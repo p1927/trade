@@ -125,22 +125,62 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "ECB Bank of England BOJ central bank policy",
         "oil commodities supply chain energy",
     ],
+    # RSS/Atom feeds for the Sentiment Analyst. Each entry is {"label", "url"};
+    # URLs may use {ticker} or {search_term} placeholders. Append more via
+    # TRADINGAGENTS_SENTIMENT_RSS_FEEDS in .env (label|url pairs, comma-separated).
+    "sentiment_rss_feeds": [
+        {
+            "label": "Google News",
+            "url": (
+                "https://news.google.com/rss/search?q={search_term}+stock+when:7d"
+                "&hl=en-US&gl=US&ceid=US:en"
+            ),
+        },
+        {
+            "label": "Yahoo Finance Headlines",
+            "url": (
+                "https://feeds.finance.yahoo.com/rss/2.0/headline"
+                "?s={ticker}&region=US&lang=en-US"
+            ),
+        },
+    ],
+    # Backends merged by the news aggregator (comma-separated). Each source is
+    # best-effort: missing keys or transient failures are skipped, not fatal.
+    "news_aggregator_sources": os.getenv(
+        "TRADINGAGENTS_NEWS_AGGREGATOR_SOURCES",
+        "searxng,yfinance,alpha_vantage",
+    ),
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
     # The configured value is the exact vendor chain — requests are NOT silently
     # routed to vendors you didn't choose. For ordered fallback, list several,
     # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": os.getenv(
+            "TRADINGAGENTS_CORE_STOCK_DATA_VENDOR",
+            "openalgo,yfinance" if os.getenv("OPENALGO_API_KEY") else "yfinance",
+        ),
+        "technical_indicators": os.getenv(
+            "TRADINGAGENTS_TECHNICAL_INDICATORS_DATA_VENDOR",
+            "openalgo,yfinance" if os.getenv("OPENALGO_API_KEY") else "yfinance",
+        ),
+        "fundamental_data": os.getenv(
+            "TRADINGAGENTS_FUNDAMENTAL_DATA_VENDOR",
+            "yfinance",
+        ),
+        "news_data": os.getenv("TRADINGAGENTS_NEWS_DATA_VENDOR", "aggregated"),
+        # Options: aggregated (merge all sources), searxng, yfinance,
+        # alpha_vantage, or ordered fallback e.g. "searxng,yfinance"
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
     },
+    # OpenAlgo bridge (local instance; broker e.g. Groww is configured there)
+    "openalgo_host": os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001"),
+    "openalgo_api_key": os.getenv("OPENALGO_API_KEY", ""),
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
-        # Example: "get_stock_data": "alpha_vantage",  # Override category default
+        # Insider filings have no aggregated backend; keep a direct vendor chain.
+        "get_insider_transactions": "yfinance,alpha_vantage",
     },
     # Benchmark for alpha calculation in the reflection layer.
     # ``benchmark_ticker`` (when set) overrides the suffix map for all

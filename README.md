@@ -310,3 +310,10 @@ Please reference our work if you find *TradingAgents* provides you with some hel
       url={https://arxiv.org/abs/2412.20138}, 
 }
 ```
+
+
+
+prat 
+
+Hello@123
+This is username password for OpenAlco

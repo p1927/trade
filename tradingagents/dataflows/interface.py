@@ -28,6 +28,9 @@ from .y_finance import (
     get_stock_stats_indicators_window,
     get_YFin_data_online,
 )
+from .news_aggregator import get_global_news_aggregated, get_news_aggregated
+from .openalgo import get_openalgo_indicators, get_openalgo_stock_data
+from .searxng_news import get_global_news_searxng, get_news_searxng
 from .yfinance_news import get_global_news_yfinance, get_news_yfinance
 
 logger = logging.getLogger(__name__)
@@ -79,9 +82,12 @@ TOOLS_CATEGORIES = {
 
 VENDOR_LIST = [
     "yfinance",
+    "openalgo",
     "fred",
     "polymarket",
     "alpha_vantage",
+    "searxng",
+    "aggregated",
 ]
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -97,11 +103,13 @@ VENDOR_METHODS = {
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+        "openalgo": get_openalgo_stock_data,
     },
     # technical_indicators
     "get_indicators": {
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
+        "openalgo": get_openalgo_indicators,
     },
     # fundamental_data
     "get_fundamentals": {
@@ -124,10 +132,14 @@ VENDOR_METHODS = {
     "get_news": {
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
+        "searxng": get_news_searxng,
+        "aggregated": get_news_aggregated,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
         "alpha_vantage": get_alpha_vantage_global_news,
+        "searxng": get_global_news_searxng,
+        "aggregated": get_global_news_aggregated,
     },
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
