@@ -11,6 +11,16 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
+research = [
+    "nselib>=2.0",
+    "india-corp-actions>=0.2.0",
+    "dalal>=0.2.1",
+    "finvizfinance>=1.3.0",
+    "edgartools>=5.0.0",
+]
+research-plus = [
+    "trade-stack[research]",
+]
 dev = [
     "pytest>=8.0",
 ]
