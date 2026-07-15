@@ -149,13 +149,31 @@ def _fetch_live_quote(oa_symbol: str, exchange: str) -> dict | None:
         return None
 
 
+def normalize_openalgo_expiry(expiry: str) -> str:
+    """Convert OpenAlgo expiry (DD-MMM-YY or DDMMMYY) to DDMMMYY for optionchain."""
+    raw = expiry.strip().upper().replace("-", "")
+    return raw
+
+
+def _unwrap_openalgo_market_payload(parsed: dict) -> dict:
+    """OpenAlgo returns option chain fields at top level; expiry dates under data."""
+    data = parsed.get("data")
+    if isinstance(data, dict) and data.get("chain"):
+        return data
+    if parsed.get("chain"):
+        return parsed
+    if isinstance(data, list):
+        return {"chain": data}
+    return data if isinstance(data, dict) else {}
+
+
 def fetch_option_expiry_dates(
     symbol: str,
     exchange: str = "NFO",
     *,
     instrument_type: str = "options",
 ) -> list[str]:
-    """Return available option expiry dates (DDMMMYY) from OpenAlgo."""
+    """Return available option expiry dates (DD-MMM-YY or DDMMMYY) from OpenAlgo."""
     parsed = _openalgo_post(
         "expiry",
         {
@@ -183,24 +201,19 @@ def fetch_option_chain(
         "exchange": exchange.upper(),
     }
     if expiry_date:
-        body["expiry_date"] = expiry_date.upper()
+        body["expiry_date"] = normalize_openalgo_expiry(expiry_date)
     if strike_count is not None:
         body["strike_count"] = strike_count
     parsed = _openalgo_post("optionchain", body)
-    data = parsed.get("data") or {}
-    if isinstance(data, list):
-        chain = data
-        meta = {}
-    else:
-        chain = data.get("chain") or []
-        meta = data
+    meta = _unwrap_openalgo_market_payload(parsed)
+    chain = meta.get("chain") or []
     ce_oi = sum(int(row.get("ce", {}).get("oi") or 0) for row in chain if isinstance(row, dict))
     pe_oi = sum(int(row.get("pe", {}).get("oi") or 0) for row in chain if isinstance(row, dict))
     pcr = round(pe_oi / ce_oi, 4) if ce_oi else None
     return {
         "underlying": meta.get("underlying") or underlying.upper(),
         "underlying_ltp": meta.get("underlying_ltp"),
-        "expiry_date": meta.get("expiry_date") or expiry_date,
+        "expiry_date": meta.get("expiry_date") or body.get("expiry_date") or expiry_date,
         "atm_strike": meta.get("atm_strike"),
         "chain": chain,
         "pcr": pcr,
