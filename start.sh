@@ -14,6 +14,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGENTS_DIR="$ROOT/tradingagents"
 OPENALGO_DIR="$ROOT/openalgo"
 COMPOSE_FILE="$ROOT/docker-compose.stack.yml"
 PID_FILE="$ROOT/.stack.pids"
@@ -149,13 +150,20 @@ bootstrap_tradingagents() {
     "$py" -m venv "$ROOT/.venv"
   fi
 
-  local vpy="$ROOT/.venv/bin/python"
-  if ! "$vpy" -c "import tradingagents" 2>/dev/null; then
-    log "Installing TradingAgents (editable) ..."
-    "$ROOT/.venv/bin/pip" install -q -e "$ROOT"
+  if [[ ! -d "$AGENTS_DIR" ]]; then
+    fail "Missing tradingagents/ submodule — run: git submodule update --init --recursive"
+    return 1
   fi
 
-  if "$vpy" -c "import tradingagents" 2>/dev/null; then
+  local vpy="$ROOT/.venv/bin/python"
+  if ! "$vpy" -c "import trade_integrations; import tradingagents" 2>/dev/null; then
+    log "Installing TradingAgents engine + trade integrations ..."
+    "$ROOT/.venv/bin/pip" install -q -e "$AGENTS_DIR"
+    "$ROOT/.venv/bin/pip" install -q -e "$ROOT"
+    "$vpy" -c "import trade_integrations"
+  fi
+
+  if "$vpy" -c "import trade_integrations; import tradingagents" 2>/dev/null; then
     READY_AGENTS=1
     return 0
   fi
@@ -253,7 +261,7 @@ wait_for_openalgo() {
 
 start_openalgo() {
   if [[ ! -d "$OPENALGO_DIR" ]]; then
-    fail "Missing openalgo/ — run: git clone https://github.com/marketcalls/openalgo.git openalgo"
+    fail "Missing openalgo/ submodule — run: git submodule update --init --recursive"
     return 1
   fi
   if [[ ! -f "$OPENALGO_DIR/.env" ]]; then
@@ -347,6 +355,7 @@ start_tradingagents_cli() {
   log "Launching TradingAgents CLI ..."
   cd "$ROOT"
   if [[ -x "$ROOT/.venv/bin/tradingagents" ]]; then
+    "$ROOT/.venv/bin/python" -c "import trade_integrations" >/dev/null
     "$ROOT/.venv/bin/tradingagents"
   elif command -v tradingagents >/dev/null 2>&1; then
     tradingagents
@@ -361,7 +370,7 @@ main() {
   if (( DO_BOOTSTRAP )); then
     bootstrap_tradingagents || true
   else
-    if [[ -x "$ROOT/.venv/bin/python" ]] && "$ROOT/.venv/bin/python" -c "import tradingagents" 2>/dev/null; then
+    if [[ -x "$ROOT/.venv/bin/python" ]] && "$ROOT/.venv/bin/python" -c "import trade_integrations; import tradingagents" 2>/dev/null; then
       READY_AGENTS=1
     fi
   fi
@@ -389,7 +398,8 @@ main() {
   fi
 
   if (( ! READY_AGENTS )); then
-    fail "TradingAgents is not ready — run without --no-bootstrap or: pip install -e ."
+    fail "TradingAgents is not ready — run without --no-bootstrap or:"
+    fail "  pip install -e tradingagents/ && pip install -e ."
     exit 1
   fi
 

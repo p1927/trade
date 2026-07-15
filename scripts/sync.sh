@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync forked dependencies with their upstream repositories.
+# Sync forked submodules with their upstream repositories.
 #
 # Usage:
 #   ./scripts/sync.sh all
@@ -12,21 +12,31 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-all}"
 
+ensure_upstream() {
+  local dir="$1" url="$2"
+  cd "$dir"
+  if ! git remote | grep -qx upstream; then
+    git remote add upstream "$url"
+  fi
+}
+
 sync_tradingagents() {
-  echo "==> Syncing TradingAgents (upstream -> trade)"
-  cd "$ROOT"
+  echo "==> Syncing TradingAgents (upstream -> p1927/TradingAgents submodule)"
+  ensure_upstream "$ROOT/tradingagents" "https://github.com/TauricResearch/TradingAgents.git"
+  cd "$ROOT/tradingagents"
   git fetch upstream
   git merge --no-edit upstream/main
-  echo "    Merged TauricResearch/TradingAgents into trade."
-  echo "    Push when ready: git push origin main"
+  git push origin main
+  cd "$ROOT"
+  git add tradingagents
+  echo "    Updated tradingagents submodule pointer."
+  echo "    Commit and push trade when ready: git commit -m 'chore: bump tradingagents submodule'"
 }
 
 sync_openalgo() {
   echo "==> Syncing OpenAlgo (upstream -> p1927/openalgo submodule)"
+  ensure_upstream "$ROOT/openalgo" "https://github.com/marketcalls/openalgo.git"
   cd "$ROOT/openalgo"
-  if ! git remote | grep -qx upstream; then
-    git remote add upstream https://github.com/marketcalls/openalgo.git
-  fi
   git fetch upstream
   git merge --no-edit upstream/main
   git push origin main
@@ -37,18 +47,19 @@ sync_openalgo() {
 }
 
 show_status() {
-  echo "==> Trade remotes"
+  echo "==> Trade repository"
   cd "$ROOT"
   git remote -v
   echo
   echo "==> TradingAgents upstream delta"
+  ensure_upstream "$ROOT/tradingagents" "https://github.com/TauricResearch/TradingAgents.git"
+  cd "$ROOT/tradingagents"
   git fetch upstream --quiet
   git log --oneline HEAD..upstream/main | head -10 || true
   echo
   echo "==> OpenAlgo upstream delta"
+  ensure_upstream "$ROOT/openalgo" "https://github.com/marketcalls/openalgo.git"
   cd "$ROOT/openalgo"
-  git remote get-url upstream >/dev/null 2>&1 || \
-    git remote add upstream https://github.com/marketcalls/openalgo.git
   git fetch upstream --quiet
   git log --oneline HEAD..upstream/main | head -10 || true
 }
@@ -72,10 +83,10 @@ case "$TARGET" in
 Usage: ./scripts/sync.sh [target]
 
 Targets:
-  all             Sync TradingAgents and OpenAlgo (default)
-  tradingagents   Merge upstream TradingAgents into trade
-  openalgo        Merge upstream OpenAlgo into the openalgo submodule
-  status          Show pending upstream commits for both repos
+  all             Sync TradingAgents and OpenAlgo submodules (default)
+  tradingagents   Merge upstream TradingAgents into tradingagents/
+  openalgo        Merge upstream OpenAlgo into openalgo/
+  status          Show pending upstream commits for both submodules
 EOF
     ;;
   *)

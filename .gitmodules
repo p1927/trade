@@ -2,3 +2,7 @@
 	path = openalgo
 	url = https://github.com/p1927/openalgo.git
 	branch = main
+[submodule "tradingagents"]
+	path = tradingagents
+	url = https://github.com/p1927/TradingAgents.git
+	branch = main
