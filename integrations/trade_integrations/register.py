@@ -8,7 +8,7 @@ _APPLIED = False
 
 
 def apply() -> None:
-    """Register OpenAlgo, SearXNG, RSS, and news-aggregator integrations."""
+    """Register OpenAlgo, SearXNG, RSS, news-aggregator, and company research."""
     global _APPLIED
     if _APPLIED:
         return
@@ -17,6 +17,8 @@ def apply() -> None:
     _patch_default_config()
     _patch_vendor_routing()
     _patch_sentiment_analyst()
+    _patch_news_analyst()
+    _patch_trading_graph()
 
 
 def _patch_default_config() -> None:
@@ -98,3 +100,49 @@ def _patch_sentiment_analyst() -> None:
     from trade_integrations.agents.sentiment_analyst import create_sentiment_analyst
 
     sentiment_module.create_sentiment_analyst = create_sentiment_analyst
+
+
+def _patch_news_analyst() -> None:
+    import tradingagents.agents.analysts.news_analyst as news_module
+    from trade_integrations.agents.news_analyst import create_news_analyst
+
+    news_module.create_news_analyst = create_news_analyst
+
+
+def _patch_trading_graph() -> None:
+    import logging
+
+    from langgraph.prebuilt import ToolNode
+
+    import tradingagents.graph.trading_graph as graph_module
+    from trade_integrations.context.hub import prefetch_company_research
+    from trade_integrations.tools.company_research_tools import get_company_research
+
+    logger = logging.getLogger(__name__)
+    original_create_tool_nodes = graph_module.TradingAgentsGraph._create_tool_nodes
+    original_propagate = graph_module.TradingAgentsGraph.propagate
+
+    def _create_tool_nodes_patched(self):
+        tool_nodes = original_create_tool_nodes(self)
+        news_tools = list(tool_nodes["news"].tools_by_name.values())
+        if get_company_research not in news_tools:
+            news_tools.append(get_company_research)
+            tool_nodes["news"] = ToolNode(news_tools)
+        return tool_nodes
+
+    def propagate_patched(self, company_name, trade_date, asset_type: str = "stock"):
+        try:
+            if prefetch_company_research(company_name, asset_type=asset_type):
+                logger.info(
+                    "Prefetched company research for %s into trade-stack hub",
+                    company_name,
+                )
+        except Exception:
+            logger.exception(
+                "Company research prefetch failed for %s; continuing graph run",
+                company_name,
+            )
+        return original_propagate(self, company_name, trade_date, asset_type=asset_type)
+
+    graph_module.TradingAgentsGraph._create_tool_nodes = _create_tool_nodes_patched
+    graph_module.TradingAgentsGraph.propagate = propagate_patched

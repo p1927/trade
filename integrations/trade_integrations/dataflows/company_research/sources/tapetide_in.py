@@ -95,6 +95,12 @@ def fetch_tapetide_calendar_events(symbol: str) -> list[dict[str, Any]]:
             )
 
     if not events and payload.get("raw_text"):
+        raw_text = str(payload.get("raw_text"))
+        if any(
+            marker in raw_text.lower()
+            for marker in ("mcp error", "validation error", "invalid input", "unauthorized")
+        ):
+            return []
         events.append(
             {
                 "symbol": symbol_upper,

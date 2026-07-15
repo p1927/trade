@@ -30,6 +30,14 @@ class TestDetectMarket:
         monkeypatch.setenv("OPENALGO_API_KEY", "test-key")
         monkeypatch.setenv("TRADINGAGENTS_RESEARCH_MARKET_DEFAULT", "IN")
         assert detect_market("RELIANCE") == Market.IN
+        assert detect_market("TCS") == Market.IN
+
+    def test_plain_us_with_openalgo_configured(self, monkeypatch):
+        monkeypatch.setenv("OPENALGO_API_KEY", "test-key")
+        monkeypatch.setenv("TRADINGAGENTS_RESEARCH_MARKET_DEFAULT", "IN")
+        assert detect_market("AAPL") == Market.US
+        assert detect_market("MSFT") == Market.US
+        assert detect_market("NVDA") == Market.US
 
     def test_plain_us_when_default_us(self, monkeypatch):
         monkeypatch.delenv("OPENALGO_API_KEY", raising=False)
@@ -64,7 +72,7 @@ class TestNormalizeTicker:
 
     def test_us_symbol(self, monkeypatch):
         monkeypatch.setenv("TRADINGAGENTS_RESEARCH_MARKET_DEFAULT", "US")
-        norm = normalize_ticker("AAPL", market_hint=Market.US)
+        norm = normalize_ticker("AAPL")
         assert norm.market == Market.US
         assert norm.yfinance_symbol == "AAPL"
         assert norm.openalgo_exchange == ""
@@ -110,3 +118,11 @@ class TestRunCompanyResearch:
         assert len(identity_stages) == 1
         calendar_stages = [s for s in doc.stages if s.stage == "calendar"]
         assert len(calendar_stages) == 1
+        stage_names = {s.stage for s in doc.stages}
+        assert "identity" in stage_names
+        assert "peers" in stage_names
+        assert "fundamentals" in stage_names
+        assert "filings" in stage_names
+        assert "news" in stage_names
+        assert "sentiment" in stage_names
+        assert "macro" in stage_names

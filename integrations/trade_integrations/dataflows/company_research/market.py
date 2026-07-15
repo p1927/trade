@@ -8,6 +8,8 @@ from enum import Enum
 
 from trade_integrations.dataflows.openalgo import resolve_openalgo_symbol
 
+from .india_symbols import is_india_listed_symbol
+
 
 class Market(str, Enum):
     IN = "IN"
@@ -41,10 +43,6 @@ class NormalizedTicker:
     display_symbol: str
 
 
-def _openalgo_configured() -> bool:
-    return bool(os.getenv("OPENALGO_API_KEY", "").strip())
-
-
 def detect_market(
     ticker: str,
     *,
@@ -67,15 +65,13 @@ def detect_market(
         # e.g. BRK.B — treat dotted US-style tickers as US.
         return Market.US
 
-    default = (market_default or os.getenv("TRADINGAGENTS_RESEARCH_MARKET_DEFAULT", "IN")).upper()
-
-    # India-first stack: ambiguous plain symbols (RELIANCE, TCS) default to IN
-    # when OpenAlgo is configured. US tickers (AAPL) should use an explicit
-    # suffix, market_hint, or TRADINGAGENTS_RESEARCH_MARKET_DEFAULT=US.
-    if default == "IN" and _openalgo_configured():
+    if is_india_listed_symbol(raw):
         return Market.IN
+
+    default = (market_default or os.getenv("TRADINGAGENTS_RESEARCH_MARKET_DEFAULT", "IN")).upper()
     if default == "US":
         return Market.US
+    # Plain symbol not on NSE/BSE index lists → US (e.g. AAPL with OpenAlgo configured).
     return Market.US
 
 

@@ -9,6 +9,7 @@ from typing import Any
 
 from ..market import NormalizedTicker
 from ..models import StageResult
+from .bse_india import fetch_bse_calendar_events
 from .moneycontrol_rss import fetch_results_news
 from .resilience import (
     SourceAttempt,
@@ -28,9 +29,9 @@ def _stage_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _date_window(lookahead_days: int) -> tuple[date, date]:
-    start = date.today()
-    end = start + timedelta(days=max(lookahead_days, 1))
+def _date_window(lookahead_days: int, *, lookback_days: int = 0) -> tuple[date, date]:
+    start = date.today() - timedelta(days=max(lookback_days, 0))
+    end = date.today() + timedelta(days=max(lookahead_days, 1))
     return start, end
 
 
@@ -139,127 +140,6 @@ def _fetch_nselib_events(
             normalized = _normalize_nselib_row(row, source=f"nselib:{fetch_name}")
             if normalized:
                 events.append(normalized)
-
-    return events, errors
-
-
-def _normalize_corp_action(action: Any, *, source: str) -> dict[str, Any] | None:
-    if hasattr(action, "__dict__"):
-        payload = {
-            "symbol": getattr(action, "symbol", ""),
-            "company": getattr(action, "company", ""),
-            "type": getattr(action, "action_type", "") or getattr(action, "type", ""),
-            "purpose": getattr(action, "purpose", "") or getattr(action, "action_type", ""),
-            "description": getattr(action, "description", "") or getattr(action, "remarks", ""),
-            "date": _to_iso_date(
-                getattr(action, "ex_date", None)
-                or getattr(action, "record_date", None)
-                or getattr(action, "date", None)
-            ),
-        }
-    elif isinstance(action, dict):
-        payload = {
-            "symbol": action.get("symbol", ""),
-            "company": action.get("company", ""),
-            "type": action.get("action_type", "") or action.get("type", ""),
-            "purpose": action.get("purpose", "") or action.get("action_type", ""),
-            "description": action.get("description", "") or action.get("remarks", ""),
-            "date": _to_iso_date(
-                action.get("ex_date") or action.get("record_date") or action.get("date")
-            ),
-        }
-    else:
-        return None
-
-    symbol = str(payload.get("symbol", "")).strip().upper()
-    if not symbol:
-        return None
-    payload["symbol"] = symbol
-    payload["source"] = source
-    if payload.get("type"):
-        payload["type"] = str(payload["type"]).lower().replace(" ", "_")
-    return payload
-
-
-def _fetch_india_corp_actions(
-    symbol: str,
-    *,
-    start: date,
-    end: date,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    errors: list[str] = []
-    events: list[dict[str, Any]] = []
-    try:
-        from india_corp_actions import IndiaCorpActions
-    except ImportError:
-        return [], ["india_corp_actions: not installed"]
-
-    client = IndiaCorpActions()
-    start_s = start.strftime("%d-%m-%Y")
-    end_s = end.strftime("%d-%m-%Y")
-    symbol_upper = symbol.upper()
-
-    fetchers: list[tuple[str, Any]] = [
-        (
-            "get_actions_df",
-            lambda src: client.get_actions_df(
-                symbol=symbol_upper,
-                from_date=start_s,
-                to_date=end_s,
-                source=src,
-            ),
-        ),
-        ("get_upcoming_results", lambda _src: client.get_upcoming_results()),
-        ("get_board_meetings", lambda _src: client.get_board_meetings()),
-    ]
-
-    for source in ("NSE", "BSE"):
-        for fetch_name, fetcher in fetchers[:1]:
-            try:
-                frame = fetcher(source)
-            except Exception as exc:
-                errors.append(f"india_corp_actions.{fetch_name}({source}): {exc}")
-                continue
-            if frame is None:
-                continue
-            if hasattr(frame, "empty") and frame.empty:
-                continue
-            rows = frame.to_dict("records") if hasattr(frame, "to_dict") else frame
-            if isinstance(rows, dict):
-                rows = [rows]
-            for row in rows or []:
-                row_symbol = str(row.get("symbol", symbol_upper)).upper()
-                if row_symbol != symbol_upper:
-                    continue
-                normalized = _normalize_corp_action(
-                    row,
-                    source=f"india_corp_actions:{fetch_name}:{source}",
-                )
-                if normalized:
-                    events.append(normalized)
-
-    for fetch_name, fetcher in fetchers[1:]:
-        for source in ("NSE",):
-            try:
-                payload = fetcher(source)
-            except Exception as exc:
-                errors.append(f"india_corp_actions.{fetch_name}: {exc}")
-                continue
-            rows = payload if isinstance(payload, list) else []
-            for row in rows:
-                row_symbol = str(
-                    getattr(row, "symbol", None) or (row.get("symbol") if isinstance(row, dict) else "")
-                ).upper()
-                if row_symbol and row_symbol != symbol_upper:
-                    continue
-                normalized = _normalize_corp_action(
-                    row,
-                    source=f"india_corp_actions:{fetch_name}",
-                )
-                if normalized and (not normalized.get("date") or start.isoformat() <= normalized["date"] <= end.isoformat()):
-                    if row_symbol == symbol_upper or not row_symbol:
-                        normalized["symbol"] = symbol_upper
-                        events.append(normalized)
 
     return events, errors
 
@@ -378,18 +258,18 @@ def fetch_calendar_in(
     normalized: NormalizedTicker,
     *,
     lookahead_days: int = 14,
+    lookback_days: int = 0,
 ) -> StageResult:
     """Collect upcoming Indian corporate events from every available source."""
-    start, end = _date_window(lookahead_days)
+    start, end = _date_window(lookahead_days, lookback_days=lookback_days)
     symbol = normalized.base_symbol
 
     def _nselib() -> list[dict[str, Any]]:
         events, _ = _fetch_nselib_events(symbol, start=start, end=end)
         return events
 
-    def _corp_actions() -> list[dict[str, Any]]:
-        events, _ = _fetch_india_corp_actions(symbol, start=start, end=end)
-        return events
+    def _bse_india() -> list[dict[str, Any]]:
+        return fetch_bse_calendar_events(symbol, start=start, end=end)
 
     def _rss() -> list[dict[str, Any]]:
         events = fetch_results_news(symbol)
@@ -405,7 +285,7 @@ def fetch_calendar_in(
 
     source_jobs = [
         ("nselib", _nselib),
-        ("india_corp_actions", _corp_actions),
+        ("bse_india", _bse_india),
         ("moneycontrol_rss", _rss),
     ]
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
@@ -448,6 +328,7 @@ def fetch_calendar_in(
             "from_date": start.isoformat(),
             "to_date": end.isoformat(),
             "lookahead_days": lookahead_days,
+            "lookback_days": lookback_days,
             "event_count": len(events),
             "events": events,
             "source_attempts": [a.to_dict() for a in attempts],

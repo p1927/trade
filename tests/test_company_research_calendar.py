@@ -34,7 +34,7 @@ class TestCalendarHelpers:
                 "type": "financial_results",
                 "purpose": "Financial Results",
                 "description": "Board meeting duplicate",
-                "source": "india_corp_actions:get_board_meetings",
+                "source": "bse_india:announcements",
             },
             {
                 "symbol": "RELIANCE",
