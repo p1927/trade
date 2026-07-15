@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# Trade stack CLI — one entry point for stack, tunnels, webhooks, and research.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+trade — Trade stack command-line interface
+
+Usage:
+  trade <command> [subcommand] [options]
+
+Stack:
+  start [mode]          Start services (default: vibe)
+                        Modes: vibe | openalgo | cli | full
+  status                Check SearXNG, OpenAlgo, Vibe, agents readiness
+  stop-searxng          Stop SearXNG Docker container
+  logs-searxng          Follow SearXNG logs
+
+Tunnel (webhook exposure):
+  tunnel quick          Start trycloudflare.com tunnel (dev/testing)
+  tunnel named          Start persistent Cloudflare named tunnel
+  tunnel stop           Stop active tunnel
+  tunnel status         Show tunnel + HOST_SERVER state
+  tunnel sync [url]     Set openalgo/.env HOST_SERVER
+  tunnel urls [plat]    Print webhook URLs (tradingview|gocharting|chartink|all)
+
+Webhooks (shortcut):
+  webhooks [platform]   Same as tunnel urls + setup hints
+
+Research:
+  research <ticker>     Run company research pipeline (e.g. RELIANCE, AAPL)
+  research <ticker> --days 30
+
+Maintenance:
+  sync [target]         Sync submodules (all|tradingagents|openalgo|status)
+  setup vibe            Wire OpenAlgo MCP into Vibe agent config
+
+Examples:
+  trade start openalgo              # OpenAlgo only (for webhook setup)
+  trade tunnel quick                # expose OpenAlgo to the internet
+  trade webhooks tradingview        # show TradingView webhook URL + where to paste it
+  trade status                      # is everything up?
+  trade research RELIANCE
+
+Legacy scripts still work: ./start.sh, ./exposure/start.sh, make tunnel-quick
+EOF
+}
+
+webhook_hints() {
+  local platform="${1:-all}"
+  case "$platform" in
+    tradingview|all)
+      cat <<'EOF'
+
+TradingView — where to paste the webhook URL:
+  1. Open your chart → Create Alert
+  2. Notifications tab → enable "Webhook URL"
+  3. Paste the URL into Webhook URL
+  4. Paste the JSON from OpenAlgo /tradingview into Message
+  5. OpenAlgo UI: http://127.0.0.1:5001/tradingview
+EOF
+      ;;
+  esac
+  case "$platform" in
+    gocharting|all)
+      cat <<'EOF'
+
+GoCharting — where to paste the webhook URL:
+  1. Create alert on your chart (Premium required)
+  2. Paste URL into webhook field
+  3. Paste JSON from OpenAlgo /gocharting into alert message
+  4. OpenAlgo UI: http://127.0.0.1:5001/gocharting
+EOF
+      ;;
+  esac
+  case "$platform" in
+    chartink|all)
+      cat <<'EOF'
+
+Chartink — where to paste the webhook URL:
+  1. Create scanner alert → Webhook URL field
+  2. Body: {"webhook_id": "<id>", "stocks": "{stocks}"}
+  3. Create strategy in OpenAlgo /chartink to get webhook-id
+  4. OpenAlgo UI: http://127.0.0.1:5001/chartink
+EOF
+      ;;
+  esac
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  start)
+    mode="${1:-vibe}"
+    shift || true
+    case "$mode" in
+      vibe|default)     exec "$ROOT/start.sh" "$@" ;;
+      openalgo)         exec "$ROOT/start.sh" --openalgo-only "$@" ;;
+      cli|agents)       exec "$ROOT/start.sh" --cli "$@" ;;
+      full)             exec "$ROOT/start.sh" "$@" ;;
+      -h|--help|help)
+        echo "Usage: trade start [vibe|openalgo|cli|full]"
+        ;;
+      *)
+        echo "Unknown start mode: $mode (try: vibe, openalgo, cli, full)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  status)
+    exec "$ROOT/start.sh" --status --no-bootstrap "$@"
+    ;;
+
+  stop-searxng)
+    exec docker compose -f "$ROOT/docker-compose.stack.yml" down "$@"
+    ;;
+
+  logs-searxng)
+    exec docker compose -f "$ROOT/docker-compose.stack.yml" logs -f searxng "$@"
+    ;;
+
+  tunnel|expose)
+    sub="${1:-}"
+    shift || true
+    case "$sub" in
+      quick)   exec "$ROOT/exposure/start.sh" quick "$@" ;;
+      named)   exec "$ROOT/exposure/start.sh" named "$@" ;;
+      stop)    exec "$ROOT/exposure/start.sh" stop "$@" ;;
+      status)  exec "$ROOT/exposure/start.sh" status "$@" ;;
+      sync)    exec "$ROOT/exposure/start.sh" sync "$@" ;;
+      urls)
+        platform="${1:-all}"
+        shift || true
+        exec "$ROOT/exposure/start.sh" urls "$platform" "$@"
+        ;;
+      -h|--help|help|"")
+        exec "$ROOT/exposure/start.sh" --help
+        ;;
+      *)
+        echo "Unknown tunnel command: $sub (try: quick, named, stop, status, sync, urls)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  webhooks|webhook)
+    platform="${1:-all}"
+    shift || true
+    "$ROOT/exposure/start.sh" urls "$platform" "$@" || true
+    webhook_hints "$platform"
+    ;;
+
+  research)
+    ticker="${1:-}"
+    if [[ -z "$ticker" || "$ticker" == "-h" || "$ticker" == "--help" ]]; then
+      echo "Usage: trade research <ticker> [--days N] [--json]"
+      exit 0
+    fi
+    shift || true
+    py="$ROOT/.venv/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    exec "$py" "$ROOT/scripts/run_company_research.py" "$ticker" "$@"
+    ;;
+
+  sync)
+    target="${1:-all}"
+    shift || true
+    exec "$ROOT/scripts/sync.sh" "$target" "$@"
+    ;;
+
+  setup)
+    sub="${1:-}"
+    shift || true
+    case "$sub" in
+      vibe)
+        py="$ROOT/.venv/bin/python"
+        [[ -x "$py" ]] || py="python3"
+        exec "$py" "$ROOT/scripts/setup_vibe.py" "$@"
+        ;;
+      -h|--help|help|"")
+        echo "Usage: trade setup vibe"
+        ;;
+      *)
+        echo "Unknown setup target: $sub (try: vibe)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  -h|--help|help|"")
+    usage
+    ;;
+
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

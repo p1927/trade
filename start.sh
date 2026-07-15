@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Bootstrap and run the full TradingAgents stack:
+# Bootstrap and run the full Trade stack:
 #   1. SearXNG (Docker) — news search
-#   2. OpenAlgo — live broker data + options UI
-#   3. TradingAgents — AI research CLI
+#   2. OpenAlgo — live broker data + execution bridge
+#   3. Vibe Trading Web UI (default) — chat, plans, OpenAlgo MCP orders
+#   4. TradingAgents CLI (--cli) — batch multi-agent research
 #
 # Usage: ./start.sh [options]
-#   --openalgo-only   OpenAlgo only (no TradingAgents CLI)
+#   --openalgo-only   OpenAlgo only (no Vibe / TradingAgents)
+#   --cli             TradingAgents CLI instead of Vibe Web UI
 #   --agents-only     TradingAgents only (expects SearXNG + OpenAlgo up)
 #   --no-searxng      Skip SearXNG Docker check/start
 #   --no-bootstrap    Skip venv / pip install
@@ -16,6 +18,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENTS_DIR="$ROOT/tradingagents"
 OPENALGO_DIR="$ROOT/openalgo"
+VIBE_DIR="$ROOT/vibetrading"
 COMPOSE_FILE="$ROOT/docker-compose.stack.yml"
 PID_FILE="$ROOT/.stack.pids"
 LOG_DIR="$ROOT/openalgo/log"
@@ -23,6 +26,8 @@ OPENALGO_LOG="$LOG_DIR/stack-openalgo.log"
 
 START_OPENALGO=1
 START_AGENTS=1
+START_VIBE=1
+START_CLI=0
 START_SEARXNG=1
 DO_BOOTSTRAP=1
 STATUS_ONLY=0
@@ -31,11 +36,14 @@ STATUS_ONLY=0
 READY_SEARXNG=0
 READY_OPENALGO=0
 READY_AGENTS=0
+READY_VIBE=0
 
 for arg in "$@"; do
   case "$arg" in
-    --openalgo-only) START_AGENTS=0 ;;
-    --agents-only) START_OPENALGO=0 ;;
+    --openalgo-only) START_AGENTS=0; START_VIBE=0; START_CLI=0 ;;
+    --cli) START_VIBE=0; START_CLI=1 ;;
+    --vibe-only) START_CLI=0; START_VIBE=1 ;;
+    --agents-only) START_OPENALGO=0; START_VIBE=0; START_CLI=1 ;;
     --no-searxng) START_SEARXNG=0 ;;
     --no-bootstrap) DO_BOOTSTRAP=0 ;;
     --status) STATUS_ONLY=1 ;;
@@ -43,17 +51,20 @@ for arg in "$@"; do
       cat <<'EOF'
 Usage: ./start.sh [options]
 
-  (default)         Bootstrap, start SearXNG + OpenAlgo, launch TradingAgents CLI
-  --openalgo-only   SearXNG + OpenAlgo only (browser trading, no CLI)
-  --agents-only     TradingAgents only (SearXNG + OpenAlgo must already run)
+  (default)         Bootstrap, start SearXNG + OpenAlgo, launch Vibe Web UI
+  --cli             TradingAgents interactive CLI instead of Vibe Web UI
+  --openalgo-only   SearXNG + OpenAlgo only (browser trading, no agent UI)
+  --agents-only     TradingAgents CLI only (SearXNG + OpenAlgo must already run)
   --no-searxng      Do not start/check SearXNG Docker
   --no-bootstrap    Skip venv creation and pip install
   --status          Check readiness of all services and exit
 
 Services:
-  SearXNG         http://localhost:5555   (Docker, news search)
-  OpenAlgo        http://127.0.0.1:5001    (trading + INDmoney)
-  TradingAgents   interactive CLI         (AI research)
+  SearXNG         http://localhost:5555        (Docker, news search)
+  OpenAlgo        http://127.0.0.1:5001         (trading + broker UI)
+  Vibe Trading    http://localhost:5899         (chat UI, default)
+  Vibe API        http://localhost:8899         (backend)
+  TradingAgents   interactive CLI (--cli)
 EOF
       exit 0
       ;;
@@ -121,7 +132,7 @@ searxng_url() {
 }
 
 openalgo_url() {
-  echo "${OPENALGO_HOST:-http://127.0.0.1:5000}"
+  echo "${OPENALGO_HOST:-http://127.0.0.1:5001}"
 }
 
 wait_for_url() {
@@ -163,12 +174,30 @@ bootstrap_tradingagents() {
     "$vpy" -c "import trade_integrations"
   fi
 
+  if (( START_VIBE )) && [[ ! -d "$VIBE_DIR" ]]; then
+    fail "Missing vibetrading/ submodule — run: git submodule update --init --recursive vibetrading"
+    return 1
+  fi
+
+  if (( START_VIBE )) && [[ ! -x "$ROOT/.venv/bin/vibe-trading" ]]; then
+    log "Installing Vibe Trading from vibetrading/ submodule ..."
+    "$ROOT/.venv/bin/pip" install -q -e "$VIBE_DIR"
+  fi
+
   if "$vpy" -c "import trade_integrations; import tradingagents" 2>/dev/null; then
     READY_AGENTS=1
-    return 0
+  else
+    fail "TradingAgents import failed after install"
+    return 1
   fi
-  fail "TradingAgents import failed after install"
-  return 1
+
+  if (( START_VIBE )) && command -v "$ROOT/.venv/bin/vibe-trading" >/dev/null 2>&1; then
+    READY_VIBE=1
+  elif (( START_VIBE )); then
+    warn "vibe-trading CLI not found — run: pip install -e vibetrading/"
+  fi
+
+  return 0
 }
 
 check_tradingagents_config() {
@@ -305,6 +334,12 @@ check_openalgo() {
 
 # ── status report ────────────────────────────────────────────────────────────
 
+check_vibe_ready() {
+  if [[ -d "$VIBE_DIR" ]] && [[ -x "$ROOT/.venv/bin/vibe-trading" ]]; then
+    READY_VIBE=1
+  fi
+}
+
 print_status() {
   echo ""
   echo "══════════════════════════════════════════════════════════"
@@ -331,6 +366,14 @@ print_status() {
     ok "TradingAgents  CLI ready ($provider / $model)"
   else
     fail "TradingAgents  not installed"
+  fi
+
+  if (( READY_VIBE )); then
+    local vibe_ui="${VIBE_FRONTEND_PORT:-5899}"
+    local vibe_api="${VIBE_BACKEND_PORT:-8899}"
+    ok "Vibe Trading   Web UI http://localhost:${vibe_ui}  (API :${vibe_api})"
+  elif (( START_VIBE )); then
+    fail "Vibe Trading   not installed (pip install -e vibetrading/)"
   fi
 
   if [[ -n "${OPENALGO_API_KEY:-}" ]]; then
@@ -364,6 +407,61 @@ start_tradingagents_cli() {
   fi
 }
 
+vibe_frontend_dir() {
+  echo "${VIBE_FRONTEND_DIR:-$VIBE_DIR/frontend}"
+}
+
+setup_vibe_config() {
+  log "Syncing Vibe operator config (OpenAlgo MCP + trade-stack skill) ..."
+  "$(pick_python)" "$ROOT/scripts/setup_vibe.py"
+}
+
+ensure_vibe_frontend() {
+  local frontend
+  frontend="$(vibe_frontend_dir)"
+  if [[ -f "$frontend/package.json" && -x "$frontend/node_modules/.bin/vite" ]]; then
+    return 0
+  fi
+  if [[ -x "$ROOT/scripts/ensure_vibe_frontend.sh" ]]; then
+    log "Vibe frontend not built — running ensure_vibe_frontend.sh (requires Node.js) ..."
+    bash "$ROOT/scripts/ensure_vibe_frontend.sh" || return 1
+  fi
+}
+
+start_vibe_web() {
+  local frontend backend_port frontend_port vibe_bin
+  frontend="$(vibe_frontend_dir)"
+  backend_port="${VIBE_BACKEND_PORT:-8899}"
+  frontend_port="${VIBE_FRONTEND_PORT:-5899}"
+  vibe_bin="$ROOT/.venv/bin/vibe-trading"
+
+  if [[ ! -x "$vibe_bin" ]]; then
+    fail "vibe-trading not found — run: pip install -e vibetrading/"
+    return 1
+  fi
+
+  setup_vibe_config || true
+  ensure_vibe_frontend || {
+    fail "Vibe frontend missing. Install Node 20+ and run: ./scripts/ensure_vibe_frontend.sh"
+    return 1
+  }
+
+  if [[ ! -f "$frontend/package.json" ]]; then
+    fail "Vibe frontend not found at $frontend"
+    return 1
+  fi
+
+  log "Launching Vibe Trading Web UI ..."
+  log "  Chat UI:  http://localhost:${frontend_port}"
+  log "  API:      http://localhost:${backend_port}"
+  log "  OpenAlgo MCP is wired via ~/.vibe-trading/agent.json"
+  cd "$ROOT"
+  exec "$vibe_bin" dev \
+    --port "$backend_port" \
+    --frontend-port "$frontend_port" \
+    --frontend-dir "$frontend"
+}
+
 main() {
   load_env
 
@@ -382,16 +480,22 @@ main() {
     check_searxng
   fi
 
-  if (( START_OPENALGO )); then
+  if (( STATUS_ONLY )); then
+    check_openalgo
+  elif (( START_OPENALGO )); then
     start_openalgo || true
   else
     check_openalgo
   fi
 
+  if (( START_VIBE )); then
+    check_vibe_ready
+  fi
+
   print_status
 
   if (( STATUS_ONLY )); then
-    if (( READY_SEARXNG && READY_OPENALGO && READY_AGENTS )); then
+    if (( READY_SEARXNG && READY_OPENALGO && READY_AGENTS && ( ! START_VIBE || READY_VIBE ) )); then
       exit 0
     fi
     exit 1
@@ -403,7 +507,14 @@ main() {
     exit 1
   fi
 
-  if (( START_AGENTS )); then
+  if (( START_VIBE )); then
+    check_vibe_ready
+    if (( ! READY_VIBE )); then
+      fail "Vibe Trading is not ready — run: pip install -e vibetrading/"
+      exit 1
+    fi
+    start_vibe_web
+  elif (( START_CLI )); then
     start_tradingagents_cli
   else
     log "Services running. Press Ctrl+C to stop OpenAlgo (SearXNG Docker keeps running)."

@@ -22,9 +22,18 @@ research = [
 ]
 research-plus = [
     "trade-stack[research]",
+    "finverse>=0.7",
 ]
 stack = [
-    "vibe-trading-ai>=0.1.11",
+    # Editable install from vibetrading/ submodule (see start.sh bootstrap).
+    # pip install -e vibetrading/
+]
+options = [
+    "trade-stack[research]",
+    "qfinindia>=0.3.2",
+    "optionlab>=1.3.2",
+    "finworth>=0.7.0",
+    "opengreeks>=0.2.0",
 ]
 dev = [
     "pytest>=8.0",

@@ -1,0 +1,21 @@
+# Copy to ~/.cloudflared/config.yml (or pass via --config) after creating a named tunnel.
+#
+# Setup (one-time):
+#   cloudflared tunnel login
+#   cloudflared tunnel create trade-openalgo
+#   cloudflared tunnel route dns trade-openalgo openalgo.yourdomain.com
+#
+# Replace TUNNEL_UUID and credentials-file path from:
+#   cloudflared tunnel list
+#   ls ~/.cloudflared/*.json
+
+tunnel: TUNNEL_UUID
+credentials-file: /Users/YOU/.cloudflared/TUNNEL_UUID.json
+
+ingress:
+  - hostname: openalgo.yourdomain.com
+    service: http://127.0.0.1:5001
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 30s
+  - service: http_status:404

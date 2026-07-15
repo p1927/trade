@@ -186,8 +186,6 @@ def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
     ]
     if resolve_bse_scrip_code(normalized.base_symbol):
         fetchers.insert(0, ("dalal_bse", lambda: _fetch_dalal_bse(normalized)))
-    else:
-        pass
 
     try:
         import nselib  # noqa: F401

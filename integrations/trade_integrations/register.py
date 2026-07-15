@@ -115,8 +115,9 @@ def _patch_trading_graph() -> None:
     from langgraph.prebuilt import ToolNode
 
     import tradingagents.graph.trading_graph as graph_module
-    from trade_integrations.context.hub import prefetch_company_research
+    from trade_integrations.context.hub import prefetch_company_research, prefetch_options_research
     from trade_integrations.tools.company_research_tools import get_company_research
+    from trade_integrations.tools.options_research_tools import get_options_research
 
     logger = logging.getLogger(__name__)
     original_create_tool_nodes = graph_module.TradingAgentsGraph._create_tool_nodes
@@ -125,8 +126,14 @@ def _patch_trading_graph() -> None:
     def _create_tool_nodes_patched(self):
         tool_nodes = original_create_tool_nodes(self)
         news_tools = list(tool_nodes["news"].tools_by_name.values())
+        changed = False
         if get_company_research not in news_tools:
             news_tools.append(get_company_research)
+            changed = True
+        if get_options_research not in news_tools:
+            news_tools.append(get_options_research)
+            changed = True
+        if changed:
             tool_nodes["news"] = ToolNode(news_tools)
         return tool_nodes
 
@@ -135,6 +142,11 @@ def _patch_trading_graph() -> None:
             if prefetch_company_research(company_name, asset_type=asset_type):
                 logger.info(
                     "Prefetched company research for %s into trade-stack hub",
+                    company_name,
+                )
+            if prefetch_options_research(company_name):
+                logger.info(
+                    "Prefetched options research for %s into trade-stack hub",
                     company_name,
                 )
         except Exception:

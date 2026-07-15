@@ -149,6 +149,67 @@ def _fetch_live_quote(oa_symbol: str, exchange: str) -> dict | None:
         return None
 
 
+def fetch_option_expiry_dates(
+    symbol: str,
+    exchange: str = "NFO",
+    *,
+    instrument_type: str = "options",
+) -> list[str]:
+    """Return available option expiry dates (DDMMMYY) from OpenAlgo."""
+    parsed = _openalgo_post(
+        "expiry",
+        {
+            "symbol": symbol.upper(),
+            "exchange": exchange.upper(),
+            "instrumenttype": instrument_type,
+        },
+    )
+    data = parsed.get("data") or {}
+    if isinstance(data, list):
+        return [str(x) for x in data]
+    return list(data.get("expiry_dates") or data.get("expiries") or [])
+
+
+def fetch_option_chain(
+    underlying: str,
+    exchange: str,
+    *,
+    expiry_date: str | None = None,
+    strike_count: int | None = None,
+) -> dict:
+    """Fetch normalized option chain payload from OpenAlgo."""
+    body: dict = {
+        "underlying": underlying.upper(),
+        "exchange": exchange.upper(),
+    }
+    if expiry_date:
+        body["expiry_date"] = expiry_date.upper()
+    if strike_count is not None:
+        body["strike_count"] = strike_count
+    parsed = _openalgo_post("optionchain", body)
+    data = parsed.get("data") or {}
+    if isinstance(data, list):
+        chain = data
+        meta = {}
+    else:
+        chain = data.get("chain") or []
+        meta = data
+    ce_oi = sum(int(row.get("ce", {}).get("oi") or 0) for row in chain if isinstance(row, dict))
+    pe_oi = sum(int(row.get("pe", {}).get("oi") or 0) for row in chain if isinstance(row, dict))
+    pcr = round(pe_oi / ce_oi, 4) if ce_oi else None
+    return {
+        "underlying": meta.get("underlying") or underlying.upper(),
+        "underlying_ltp": meta.get("underlying_ltp"),
+        "expiry_date": meta.get("expiry_date") or expiry_date,
+        "atm_strike": meta.get("atm_strike"),
+        "chain": chain,
+        "pcr": pcr,
+        "total_call_oi": ce_oi,
+        "total_put_oi": pe_oi,
+        "source": "openalgo",
+    }
+
+
 def get_openalgo_stock_data(
     symbol: Annotated[str, "ticker symbol of the company"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],

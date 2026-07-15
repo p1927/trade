@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "openalgo": {
+      "command": "{{OPENALGO_MCP_PYTHON}}",
+      "args": [
+        "{{OPENALGO_MCP_SERVER}}",
+        "{{OPENALGO_API_KEY}}",
+        "{{OPENALGO_HOST}}"
+      ],
+      "toolTimeout": 60,
+      "enabledTools": ["*"]
+    }
+  }
+}

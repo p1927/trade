@@ -6,3 +6,7 @@
 	path = tradingagents
 	url = https://github.com/p1927/TradingAgents.git
 	branch = main
+[submodule "vibetrading"]
+	path = vibetrading
+	url = https://github.com/p1927/Vibe-Trading.git
+	branch = main

@@ -5,6 +5,7 @@
 #   ./scripts/sync.sh all
 #   ./scripts/sync.sh tradingagents
 #   ./scripts/sync.sh openalgo
+#   ./scripts/sync.sh vibetrading
 #   ./scripts/sync.sh status
 
 set -euo pipefail
@@ -46,6 +47,19 @@ sync_openalgo() {
   echo "    Commit and push trade when ready: git commit -m 'chore: bump openalgo submodule'"
 }
 
+sync_vibetrading() {
+  echo "==> Syncing Vibe Trading (upstream -> p1927/Vibe-Trading submodule)"
+  ensure_upstream "$ROOT/vibetrading" "https://github.com/HKUDS/Vibe-Trading.git"
+  cd "$ROOT/vibetrading"
+  git fetch upstream
+  git merge --no-edit upstream/main
+  git push origin main
+  cd "$ROOT"
+  git add vibetrading
+  echo "    Updated vibetrading submodule pointer."
+  echo "    Commit and push trade when ready: git commit -m 'chore: bump vibetrading submodule'"
+}
+
 show_status() {
   echo "==> Trade repository"
   cd "$ROOT"
@@ -62,6 +76,16 @@ show_status() {
   cd "$ROOT/openalgo"
   git fetch upstream --quiet
   git log --oneline HEAD..upstream/main | head -10 || true
+  echo
+  echo "==> Vibe Trading upstream delta"
+  if [[ -d "$ROOT/vibetrading/.git" ]]; then
+    ensure_upstream "$ROOT/vibetrading" "https://github.com/HKUDS/Vibe-Trading.git"
+    cd "$ROOT/vibetrading"
+    git fetch upstream --quiet
+    git log --oneline HEAD..upstream/main | head -10 || true
+  else
+    echo "    vibetrading/ submodule not initialized"
+  fi
 }
 
 case "$TARGET" in
@@ -71,9 +95,13 @@ case "$TARGET" in
   openalgo|oa)
     sync_openalgo
     ;;
+  vibetrading|vibe|vt)
+    sync_vibetrading
+    ;;
   all)
     sync_tradingagents
     sync_openalgo
+    sync_vibetrading
     ;;
   status)
     show_status
@@ -83,10 +111,11 @@ case "$TARGET" in
 Usage: ./scripts/sync.sh [target]
 
 Targets:
-  all             Sync TradingAgents and OpenAlgo submodules (default)
+  all             Sync all submodules (default)
   tradingagents   Merge upstream TradingAgents into tradingagents/
   openalgo        Merge upstream OpenAlgo into openalgo/
-  status          Show pending upstream commits for both submodules
+  vibetrading     Merge upstream HKUDS/Vibe-Trading into vibetrading/
+  status          Show pending upstream commits for all submodules
 EOF
     ;;
   *)
