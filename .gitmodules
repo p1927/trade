@@ -1,3 +1,4 @@
 [submodule "openalgo"]
 	path = openalgo
 	url = https://github.com/p1927/openalgo.git
+	branch = main

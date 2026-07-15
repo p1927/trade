@@ -24,6 +24,9 @@ sync_tradingagents() {
 sync_openalgo() {
   echo "==> Syncing OpenAlgo (upstream -> p1927/openalgo submodule)"
   cd "$ROOT/openalgo"
+  if ! git remote | grep -qx upstream; then
+    git remote add upstream https://github.com/marketcalls/openalgo.git
+  fi
   git fetch upstream
   git merge --no-edit upstream/main
   git push origin main
@@ -44,6 +47,8 @@ show_status() {
   echo
   echo "==> OpenAlgo upstream delta"
   cd "$ROOT/openalgo"
+  git remote get-url upstream >/dev/null 2>&1 || \
+    git remote add upstream https://github.com/marketcalls/openalgo.git
   git fetch upstream --quiet
   git log --oneline HEAD..upstream/main | head -10 || true
 }
