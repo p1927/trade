@@ -34,6 +34,19 @@ def _session_service():
     return host._get_session_service()
 
 
+async def _append_watch_system_message(session_id: str, summary: str) -> None:
+    """Post a watch summary to the agent session without triggering a user turn."""
+    if not summary.strip():
+        return
+    svc = _session_service()
+    if not svc or not session_id:
+        return
+    try:
+        await svc.send_message(session_id, summary, role="system")
+    except Exception as exc:
+        logger.warning("failed to append watch summary to session %s: %s", session_id, exc)
+
+
 def _nautilus_watch_enabled() -> bool:
     try:
         from nautilus_openalgo_bridge.config import is_watch_enabled
@@ -58,18 +71,14 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     symbols = list(agent.get("symbols") or ["NIFTY"])
     focus = symbols[0]
 
+    session_id = str(agent.get("vibe_session_id") or "")
+
     if mc.market_hours_only and not is_market_session_open(cfg):
         now = datetime.now(timezone.utc).isoformat()
         agent["last_watch_at"] = now
         save_agent(agent)
         summary = "[autonomous_watch] market closed — summary only"
-        svc = _session_service()
-        session_id = str(agent.get("vibe_session_id") or "")
-        if svc and session_id:
-            try:
-                await svc.send_message(session_id, summary, role="system")
-            except Exception as exc:
-                logger.warning("failed to append market-closed watch summary to session %s: %s", session_id, exc)
+        await _append_watch_system_message(session_id, summary)
         return {"status": "watch_only", "reason": "outside_market_hours", "summary": summary}
 
     profile = resolve_profile(agent=agent)
@@ -80,6 +89,7 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
         agent["last_watch_at"] = now
         save_agent(agent)
         summary = "[autonomous_watch] Nautilus bridge required for India agents — set NAUTILUS_WATCH_ENABLE=true"
+        await _append_watch_system_message(session_id, summary)
         return {"status": "degraded", "reason": "nautilus_watch_required", "summary": summary}
 
     if bridge_agent or _nautilus_watch_enabled():
@@ -99,13 +109,7 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
                     "focus_ticker": focus,
                 },
             )
-            svc = _session_service()
-            session_id = str(agent.get("vibe_session_id") or "")
-            if svc and session_id:
-                try:
-                    await svc.send_message(session_id, summary, role="system")
-                except Exception as exc:
-                    logger.warning("failed to append watch summary to session %s: %s", session_id, exc)
+            await _append_watch_system_message(session_id, summary)
             return {
                 "status": "watch",
                 "summary": summary,
@@ -115,24 +119,31 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
             }
         except Exception as exc:
             logger.warning("nautilus bridge watch tick failed for %s: %s", agent_id, exc)
+            summary = f"[autonomous_watch] Nautilus bridge error: {exc}"
+            await _append_watch_system_message(session_id, summary)
             if bridge_agent:
                 return {
                     "status": "error",
                     "reason": "nautilus_bridge_failed",
-                    "summary": f"[autonomous_watch] Nautilus bridge error: {exc}",
+                    "summary": summary,
                     "watch_path": "nautilus_bridge",
                 }
             return {
                 "status": "watch",
-                "summary": f"[autonomous_watch] Nautilus bridge error: {exc}",
+                "summary": summary,
                 "nautilus_primary": True,
             }
 
     if is_bridge_autonomous_agent(agent_id):
+        now = datetime.now(timezone.utc).isoformat()
+        agent["last_watch_at"] = now
+        save_agent(agent)
+        summary = "[autonomous_watch] India agent requires Nautilus bridge — auto_paper watch disabled"
+        await _append_watch_system_message(session_id, summary)
         return {
             "status": "degraded",
             "reason": "nautilus_watch_required",
-            "summary": "[autonomous_watch] India agent requires Nautilus bridge — auto_paper watch disabled",
+            "summary": summary,
         }
 
     feedback: dict[str, Any] = {}
@@ -150,13 +161,7 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     save_agent(agent)
 
     summary = build_watch_summary_message(agent=agent, feedback=feedback)
-    svc = _session_service()
-    session_id = str(agent.get("vibe_session_id") or "")
-    if svc and session_id:
-        try:
-            await svc.send_message(session_id, summary, role="system")
-        except Exception as exc:
-            logger.warning("failed to append watch summary to session %s: %s", session_id, exc)
+    await _append_watch_system_message(session_id, summary)
 
     requires_action = bool(feedback.get("requires_action")) or bool(feedback.get("alerts"))
     if requires_action and mc.revision_policy != "scheduled_only":

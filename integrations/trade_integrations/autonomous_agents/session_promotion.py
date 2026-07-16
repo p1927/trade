@@ -51,7 +51,6 @@ def promote_orchestrator_session(
         raise ValueError(f"session is not orchestrator: {orch_sid}")
 
     session.config = dict(session_cfg)
-    session.config["hide_orchestrator_history"] = True
     session.title = f"autonomous:{name}"
     session_service.store.update_session(session)
 

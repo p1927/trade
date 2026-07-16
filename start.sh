@@ -10,6 +10,7 @@
 #   --cli             TradingAgents CLI instead of Vibe Web UI
 #   --agents-only     TradingAgents only (expects SearXNG + OpenAlgo up)
 #   --no-searxng      Skip SearXNG Docker check/start
+#   --no-timescale    Skip TimescaleDB Docker check/start
 #   --no-bootstrap    Skip venv / pip install
 #   --status          Print readiness and exit
 
@@ -29,12 +30,14 @@ START_AGENTS=1
 START_VIBE=1
 START_CLI=0
 START_SEARXNG=1
+START_TIMESCALE=1
 DO_BOOTSTRAP=1
 STATUS_ONLY=0
 DAEMON=0
 
 # Readiness flags (0/1)
 READY_SEARXNG=0
+READY_TIMESCALE=0
 READY_OPENALGO=0
 READY_AGENTS=0
 READY_VIBE=0
@@ -46,6 +49,7 @@ for arg in "$@"; do
     --vibe-only) START_CLI=0; START_VIBE=1 ;;
     --agents-only) START_OPENALGO=0; START_VIBE=0; START_CLI=1 ;;
     --no-searxng) START_SEARXNG=0 ;;
+    --no-timescale) START_TIMESCALE=0 ;;
     --no-bootstrap) DO_BOOTSTRAP=0 ;;
     --status) STATUS_ONLY=1 ;;
     --daemon) DAEMON=1 ;;
@@ -58,6 +62,7 @@ Usage: ./start.sh [options]
   --openalgo-only   SearXNG + OpenAlgo only (browser trading, no agent UI)
   --agents-only     TradingAgents CLI only (SearXNG + OpenAlgo must already run)
   --no-searxng      Do not start/check SearXNG Docker
+  --no-timescale    Do not start/check TimescaleDB Docker
   --no-bootstrap    Skip venv creation and pip install
   --status          Check readiness of all services and exit
   --daemon          Start OpenAlgo + Vibe in background and exit
@@ -118,6 +123,17 @@ pick_python() {
     echo "$ROOT/.venv/bin/python"
   else
     echo "python3"
+  fi
+}
+
+ensure_docker_path() {
+  if command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  local docker_bin="/Applications/Docker.app/Contents/Resources/bin"
+  if [[ -x "$docker_bin/docker" ]]; then
+    PATH="$docker_bin:$PATH"
+    export PATH
   fi
 }
 
@@ -251,6 +267,9 @@ ensure_searxng() {
   fi
 
   if ! command -v docker >/dev/null 2>&1; then
+    ensure_docker_path
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
     fail "SearXNG not running and Docker is not installed"
     warn "News search will fall back to yfinance/alpha_vantage only"
     return 0
@@ -277,6 +296,87 @@ ensure_searxng() {
 check_searxng() {
   if probe_searxng; then
     READY_SEARXNG=1
+  fi
+}
+
+# ── TimescaleDB (Docker) ─────────────────────────────────────────────────────
+
+timescale_enabled() {
+  local flag="${TIMESCALE_ENABLED:-}"
+  flag="${flag,,}"
+  [[ "$flag" == "1" || "$flag" == "true" || "$flag" == "yes" || "$flag" == "on" ]]
+}
+
+timescale_url() {
+  echo "${TIMESCALE_DATABASE_URL:-postgresql://postgres:tradehub@localhost:5433/trade_hub}"
+}
+
+probe_timescale() {
+  if ! timescale_enabled; then
+    return 0
+  fi
+  (cd "$ROOT" && "$(pick_python)" - <<'PY') >/dev/null 2>&1
+from trade_integrations.env import load_trade_env
+from trade_integrations.hub_storage.timescale_ticks import timescale_health
+
+load_trade_env()
+health = timescale_health()
+raise SystemExit(0 if health.get("ok") else 1)
+PY
+}
+
+ensure_timescale() {
+  if ! timescale_enabled; then
+    return 0
+  fi
+
+  if probe_timescale; then
+    READY_TIMESCALE=1
+    return 0
+  fi
+
+  if [[ ! -f "$COMPOSE_FILE" ]]; then
+    fail "TimescaleDB enabled but $COMPOSE_FILE missing"
+    return 1
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    ensure_docker_path
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    fail "TimescaleDB enabled but Docker is not installed"
+    warn "Hot tick recording will be skipped until TimescaleDB is available"
+    return 0
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    fail "TimescaleDB enabled but Docker daemon is not running"
+    warn "Start Docker Desktop, then retry — hot ticks disabled until then"
+    return 0
+  fi
+
+  log "Starting TimescaleDB via Docker ..."
+  docker compose -f "$COMPOSE_FILE" up -d timescaledb
+
+  local i
+  for i in $(seq 1 30); do
+    if probe_timescale; then
+      READY_TIMESCALE=1
+      return 0
+    fi
+    sleep 2
+  done
+
+  fail "TimescaleDB did not become ready — check: docker compose -f docker-compose.stack.yml logs timescaledb"
+  return 1
+}
+
+check_timescale() {
+  if ! timescale_enabled; then
+    return 0
+  fi
+  if probe_timescale; then
+    READY_TIMESCALE=1
   fi
 }
 
@@ -382,6 +482,16 @@ print_status() {
     ok "SearXNG        $(searxng_url)  (news search)"
   else
     fail "SearXNG        not reachable at $(searxng_url)"
+  fi
+
+  if timescale_enabled; then
+    if (( READY_TIMESCALE )); then
+      ok "TimescaleDB    $(timescale_url)  (hot market ticks)"
+    else
+      fail "TimescaleDB    enabled but not reachable at $(timescale_url)"
+    fi
+  else
+    warn "TimescaleDB    disabled (set TIMESCALE_ENABLED=true for hot tick tier)"
   fi
 
   if (( READY_OPENALGO )); then
@@ -531,6 +641,12 @@ main() {
     ensure_searxng || true
   else
     check_searxng
+  fi
+
+  if (( START_TIMESCALE )); then
+    ensure_timescale || true
+  else
+    check_timescale
   fi
 
   if (( STATUS_ONLY )); then

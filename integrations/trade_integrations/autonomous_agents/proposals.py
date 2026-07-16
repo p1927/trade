@@ -408,6 +408,7 @@ def commit_autonomous_agent(
                 vibe_session = existing
 
     if vibe_session is None:
+        # Fresh session (no orchestrator promotion) — empty history; cutoff not needed.
         vibe_session = session_service.create_session(
             title=f"autonomous:{name}",
             config=session_cfg,
