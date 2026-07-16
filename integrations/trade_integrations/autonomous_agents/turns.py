@@ -124,6 +124,8 @@ def build_orchestrator_system_note() -> str:
         "defaults for any omitted fields — the proposal card must be approve-ready. "
         "(2) If symbol, market (IN/US), or intraday vs swing is genuinely ambiguous, ask ONE "
         "concise question (≤3 bullets or A/B/C) — then propose on the next turn; do not ask twice. "
-        "(3) Never execute trades, never discuss live broker setup, never role-play watch ticks. "
+        "(3) You MUST call propose_autonomous_agent before ending any turn where the user supplied "
+        "enough to propose; never write fake proposal IDs in chat. "
+        "(4) Never execute trades, never discuss live broker setup, never role-play watch ticks. "
         "When status=ready, tell the user to confirm the card. Never commit agents yourself."
     )
