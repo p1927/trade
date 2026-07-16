@@ -117,10 +117,12 @@ def _patch_trading_graph() -> None:
     import tradingagents.graph.trading_graph as graph_module
     from trade_integrations.context.hub import (
         prefetch_company_research,
+        prefetch_index_research,
         prefetch_options_research,
         prefetch_stock_research,
     )
     from trade_integrations.tools.company_research_tools import get_company_research
+    from trade_integrations.tools.index_research_tools import get_index_research
     from trade_integrations.tools.options_research_tools import get_options_research
     from trade_integrations.tools.stock_research_tools import get_stock_research
 
@@ -141,6 +143,9 @@ def _patch_trading_graph() -> None:
         if get_stock_research not in news_tools:
             news_tools.append(get_stock_research)
             changed = True
+        if get_index_research not in news_tools:
+            news_tools.append(get_index_research)
+            changed = True
         if changed:
             tool_nodes["news"] = ToolNode(news_tools)
         return tool_nodes
@@ -160,6 +165,11 @@ def _patch_trading_graph() -> None:
             if prefetch_stock_research(company_name):
                 logger.info(
                     "Prefetched stock research for %s into trade-stack hub",
+                    company_name,
+                )
+            if prefetch_index_research(company_name):
+                logger.info(
+                    "Prefetched index research for %s into trade-stack hub",
                     company_name,
                 )
         except Exception:

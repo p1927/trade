@@ -78,3 +78,16 @@ For **equity** CNC/MIS trades, use the **stock-advisor** skill:
 **Vibe automation (OpenAlgo MCP):** `get_stock_browse`; `get_stock_trade_plan`
 
 Regenerate: `python scripts/run_stock_research.py RELIANCE`
+
+## Index research (NIFTY)
+
+For **index-level** prediction, attribution, and scenarios:
+
+```
+{{TRADE_STACK_HUB_DIR}}/NIFTY/index_research/latest.json
+```
+
+**Vibe automation (OpenAlgo MCP):** `get_index_trade_plan` (accepts `horizon_days`)
+
+Regenerate: `python scripts/run_index_research.py NIFTY --horizon-days 14`
+Daily factors: `python scripts/run_index_factor_snapshot.py`

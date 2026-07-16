@@ -20,6 +20,7 @@ _PREFETCH_ENV = "TRADINGAGENTS_RESEARCH_PREFETCH"
 _OPTIONS_CACHE_MINUTES_ENV = "TRADINGAGENTS_OPTIONS_CACHE_MINUTES"
 _OPTIONS_PREFETCH_ENV = "TRADINGAGENTS_OPTIONS_PREFETCH"
 _STOCK_PREFETCH_ENV = "TRADINGAGENTS_STOCK_PREFETCH"
+_INDEX_PREFETCH_ENV = "TRADINGAGENTS_INDEX_PREFETCH"
 
 
 def get_hub_dir() -> Path:
@@ -518,3 +519,23 @@ def is_index_research_cache_fresh(ticker: str) -> bool:
     mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
     age_minutes = (datetime.now(timezone.utc) - mtime).total_seconds() / 60.0
     return age_minutes <= max_age
+
+
+def is_index_prefetch_enabled() -> bool:
+    raw = os.getenv(_INDEX_PREFETCH_ENV, "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def prefetch_index_research(ticker: str) -> bool:
+    """Warm the hub cache for index research when enabled (NIFTY and other indices)."""
+    from trade_integrations.dataflows.company_research.india_symbols import india_index_tickers
+
+    if not is_index_prefetch_enabled():
+        return False
+    sym = ticker.strip().upper().replace(".NS", "").replace(".BO", "")
+    if sym not in india_index_tickers():
+        return False
+    from trade_integrations.tools.index_research_tools import fetch_index_research_report
+
+    fetch_index_research_report(sym)
+    return True
