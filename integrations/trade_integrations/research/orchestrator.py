@@ -205,6 +205,14 @@ def ensure_research_complete(
 
     if doc is None or refresh:
         try:
+            from trade_integrations.hub_capture.channel import resolve_registered_entity, warm_entity_channel
+
+            if resolve_registered_entity(sym):
+                warm_entity_channel(sym, kind=resolved_kind.value)
+                stages_run.append("hub_channel:warm")
+        except Exception:
+            pass
+        try:
             doc = _run_batch_pipeline(
                 sym,
                 resolved_kind,

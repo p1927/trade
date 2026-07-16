@@ -282,6 +282,21 @@ def _fetch_nifty_pe() -> dict[str, Any] | None:
 
 def _fetch_nifty_pcr() -> dict[str, Any] | None:
     try:
+        from trade_integrations.hub_capture.channel import read_captured_pcr
+    except ImportError:
+        read_captured_pcr = None  # type: ignore[assignment,misc]
+
+    if read_captured_pcr is not None:
+        captured = read_captured_pcr("NIFTY")
+        if captured is not None:
+            return {
+                "factor": "nifty_pcr",
+                "value": float(captured),
+                "source": "hub_capture",
+                "metadata": {"source": "capture_ledger"},
+            }
+
+    try:
         from trade_integrations.dataflows.openalgo import fetch_option_chain
     except ImportError:
         return None

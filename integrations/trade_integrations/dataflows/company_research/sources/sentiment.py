@@ -123,6 +123,7 @@ def fetch_sentiment(
     *,
     headlines: list[str],
     text: str | None = None,
+    capture_entity: str | None = None,
 ) -> StageResult:
     items = list(headlines)
     if text:
@@ -167,6 +168,15 @@ def fetch_sentiment(
         "neutral_pct": round(100 * sum(1 for l in labels if l == "neutral") / total, 1),
         "count": len(labels),
     }
+
+    if capture_entity and text_items:
+        try:
+            from trade_integrations.hub_capture.channel import record_news_headlines
+
+            news_rows = [{"title": str(h)} for h in text_items[:15]]
+            record_news_headlines(capture_entity, news_rows, source=str(vendor))
+        except Exception:
+            logger.debug("hub news channel write-through skipped", exc_info=True)
 
     return StageResult(
         stage="sentiment",

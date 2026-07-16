@@ -152,8 +152,8 @@ def _fetch_live_quote(oa_symbol: str, exchange: str) -> dict | None:
         return None
 
 
-def fetch_openalgo_quote(symbol: str) -> dict | None:
-    """Fetch a single live quote for an equity or index symbol."""
+def _fetch_live_quote_raw(symbol: str) -> dict | None:
+    """Direct OpenAlgo quote fetch (no hub channel)."""
     oa_symbol, exchange = resolve_openalgo_symbol(symbol)
     data = _fetch_live_quote(oa_symbol, exchange)
     if not data:
@@ -166,6 +166,13 @@ def fetch_openalgo_quote(symbol: str) -> dict | None:
         "low_52w": data.get("low_52w"),
         "source": "openalgo",
     }
+
+
+def fetch_openalgo_quote(symbol: str) -> dict | None:
+    """Fetch a single live quote for an equity or index symbol (hub channel when registered)."""
+    from trade_integrations.hub_capture.channel import get_quote
+
+    return get_quote(symbol, _fetch_live_quote_raw)
 
 
 def normalize_openalgo_expiry(expiry: str) -> str:
@@ -207,14 +214,14 @@ def fetch_option_expiry_dates(
     return list(data.get("expiry_dates") or data.get("expiries") or [])
 
 
-def fetch_option_chain(
+def _fetch_option_chain_raw(
     underlying: str,
     exchange: str,
     *,
     expiry_date: str | None = None,
     strike_count: int | None = None,
 ) -> dict:
-    """Fetch normalized option chain payload from OpenAlgo."""
+    """Direct OpenAlgo option chain fetch (no hub channel)."""
     body: dict = {
         "underlying": underlying.upper(),
         "exchange": exchange.upper(),
@@ -242,6 +249,25 @@ def fetch_option_chain(
     }
 
 
+def fetch_option_chain(
+    underlying: str,
+    exchange: str,
+    *,
+    expiry_date: str | None = None,
+    strike_count: int | None = None,
+) -> dict:
+    """Fetch normalized option chain payload (hub channel when registered)."""
+    from trade_integrations.hub_capture.channel import get_chain
+
+    return get_chain(
+        underlying,
+        exchange,
+        _fetch_option_chain_raw,
+        expiry_date=expiry_date,
+        strike_count=strike_count,
+    )
+
+
 def get_openalgo_stock_data(
     symbol: Annotated[str, "ticker symbol of the company"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
@@ -266,7 +292,11 @@ def get_openalgo_stock_data(
         f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
     )
 
-    quote = _fetch_live_quote(oa_symbol, exchange)
+    from trade_integrations.hub_capture.channel import get_quote, resolve_registered_entity
+
+    quote = get_quote(symbol, _fetch_live_quote_raw) if resolve_registered_entity(symbol) else None
+    if quote is None:
+        quote = _fetch_live_quote(oa_symbol, exchange)
     if quote and quote.get("ltp") is not None:
         header += (
             f"# Live quote: LTP={quote.get('ltp')} bid={quote.get('bid')} "

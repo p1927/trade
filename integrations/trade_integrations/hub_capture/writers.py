@@ -230,6 +230,65 @@ def record_vix_snapshot(
     return _append_rows(entity_id, "vix", [row], dedupe_keys=("date", "source"))
 
 
+def record_quote_snapshot(
+    entity_id: str,
+    quote: dict[str, Any],
+    *,
+    source: str = "openalgo",
+    captured_at: str | None = None,
+) -> dict[str, Any]:
+    if not should_capture(entity_id, "derivatives_chain"):
+        return {"status": "skipped", "reason": "capture_disabled"}
+    ts = captured_at or _now_iso()
+    row = {
+        "entity_id": entity_id.upper(),
+        "captured_at": ts,
+        "date": ts[:10],
+        "ltp": quote.get("ltp"),
+        "volume": quote.get("volume"),
+        "change_pct": quote.get("change_pct"),
+        "source": source,
+        "series": "quotes",
+        "channel": "hub_channel",
+    }
+    return _append_rows(entity_id, "quotes", [row], dedupe_keys=("captured_at", "source", "series"))
+
+
+def record_news_snapshot(
+    entity_id: str,
+    headlines: list[dict[str, Any]],
+    *,
+    source: str,
+    captured_at: str | None = None,
+) -> dict[str, Any]:
+    if not should_capture(entity_id, "flows"):
+        return {"status": "skipped", "reason": "capture_disabled"}
+    ts = captured_at or _now_iso()
+    rows = []
+    for headline in headlines:
+        if not isinstance(headline, dict):
+            continue
+        title = str(headline.get("title") or "").strip()
+        if not title:
+            continue
+        rows.append(
+            {
+                "entity_id": entity_id.upper(),
+                "captured_at": ts,
+                "date": ts[:10],
+                "title": title[:500],
+                "summary": str(headline.get("summary") or "")[:1000],
+                "url": str(headline.get("url") or headline.get("link") or "")[:500],
+                "source": source,
+                "series": "news",
+                "channel": "hub_channel",
+            }
+        )
+    if not rows:
+        return {"status": "empty"}
+    return _append_rows(entity_id, "news", rows, dedupe_keys=("date", "title", "source"))
+
+
 def prune_capture_series(entity_id: str) -> dict[str, Any]:
     """Delete daily capture files older than entity retention policy."""
     entity = get_entity(entity_id)
@@ -244,6 +303,8 @@ def prune_capture_series(entity_id: str) -> dict[str, Any]:
         "derivatives_chain": int(retention.get("derivatives", 365)),
         "flows": int(retention.get("flows", 365)),
         "vix": int(retention.get("vix", 365)),
+        "quotes": int(retention.get("derivatives", 365)),
+        "news": int(retention.get("flows", 365)),
     }
     for series, keep_days in mapping.items():
         directory = _series_dir(entity_id, series)

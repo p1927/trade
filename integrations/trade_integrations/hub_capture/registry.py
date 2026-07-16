@@ -35,6 +35,8 @@ _TIER_A_KEYS = frozenset({
     "fii_fut_long_short_ratio",
     "fii_net_5d",
     "dii_net_5d",
+    "fpi_equity_net_usd",
+    "fpi_debt_net_usd",
     "india_vix",
     "institutional_net_5d",
     "dii_absorption_ratio",
@@ -244,6 +246,8 @@ def build_capture_stats(entity_id: str = _DEFAULT_ENTITY_ID) -> dict[str, Any]:
         "derivatives_chain": base / "derivatives_chain",
         "flows": base / "flows",
         "vix": base / "vix",
+        "quotes": base / "quotes",
+        "news": base / "news",
         "participant_oi": poi,
     }
     total_rows = 0
@@ -264,9 +268,17 @@ def build_capture_stats(entity_id: str = _DEFAULT_ENTITY_ID) -> dict[str, Any]:
         total_rows += rows
 
     entity_cfg = get_entity(entity) or default_entity()
+    channel_stats: dict[str, Any] = {}
+    try:
+        from trade_integrations.hub_capture.channel import channel_stats_today
+
+        channel_stats = channel_stats_today()
+    except Exception:
+        pass
     return {
         "entity_id": entity,
         "capture_enabled": bool(entity_cfg.get("capture_enabled")),
         "series": series,
         "total_rows": total_rows,
+        "channel": channel_stats,
     }

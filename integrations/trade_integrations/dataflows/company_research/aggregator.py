@@ -131,7 +131,16 @@ def run_company_research(
                 lookback_days=config.news_lookback_days,
             ),
         )
-        _apply_stage(doc, fetch_sentiment(headlines=_headlines_from_news(doc.news)))
+        from trade_integrations.hub_capture.channel import resolve_registered_entity
+
+        capture_entity = resolve_registered_entity(normalized)
+        _apply_stage(
+            doc,
+            fetch_sentiment(
+                headlines=_headlines_from_news(doc.news),
+                capture_entity=capture_entity,
+            ),
+        )
         if include_macro:
             _apply_stage(doc, fetch_macro_in())
     else:
@@ -155,7 +164,16 @@ def run_company_research(
                 lookback_days=config.news_lookback_days,
             ),
         )
-        _apply_stage(doc, fetch_sentiment(headlines=_headlines_from_news(doc.news)))
+        from trade_integrations.hub_capture.channel import resolve_registered_entity
+
+        capture_entity = resolve_registered_entity(normalized)
+        _apply_stage(
+            doc,
+            fetch_sentiment(
+                headlines=_headlines_from_news(doc.news),
+                capture_entity=capture_entity,
+            ),
+        )
         _apply_stage(doc, fetch_earnings_signal(normalized, market=market))
         _apply_stage(doc, fetch_corp_events(normalized, market=market))
         if include_macro:

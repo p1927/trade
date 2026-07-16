@@ -492,6 +492,19 @@ def run_miss_analysis(
         categories[cat] = categories.get(cat, 0) + 1
 
     metrics = report.get("metrics") or {}
+    capture_block: dict[str, Any] = {}
+    try:
+        from trade_integrations.hub_capture.channel import channel_stats_today
+        from trade_integrations.hub_capture.registry import build_capture_stats
+        from trade_integrations.hub_capture.rollup import capture_coverage_stats
+
+        capture_block = {
+            "stats": build_capture_stats(ticker.strip().upper()),
+            "coverage": capture_coverage_stats(ticker.strip().upper()),
+            "channel_today": channel_stats_today(),
+        }
+    except Exception:
+        pass
     return {
         "status": "ok",
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -506,6 +519,7 @@ def run_miss_analysis(
             "hit_count": len(hits),
             "miss_categories": categories,
             "top_miss_patterns": _top_miss_patterns(misses),
+            "capture_coverage": capture_block,
         },
         "misses": misses,
         "hits_sample": hits[:5],

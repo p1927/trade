@@ -59,6 +59,7 @@ def main() -> int:
         "trade_integrations.hub_capture.gate",
         "trade_integrations.hub_capture.writers",
         "trade_integrations.hub_capture.rollup",
+        "trade_integrations.hub_capture.channel",
         "trade_integrations.monitor.execution_ledger",
         "trade_integrations.auto_paper.outcome_ledger",
         "trade_integrations.dataflows.options_research.strategy_ranker",
@@ -167,6 +168,39 @@ def main() -> int:
         results.append(_check("capture_gate", should_capture("NIFTY", "derivatives_chain") is True))
     except Exception as exc:
         results.append(_check("capture_registry", False, str(exc)))
+
+    try:
+        from trade_integrations.hub_capture.channel import get_chain, channel_stats_today
+        from trade_integrations.hub_capture.registry import save_registry, update_entity
+
+        def _fake_chain(underlying, exchange, *, expiry_date=None, strike_count=None):
+            return {
+                "underlying": underlying.upper(),
+                "underlying_ltp": 24500.0,
+                "expiry_date": "16JUL26",
+                "chain": [{"strike": 24500, "ce": {"ltp": 100, "oi": 500}, "pe": {"ltp": 95, "oi": 600}}],
+                "source": "verify_mock",
+            }
+
+        save_registry({"entities": []})
+        update_entity("NIFTY", {"capture_enabled": True, "factor_groups": ["derivatives", "flows"]})
+        latest = hub / "NIFTY" / "options_research" / "latest.json"
+        if latest.is_file():
+            try:
+                payload = json.loads(latest.read_text(encoding="utf-8"))
+                payload["as_of"] = "2020-01-01T00:00:00+00:00"
+                latest.write_text(json.dumps(payload), encoding="utf-8")
+            except (json.JSONDecodeError, OSError):
+                pass
+        chain = get_chain("NIFTY", "NFO", _fake_chain, strike_count=5)
+        stats = channel_stats_today()
+        capture_dir = hub / "_data" / "capture" / "nifty" / "derivatives_chain"
+        wrote = capture_dir.is_dir() and any(capture_dir.glob("*.parquet"))
+        results.append(_check("hub_channel_fetch", bool(chain.get("chain"))))
+        results.append(_check("hub_channel_write_through", wrote or stats.get("vendor_fetches", 0) >= 1))
+    except Exception as exc:
+        results.append(_check("hub_channel_fetch", False, str(exc)))
+        results.append(_check("hub_channel_write_through", False, str(exc)))
 
     try:
         from trade_integrations.hub_storage.timescale_ticks import timescale_health

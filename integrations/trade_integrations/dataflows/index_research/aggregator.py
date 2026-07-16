@@ -131,6 +131,27 @@ def run_index_research(
         lookahead_days=horizon.days,
         refresh=refresh_constituents,
     )
+    try:
+        from trade_integrations.hub_capture.channel import record_news_headlines
+
+        index_headlines: list[dict[str, Any]] = []
+        for signal in signals:
+            for factor in signal.factors or []:
+                if factor.get("type") != "news":
+                    continue
+                title = str(factor.get("title") or "").strip()
+                if title:
+                    index_headlines.append(
+                        {
+                            "title": title,
+                            "summary": factor.get("note"),
+                            "source": factor.get("source"),
+                        }
+                    )
+        if index_headlines:
+            record_news_headlines("NIFTY", index_headlines[:50], source="index_constituents")
+    except Exception:
+        pass
     with_news = sum(
         1 for s in signals if any(f.get("type") == "news" for f in (s.factors or []))
     )
