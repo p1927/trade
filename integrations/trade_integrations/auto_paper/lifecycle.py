@@ -164,20 +164,54 @@ def sync_lifecycle_from_positions(session: dict[str, Any]) -> dict[str, Any]:
     return lifecycle
 
 
+def on_strategy_revised(
+    session: dict[str, Any],
+    *,
+    new_strategy: str,
+    widget_id: str | None = None,
+    rationale: str = "",
+) -> dict[str, Any]:
+    """Lifecycle hook when agent revises strategy mid-session."""
+    lifecycle = load_lifecycle(session)
+    revisions = list(lifecycle.get("strategy_revisions") or [])
+    revisions.append(
+        {
+            "at": _now_iso(),
+            "from_strategy": lifecycle.get("active_strategy"),
+            "to_strategy": new_strategy,
+            "widget_id": widget_id,
+            "rationale": rationale[:500],
+        }
+    )
+    lifecycle["strategy_revisions"] = revisions[-20:]
+    lifecycle = _transition(
+        lifecycle,
+        STATE_ENTERING,
+        active_strategy=new_strategy,
+        active_widget_id=widget_id or lifecycle.get("active_widget_id"),
+        entered_at=_now_iso(),
+    )
+    save_lifecycle(session, lifecycle)
+    return lifecycle
+
+
 def on_decision(session: dict[str, Any], *, decision: str, rationale: str, ticker: str | None = None) -> dict[str, Any]:
-    """Update lifecycle when agent records ENTER/EXIT/HOLD/SKIP."""
+    """Update lifecycle when agent records ENTER/EXIT/HOLD/SKIP/REVISE."""
     lifecycle = load_lifecycle(session)
     focus = (ticker or session.get("primary_ticker") or "NIFTY").upper()
     decision_u = decision.strip().upper()
     cfg = get_auto_paper_config()
 
-    if decision_u == "ENTER":
+    if decision_u in {"ENTER", "REVISE", "ADJUST"}:
         lifecycle = _transition(
             lifecycle,
             STATE_ENTERING,
             active_ticker=focus,
             entered_at=_now_iso(),
         )
+        if decision_u in {"REVISE", "ADJUST"}:
+            on_strategy_revised(session, new_strategy=lifecycle.get("active_strategy") or "revised", rationale=rationale)
+            lifecycle = load_lifecycle(session)
     elif decision_u == "EXIT":
         strategy = lifecycle.get("active_strategy")
         tried = list(lifecycle.get("tried_strategies") or [])

@@ -57,13 +57,18 @@ def test_prefetch_emits_index_artifact_and_widget():
         patch("src.trade.hub_bridge._index_auto_widget_enabled", return_value=True),
         patch("src.trade.hub_bridge._maybe_emit_index_widget") as emit_index,
     ):
-        context = prefetch_research_for_message("sess-index", "NIFTY outlook", bus)
+        context = prefetch_research_for_message("sess-index", "Where is NIFTY headed?", bus)
 
     artifact_events = [e for e in bus.events if e[1] == "research.artifact"]
     assert len(artifact_events) == 2
     asset_types = {e[2]["asset_type"] for e in artifact_events}
     assert asset_types == {"options", "index"}
-    emit_index.assert_called_once_with(bus, "sess-index", "NIFTY")
+    emit_index.assert_called_once_with(
+        bus,
+        "sess-index",
+        "NIFTY",
+        widget_intent="index_outlook",
+    )
     assert "[index_research_context]" in context
     assert "[research_context]" in context
 

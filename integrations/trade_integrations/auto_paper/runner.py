@@ -97,6 +97,17 @@ class PaperTradingAgentRunner:
         if not is_agent_session_active():
             return PaperTickResult(TICK_NO_SESSION, "session_inactive_or_halted")
 
+        agent_id = str(session.get("autonomous_agent_id") or "").strip()
+        if agent_id or session.get("nautilus_bridge_mode"):
+            try:
+                from trade_integrations.execution.enforce import is_bridge_autonomous_agent
+
+                if is_bridge_autonomous_agent(agent_id) or session.get("nautilus_bridge_mode"):
+                    return PaperTickResult(TICK_OUTSIDE_HOURS, "nautilus_bridge_owns_watch")
+            except ImportError:
+                if session.get("nautilus_bridge_mode"):
+                    return PaperTickResult(TICK_OUTSIDE_HOURS, "nautilus_bridge_owns_watch")
+
         cfg = get_auto_paper_config()
         if not is_market_session_open(cfg):
             return PaperTickResult(TICK_OUTSIDE_HOURS, "outside_market_hours")
@@ -137,6 +148,18 @@ class PaperTradingAgentRunner:
         vibe_session_id = session.get("vibe_session_id")
         if self._agent_caller and vibe_session_id:
             try:
+                try:
+                    import sys
+
+                    host = sys.modules.get("api_server") or sys.modules.get("agent.api_server")
+                    if host is not None:
+                        svc = host._get_session_service()
+                        if svc is not None:
+                            from src.trade.auto_paper_bootstrap import prepare_fresh_vibe_turn
+
+                            await prepare_fresh_vibe_turn(svc, str(vibe_session_id))
+                except ImportError:
+                    pass
                 result = await self._agent_caller(str(vibe_session_id), prompt)
                 audit = write_paper_action(
                     "turn_completed",

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from trade_integrations.context.hub import load_company_research_json, save_company_research
 from trade_integrations.dataflows.company_research.models import StageResult
-from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+from trade_integrations.dataflows.market_quotes import fetch_live_quote
 
 from .browse_summary import build_stock_browse_summary
 from .format import format_stock_report
@@ -50,9 +50,9 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
     identity = payload.get("identity") or {}
     quote = None
     try:
-        q = fetch_openalgo_quote(sym)
+        q = fetch_live_quote(sym)
         if q:
-            quote = {"ltp": q.get("ltp"), "volume": q.get("volume"), "source": "openalgo"}
+            quote = {"ltp": q.get("ltp"), "volume": q.get("volume"), "source": q.get("source") or "live"}
     except Exception:
         quote = None
 

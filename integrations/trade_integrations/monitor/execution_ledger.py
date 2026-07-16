@@ -114,6 +114,22 @@ def list_open_entries() -> list[dict[str, Any]]:
     return [entry for entry in load_ledger() if entry.get("status") == "open"]
 
 
+def list_open_entries_live(*, reconcile_stale: bool = True) -> list[dict[str, Any]]:
+    """Open ledger entries that still have non-zero rows in OpenAlgo positionbook."""
+    position_book = fetch_position_book()
+    live: list[dict[str, Any]] = []
+    for entry in list_open_entries():
+        matched, _ = match_positions_for_entry(entry, position_book)
+        if matched:
+            live.append(entry)
+            continue
+        if reconcile_stale:
+            widget_id = str(entry.get("widget_id") or "")
+            if widget_id:
+                close_ledger_entry(widget_id)
+    return live
+
+
 def list_open_by_underlying(underlying: str) -> list[dict[str, Any]]:
     """Return open ledger entries for an underlying symbol."""
     symbol = underlying.strip().upper()
@@ -240,6 +256,12 @@ def match_positions_for_entry(
     for row in _normalize_position_rows(position_book):
         symbol = str(row.get("symbol", "")).upper()
         if symbol not in leg_symbols:
+            continue
+        try:
+            qty = int(float(row.get("quantity") or row.get("netqty") or row.get("net_qty") or 0))
+        except (TypeError, ValueError):
+            qty = 0
+        if qty == 0:
             continue
         matched.append(row)
         pnl = row.get("pnl")

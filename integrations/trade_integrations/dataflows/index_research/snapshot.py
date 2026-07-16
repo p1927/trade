@@ -8,6 +8,9 @@ from trade_integrations.dataflows.index_research.factor_store import (
     get_factor_data_dir,
     save_daily_factors,
 )
+from trade_integrations.dataflows.index_research.constituent_momentum import (
+    rollup_constituent_momentum,
+)
 from trade_integrations.dataflows.index_research.macro_global import (
     collect_global_factor_rows,
 )
@@ -86,8 +89,21 @@ def run_snapshot(*, snapshot_date: str, skip_constituents: bool = False) -> dict
         constituent_sentiments=constituent_sentiments or None,
     )
     aggregate_rows = build_constituent_aggregate_rows(signals) if signals else []
+    momentum = rollup_constituent_momentum(signals) if signals else None
+    if momentum is not None:
+        aggregate_rows.append(
+            {
+                "factor": "constituent_momentum_7d",
+                "value": momentum,
+                "source": "constituent_momentum",
+            }
+        )
     all_rows = macro_rows + aggregate_rows
     save_daily_factors(snapshot_date, all_rows)
+
+    from trade_integrations.context.hub import archive_company_research_snapshots
+
+    archive_summary = archive_company_research_snapshots(as_of_date=snapshot_date)
 
     out_path = get_factor_data_dir() / f"{snapshot_date}.parquet"
     return {
@@ -97,4 +113,5 @@ def run_snapshot(*, snapshot_date: str, skip_constituents: bool = False) -> dict
         "skip_constituents": skip_constituents,
         "factors": [row["factor"] for row in all_rows],
         "path": str(out_path),
+        "company_archive": archive_summary,
     }

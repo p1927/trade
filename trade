@@ -14,7 +14,7 @@ Usage:
 
 Stack:
   start [mode]          Start services (default: vibe, foreground)
-                        Modes: vibe | openalgo | cli | full | daemon
+                        Modes: vibe | openalgo | cli | full | daemon | nautilus-watch
   restart               Restart OpenAlgo + Vibe in background
   stop                  Stop OpenAlgo + Vibe background services
   status                Check SearXNG, OpenAlgo, Vibe, agents readiness
@@ -111,8 +111,14 @@ case "$cmd" in
       cli|agents)       exec "$ROOT/start.sh" --cli "$@" ;;
       full)             exec "$ROOT/start.sh" "$@" ;;
       daemon)           exec "$ROOT/start.sh" --daemon --no-searxng "$@" ;;
+      nautilus-watch)
+        # shellcheck disable=SC1091
+        source "$ROOT/scripts/stack_lib.sh"
+        stack_load_env
+        stack_start_nautilus_watch
+        ;;
       -h|--help|help)
-        echo "Usage: trade start [vibe|openalgo|cli|full|daemon]"
+        echo "Usage: trade start [vibe|openalgo|cli|full|daemon|nautilus-watch]"
         ;;
       *)
         echo "Unknown start mode: $mode (try: vibe, openalgo, cli, full)" >&2

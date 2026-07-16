@@ -15,6 +15,7 @@ from trade_integrations.context.hub import (
 from trade_integrations.dataflows.company_research.aggregator import run_company_research
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
+from trade_integrations.dataflows.index_research.constituent_factors import build_constituent_factors
 from trade_integrations.dataflows.index_research.models import ConstituentRow, ConstituentSignal
 
 _MAX_WORKERS_ENV = "INDEX_RESEARCH_MAX_WORKERS"
@@ -68,12 +69,37 @@ def _upcoming_events(
 
 def _sentiment_score(sentiment: dict[str, Any]) -> float | None:
     raw = sentiment.get("score")
-    if raw is None:
-        return None
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+
+    scores = sentiment.get("scores") or []
+    if scores:
+        total = 0.0
+        count = 0
+        for row in scores:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label") or "neutral").lower()
+            conf = float(row.get("score") or 0.5)
+            if label == "positive":
+                total += conf
+            elif label == "negative":
+                total -= conf
+            count += 1
+        if count:
+            return round(total / count, 4)
+
+    summary = sentiment.get("summary") or {}
+    if isinstance(summary, dict):
+        pos = float(summary.get("positive_pct") or 0.0)
+        neg = float(summary.get("negative_pct") or 0.0)
+        if pos or neg:
+            return round((pos - neg) / 100.0, 4)
+
+    return None
 
 
 def _build_signal(
@@ -82,13 +108,21 @@ def _build_signal(
     *,
     lookahead_days: int,
 ) -> ConstituentSignal:
+    events = _upcoming_events(list(doc.calendar_events or []), lookahead_days=lookahead_days)
+    sentiment = _sentiment_score(doc.sentiment or {})
+    factors = build_constituent_factors(
+        doc,
+        sector=row.sector,
+        upcoming_events=events,
+        sentiment_score=sentiment,
+    )
     return ConstituentSignal(
         symbol=row.symbol,
         weight=row.weight,
         sector=row.sector,
-        events=_upcoming_events(list(doc.calendar_events or []), lookahead_days=lookahead_days),
-        factors=[],
-        sentiment_score=_sentiment_score(doc.sentiment or {}),
+        events=events,
+        factors=factors,
+        sentiment_score=sentiment,
         contribution_to_index_pct=None,
     )
 

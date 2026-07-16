@@ -32,11 +32,17 @@ def main() -> int:
         action="store_true",
         help="Reconcile and score only; do not retrain",
     )
+    parser.add_argument(
+        "--force-retrain",
+        action="store_true",
+        help="Backfill factor history and retrain even without drift",
+    )
     args = parser.parse_args()
 
     summary = run_calibration(
         horizon_days=args.horizon_days,
         skip_retrain=args.skip_retrain,
+        force_retrain=args.force_retrain,
     )
     print(json.dumps(summary, indent=2, default=str))
     return 0

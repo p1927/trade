@@ -7,6 +7,7 @@
 #   ./scripts/sync.sh openalgo
 #   ./scripts/sync.sh vibetrading
 #   ./scripts/sync.sh ed-alpha
+#   ./scripts/sync.sh nautilus
 #   ./scripts/sync.sh status
 
 set -euo pipefail
@@ -74,6 +75,19 @@ sync_ed_alpha() {
   echo "    Commit and push trade when ready: git commit -m 'chore: bump ed-alpha submodule'"
 }
 
+sync_nautilus() {
+  echo "==> Syncing NautilusTrader (upstream develop -> nautilus_trader/ submodule)"
+  ensure_upstream "$ROOT/nautilus_trader" "https://github.com/nautechsystems/nautilus_trader.git"
+  cd "$ROOT/nautilus_trader"
+  git fetch upstream
+  git merge --no-edit upstream/develop
+  cd "$ROOT"
+  git add nautilus_trader
+  echo "    Updated nautilus_trader submodule pointer."
+  echo "    Commit when ready: git commit -m 'chore: bump nautilus_trader submodule'"
+  echo "    Note: watch node uses PyPI nautilus_trader wheel; submodule is source reference."
+}
+
 show_status() {
   echo "==> Trade repository"
   cd "$ROOT"
@@ -110,6 +124,16 @@ show_status() {
   else
     echo "    ed-alpha/ submodule not initialized"
   fi
+  echo
+  echo "==> NautilusTrader upstream delta"
+  if [[ -d "$ROOT/nautilus_trader/.git" ]]; then
+    ensure_upstream "$ROOT/nautilus_trader" "https://github.com/nautechsystems/nautilus_trader.git"
+    cd "$ROOT/nautilus_trader"
+    git fetch upstream --quiet
+    git log --oneline HEAD..upstream/develop | head -10 || true
+  else
+    echo "    nautilus_trader/ submodule not initialized"
+  fi
 }
 
 case "$TARGET" in
@@ -125,11 +149,15 @@ case "$TARGET" in
   ed-alpha|edalpha|ea)
     sync_ed_alpha
     ;;
+  nautilus|nautilus_trader|nt)
+    sync_nautilus
+    ;;
   all)
     sync_tradingagents
     sync_openalgo
     sync_vibetrading
     sync_ed_alpha
+    sync_nautilus
     ;;
   status)
     show_status
@@ -144,6 +172,7 @@ Targets:
   openalgo        Merge upstream OpenAlgo into openalgo/
   vibetrading     Merge upstream HKUDS/Vibe-Trading into vibetrading/
   ed-alpha        Merge upstream E9Technologies/ED-ALPHA into ed-alpha/
+  nautilus        Fast-forward nautilus_trader/ from nautechsystems/nautilus_trader develop
   status          Show pending upstream commits for all submodules
 EOF
     ;;

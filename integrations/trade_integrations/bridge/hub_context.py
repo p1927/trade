@@ -41,19 +41,50 @@ def format_research_context_for_agent(
     artifact: dict[str, Any] | None,
     *,
     index_artifact: dict[str, Any] | None = None,
+    widget_intent: str = "none",
 ) -> str:
     """Build a hidden context block injected into the Vibe chat agent prompt."""
-    parts: list[str] = []
+    parts: list[str] = [f"[widget_intent: {widget_intent}]"]
     if artifact and artifact.get("asset_type") != "index":
-        parts.append(_format_options_stock_context(artifact))
+        parts.append(_format_options_stock_context(artifact, widget_intent=widget_intent))
     if index_artifact:
-        parts.append(_format_index_research_context(index_artifact))
+        parts.append(_format_index_research_context(index_artifact, widget_intent=widget_intent))
     elif artifact and artifact.get("asset_type") == "index":
-        parts.append(_format_index_research_context(artifact))
+        parts.append(_format_index_research_context(artifact, widget_intent=widget_intent))
+    paper_block = _format_paper_calibration_context()
+    if paper_block:
+        parts.append(paper_block)
     return "\n\n".join(p for p in parts if p)
 
 
-def _format_options_stock_context(artifact: dict[str, Any]) -> str:
+def _format_paper_calibration_context() -> str:
+    try:
+        from trade_integrations.auto_paper.outcome_ledger import compute_paper_calibration_metrics
+
+        metrics = compute_paper_calibration_metrics()
+    except Exception:
+        return ""
+    if not metrics.get("closed_trades"):
+        return ""
+    lines = [
+        "[paper_calibration]",
+        f"closed_trades: {metrics.get('closed_trades')}",
+        f"avg_net_pnl_inr: {metrics.get('avg_net_pnl_inr')}",
+    ]
+    rates = metrics.get("strategy_hit_rates") or {}
+    if rates:
+        lines.append("strategy_hit_rates:")
+        for name, hit in sorted(rates.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+            lines.append(f"  - {name}: {hit:.0%}")
+    lines.append("[/paper_calibration]")
+    return "\n".join(lines)
+
+
+def _format_options_stock_context(
+    artifact: dict[str, Any],
+    *,
+    widget_intent: str = "none",
+) -> str:
     lines = [
         "[research_context]",
         f"ticker: {artifact.get('underlying') or artifact.get('ticker')}",
@@ -119,23 +150,35 @@ def _format_options_stock_context(artifact: dict[str, Any]) -> str:
         if asset == "stock"
         else "get_options_trade_widget(ticker)"
     )
-    if has_strategy_options_to_present(artifact):
+    if widget_intent in ("options_strategy", "execute_refresh") and has_strategy_options_to_present(
+        artifact
+    ):
+        refresh_hint = ", refresh=true" if widget_intent == "execute_refresh" else ""
         lines.append(
             f"When presenting ranked strategy options or the recommended trade plan with legs, "
-            f"call OpenAlgo MCP {widget_tool} in the same turn so the user can compare "
-            f"alternatives, see payoff/charges, and execute. Do not answer with markdown-only "
-            f"strategy lists. If plan_status is stale, use refresh=true."
+            f"call OpenAlgo MCP {widget_tool}{refresh_hint} in the same turn so the user can "
+            f"compare alternatives, see payoff/charges, and execute. Do not answer with "
+            f"markdown-only strategy lists."
+        )
+    elif widget_intent == "stock_trade" and artifact.get("asset_type") == "stock":
+        lines.append(
+            f"When presenting a stock trade recommendation with entry/exit, call OpenAlgo MCP "
+            f"{widget_tool} in the same turn."
         )
     else:
         lines.append(
             f"Do not call {widget_tool} for prediction, events, or browse-only answers — "
-            f"explain from research_context without the widget until ranked_strategies is "
-            f"populated. Refresh the plan first if the user asks which strategy to trade."
+            f"explain from research_context without the widget until the user asks for a "
+            f"specific strategy or trade plan."
         )
     return "\n".join(lines)
 
 
-def _format_index_research_context(artifact: dict[str, Any]) -> str:
+def _format_index_research_context(
+    artifact: dict[str, Any],
+    *,
+    widget_intent: str = "none",
+) -> str:
     ticker = artifact.get("underlying") or artifact.get("ticker") or "NIFTY"
     lines = [
         "[index_research_context]",
@@ -198,18 +241,19 @@ def _format_index_research_context(artifact: dict[str, Any]) -> str:
         lines.append(f"stage_errors: {'; '.join(str(e) for e in stage_errors[:3])}")
 
     lines.append("[/index_research_context]")
-    lines.append(
-        "For index-level direction, factor attribution, macro overlay, and scenario ranges, "
-        "call OpenAlgo MCP get_index_trade_plan(ticker, horizon_days=14) and "
-        "get_index_trade_widget(ticker) in the same turn. "
-        "Use refresh=true when the user asks for fresh index research or spot moved materially."
-    )
-    lines.append(
-        "MANDATORY: When answering where the index is headed, which factors drive NIFTY, "
-        "or index scenarios, you MUST call get_index_trade_widget(ticker) — not markdown-only prose. "
-        "For F&O strategy legs after the index view, call get_options_trade_widget(ticker) "
-        "only when presenting ranked strategy options from the options hub plan."
-    )
+    if widget_intent == "index_outlook":
+        lines.append(
+            "Call OpenAlgo MCP get_index_trade_plan(ticker, horizon_days=14) and "
+            "get_index_trade_widget(ticker) when answering index direction, factor "
+            "attribution, or scenario ranges. Use refresh=true when the user asks for "
+            "fresh index research."
+        )
+    else:
+        lines.append(
+            "Do not call get_index_trade_widget for browse-only or generic ticker mentions. "
+            "For F&O strategy legs, call get_options_trade_widget(ticker) only when "
+            "presenting ranked strategy options from the options hub plan."
+        )
     return "\n".join(lines)
 
 

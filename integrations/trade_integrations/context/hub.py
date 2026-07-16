@@ -7,6 +7,7 @@ import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from trade_integrations.dataflows.company_research.market import _IN_INDEX_TICKERS
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc
@@ -64,6 +65,45 @@ def _cache_max_age_minutes() -> int:
         return 60
 
 
+def _company_history_retention() -> int:
+    try:
+        return max(7, int(os.getenv("COMPANY_RESEARCH_HISTORY_RETENTION", "365")))
+    except ValueError:
+        return 90
+
+
+def archive_company_research_snapshots(*, as_of_date: str | None = None) -> dict[str, int]:
+    """Copy each symbol's latest.json to history/YYYY-MM-DD.json (one per calendar day)."""
+    hub = get_hub_dir()
+    if not hub.is_dir():
+        return {"archived": 0, "skipped": 0}
+
+    day = as_of_date or datetime.now(timezone.utc).date().isoformat()
+    archived = 0
+    skipped = 0
+    for symbol_dir in hub.iterdir():
+        if not symbol_dir.is_dir():
+            continue
+        latest = symbol_dir / "company_research" / "latest.json"
+        if not latest.is_file():
+            continue
+        history_dir = symbol_dir / "company_research" / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        daily_path = history_dir / f"{day}.json"
+        if daily_path.is_file():
+            skipped += 1
+            continue
+        daily_path.write_text(latest.read_text(encoding="utf-8"), encoding="utf-8")
+        archived += 1
+
+        snapshots = sorted(history_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        retention = _company_history_retention()
+        for old in snapshots[retention:]:
+            old.unlink(missing_ok=True)
+
+    return {"archived": archived, "skipped": skipped, "date": day}
+
+
 def _doc_from_json(payload: dict) -> CompanyResearchDoc:
     from trade_integrations.dataflows.company_research.models import StageResult
 
@@ -117,6 +157,17 @@ def save_company_research(doc: CompanyResearchDoc) -> Path:
     ]
     json_path = out_dir / "latest.json"
     json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    history_dir = out_dir / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    stamp = doc.as_of.strftime("%Y-%m-%dT%H%M%S") if hasattr(doc.as_of, "strftime") else "snapshot"
+    snap_path = history_dir / f"{stamp}.json"
+    snap_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    snapshots = sorted(history_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    retention = _company_history_retention()
+    for old in snapshots[retention:]:
+        old.unlink(missing_ok=True)
+
     return json_path
 
 
@@ -135,6 +186,53 @@ def load_company_research_json(ticker: str) -> CompanyResearchDoc | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return _doc_from_json(payload)
+
+
+def list_company_research_history(
+    ticker: str,
+    *,
+    days: int = 90,
+) -> list[dict[str, Any]]:
+    """Load archived company research snapshots for trend charts."""
+    from datetime import date, timedelta
+
+    history_dir = _company_research_dir(ticker) / "history"
+    if not history_dir.is_dir():
+        return []
+
+    cutoff = date.today() - timedelta(days=max(7, days))
+    rows: list[dict[str, Any]] = []
+    for path in sorted(history_dir.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        as_of_raw = str(payload.get("as_of") or path.stem)[:10]
+        try:
+            as_of_date = date.fromisoformat(as_of_raw)
+        except ValueError:
+            continue
+        if as_of_date < cutoff:
+            continue
+        rows.append(
+            {
+                "date": as_of_date.isoformat(),
+                "as_of": payload.get("as_of"),
+                "sentiment": payload.get("sentiment") or {},
+                "earnings_signal": payload.get("earnings_signal") or {},
+                "news": payload.get("news") or {},
+                "calendar_events": list(payload.get("calendar_events") or []),
+                "source_file": path.name,
+            }
+        )
+
+    rows.sort(key=lambda row: row["date"])
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        deduped[row["date"]] = row
+    return [deduped[key] for key in sorted(deduped)]
 
 
 def is_cache_fresh(ticker: str) -> bool:
@@ -473,6 +571,8 @@ def _index_doc_from_json(payload: dict):
         factor_explanation=dict(payload.get("factor_explanation") or {}),
         factor_sensitivity=list(payload.get("factor_sensitivity") or []),
         event_impact_curves=list(payload.get("event_impact_curves") or []),
+        upcoming_events=list(payload.get("upcoming_events") or []),
+        pipeline_log=list(payload.get("pipeline_log") or []),
         stages=stages,
     )
 
@@ -491,6 +591,16 @@ def save_index_research(doc) -> Path:
     ]
     json_path = out_dir / "latest.json"
     json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    history_dir = out_dir / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    stamp = doc.as_of.strftime("%Y-%m-%dT%H%M%S") if hasattr(doc.as_of, "strftime") else "snapshot"
+    snap_path = history_dir / f"{stamp}.json"
+    snap_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    snapshots = sorted(history_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in snapshots[30:]:
+        old.unlink(missing_ok=True)
+
     return json_path
 
 

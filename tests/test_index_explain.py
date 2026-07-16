@@ -94,6 +94,48 @@ def test_event_impact_curves_match_scenarios():
 
 
 @pytest.mark.unit
+def test_explanation_bundle_rescales_after_reconciled_headline():
+    """Contributors must sum to reconciled macro delta, not raw Ridge cap."""
+    horizon = resolve_horizon(14)
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 2.0, "oil_brent": -1.0},
+        intercept=4.5,
+        mae=1.2,
+        feature_names=["usd_inr", "oil_brent"],
+        poly_degree=1,
+        horizon_name="B",
+    )
+    macro = {"usd_inr": 83.2, "oil_brent": 82.0}
+    bottom_up = 0.5
+    ridge_only = explain_macro_factors(
+        macro,
+        horizon=horizon,
+        spot=24500.0,
+        bottom_up_return_pct=bottom_up,
+        artifact=artifact,
+    )
+    ridge_macro = ridge_only["macro_delta_pct"]
+    assert abs(ridge_macro) > 0.5
+
+    reconciled_headline = bottom_up + 0.9
+    bundle = build_factor_explanation_bundle(
+        macro,
+        [],
+        horizon=horizon,
+        spot=24500.0,
+        bottom_up_return_pct=bottom_up,
+        headline_return_pct=reconciled_headline,
+        artifact=artifact,
+    )
+    explanation = bundle["factor_explanation"]
+    assert explanation["macro_delta_pct"] == pytest.approx(0.9, abs=0.01)
+    assert explanation.get("ridge_macro_delta_pct") == pytest.approx(ridge_macro, abs=0.05)
+    assert explanation.get("attribution_rescaled") is True
+    total_contrib = sum(row["contribution_pct"] for row in explanation["contributors"])
+    assert total_contrib == pytest.approx(explanation["macro_delta_pct"], abs=0.02)
+
+
+@pytest.mark.unit
 def test_explanation_bundle_structure():
     horizon = resolve_horizon(14)
     bundle = build_factor_explanation_bundle(

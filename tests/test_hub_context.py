@@ -51,6 +51,7 @@ class TestHubContext:
         assert "incomplete" in block
         assert "Live option chain" in block
         assert "refresh=true" in block
+        assert "[widget_intent: none]" in block
         assert "Do not call get_options_trade_widget" in block
         assert "MANDATORY" not in block
 
@@ -68,8 +69,34 @@ class TestHubContext:
                     "name": "Iron condor",
                     "legs": [{"side": "SELL", "strike": 24000, "option_type": "PE"}],
                 },
-            }
+            },
+            widget_intent="options_strategy",
         )
         assert "get_options_trade_widget(ticker)" in block
         assert "ranked strategy options" in block
-        assert "Do not call get_options_trade_widget for prediction" not in block
+
+    def test_format_index_context_skips_mandatory_widget_when_intent_none(self):
+        block = format_research_context_for_agent(
+            None,
+            index_artifact={
+                "underlying": "NIFTY",
+                "plan_status": "ready",
+                "prediction": {"view": "bullish"},
+            },
+            widget_intent="none",
+        )
+        assert "MANDATORY" not in block
+        assert "Do not call get_index_trade_widget" in block
+
+    def test_format_index_context_requests_widget_on_outlook_intent(self):
+        block = format_research_context_for_agent(
+            None,
+            index_artifact={
+                "underlying": "NIFTY",
+                "plan_status": "ready",
+                "prediction": {"view": "bullish"},
+            },
+            widget_intent="index_outlook",
+        )
+        assert "get_index_trade_widget" in block
+        assert "Do not call get_index_trade_widget for browse-only" not in block

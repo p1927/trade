@@ -12,6 +12,7 @@ from trade_integrations.dataflows.index_research.models import PredictionRecord
 from trade_integrations.dataflows.index_research.prediction_ledger import (
     append_prediction,
     compute_accuracy_metrics,
+    list_forecast_history_bundle,
     load_ledger,
     reconcile_predictions,
     save_ledger,
@@ -126,3 +127,22 @@ def test_should_retrain_on_drift():
     assert should_retrain(2.0, baseline_mae=1.5) is True
     assert should_retrain(1.6, baseline_mae=1.5) is False
     assert should_retrain(None, baseline_mae=1.5) is False
+
+
+@pytest.mark.unit
+def test_forecast_history_bundle_daily_not_intraday_times(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+    now = datetime(2026, 7, 16, 14, 0, tzinfo=timezone.utc)
+    for hour in (10, 12, 14):
+        append_prediction(
+            _sample_record(
+                predicted_at=now.replace(hour=hour),
+                metadata={"ticker": "NIFTY", "horizon_name": "B", "refresh": "light"},
+            )
+        )
+
+    bundle = list_forecast_history_bundle("NIFTY", horizon_days=7)
+    assert len(bundle["daily"]) == 1
+    assert bundle["meta"]["unique_days"] == 1
+    assert bundle["meta"]["intraday_revisions"] == 3
+    assert len(bundle["intraday"]) == 3

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 
+from trade_integrations.dataflows.index_research.calendar_features import (
+    calendar_factor_dict,
+)
 from trade_integrations.dataflows.index_research.factor_store import load_factor_history
+from trade_integrations.dataflows.index_research.technical_features import (
+    enrich_nifty_technical_columns,
+)
 
 NIFTY_SYMBOL = "^NSEI"
 
@@ -40,6 +47,31 @@ def load_nifty_history(days: int = 365) -> pd.DataFrame:
     return frame[["date", "close"]].sort_values("date").reset_index(drop=True)
 
 
+def _append_calendar_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "date" not in frame.columns:
+        return frame
+    out = frame.copy()
+    for key in ("days_to_monthly_expiry", "is_budget_week", "is_results_season"):
+        out[key] = np.nan
+    for idx, raw_date in enumerate(out["date"]):
+        try:
+            as_of = date.fromisoformat(str(raw_date)[:10])
+        except ValueError:
+            continue
+        cal = calendar_factor_dict(as_of)
+        for key, value in cal.items():
+            out.at[idx, key] = value
+    return out
+
+
+def enrich_history_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add technical + calendar columns derived from Nifty close history."""
+    if frame.empty:
+        return frame
+    enriched = enrich_nifty_technical_columns(frame)
+    return _append_calendar_columns(enriched)
+
+
 def load_aligned_factor_history(days: int = 365) -> pd.DataFrame:
     """Merge Nifty closes with wide-format daily factor columns from the factor store."""
     nifty = load_nifty_history(days=days)
@@ -66,4 +98,5 @@ def load_aligned_factor_history(days: int = 365) -> pd.DataFrame:
     wide["date"] = wide["date"].astype(str).str[:10]
 
     aligned = nifty.merge(wide, on="date", how="left")
+    aligned = enrich_history_features(aligned)
     return aligned.sort_values("date").reset_index(drop=True)

@@ -1,0 +1,143 @@
+"""Code enforcement of user-configured mandate rules."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from trade_integrations.auto_paper.config import AutoPaperConfig, get_auto_paper_config
+from trade_integrations.auto_paper.engine import is_market_session_open
+from trade_integrations.auto_paper.mandate_config import MandateConfig, mandate_config_from_session
+from trade_integrations.monitor.execution_ledger import list_open_entries
+
+
+class MandateViolation(Exception):
+    """Raised when an action would violate the user's mandate."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+def _mandate_from_session(session: dict[str, Any]) -> MandateConfig:
+    return mandate_config_from_session(session)
+
+
+def widget_instrument_class(widget: dict[str, Any]) -> str:
+    """Return ``options`` or ``equity`` from widget metadata."""
+    wid = str(widget.get("widget_id") or "")
+    if wid.startswith("ts_"):
+        return "equity"
+    if wid.startswith("tp_") or wid.startswith("ti_"):
+        return "options"
+    asset = str((widget.get("recommended") or {}).get("asset_class") or "").lower()
+    if asset in {"equity", "stock"}:
+        return "equity"
+    if asset in {"options", "option"}:
+        return "options"
+    steps = widget.get("implementation_steps") or []
+    for step in steps:
+        orders = (step.get("payload") or {}).get("orders") or []
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            exch = str(order.get("exchange") or "").upper()
+            if exch == "NFO":
+                return "options"
+            if exch in {"NSE", "BSE"}:
+                return "equity"
+    return "options"
+
+
+def assert_widget_allowed(
+    widget: dict[str, Any],
+    mandate: MandateConfig,
+) -> None:
+    """Ensure widget instrument type is permitted by mandate."""
+    inst = widget_instrument_class(widget)
+    allowed = {str(x).strip().lower() for x in (mandate.allowed_instruments or []) if str(x).strip()}
+    if not allowed:
+        return
+    if inst not in allowed:
+        raise MandateViolation(
+            "instrument_not_allowed",
+            f"Mandate allows {sorted(allowed)} but widget is {inst}",
+        )
+
+
+def assert_can_execute(
+    session: dict[str, Any],
+    *,
+    cfg: AutoPaperConfig | None = None,
+    mandate: MandateConfig | None = None,
+    confidence: int | None = None,
+) -> None:
+    """Guard ENTER/ADJUST basket execution."""
+    if not session.get("enabled"):
+        raise MandateViolation("session_inactive", "Paper session is not active")
+    if session.get("halted"):
+        reason = session.get("halt_reason") or "halted"
+        raise MandateViolation("session_halted", f"Session halted: {reason}")
+
+    mandate = mandate or _mandate_from_session(session)
+    cfg = cfg or get_auto_paper_config()
+
+    if mandate.market_hours_only and not is_market_session_open(cfg):
+        raise MandateViolation("outside_market_hours", "Market is closed for this agent's trading window")
+
+    open_count = len(list_open_entries())
+    if open_count >= mandate.max_open_positions:
+        raise MandateViolation(
+            "max_positions",
+            f"Already at max open positions ({mandate.max_open_positions})",
+        )
+
+    if confidence is not None and confidence < mandate.confidence_threshold:
+        raise MandateViolation(
+            "confidence_below_threshold",
+            f"Confidence {confidence} below threshold {mandate.confidence_threshold}",
+        )
+
+
+def validate_decision(
+    decision: str,
+    session: dict[str, Any],
+    *,
+    cfg: AutoPaperConfig | None = None,
+    mandate: MandateConfig | None = None,
+) -> tuple[str, list[str]]:
+    """
+    Validate and optionally override agent decisions against mandate.
+
+    Returns (decision, warnings).
+    """
+    mandate = mandate or _mandate_from_session(session)
+    cfg = cfg or get_auto_paper_config()
+    decision_u = decision.strip().upper()
+    warnings: list[str] = []
+    open_positions = len(list_open_entries())
+
+    if decision_u == "HOLD" and open_positions > 0:
+        if mandate.needs_session_close_flatten() and mandate.market_hours_only:
+            if not is_market_session_open(cfg):
+                warnings.append("mandate_override: market closed with open positions — flatten required")
+                return "EXIT", warnings
+        if mandate.flatten_policy == "session_close" and not is_market_session_open(cfg):
+            warnings.append("mandate_override: session_close policy with open positions after close")
+            return "EXIT", warnings
+
+    if decision_u in {"ENTER", "REVISE", "ADJUST"} and mandate.revision_policy == "user_guidance_only":
+        guidance = list(session.get("user_guidance") or [])
+        if not guidance:
+            warnings.append("revision_policy blocks entry until user guidance is set")
+            return "SKIP", warnings
+
+    return decision_u, warnings
+
+
+def product_for_session(session: dict[str, Any], *, cfg: AutoPaperConfig | None = None) -> str:
+    mandate = _mandate_from_session(session)
+    resolved = mandate.resolve_product()
+    if resolved:
+        return resolved
+    cfg = cfg or get_auto_paper_config()
+    return cfg.product

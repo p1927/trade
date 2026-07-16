@@ -149,6 +149,14 @@ def rank_strategies(
             score += calibration_confidence_adjustment()
         except Exception:
             pass
+        try:
+            from trade_integrations.auto_paper.outcome_ledger import (
+                paper_strategy_calibration_adjustment,
+            )
+
+            score += paper_strategy_calibration_adjustment(cand.get("name"))
+        except Exception:
+            pass
         score = max(0.0, min(1.0, score))
         tier = _tier_label(iv_rank_ok=iv_rank_ok, liquidity_ok=liquidity_ok, event_fit=event_fit, pop=pop)
 

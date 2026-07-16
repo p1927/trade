@@ -196,6 +196,42 @@ def _provider_from_trade_env() -> tuple[str, str, str]:
     return provider, model, api_key
 
 
+def sync_alpaca_config(dry_run: bool = False) -> Path | None:
+    """Write ~/.vibe-trading/alpaca.json from trade stack ALPACA_* env vars."""
+    api_key = os.getenv("ALPACA_API_KEY", "").strip()
+    secret = (
+        os.getenv("ALPACA_API_SECRET", "").strip()
+        or os.getenv("ALPACA_SECRET_KEY", "").strip()
+    )
+    if not api_key or not secret:
+        return None
+
+    profile = (os.getenv("ALPACA_PROFILE") or "paper").strip().lower() or "paper"
+    feed = (os.getenv("ALPACA_DATA_FEED") or "iex").strip().lower() or "iex"
+    readonly_raw = (os.getenv("ALPACA_READONLY") or "false").strip().lower()
+    payload = {
+        "api_key": api_key,
+        "secret_key": secret,
+        "profile": profile,
+        "feed": feed,
+        "readonly": readonly_raw in ("1", "true", "yes"),
+        "timeout": 15.0,
+    }
+    target = vibe_home() / "alpaca.json"
+    if dry_run:
+        redacted = {**payload, "secret_key": "***", "api_key": api_key[:4] + "***"}
+        print(json.dumps(redacted, indent=2))
+        return target
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    try:
+        target.chmod(0o600)
+    except OSError:
+        pass
+    return target
+
+
 def _patch_vibe_env_keys(target: Path, *, dry_run: bool = False) -> None:
     """Append trade-stack keys to an existing ~/.vibe-trading/.env when missing."""
     hub = hub_dir()
@@ -210,6 +246,26 @@ def _patch_vibe_env_keys(target: Path, *, dry_run: bool = False) -> None:
     required["OPENALGO_PAPER_MODE"] = "true" if paper_mode in ("1", "true", "yes") else "false"
     if openalgo_key:
         required["OPENALGO_API_KEY"] = openalgo_key
+
+    alpaca_key = os.getenv("ALPACA_API_KEY", "").strip()
+    alpaca_secret = (
+        os.getenv("ALPACA_API_SECRET", "").strip()
+        or os.getenv("ALPACA_SECRET_KEY", "").strip()
+    )
+    if alpaca_key:
+        required["ALPACA_API_KEY"] = alpaca_key
+    if alpaca_secret:
+        required["ALPACA_API_SECRET"] = alpaca_secret
+    for env_name in (
+        "ALPACA_PROFILE",
+        "ALPACA_DATA_FEED",
+        "ALPACA_REALTIME_ENABLED",
+        "ALPACA_API_BASE",
+        "ALPACA_DATA_BASE",
+    ):
+        value = os.getenv(env_name, "").strip()
+        if value:
+            required[env_name] = value
 
     existing = target.read_text(encoding="utf-8") if target.is_file() else ""
     present = {
@@ -263,6 +319,26 @@ def sync_vibe_env(dry_run: bool = False, force: bool = False) -> Path | None:
     if openalgo_key:
         lines.append(f"OPENALGO_API_KEY={openalgo_key}")
 
+    alpaca_key = os.getenv("ALPACA_API_KEY", "").strip()
+    alpaca_secret = (
+        os.getenv("ALPACA_API_SECRET", "").strip()
+        or os.getenv("ALPACA_SECRET_KEY", "").strip()
+    )
+    if alpaca_key:
+        lines.append(f"ALPACA_API_KEY={alpaca_key}")
+    if alpaca_secret:
+        lines.append(f"ALPACA_API_SECRET={alpaca_secret}")
+    for env_name in (
+        "ALPACA_PROFILE",
+        "ALPACA_DATA_FEED",
+        "ALPACA_REALTIME_ENABLED",
+        "ALPACA_API_BASE",
+        "ALPACA_DATA_BASE",
+    ):
+        value = os.getenv(env_name, "").strip()
+        if value:
+            lines.append(f"{env_name}={value}")
+
     if dry_run:
         print("\n".join(lines))
         return target
@@ -292,6 +368,7 @@ def main() -> int:
     agent_path = sync_agent_json(dry_run=args.dry_run)
     skill_paths = sync_skills(dry_run=args.dry_run)
     env_path = sync_vibe_env(dry_run=args.dry_run, force=args.force_env)
+    alpaca_path = sync_alpaca_config(dry_run=args.dry_run)
 
     if args.dry_run:
         return 0
@@ -304,6 +381,8 @@ def main() -> int:
     else:
         patched = vibe_home() / ".env"
         print(f"Patched/kept {patched} (use --force-env to replace)")
+    if alpaca_path:
+        print(f"Wrote {alpaca_path}")
 
     ok, message = verify_openalgo_mcp()
     if ok:

@@ -10,13 +10,13 @@ logger = logging.getLogger(__name__)
 def fetch_underlying_ltp(ticker: str) -> float | None:
     """Fetch last traded price for an underlying; None on failure."""
     try:
-        from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+        from trade_integrations.dataflows.market_quotes import fetch_live_quote
     except ImportError:
-        logger.debug("openalgo adapter unavailable for %s", ticker)
+        logger.debug("market quote router unavailable for %s", ticker)
         return None
 
     try:
-        quote = fetch_openalgo_quote(ticker)
+        quote = fetch_live_quote(ticker)
     except Exception:
         logger.debug("failed to fetch live quote for %s", ticker, exc_info=True)
         return None

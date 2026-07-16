@@ -24,7 +24,7 @@ def test_resolve_horizon_profiles():
     profile_b = resolve_horizon(14)
     assert profile_b.name == "B"
     assert profile_b.feature_window == 14
-    assert profile_b.poly_degree == 2
+    assert profile_b.poly_degree == 1
 
     profile_c = resolve_horizon(45)
     assert profile_c.name == "C"

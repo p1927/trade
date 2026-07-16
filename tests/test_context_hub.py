@@ -55,6 +55,9 @@ class TestContextHubPersistence:
         assert loaded is not None
         assert "Reliance Industries" in loaded
         assert is_cache_fresh("RELIANCE") is True
+        history_dir = tmp_path / "RELIANCE" / "company_research" / "history"
+        assert history_dir.is_dir()
+        assert len(list(history_dir.glob("*.json"))) >= 1
 
     def test_hub_dir_override(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path / "custom"))

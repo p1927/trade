@@ -8,6 +8,9 @@ from datetime import date, datetime, timedelta
 from trade_integrations.dataflows.index_research.models import ConstituentSignal
 
 _SENTIMENT_BETA = 5.0
+_MOMENTUM_BLEND = 0.3
+_SENTIMENT_BLEND = 0.7
+_MOMENTUM_SCALE = 0.5
 _EXPECTED_RETURN_CAP_PCT = 3.0
 _EARNINGS_BUMP_PCT = 0.5
 _EARNINGS_EVENT_TYPES = frozenset({"results", "earnings", "earnings_signal"})
@@ -60,7 +63,12 @@ def _has_earnings_within_horizon(
 
 def _expected_return_pct(signal: ConstituentSignal, *, horizon_days: int) -> float:
     sentiment = signal.sentiment_score or 0.0
-    raw = sentiment * _SENTIMENT_BETA
+    sentiment_move = sentiment * _SENTIMENT_BETA
+    if signal.momentum_7d_pct is not None:
+        momentum_move = float(signal.momentum_7d_pct) * _MOMENTUM_SCALE
+        raw = _SENTIMENT_BLEND * sentiment_move + _MOMENTUM_BLEND * momentum_move
+    else:
+        raw = sentiment_move
     capped = max(-_EXPECTED_RETURN_CAP_PCT, min(_EXPECTED_RETURN_CAP_PCT, raw))
     if _has_earnings_within_horizon(signal, horizon_days=horizon_days, as_of=_today()):
         capped += _EARNINGS_BUMP_PCT

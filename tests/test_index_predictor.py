@@ -27,6 +27,8 @@ def _synthetic_history(rows: int = 30) -> pd.DataFrame:
     usd_inr = 83 + rng.normal(0, 0.15, rows)
     oil = 80 + rng.normal(0, 0.8, rows)
     fii = rng.normal(500, 120, rows)
+    nifty_return_7d = rng.normal(0.5, 1.0, rows)
+    nifty_pcr = 1.0 + rng.normal(0, 0.05, rows)
     return pd.DataFrame(
         {
             "date": dates.strftime("%Y-%m-%d"),
@@ -34,8 +36,26 @@ def _synthetic_history(rows: int = 30) -> pd.DataFrame:
             "usd_inr": usd_inr,
             "oil_brent": oil,
             "fii_net_5d": fii,
+            "nifty_return_7d": nifty_return_7d,
+            "nifty_pcr": nifty_pcr,
+            "days_to_monthly_expiry": np.linspace(20, 1, rows),
+            "is_budget_week": np.zeros(rows),
+            "is_results_season": np.ones(rows),
         }
     ), horizon
+
+
+@pytest.mark.unit
+def test_train_macro_ridge_walk_forward_and_direction_head():
+    pytest.importorskip("sklearn")
+    history, horizon = _synthetic_history(rows=40)
+    artifact = train_macro_ridge(history, horizon)
+
+    assert artifact.feature_names
+    assert artifact.mae >= 0
+    assert artifact.horizon_name == "B"
+    assert isinstance(artifact.coefficients, dict)
+    assert artifact.direction_hit_rate_oos is None or 0.0 <= artifact.direction_hit_rate_oos <= 1.0
 
 
 @pytest.mark.unit
@@ -76,6 +96,8 @@ def test_predict_nifty_hybrid(monkeypatch):
     )
 
     assert result["view"] in {"bullish", "bearish", "neutral"}
+    assert "direction_view" in result
+    assert "direction_confidence" in result
     assert "expected_return_pct" in result
     assert "range" in result
     assert result["range"]["low"] < result["range"]["high"]

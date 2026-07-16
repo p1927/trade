@@ -14,3 +14,7 @@
 	path = ed-alpha
 	url = https://github.com/p1927/ED-ALPHA.git
 	branch = main
+[submodule "nautilus_trader"]
+	path = nautilus_trader
+	url = https://github.com/nautechsystems/nautilus_trader.git
+	branch = develop

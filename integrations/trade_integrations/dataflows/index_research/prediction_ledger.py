@@ -11,6 +11,7 @@ import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.models import PredictionRecord
+from trade_integrations.dataflows.index_research.factor_store import load_factor_history
 from trade_integrations.dataflows.index_research.sources.history_loader import (
     NIFTY_SYMBOL,
     load_nifty_history,
@@ -28,10 +29,14 @@ def get_ledger_path() -> Path:
 
 def _write_parquet(df: pd.DataFrame, path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path = path.with_suffix(".csv")
     try:
         df.to_parquet(path, index=False)
     except ImportError:
-        df.to_csv(path.with_suffix(".csv"), index=False)
+        df.to_csv(csv_path, index=False)
+        return
+    # Mirror CSV so readers without pyarrow stay in sync with parquet.
+    df.to_csv(csv_path, index=False)
 
 
 def _read_parquet(path) -> pd.DataFrame:
@@ -197,6 +202,218 @@ def reconcile_predictions(*, as_of: datetime | None = None) -> int:
     if updated:
         save_ledger(ledger)
     return updated
+
+
+def list_factor_history_series(
+    *,
+    days: int = 90,
+    factors: list[str] | None = None,
+    include_nifty_close: bool = True,
+) -> dict[str, Any]:
+    """Return wide-format daily factor + optional Nifty close series for charting."""
+    from datetime import datetime, timedelta, timezone
+
+    from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
+
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=max(1, days))
+    long_df = load_factor_history(start.isoformat(), end.isoformat())
+    series: dict[str, dict[str, float]] = {}
+
+    if not long_df.empty and "factor" in long_df.columns:
+        value_col = "value" if "value" in long_df.columns else long_df.columns[-1]
+        for _, row in long_df.iterrows():
+            day = str(row.get("date", ""))[:10]
+            factor = str(row.get("factor", ""))
+            if not day or not factor:
+                continue
+            if factors and factor not in factors:
+                continue
+            try:
+                series.setdefault(day, {})[factor] = float(row[value_col])
+            except (TypeError, ValueError):
+                continue
+
+    if include_nifty_close:
+        nifty = load_nifty_history(days=days + 5)
+        for _, row in nifty.iterrows():
+            day = str(row["date"])[:10]
+            if start.isoformat() <= day <= end.isoformat():
+                series.setdefault(day, {})["nifty_close"] = float(row["close"])
+
+    ordered_days = sorted(series.keys())
+    rows = [{"date": day, **series[day]} for day in ordered_days]
+    factor_names = sorted({k for day in rows for k in day if k != "date"})
+    coverage = {
+        factor: sum(1 for row in rows if row.get(factor) is not None)
+        for factor in factor_names
+    }
+    coverage_notes: list[str] = []
+    if "fii_net_5d" in coverage and coverage["fii_net_5d"] < len(rows) * 0.5:
+        coverage_notes.append(
+            "FII/DII cash flows: ~111 trading days via Mr. Chartist (NSE has no free historical JSON)."
+        )
+    if "nifty_pcr" in coverage and coverage["nifty_pcr"] < len(rows) * 0.5:
+        coverage_notes.append(
+            "PCR / FII OI: backfilled from nselib participant OI (run backfill_participant_oi for full range)."
+        )
+    return {
+        "series": rows,
+        "factors": factor_names,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "coverage": coverage,
+        "coverage_notes": coverage_notes,
+    }
+
+
+def list_prediction_history(
+    ticker: str = "NIFTY",
+    *,
+    limit: int = 50,
+    horizon_days: int | None = None,
+    daily_last: bool = True,
+) -> list[dict[str, Any]]:
+    """Return recent ledger rows for one index ticker (newest first)."""
+    sym = ticker.strip().upper()
+    ledger = load_ledger()
+    if ledger.empty:
+        return []
+
+    parsed: list[dict[str, Any]] = []
+    for _, row in ledger.iloc[::-1].iterrows():
+        record = _row_to_record(row)
+        meta = record.metadata or {}
+        row_ticker = str(meta.get("ticker") or "NIFTY").strip().upper()
+        if row_ticker != sym:
+            continue
+        if horizon_days is not None and record.horizon_days != horizon_days:
+            continue
+        spot = float(record.spot_at_prediction)
+        expected = float(record.expected_return_pct)
+        implied_level = spot * (1.0 + expected / 100.0)
+        parsed.append(
+            {
+                "predicted_at": record.predicted_at.isoformat(),
+                "horizon_days": record.horizon_days,
+                "spot_at_prediction": spot,
+                "expected_return_pct": expected,
+                "implied_level": implied_level,
+                "range_low": float(record.range_low),
+                "range_high": float(record.range_high),
+                "actual_return_pct": record.actual_return_pct,
+                "direction_correct": record.direction_correct,
+                "horizon_name": meta.get("horizon_name"),
+                "bottom_up_return_pct": meta.get("bottom_up_return_pct"),
+                "macro_delta_pct": meta.get("macro_delta_pct"),
+                "refresh": meta.get("refresh"),
+            }
+        )
+
+    if daily_last and parsed:
+        by_day: dict[str, dict[str, Any]] = {}
+        for row in parsed:
+            day = row["predicted_at"][:10]
+            if day not in by_day:
+                by_day[day] = row
+        parsed = list(by_day.values())
+        parsed.sort(key=lambda r: r["predicted_at"], reverse=True)
+
+    return parsed[: max(1, limit)]
+
+
+def _snapshot_to_history_row(snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    as_of = snapshot.get("as_of")
+    spot = snapshot.get("spot")
+    expected = snapshot.get("expected_return_pct")
+    if not as_of or spot is None or expected is None:
+        return None
+    try:
+        spot_f = float(spot)
+        expected_f = float(expected)
+    except (TypeError, ValueError):
+        return None
+    range_low = snapshot.get("range_low")
+    range_high = snapshot.get("range_high")
+    if range_low is None or range_high is None:
+        range_low = spot_f * (1.0 + expected_f / 100.0 - 0.015)
+        range_high = spot_f * (1.0 + expected_f / 100.0 + 0.015)
+    return {
+        "predicted_at": str(as_of),
+        "horizon_days": int(snapshot.get("horizon_days") or 14),
+        "spot_at_prediction": spot_f,
+        "expected_return_pct": expected_f,
+        "implied_level": spot_f * (1.0 + expected_f / 100.0),
+        "range_low": float(range_low),
+        "range_high": float(range_high),
+        "actual_return_pct": None,
+        "direction_correct": None,
+        "horizon_name": None,
+        "bottom_up_return_pct": snapshot.get("bottom_up_return_pct"),
+        "macro_delta_pct": snapshot.get("macro_delta_pct"),
+        "refresh": "snapshot",
+    }
+
+
+def list_forecast_history_bundle(
+    ticker: str = "NIFTY",
+    *,
+    limit: int = 90,
+    horizon_days: int | None = None,
+) -> dict[str, Any]:
+    """Daily forecast series for charts plus optional intraday revisions for today."""
+    from trade_integrations.dataflows.index_research.snapshots import list_index_research_snapshots
+
+    sym = ticker.strip().upper()
+    intraday = list_prediction_history(
+        sym,
+        limit=max(1, limit),
+        horizon_days=horizon_days,
+        daily_last=False,
+    )
+    ledger_daily = list_prediction_history(
+        sym,
+        limit=max(1, limit),
+        horizon_days=horizon_days,
+        daily_last=True,
+    )
+
+    by_day: dict[str, dict[str, Any]] = {}
+    for row in ledger_daily:
+        day = row["predicted_at"][:10]
+        by_day[day] = row
+
+    for snapshot in list_index_research_snapshots(sym, limit=limit):
+        if horizon_days is not None and snapshot.get("horizon_days") not in (None, horizon_days):
+            continue
+        row = _snapshot_to_history_row(snapshot)
+        if not row:
+            continue
+        day = row["predicted_at"][:10]
+        if day not in by_day:
+            by_day[day] = row
+
+    daily = sorted(by_day.values(), key=lambda r: r["predicted_at"])
+    unique_days = len(by_day)
+
+    from datetime import date
+
+    today = date.today().isoformat()
+    intraday_today = [r for r in intraday if str(r.get("predicted_at", ""))[:10] == today]
+    if not intraday_today and unique_days == 1 and len(intraday) > 1:
+        intraday_today = intraday
+
+    return {
+        "daily": daily,
+        "intraday": intraday_today,
+        "meta": {
+            "unique_days": unique_days,
+            "intraday_revisions": len(intraday_today),
+            "granularity": "daily",
+            "needs_more_days": unique_days < 2,
+        },
+        "intraday_days": sorted({str(r.get("predicted_at", ""))[:10] for r in intraday}),
+    }
 
 
 def compute_accuracy_metrics(*, window: int = 14) -> dict[str, Any]:

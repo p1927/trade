@@ -48,6 +48,13 @@ stack_vibe_ui_port() {
   echo "${VIBE_FRONTEND_PORT:-5899}"
 }
 
+stack_api_index_prediction_ok() {
+  local port="${1:-$(stack_vibe_api_port)}"
+  curl -sf -H "Accept: application/json" \
+    "http://127.0.0.1:${port}/trade/index-prediction?ticker=NIFTY" 2>/dev/null \
+    | grep -q '"status":"ok"'
+}
+
 stack_http_ok() {
   curl -sf -o /dev/null -m 3 "$1" 2>/dev/null
 }
@@ -245,10 +252,14 @@ stack_start_vibe_api() {
   base="http://127.0.0.1:$port"
   agent_dir="$root/vibetrading/agent"
 
-  if stack_http_ok "$base/"; then
+  if stack_http_ok "$base/" && stack_api_index_prediction_ok "$port"; then
     stack_sync_pidfile_from_port "$pidfile" "$port"
     echo "[stack] Vibe API already up at $base"
     return 0
+  fi
+
+  if stack_http_ok "$base/"; then
+    echo "[stack] Vibe API on :$port is stale (missing /trade/index-prediction) — restarting ..."
   fi
 
   stack_kill_port "$port"
@@ -331,6 +342,7 @@ stack_stop_vibe_stack() {
   stack_stop_pidfile "Vibe UI" "$log_dir/vibe-ui.pid" "vite --port ${ui_port}"
   stack_stop_pidfile "Vibe API" "$log_dir/vibe-api.pid" "cli._legacy serve"
   stack_stop_pidfile "vibe-trading (legacy)" "$log_dir/vibe-trading.pid" "vibe-trading dev"
+  stack_stop_nautilus_watch
   stack_stop_pidfile "OpenAlgo" "$log_dir/openalgo.pid" "openalgo.*app.py"
 
   stack_kill_port "$ui_port"
@@ -414,10 +426,69 @@ stack_status_vibe_stack() {
     fi
   done
 
+  local nautilus_pid
+  nautilus_pid="$(stack_read_pid "$log_dir/nautilus-watch.pid")"
+  if stack_pid_alive "$nautilus_pid"; then
+    echo "  ✓ Nautilus watch  pid=${nautilus_pid} (alive)"
+  elif [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
+    echo "  · Nautilus watch  disabled (NAUTILUS_WATCH_ENABLE=0)"
+  else
+    echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (expected — enabled by default)"
+    ok=0
+  fi
+
   echo "══════════════════════════════════════════════════════════"
   if (( ok )); then return 0; fi
   echo "  Fix: trade restart   (starts only what's down)"
   echo "  Full reset: trade restart --force"
   echo "══════════════════════════════════════════════════════════"
   return 1
+}
+
+stack_nautilus_python() {
+  local root py
+  root="$(stack_root)"
+  py="$root/.venv-nautilus/bin/python"
+  if [[ -x "$py" ]]; then
+    echo "$py"
+    return
+  fi
+  stack_pick_python
+}
+
+stack_start_nautilus_watch() {
+  local root log_dir pidfile logfile py agent_id
+  root="$(stack_root)"
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/nautilus-watch.pid"
+  logfile="$log_dir/nautilus-watch.log"
+  py="$(stack_nautilus_python)"
+  agent_id="${NAUTILUS_AGENT_ID:-}"
+
+  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
+    echo "[stack] NAUTILUS_WATCH_ENABLE=0 — skip Nautilus watch node"
+    return 0
+  fi
+
+  existing="$(stack_read_pid "$pidfile")"
+  if stack_pid_alive "$existing"; then
+    echo "[stack] Nautilus watch already running (pid $existing)"
+    return 0
+  fi
+
+  if [[ ! -x "$root/.venv-nautilus/bin/python" ]]; then
+    echo "[stack] Nautilus venv missing — run ./scripts/setup_nautilus.sh" >&2
+    return 1
+  fi
+
+  echo "[stack] starting Nautilus watch node ..."
+  local cmd=("$root/scripts/run_nautilus_watch.sh")
+  if [[ -n "$agent_id" ]]; then
+    cmd+=(--agent-id "$agent_id")
+  fi
+  stack_launch_detached "$pidfile" "$logfile" "$root" "${cmd[@]}"
+}
+
+stack_stop_nautilus_watch() {
+  stack_stop_pidfile "Nautilus watch" "$(stack_log_dir)/nautilus-watch.pid" "run_watch_node"
 }

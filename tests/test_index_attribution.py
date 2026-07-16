@@ -77,6 +77,24 @@ def test_attribute_constituent_earnings_bump_and_cap(monkeypatch):
 
 
 @pytest.mark.unit
+def test_attribute_constituent_momentum_blend(monkeypatch):
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.attribution._today",
+        lambda: date(2026, 7, 16),
+    )
+
+    signal = ConstituentSignal(
+        symbol="RELIANCE",
+        weight=1.0,
+        sentiment_score=0.0,
+        momentum_7d_pct=4.0,
+    )
+    attributed = attribute_constituent(signal)
+    # 0.3 blend * 4.0 momentum * 0.5 scale = 0.6
+    assert attributed.contribution_to_index_pct == pytest.approx(0.6)
+
+
+@pytest.mark.unit
 def test_attribute_constituents_sorted_and_rollup(monkeypatch):
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.attribution._today",

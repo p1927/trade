@@ -45,15 +45,21 @@ def _patch_default_config() -> None:
         "TRADINGAGENTS_NEWS_AGGREGATOR_SOURCES",
         "searxng,yfinance,alpha_vantage",
     )
+    alpaca_on = bool(os.getenv("ALPACA_API_KEY") and (
+        os.getenv("ALPACA_API_SECRET") or os.getenv("ALPACA_SECRET_KEY")
+    ))
+    openalgo_on = bool(os.getenv("OPENALGO_API_KEY"))
+    stock_vendors = []
+    if openalgo_on:
+        stock_vendors.append("openalgo")
+    if alpaca_on:
+        stock_vendors.append("alpaca")
+    stock_vendors.append("yfinance")
+    stock_chain = os.getenv("TRADINGAGENTS_CORE_STOCK_DATA_VENDOR") or ",".join(stock_vendors)
+    indicator_chain = os.getenv("TRADINGAGENTS_TECHNICAL_INDICATORS_DATA_VENDOR") or stock_chain
     cfg["data_vendors"] = {
-        "core_stock_apis": os.getenv(
-            "TRADINGAGENTS_CORE_STOCK_DATA_VENDOR",
-            "openalgo,yfinance" if os.getenv("OPENALGO_API_KEY") else "yfinance",
-        ),
-        "technical_indicators": os.getenv(
-            "TRADINGAGENTS_TECHNICAL_INDICATORS_DATA_VENDOR",
-            "openalgo,yfinance" if os.getenv("OPENALGO_API_KEY") else "yfinance",
-        ),
+        "core_stock_apis": stock_chain,
+        "technical_indicators": indicator_chain,
         "fundamental_data": os.getenv(
             "TRADINGAGENTS_FUNDAMENTAL_DATA_VENDOR",
             "yfinance",
@@ -64,6 +70,10 @@ def _patch_default_config() -> None:
     }
     cfg["openalgo_host"] = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001")
     cfg["openalgo_api_key"] = os.getenv("OPENALGO_API_KEY", "")
+    cfg["alpaca_profile"] = os.getenv("ALPACA_PROFILE", "paper")
+    cfg["alpaca_realtime_enabled"] = (
+        os.getenv("ALPACA_REALTIME_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+    )
     cfg.setdefault("tool_vendors", {})
     cfg["tool_vendors"]["get_insider_transactions"] = "yfinance,alpha_vantage"
 
@@ -74,6 +84,10 @@ def _patch_vendor_routing() -> None:
         get_global_news_aggregated,
         get_news_aggregated,
     )
+    from trade_integrations.dataflows.alpaca import (
+        get_alpaca_indicators,
+        get_alpaca_stock_data,
+    )
     from trade_integrations.dataflows.openalgo import (
         get_openalgo_indicators,
         get_openalgo_stock_data,
@@ -83,12 +97,14 @@ def _patch_vendor_routing() -> None:
         get_news_searxng,
     )
 
-    for vendor in ("openalgo", "searxng", "aggregated"):
+    for vendor in ("openalgo", "alpaca", "searxng", "aggregated"):
         if vendor not in interface.VENDOR_LIST:
             interface.VENDOR_LIST.append(vendor)
 
     interface.VENDOR_METHODS["get_stock_data"]["openalgo"] = get_openalgo_stock_data
+    interface.VENDOR_METHODS["get_stock_data"]["alpaca"] = get_alpaca_stock_data
     interface.VENDOR_METHODS["get_indicators"]["openalgo"] = get_openalgo_indicators
+    interface.VENDOR_METHODS["get_indicators"]["alpaca"] = get_alpaca_indicators
     interface.VENDOR_METHODS["get_news"]["searxng"] = get_news_searxng
     interface.VENDOR_METHODS["get_news"]["aggregated"] = get_news_aggregated
     interface.VENDOR_METHODS["get_global_news"]["searxng"] = get_global_news_searxng

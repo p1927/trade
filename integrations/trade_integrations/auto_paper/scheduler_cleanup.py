@@ -12,11 +12,15 @@ logger = logging.getLogger(__name__)
 AUTO_PAPER_AGENT_JOB_ID = "auto-paper-agent-turn"
 AUTO_PAPER_INTRADAY_JOB_ID = "auto-paper-intraday"
 AUTO_PAPER_THESIS_BREAK_JOB_ID = "auto-paper-thesis-break"
+AUTO_PAPER_SCHEDULER_HEALTH_JOB_ID = "auto-paper-scheduler-health"
+AUTO_PAPER_SESSION_CLOSE_FLATTEN_JOB_ID = "auto-paper-session-close-flatten"
 AUTO_PAPER_SCHEDULER_JOB_IDS = frozenset(
     {
         AUTO_PAPER_AGENT_JOB_ID,
         AUTO_PAPER_INTRADAY_JOB_ID,
         AUTO_PAPER_THESIS_BREAK_JOB_ID,
+        AUTO_PAPER_SCHEDULER_HEALTH_JOB_ID,
+        AUTO_PAPER_SESSION_CLOSE_FLATTEN_JOB_ID,
     }
 )
 

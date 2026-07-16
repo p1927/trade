@@ -11,6 +11,7 @@ from trade_integrations.dataflows.index_research.horizon import HorizonProfile
 from trade_integrations.dataflows.index_research.predictor import (
     ModelArtifact,
     _predict_macro_delta,
+    cap_macro_delta,
     load_stored_model_artifact,
 )
 
@@ -45,6 +46,24 @@ def _iter_macro_factor_names(
 
 logger = logging.getLogger(__name__)
 
+
+def _uncapped_macro_delta(
+    macro_factors: dict[str, Any],
+    horizon: HorizonProfile,
+    artifact: ModelArtifact | None,
+) -> float:
+    """Raw Ridge macro delta before the ±5% cap (used for attribution math)."""
+    return _predict_macro_delta(macro_factors, horizon, artifact)
+
+
+def _capped_macro_delta(
+    macro_factors: dict[str, Any],
+    horizon: HorizonProfile,
+    artifact: ModelArtifact | None,
+) -> float:
+    return cap_macro_delta(_uncapped_macro_delta(macro_factors, horizon, artifact))
+
+
 _FACTOR_LABELS: dict[str, str] = {
     "oil_brent": "Brent crude",
     "oil_wti": "WTI crude",
@@ -58,6 +77,16 @@ _FACTOR_LABELS: dict[str, str] = {
     "cpi_yoy_proxy": "CPI (proxy)",
     "repo_rate": "Repo rate",
     "index_sentiment": "Index sentiment",
+    "nifty_pcr": "NIFTY PCR",
+    "nifty_return_7d": "NIFTY 7d return",
+    "nifty_return_14d": "NIFTY 14d return",
+    "nifty_rsi_14": "NIFTY RSI(14)",
+    "nifty_realized_vol_20d": "NIFTY realized vol",
+    "nifty_ma20_distance_pct": "Distance from 20d MA",
+    "constituent_momentum_7d": "Constituent momentum (7d)",
+    "days_to_monthly_expiry": "Days to expiry",
+    "is_budget_week": "Budget week",
+    "is_results_season": "Results season",
 }
 
 # Event → relative factor shocks (fraction of current level, or absolute for rates/vix)
@@ -132,7 +161,7 @@ def _marginal_macro_impact(
     *,
     step_pct: float = 0.05,
 ) -> float:
-    base = _predict_macro_delta(macro_factors, horizon, artifact)
+    base = _uncapped_macro_delta(macro_factors, horizon, artifact)
     base_val = _macro_factor_value(macro_factors, factor)
     if factor in _ABSOLUTE_SHOCK_FACTORS:
         step = max(abs(step_pct) * 10, 0.1)
@@ -142,7 +171,7 @@ def _marginal_macro_impact(
         step = abs(base_val * step_pct) if base_val else 0.01
         perturbed = copy.deepcopy(macro_factors)
         perturbed[factor] = base_val + step
-    bumped = _predict_macro_delta(perturbed, horizon, artifact)
+    bumped = _uncapped_macro_delta(perturbed, horizon, artifact)
     return bumped - base
 
 
@@ -166,7 +195,7 @@ def _try_shap_macro_contributions(
         out = []
         for row in X:
             row_factors = {names[i]: float(row[i]) for i in range(len(names))}
-            out.append(_predict_macro_delta(row_factors, horizon, artifact))
+            out.append(_uncapped_macro_delta(row_factors, horizon, artifact))
         return np.array(out, dtype=float)
 
     try:
@@ -216,7 +245,7 @@ def explain_macro_factors(
 ) -> dict[str, Any]:
     """Attribute macro portion of the prediction to each factor."""
     artifact = artifact or load_stored_model_artifact()
-    macro_delta = _predict_macro_delta(macro_factors, horizon, artifact)
+    macro_delta = _capped_macro_delta(macro_factors, horizon, artifact)
 
     shap_raw = _try_shap_macro_contributions(macro_factors, artifact, horizon)
     method = "shap" if shap_raw else "marginal"
@@ -258,9 +287,10 @@ def build_factor_sensitivity(
     horizon: HorizonProfile,
     spot: float,
     bottom_up_return_pct: float,
+    headline_return_pct: float | None = None,
     artifact: ModelArtifact | None = None,
     sweep_pct: tuple[int, int, int] = (-10, 10, 1),
-    max_factors: int = 6,
+    max_factors: int = 12,
 ) -> list[dict[str, Any]]:
     """Per-factor sweep: how index level changes when one factor moves ±%."""
     artifact = artifact or load_stored_model_artifact()
@@ -297,8 +327,11 @@ def build_factor_sensitivity(
             else:
                 perturbed[factor] = base_val * (1.0 + pct / 100.0) if base_val else pct / 100.0
 
-            macro_delta = _predict_macro_delta(perturbed, horizon, artifact)
+            macro_delta = _capped_macro_delta(perturbed, horizon, artifact)
             total_return = bottom_up_return_pct + macro_delta
+            if pct == 0 and headline_return_pct is not None:
+                total_return = headline_return_pct
+                macro_delta = total_return - bottom_up_return_pct
             index_level = spot * (1.0 + total_return / 100.0)
             points.append(
                 {
@@ -346,7 +379,7 @@ def build_event_impact_curves(
 
         shocks = template["factor_shocks"]
         shocked_factors = _apply_event_shocks(macro_factors, shocks)
-        macro_delta = _predict_macro_delta(shocked_factors, horizon, artifact)
+        macro_delta = _capped_macro_delta(shocked_factors, horizon, artifact)
         total_return = bottom_up_return_pct + macro_delta
         index_level = spot * (1.0 + total_return / 100.0)
 
@@ -358,7 +391,7 @@ def build_event_impact_curves(
         for t in (0.0, 0.25, 0.5, 0.75, 1.0):
             partial_shocks = {k: v * t for k, v in shocks.items()}
             partial_factors = _apply_event_shocks(macro_factors, partial_shocks)
-            partial_macro = _predict_macro_delta(partial_factors, horizon, artifact)
+            partial_macro = _capped_macro_delta(partial_factors, horizon, artifact)
             partial_return = bottom_up_return_pct + partial_macro
             event_points.append(
                 {
@@ -409,6 +442,51 @@ def build_event_impact_curves(
     return curves[:6]
 
 
+def _rescale_explanation_to_headline(
+    explanation: dict[str, Any],
+    *,
+    spot: float,
+    bottom_up_return_pct: float,
+    headline_return_pct: float,
+) -> dict[str, Any]:
+    """Align contributor rows with reconciled headline macro delta (not raw Ridge cap)."""
+    ridge_macro = float(explanation.get("macro_delta_pct") or 0.0)
+    reconciled_macro = round(headline_return_pct - bottom_up_return_pct, 4)
+    explanation["ridge_macro_delta_pct"] = round(ridge_macro, 4)
+    explanation["total_return_pct"] = round(headline_return_pct, 4)
+    explanation["macro_delta_pct"] = reconciled_macro
+
+    contributors = explanation.get("contributors") or []
+    if not contributors:
+        return explanation
+
+    if abs(ridge_macro) < 1e-9:
+        for row in contributors:
+            row["contribution_pct"] = 0.0
+            row["share_of_macro"] = 0.0
+            row["contribution_index_pts"] = 0.0
+        explanation["attribution_rescaled"] = True
+        return explanation
+
+    if abs(reconciled_macro - ridge_macro) <= 0.01:
+        return explanation
+
+    scale = reconciled_macro / ridge_macro
+    total_return = bottom_up_return_pct + reconciled_macro
+    for row in contributors:
+        row["contribution_pct"] = round(float(row.get("contribution_pct") or 0.0) * scale, 4)
+        if "marginal_impact_pct" in row:
+            row["marginal_impact_pct"] = round(float(row["marginal_impact_pct"]) * scale, 4)
+        if abs(reconciled_macro) > 1e-9:
+            row["share_of_macro"] = round(row["contribution_pct"] / reconciled_macro, 4)
+        if total_return:
+            row["share_of_total_equation"] = round(row["contribution_pct"] / total_return, 4)
+        row["contribution_index_pts"] = round(spot * row["contribution_pct"] / 100.0, 2)
+
+    explanation["attribution_rescaled"] = True
+    return explanation
+
+
 def build_factor_explanation_bundle(
     macro_factors: dict[str, Any],
     scenarios: list[dict[str, Any]],
@@ -416,6 +494,7 @@ def build_factor_explanation_bundle(
     horizon: HorizonProfile,
     spot: float,
     bottom_up_return_pct: float,
+    headline_return_pct: float | None = None,
     artifact: ModelArtifact | None = None,
 ) -> dict[str, Any]:
     """Full explainability payload for hub artifact and widgets."""
@@ -426,11 +505,19 @@ def build_factor_explanation_bundle(
         bottom_up_return_pct=bottom_up_return_pct,
         artifact=artifact,
     )
+    if headline_return_pct is not None:
+        explanation = _rescale_explanation_to_headline(
+            explanation,
+            spot=spot,
+            bottom_up_return_pct=bottom_up_return_pct,
+            headline_return_pct=headline_return_pct,
+        )
     sensitivity = build_factor_sensitivity(
         macro_factors,
         horizon=horizon,
         spot=spot,
         bottom_up_return_pct=bottom_up_return_pct,
+        headline_return_pct=headline_return_pct,
         artifact=artifact,
     )
     event_curves = build_event_impact_curves(

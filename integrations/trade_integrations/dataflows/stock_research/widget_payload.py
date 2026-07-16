@@ -120,7 +120,11 @@ def _strategy_variants(doc: StockResearchDoc) -> dict[str, dict[str, Any]]:
     return variants
 
 
-def build_stock_trade_widget_from_doc(doc: StockResearchDoc) -> dict[str, Any]:
+def build_stock_trade_widget_from_doc(
+    doc: StockResearchDoc,
+    *,
+    widget_intent: str | None = None,
+) -> dict[str, Any]:
     """Build Vibe ``trade_plan.widget`` payload from a stock research doc."""
     rec = doc.recommended or {}
     charges = doc.charges or {}
@@ -130,7 +134,7 @@ def build_stock_trade_widget_from_doc(doc: StockResearchDoc) -> dict[str, Any]:
     variants = _strategy_variants(doc)
     agent_recommended = rec.get("name") or (ranked[0].get("name") if ranked else "")
 
-    return {
+    payload = {
         "type": "trade_plan.widget",
         "widget_id": widget_id,
         "asset_type": "stock",
@@ -139,6 +143,7 @@ def build_stock_trade_widget_from_doc(doc: StockResearchDoc) -> dict[str, Any]:
         "market": doc.market,
         "as_of": doc.as_of.isoformat(),
         "spot": doc.spot,
+        "plan_status": "ready",
         "prediction": doc.prediction or {},
         "events": doc.events[:12],
         "scenarios": doc.scenarios[:6],
@@ -172,6 +177,9 @@ def build_stock_trade_widget_from_doc(doc: StockResearchDoc) -> dict[str, Any]:
         "meta": dict(doc.meta or {}),
         "browse_summary": doc.browse_summary or {},
     }
+    from trade_integrations.trade_widgets.presentability import apply_widget_metadata
+
+    return apply_widget_metadata(payload, widget_intent)
 
 
 def build_stock_trade_widget(
@@ -179,11 +187,12 @@ def build_stock_trade_widget(
     *,
     lookahead_days: int = 14,
     refresh: bool = False,
+    widget_intent: str | None = None,
 ) -> dict[str, Any]:
     """Load or run stock research and return widget payload."""
     if not refresh:
         cached = load_stock_research_json(ticker)
         if cached is not None:
-            return build_stock_trade_widget_from_doc(cached)
+            return build_stock_trade_widget_from_doc(cached, widget_intent=widget_intent)
     doc = run_stock_research(ticker, lookahead_days=lookahead_days)
-    return build_stock_trade_widget_from_doc(doc)
+    return build_stock_trade_widget_from_doc(doc, widget_intent=widget_intent)

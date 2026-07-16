@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from langchain_core.tools import tool
-
 from trade_integrations.context.hub import (
     is_index_research_cache_fresh,
     load_index_research_markdown,
@@ -51,7 +49,6 @@ def fetch_index_research_report(
     return format_index_report(doc)
 
 
-@tool
 def get_index_research(
     ticker: Annotated[str, "Index ticker, e.g. NIFTY or BANKNIFTY"],
     horizon_days: Annotated[
@@ -66,3 +63,12 @@ def get_index_research(
     regime classification, scenario table, and model accuracy metrics from the hub cache.
     """
     return fetch_index_research_report(ticker, horizon_days=horizon_days)
+
+
+try:
+    from langchain_core.tools import tool as _lc_tool
+
+    get_index_research = _lc_tool(get_index_research)
+except ImportError:
+    # OpenAlgo MCP loads fetch_index_research_report without langchain installed.
+    pass

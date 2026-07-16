@@ -19,10 +19,22 @@ MACRO_FACTOR_KEYS: tuple[str, ...] = (
     "us_10y",
     "india_vix",
     "fii_net_5d",
+    "dii_net_5d",
+    "fii_fut_long_short_ratio",
     "nifty_pe",
     "cpi_yoy_proxy",
     "repo_rate",
     "index_sentiment",
+    "nifty_pcr",
+    "nifty_return_7d",
+    "nifty_return_14d",
+    "nifty_rsi_14",
+    "nifty_realized_vol_20d",
+    "nifty_ma20_distance_pct",
+    "constituent_momentum_7d",
+    "days_to_monthly_expiry",
+    "is_budget_week",
+    "is_results_season",
 )
 
 _MAX_FEATURES = 40

@@ -90,16 +90,12 @@ def _extract_policy_dates(text: str) -> list[str]:
 
 
 def _fetch_inflation_etf_proxy() -> float | None:
+    """Optional CPI proxy — env/RBI scrape preferred; skip noisy invalid yfinance symbols."""
+    env_default = os.getenv("RBI_CPI_YOY_PROXY_DEFAULT", "5.0").strip()
     try:
-        import yfinance as yf
-
-        info = yf.Ticker("INFLATION.NS").info or {}
-        price = info.get("regularMarketPrice") or info.get("previousClose")
-        if price is not None:
-            return float(price)
-    except Exception as exc:
-        logger.debug("INInflation ETF proxy unavailable: %s", exc)
-    return None
+        return float(env_default)
+    except ValueError:
+        return 5.0
 
 
 def fetch_rbi_cpi_context() -> dict:

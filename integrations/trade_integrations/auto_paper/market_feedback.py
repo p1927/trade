@@ -14,7 +14,7 @@ from trade_integrations.auto_paper.session_store import load_session, save_sessi
 from trade_integrations.context.hub import load_options_research_json
 from trade_integrations.monitor.execution_ledger import (
     fetch_position_book,
-    list_open_entries,
+    list_open_entries_live,
     match_positions_for_entry,
 )
 from trade_integrations.monitor.live_quotes import fetch_underlying_ltp
@@ -41,31 +41,72 @@ def _minutes_to_session_close(cfg) -> int | None:
     return max(0, int((close_dt - now).total_seconds() / 60))
 
 
-def _session_pnl_block(session: dict[str, Any]) -> dict[str, Any]:
+def _session_pnl_block(session: dict[str, Any], *, focus_ticker: str | None = None) -> dict[str, Any]:
     """Paper sandbox P&L vs session start and vs last turn."""
+    symbol = (focus_ticker or session.get("primary_ticker") or "").strip().upper()
+    if symbol:
+        try:
+            from trade_integrations.dataflows.company_research.market import Market, detect_market
+
+            if detect_market(symbol) == Market.US:
+                return {
+                    "pnl_basis": "alpaca",
+                    "note": "US symbols use Alpaca paper; OpenAlgo INR sandbox P&L does not apply.",
+                }
+        except Exception:
+            pass
+
     block: dict[str, Any] = {}
+    budget_inr = session.get("budget_inr")
     try:
         from trade_integrations.auto_paper.openalgo_client import OpenAlgoClient
 
         funds = OpenAlgoClient().get_funds()
         available = funds.get("availablecash") or funds.get("available_balance")
-        if available is not None:
-            current = float(available)
-            block["current_inr"] = round(current, 2)
-            starting = session.get("starting_balance")
-            if starting is None:
-                session["starting_balance"] = current
-                block["starting_inr"] = round(current, 2)
+        if available is None:
+            return block
+        current = float(available)
+        block["current_inr"] = round(current, 2)
+        block["sandbox_cash_inr"] = round(current, 2)
+
+        starting = session.get("starting_balance")
+        if starting is None:
+            if budget_inr is not None:
+                baseline = min(float(budget_inr), current)
+                session["starting_balance"] = baseline
+                session["pnl_basis"] = "budget_inr"
             else:
-                block["starting_inr"] = round(float(starting), 2)
-                block["day_pnl_inr"] = round(current - float(starting), 2)
-            prior = session.get("last_balance_snapshot")
-            if prior is not None:
-                try:
-                    block["change_since_last_inr"] = round(current - float(prior), 2)
-                except (TypeError, ValueError):
-                    pass
-            session["last_balance_snapshot"] = current
+                baseline = current
+                session["starting_balance"] = current
+                session["pnl_basis"] = "sandbox_inr"
+        else:
+            baseline = float(starting)
+
+        block["starting_inr"] = round(baseline, 2)
+        block["day_pnl_inr"] = round(current - baseline, 2)
+
+        if budget_inr is not None:
+            block["budget_inr"] = round(float(budget_inr), 2)
+
+        block["pnl_basis"] = session.get("pnl_basis") or "sandbox_inr"
+        start_for_pct = block.get("starting_inr")
+        day_pnl = block.get("day_pnl_inr")
+        if start_for_pct and day_pnl is not None and float(start_for_pct) > 0:
+            pct = (float(day_pnl) / float(start_for_pct)) * 100.0
+            block["day_pnl_pct"] = round(pct, 2)
+            if abs(pct) > 500:
+                block["baseline_warning"] = (
+                    "day_pnl_pct vs starting_inr is implausible — "
+                    "starting_inr may be budget while current_inr is OpenAlgo sandbox cash."
+                )
+
+        prior = session.get("last_balance_snapshot")
+        if prior is not None:
+            try:
+                block["change_since_last_inr"] = round(current - float(prior), 2)
+            except (TypeError, ValueError):
+                pass
+        session["last_balance_snapshot"] = current
     except Exception:
         pass
     return block
@@ -154,11 +195,13 @@ def build_market_feedback(*, ticker: str | None = None) -> dict[str, Any]:
 
     positions_block: list[dict[str, Any]] = []
     position_book = fetch_position_book()
-    for entry in list_open_entries():
+    for entry in list_open_entries_live():
         underlying = str(entry.get("underlying") or "").upper()
+        matched, position_pnl = match_positions_for_entry(entry, position_book)
+        if not matched:
+            continue
         live_spot = fetch_underlying_ltp(underlying) if underlying else None
         doc = load_options_research_json(underlying) if underlying else None
-        _, position_pnl = match_positions_for_entry(entry, position_book)
         thesis = evaluate_thesis_break(doc, entry, live_spot=live_spot, position_pnl=position_pnl)
         row = {
             "widget_id": entry.get("widget_id"),
@@ -201,7 +244,7 @@ def build_market_feedback(*, ticker: str | None = None) -> dict[str, Any]:
         "summary": _feedback_summary(alerts, positions_block, tickers_block, focus),
     }
 
-    session_pnl = _session_pnl_block(session)
+    session_pnl = _session_pnl_block(session, focus_ticker=focus)
     if session_pnl:
         feedback["session_pnl"] = session_pnl
 

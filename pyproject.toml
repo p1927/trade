@@ -38,10 +38,15 @@ options = [
 dev = [
     "pytest>=8.0",
 ]
+nautilus = [
+    "nautilus_trader>=1.228",
+    "redis>=5.0",
+    "requests>=2.31",
+]
 
 [tool.setuptools.packages.find]
 where = ["integrations"]
-include = ["trade_integrations*"]
+include = ["trade_integrations*", "nautilus_openalgo_bridge*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "tradingagents/tests"]

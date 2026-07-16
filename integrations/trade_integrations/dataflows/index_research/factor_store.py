@@ -46,11 +46,14 @@ def _daily_path(day: str) -> Path:
 
 
 def _write_parquet(df: pd.DataFrame, path: Path) -> None:
+    csv_path = path.with_suffix(".csv")
     try:
         df.to_parquet(path, index=False)
     except ImportError:
-        csv_path = path.with_suffix(".csv")
         df.to_csv(csv_path, index=False)
+        return
+    # Mirror CSV so runtimes without pyarrow (e.g. agent serve on system Python) still see backfills.
+    df.to_csv(csv_path, index=False)
 
 
 def _read_parquet(path: Path) -> pd.DataFrame:
@@ -75,6 +78,22 @@ def save_daily_factors(day: str, rows: list[dict]) -> None:
     enriched = [{**row, "date": day} for row in rows]
     df = pd.DataFrame(enriched)
     _write_parquet(df, _daily_path(day))
+
+
+def upsert_daily_factors(day: str, rows: list[dict]) -> None:
+    """Merge factor rows for a day, replacing rows with the same ``factor`` key."""
+    if not rows:
+        return
+    existing = _read_parquet(_daily_path(day))
+    new_factors = {str(row["factor"]) for row in rows if row.get("factor")}
+    if not existing.empty and "factor" in existing.columns:
+        kept = existing[~existing["factor"].astype(str).isin(new_factors)]
+        merged = pd.concat([kept, pd.DataFrame([{**row, "date": day} for row in rows])], ignore_index=True)
+    else:
+        merged = pd.DataFrame([{**row, "date": day} for row in rows])
+    out_dir = get_factor_data_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_parquet(merged, _daily_path(day))
 
 
 def load_factor_history(start: str, end: str) -> pd.DataFrame:

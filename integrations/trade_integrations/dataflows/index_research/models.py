@@ -56,6 +56,7 @@ class ConstituentSignal:
     events: list[dict[str, Any]] = field(default_factory=list)
     factors: list[dict[str, Any]] = field(default_factory=list)
     sentiment_score: float | None = None
+    momentum_7d_pct: float | None = None
     contribution_to_index_pct: float | None = None
 
 
@@ -77,4 +78,7 @@ class IndexResearchDoc:
     factor_explanation: dict[str, Any] = field(default_factory=dict)
     factor_sensitivity: list[dict[str, Any]] = field(default_factory=list)
     event_impact_curves: list[dict[str, Any]] = field(default_factory=list)
+    upcoming_events: list[dict[str, Any]] = field(default_factory=list)
+    cascade_calibration: dict[str, Any] = field(default_factory=dict)
     stages: list[StageResult] = field(default_factory=list)
+    pipeline_log: list[dict[str, Any]] = field(default_factory=list)

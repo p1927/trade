@@ -21,6 +21,15 @@ if [[ ! -x "$PY" ]]; then
 fi
 
 cd "$OPENALGO_DIR"
+
+# Load trade-stack secrets (OpenAlgo + Alpaca) when present.
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+
 export TRADE_INTEGRATIONS_SKIP_APPLY=1
 export PYTHONPATH="$ROOT/integrations:$ROOT/tradingagents${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PY" mcp/mcpserver.py "$@"

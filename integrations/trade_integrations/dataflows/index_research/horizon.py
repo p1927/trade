@@ -22,5 +22,5 @@ def resolve_horizon(horizon_days: int | None = None) -> HorizonProfile:
     if days <= 3:
         return HorizonProfile(name="A", days=days, feature_window=5, poly_degree=1)
     if days <= 21:
-        return HorizonProfile(name="B", days=days, feature_window=14, poly_degree=2)
+        return HorizonProfile(name="B", days=days, feature_window=14, poly_degree=1)
     return HorizonProfile(name="C", days=days, feature_window=60, poly_degree=2)

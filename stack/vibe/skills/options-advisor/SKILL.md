@@ -25,7 +25,7 @@ Supported underlyings: India **indices** (NIFTY, BANKNIFTY, …) and **F&O stock
 
 When the user asks what to trade, which strategy, or how to execute before expiry:
 
-**Automatic research (Vibe backend):** When the user mentions a ticker, the session prefetches the hub trade plan and opens the **Research** side panel (Trade plan tab). You do not need to re-fetch if the panel already shows fresh data — but always call MCP tools when explaining strategies so the user gets the widget.
+**Automatic research (Vibe backend):** When the user mentions a ticker, the session prefetches the hub trade plan and opens the **Research** side panel (Trade plan tab). Widget auto-emit is **opt-in** — only when the message intent is strategy/outlook/execute (`OPTIONS_AUTO_WIDGET_ON_PREFETCH=false` by default). Always call MCP `get_*_trade_widget` when presenting actionable strategies so the user gets the interactive card.
 
 ### Step 0 — Browse what's available (always start here for "what can I trade?")
 

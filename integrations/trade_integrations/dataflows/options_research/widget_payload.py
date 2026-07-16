@@ -222,6 +222,7 @@ def build_options_trade_widget_from_doc(
     *,
     supersedes: str | None = None,
     revision_reason: str | None = None,
+    widget_intent: str | None = None,
 ) -> dict[str, Any]:
     """Build Vibe ``trade_plan.widget`` payload from an options research doc."""
     pred = doc.prediction or {}
@@ -295,7 +296,9 @@ def build_options_trade_widget_from_doc(
     if revision_reason:
         payload["revision_reason"] = revision_reason
     _attach_monitor_context(payload, doc)
-    return payload
+    from trade_integrations.trade_widgets.presentability import apply_widget_metadata
+
+    return apply_widget_metadata(payload, widget_intent)
 
 
 def build_options_trade_widget(
@@ -306,6 +309,7 @@ def build_options_trade_widget(
     refresh: bool = False,
     supersedes: str | None = None,
     revision_reason: str | None = None,
+    widget_intent: str | None = None,
 ) -> dict[str, Any]:
     """Load or run options research and return widget payload."""
     if not refresh:
@@ -318,6 +322,7 @@ def build_options_trade_widget(
                     cached,
                     supersedes=supersedes,
                     revision_reason=revision_reason,
+                    widget_intent=widget_intent,
                 )
     doc = run_options_research(
         ticker,
@@ -328,4 +333,5 @@ def build_options_trade_widget(
         doc,
         supersedes=supersedes,
         revision_reason=revision_reason,
+        widget_intent=widget_intent,
     )

@@ -61,6 +61,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--interval", type=int, default=None, help="Poll interval seconds")
     parser.add_argument("--once", action="store_true", help="Single agent turn then exit")
     parser.add_argument("--stop", action="store_true", help="Stop session and exit")
+    parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="Create Vibe UI session and inject kickoff prompt (recommended)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume active session in Vibe UI (fresh attempt, continuity in prompt)",
+    )
     parser.add_argument("--no-agent", action="store_true", help="Deterministic mode only (no Vibe)")
     return parser.parse_args()
 
@@ -82,6 +92,43 @@ async def _run(args: argparse.Namespace) -> int:
     ticker = args.ticker.strip().upper()
     if ticker not in watchlist:
         watchlist.insert(0, ticker)
+
+    if args.resume or args.bootstrap:
+        import urllib.error
+        import urllib.request
+
+        vibe_url = args.vibe_url.rstrip("/")
+        endpoint = "/trade/auto-paper/resume" if args.resume else "/trade/auto-paper/bootstrap"
+        payload = {
+            "ticker": ticker,
+            "budget_inr": budget,
+            "watchlist": watchlist,
+            "dispatch": True,
+            "fresh_session": args.resume,
+        }
+        if not args.resume:
+            payload["prompt"] = None
+        req = urllib.request.Request(
+            f"{vibe_url}{endpoint}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            logger.info("Bootstrap/resume: %s", json.dumps(result, default=str)[:2000])
+            ui = result.get("ui_url")
+            if ui:
+                logger.info("Open in Vibe UI: %s", ui)
+            if args.once:
+                return 0
+        except urllib.error.HTTPError as exc:
+            logger.error("Bootstrap/resume failed: %s", exc.read().decode())
+            return 1
+
+    if args.resume and args.once:
+        return 0
 
     os.environ.setdefault("AUTO_PAPER_TRADING_ENABLED", "true")
 

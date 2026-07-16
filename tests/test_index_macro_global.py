@@ -33,6 +33,29 @@ def test_collect_global_factor_rows_returns_expected_keys(monkeypatch):
         lambda: {"factor": "nifty_pe", "value": 22.1, "source": "yfinance"},
     )
     monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.macro_global._fetch_nifty_pcr",
+        lambda: {"factor": "nifty_pcr", "value": 1.12, "source": "openalgo"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.macro_global._fetch_nifty_technical_factors",
+        lambda: {
+            "rows": [
+                {"factor": "nifty_return_7d", "value": 1.5, "source": "nifty_technical"},
+                {"factor": "nifty_rsi_14", "value": 55.0, "source": "nifty_technical"},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.macro_global._fetch_calendar_factors",
+        lambda: {
+            "rows": [
+                {"factor": "days_to_monthly_expiry", "value": 10.0, "source": "calendar"},
+                {"factor": "is_budget_week", "value": 0.0, "source": "calendar"},
+                {"factor": "is_results_season", "value": 1.0, "source": "calendar"},
+            ]
+        },
+    )
+    monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.macro_global._fetch_rbi_factors",
         lambda: {
             "rows": [
@@ -52,6 +75,9 @@ def test_collect_global_factor_rows_returns_expected_keys(monkeypatch):
 
     assert "usd_inr" in factors
     assert "oil_brent" in factors
+    assert "nifty_pcr" in factors
+    assert "nifty_return_7d" in factors
+    assert "days_to_monthly_expiry" in factors
     assert "index_sentiment" in factors
     assert rows[0]["factor"] in factors
     usd_row = next(row for row in rows if row["factor"] == "usd_inr")

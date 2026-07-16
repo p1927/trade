@@ -106,7 +106,8 @@ def test_batch_uses_cached_company_research(monkeypatch):
     assert signals[0].sentiment_score == pytest.approx(0.55)
     assert len(signals[0].events) == 1
     assert signals[0].events[0]["type"] == "results"
-    assert signals[0].factors == []
+    assert len(signals[0].factors) >= 1
+    assert signals[0].factors[0]["type"] == "news_sentiment"
     assert signals[0].contribution_to_index_pct is None
 
     assert signals[1].symbol == "TCS"

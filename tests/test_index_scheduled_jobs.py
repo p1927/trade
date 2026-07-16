@@ -13,6 +13,8 @@ if str(AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(AGENT_ROOT))
 
 from src.scheduled_research.index_jobs import (
+    JOB_TYPE_COMPANY_RESEARCH_ARCHIVE,
+    JOB_TYPE_INDEX_CALIBRATION,
     JOB_TYPE_INDEX_FACTOR_SNAPSHOT,
     JOB_TYPE_INDEX_RESEARCH,
     INDEX_JOB_TYPES,
@@ -62,6 +64,20 @@ class TestIndexJobDispatch:
             dispatch_index_job_sync(job)
         run_mock.assert_called_once_with(job.config)
 
+    def test_calibration_job_calls_runner(self):
+        job = ScheduledResearchJob(
+            id="cal-1",
+            prompt="calibration",
+            schedule="86400000",
+            config={"job_type": JOB_TYPE_INDEX_CALIBRATION, "ticker": "NIFTY"},
+        )
+        with patch(
+            "src.scheduled_research.index_jobs.run_index_calibration_job",
+            return_value={"retrained": False},
+        ) as run_mock:
+            dispatch_index_job_sync(job)
+        run_mock.assert_called_once_with(job.config)
+
     def test_unknown_job_type_raises(self):
         job = ScheduledResearchJob(
             id="bad",
@@ -78,21 +94,25 @@ class TestIndexJobRegistration:
     def test_registers_defaults_when_missing(self, tmp_path):
         store = ScheduledResearchJobStore(path=tmp_path / "jobs.json")
         created = register_default_index_jobs(store)
-        assert created == 2
+        assert created == 4
         jobs = store.load()
         assert "nifty-index-factor-snapshot" in jobs
         assert "nifty-index-research" in jobs
+        assert "nifty-index-calibration" in jobs
+        assert "nifty-company-research-archive" in jobs
         assert jobs["nifty-index-factor-snapshot"].config["job_type"] == JOB_TYPE_INDEX_FACTOR_SNAPSHOT
         assert jobs["nifty-index-research"].config["job_type"] == JOB_TYPE_INDEX_RESEARCH
 
     def test_idempotent_registration(self, tmp_path):
         store = ScheduledResearchJobStore(path=tmp_path / "jobs.json")
-        assert register_default_index_jobs(store) == 2
+        assert register_default_index_jobs(store) == 4
         assert register_default_index_jobs(store) == 0
 
     def test_index_job_types_frozen(self):
         assert JOB_TYPE_INDEX_FACTOR_SNAPSHOT in INDEX_JOB_TYPES
         assert JOB_TYPE_INDEX_RESEARCH in INDEX_JOB_TYPES
+        assert JOB_TYPE_INDEX_CALIBRATION in INDEX_JOB_TYPES
+        assert JOB_TYPE_COMPANY_RESEARCH_ARCHIVE in INDEX_JOB_TYPES
 
 
 @pytest.mark.unit

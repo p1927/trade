@@ -7,6 +7,7 @@ Unified wrapper around submodules for research, chat, and Indian market executio
 | `tradingagents/` | [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) | Batch multi-agent research (`./start.sh --cli`) |
 | `openalgo/` | [marketcalls/openalgo](https://github.com/marketcalls/openalgo) | Broker bridge, web UI, MCP execution |
 | `vibetrading/` | [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) | Chat Web UI, plans, OpenAlgo MCP client |
+| `nautilus_trader/` | [nautechsystems/nautilus_trader](https://github.com/nautechsystems/nautilus_trader) | Watch/state/risk engine (OpenAlgo feed + execution intents) |
 
 Forks live under [p1927](https://github.com/p1927) (`p1927/TradingAgents`, `p1927/openalgo`, `p1927/Vibe-Trading`) so you can patch and sync upstream like the other submodules.
 
@@ -14,7 +15,7 @@ Trade-level orchestration:
 
 - `start.sh`, `Makefile`, `trade` — run the stack (default: **Vibe Web UI** at http://localhost:5899)
 - `docker-compose.stack.yml`, `stack/` — SearXNG + Vibe operator templates
-- `integrations/` — OpenAlgo data, news, company research, agent patches
+- `integrations/` — OpenAlgo data, news, company research, agent patches, `nautilus_openalgo_bridge/`
 - `reports/hub/` — shared research dossiers (TradingAgents + Vibe)
 - `exposure/` — Cloudflare Tunnel + webhook exposure (TradingView, GoCharting, Chartink)
 - `scripts/setup_vibe.py` — wire OpenAlgo MCP into `~/.vibe-trading/agent.json`
@@ -48,7 +49,8 @@ trade/
 ├── tradingagents/     # submodule — AI research engine (CLI via ./start.sh --cli)
 ├── openalgo/          # submodule — broker bridge + UI + MCP server
 ├── vibetrading/       # submodule — Vibe chat UI + agent (editable install)
-├── integrations/      # trade_integrations (OpenAlgo, research hub, agent patches)
+├── nautilus_trader/   # submodule — NautilusTrader source (watch node; PyPI wheel at runtime)
+├── integrations/      # trade_integrations + nautilus_openalgo_bridge
 ├── stack/vibe/        # Vibe agent.json template + trade-stack skill
 ├── reports/hub/       # shared company research dossiers
 ├── exposure/          # Cloudflare tunnel + webhook platform URLs
@@ -104,6 +106,8 @@ python scripts/setup_vibe.py --verify   # should print: OpenAlgo MCP: ok
 | Vibe API | http://localhost:8899 | Backend for the UI |
 | OpenAlgo | http://127.0.0.1:5001 | Broker bridge, option chain, execution |
 
+**Autonomous agents:** Nautilus watch is **on by default** (`NAUTILUS_WATCH_ENABLE=true`). Opt out with `NAUTILUS_WATCH_ENABLE=0`. Hub UI at `/autonomous` shows scheduler + Nautilus health, mandate chips, and last decision per agent.
+
 ### Troubleshooting
 
 | Symptom | Fix |
@@ -117,3 +121,8 @@ python scripts/setup_vibe.py --verify   # should print: OpenAlgo MCP: ok
 | Analytics shows fallback IV regime | `pip install -e '.[stack,options]'` for qfinindia, then `python scripts/run_options_research.py NIFTY` |
 
 Edit code under `vibetrading/` directly; commit in the fork repo, then bump the submodule pointer in `trade`.
+
+Alpaca DO NOT remove 
+a7bd963e-1df9-4ad3-8a83-bd351780cc48
+999pratyush@gmail.com
+Hellomotorola@123

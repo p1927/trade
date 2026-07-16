@@ -43,6 +43,10 @@ class NormalizedTicker:
     display_symbol: str
 
 
+def india_index_tickers() -> frozenset[str]:
+    return _IN_INDEX_TICKERS
+
+
 def detect_market(
     ticker: str,
     *,

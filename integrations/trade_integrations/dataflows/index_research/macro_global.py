@@ -140,11 +140,18 @@ def _fii_net_column(frame) -> str | None:
 
 
 def _fetch_fii_net_5d() -> dict[str, Any] | None:
-    from nselib import capital_market
+    try:
+        from nselib import capital_market
+    except ImportError:
+        return None
+
+    fetcher = getattr(capital_market, "fii_dii_trading_activity", None)
+    if fetcher is None:
+        return None
 
     end = datetime.now().date()
     start = end - timedelta(days=10)
-    frame = capital_market.fii_dii_trading_activity(
+    frame = fetcher(
         from_date=start.strftime("%d-%m-%Y"),
         to_date=end.strftime("%d-%m-%Y"),
     )
@@ -186,6 +193,59 @@ def _fetch_nifty_pe() -> dict[str, Any] | None:
         "source": "yfinance",
         "metadata": {"symbol": "^NSEI", "field": "trailingPE"},
     }
+
+
+def _fetch_nifty_pcr() -> dict[str, Any] | None:
+    try:
+        from trade_integrations.dataflows.openalgo import fetch_option_chain
+    except ImportError:
+        return None
+
+    try:
+        chain = fetch_option_chain("NIFTY", "NFO", strike_count=10)
+    except Exception as exc:
+        logger.debug("OpenAlgo NIFTY PCR fetch failed: %s", exc)
+        return None
+
+    pcr = chain.get("pcr")
+    if pcr is None:
+        return None
+    return {
+        "factor": "nifty_pcr",
+        "value": float(pcr),
+        "source": chain.get("source") or "openalgo",
+        "metadata": {
+            "expiry_date": chain.get("expiry_date"),
+            "total_call_oi": chain.get("total_call_oi"),
+            "total_put_oi": chain.get("total_put_oi"),
+        },
+    }
+
+
+def _fetch_nifty_technical_factors() -> dict[str, Any] | None:
+    from trade_integrations.dataflows.index_research.sources.history_loader import (
+        load_nifty_history,
+    )
+    from trade_integrations.dataflows.index_research.technical_features import (
+        technical_factor_rows,
+    )
+
+    history = load_nifty_history(days=90)
+    rows = technical_factor_rows(history)
+    if not rows:
+        return None
+    return {"rows": rows}
+
+
+def _fetch_calendar_factors() -> dict[str, Any] | None:
+    from datetime import date
+
+    from trade_integrations.dataflows.index_research.calendar_features import (
+        calendar_factor_rows,
+    )
+
+    rows = calendar_factor_rows(date.today())
+    return {"rows": rows}
 
 
 def _fetch_rbi_factors() -> dict[str, Any] | None:
@@ -244,8 +304,12 @@ def _attempt_from_fetch(name: str, fetcher) -> SourceAttempt:
 
 
 def _factor_row_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    factor_key = str(payload.get("factor") or "")
+    from trade_integrations.dataflows.index_research.explain import _FACTOR_LABELS
+
     row: dict[str, Any] = {
-        "factor": payload["factor"],
+        "factor": factor_key,
+        "label": _FACTOR_LABELS.get(factor_key) or factor_key.replace("_", " ").title(),
         "value": payload["value"],
         "source": payload.get("source"),
     }
@@ -285,6 +349,7 @@ def fetch_global_macro_snapshot(
         ("india_vix", _fetch_india_vix),
         ("fii_net_5d", _fetch_fii_net_5d),
         ("nifty_pe", _fetch_nifty_pe),
+        ("nifty_pcr", _fetch_nifty_pcr),
     ):
         attempt = _attempt_from_fetch(name, fetcher)
         attempts.append(attempt)
@@ -292,6 +357,17 @@ def fetch_global_macro_snapshot(
             row = _factor_row_from_payload(attempt.data)
             factor_rows.append(row)
             factors[name] = attempt.data["value"]
+
+    for name, fetcher in (
+        ("nifty_technical", _fetch_nifty_technical_factors),
+        ("calendar", _fetch_calendar_factors),
+    ):
+        attempt = _attempt_from_fetch(name, fetcher)
+        attempts.append(attempt)
+        if attempt.status == "ok" and attempt.data:
+            for row in attempt.data.get("rows", []):
+                factor_rows.append(row)
+                factors[row["factor"]] = row["value"]
 
     rbi_attempt = _attempt_from_fetch("rbi_cpi", _fetch_rbi_factors)
     attempts.append(rbi_attempt)
