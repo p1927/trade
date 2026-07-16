@@ -35,8 +35,8 @@ class TestWidgetAutoEmitDedup:
 
     def test_should_emit_normalizes_ticker_case(self):
         now = 1_000_000.0
-        _record_widget_emitted("sess-1", "nifty", now)
-        assert _should_emit_widget("sess-1", "NIFTY", now + 1) is False
+        _record_widget_emitted("sess-1", "nifty", now, widget_kind="options")
+        assert _should_emit_widget("sess-1", "NIFTY", now + 1, widget_kind="options") is False
 
     def test_dedup_prevents_second_emit_within_window(self):
         now = 2_000_000.0
@@ -44,7 +44,7 @@ class TestWidgetAutoEmitDedup:
         ticker = "RELIANCE"
 
         assert _should_emit_widget(session_id, ticker, now) is True
-        _record_widget_emitted(session_id, ticker, now)
+        _record_widget_emitted(session_id, ticker, now, widget_kind="options")
 
         within_window = now + WIDGET_EMIT_DEDUP_SECONDS - 1
         assert _should_emit_widget(session_id, ticker, within_window) is False
@@ -54,7 +54,7 @@ class TestWidgetAutoEmitDedup:
         session_id = "sess-expired"
         ticker = "BANKNIFTY"
 
-        _record_widget_emitted(session_id, ticker, now)
+        _record_widget_emitted(session_id, ticker, now, widget_kind="options")
         after_window = now + WIDGET_EMIT_DEDUP_SECONDS
         assert _should_emit_widget(session_id, ticker, after_window) is True
 
@@ -62,7 +62,7 @@ class TestWidgetAutoEmitDedup:
         now = 4_000_000.0
         ticker = "NIFTY"
 
-        _record_widget_emitted("sess-a", ticker, now)
+        _record_widget_emitted("sess-a", ticker, now, widget_kind="options")
         assert _should_emit_widget("sess-a", ticker, now + 1) is False
         assert _should_emit_widget("sess-b", ticker, now + 1) is True
 

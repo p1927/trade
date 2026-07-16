@@ -84,6 +84,7 @@ def run_agent_debate(
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     from trade_integrations.bridge.hub_context import (
+        build_tradingagents_index_context,
         build_tradingagents_options_context,
         infer_debate_asset_type,
     )
@@ -107,7 +108,9 @@ def run_agent_debate(
     )
 
     hub_options_context = build_tradingagents_options_context(display_ticker, asset_type=resolved_asset)
-    if hub_options_context:
+    hub_index_context = build_tradingagents_index_context(display_ticker)
+    hub_past_context = f"{hub_index_context}{hub_options_context}".strip()
+    if hub_past_context:
         original_run_graph = graph._run_graph
 
         def _run_graph_with_hub(company_name, trade_date_arg, asset_type_arg=resolved_asset):
@@ -116,7 +119,7 @@ def run_agent_debate(
             def _create_with_hub(*args, **kwargs):
                 state = original_create(*args, **kwargs)
                 prev = state.get("past_context") or ""
-                state["past_context"] = f"{prev}{hub_options_context}".strip()
+                state["past_context"] = f"{prev}{hub_past_context}".strip()
                 return state
 
             graph.propagator.create_initial_state = _create_with_hub

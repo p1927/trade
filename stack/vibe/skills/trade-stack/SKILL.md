@@ -79,15 +79,17 @@ For **equity** CNC/MIS trades, use the **stock-advisor** skill:
 
 Regenerate: `python scripts/run_stock_research.py RELIANCE`
 
-## Index research (NIFTY)
+## Index advisor
 
-For **index-level** prediction, attribution, and scenarios:
+For **index-level** prediction, factor attribution, macro overlay, and scenarios (before or instead of F&O legs), use the **index-advisor** skill:
 
 ```
 {{TRADE_STACK_HUB_DIR}}/NIFTY/index_research/latest.json
 ```
 
-**Vibe automation (OpenAlgo MCP):** `get_index_trade_plan` (accepts `horizon_days`)
+**Vibe automation (OpenAlgo MCP):** `get_index_trade_plan` (accepts `horizon_days`); **`get_index_trade_widget`** for the factor chart card.
+
+When the user mentions NIFTY/BANKNIFTY, Vibe auto-prefetches index research and emits the index widget. For strategy legs afterward, use **options-advisor**.
 
 Regenerate: `python scripts/run_index_research.py NIFTY --horizon-days 14`
 Daily factors: `python scripts/run_index_factor_snapshot.py`

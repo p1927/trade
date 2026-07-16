@@ -10,6 +10,7 @@ category: workflow
 Use pre-computed **options trade plans** from the trade-stack hub plus **OpenAlgo MCP** for live chain refresh, margin, payoff validation, and basket execution.
 
 See also: [trade-stack skill](../trade-stack/SKILL.md) for company research on stock underlyings.
+For **index direction and factor attribution** before picking legs, use [index-advisor](../index-advisor/SKILL.md).
 
 ## Hub artifact
 
