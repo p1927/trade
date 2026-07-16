@@ -617,6 +617,51 @@ def is_agent_debate_cache_fresh(ticker: str) -> bool:
     return age_minutes <= max_age
 
 
+def _quant_review_dir(ticker: str) -> Path:
+    return get_hub_dir() / _ticker_key(ticker) / "quant_review"
+
+
+_QUANT_REVIEW_CACHE_MINUTES_ENV = "QUANT_REVIEW_CACHE_MINUTES"
+
+
+def _quant_review_cache_max_age_minutes() -> int:
+    try:
+        return max(0, int(os.getenv(_QUANT_REVIEW_CACHE_MINUTES_ENV, "360")))
+    except ValueError:
+        return 360
+
+
+def save_quant_review(ticker: str, payload: dict) -> Path:
+    """Write latest quant review under reports/hub/{TICKER}/quant_review/."""
+    out_dir = _quant_review_dir(ticker)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / "latest.json"
+    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return json_path
+
+
+def load_quant_review_json(ticker: str) -> dict | None:
+    path = _quant_review_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def is_quant_review_cache_fresh(ticker: str) -> bool:
+    max_age = _quant_review_cache_max_age_minutes()
+    if max_age == 0:
+        return False
+    path = _quant_review_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return False
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    age_minutes = (datetime.now(timezone.utc) - mtime).total_seconds() / 60.0
+    return age_minutes <= max_age
+
+
 def _index_research_dir(ticker: str) -> Path:
     return get_hub_dir() / _ticker_key(ticker) / "index_research"
 
@@ -663,6 +708,14 @@ def save_index_research(doc) -> Path:
     """Write latest index research markdown + JSON under the shared hub."""
     from trade_integrations.dataflows.index_research.format import format_index_report
 
+    if not (getattr(doc, "news_impact", None) or {}).get("items"):
+        try:
+            from trade_integrations.dataflows.news_hub_bridge import sync_news_impact_to_index_doc
+
+            doc.news_impact = sync_news_impact_to_index_doc(doc)
+        except Exception:
+            pass
+
     out_dir = _index_research_dir(doc.ticker)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "latest.md").write_text(format_index_report(doc), encoding="utf-8")
@@ -692,7 +745,16 @@ def load_index_research_json(ticker: str):
     if not path.is_file():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return _index_doc_from_json(payload)
+    doc = _index_doc_from_json(payload)
+    embedded = getattr(doc, "news_impact", None) or {}
+    if not (embedded.get("items") or []):
+        try:
+            from trade_integrations.dataflows.news_hub_bridge import resolve_news_impact
+
+            doc.news_impact = resolve_news_impact(ticker=ticker, doc=doc)
+        except Exception:
+            pass
+    return doc
 
 
 def load_index_research_markdown(ticker: str) -> str | None:

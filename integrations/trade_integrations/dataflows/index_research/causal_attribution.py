@@ -96,25 +96,20 @@ _NEWS_KEYWORDS: dict[str, list[str]] = {
 }
 
 
-def _fetch_index_headlines(day: str, *, limit: int = 6) -> list[dict[str, str]]:
-    """Headlines for Nifty / Indian market on a calendar day."""
-    try:
-        from trade_integrations.dataflows.index_research.news_collect import collect_headlines_for_day
-    except ImportError:
-        collect_headlines_for_day = None  # type: ignore[assignment]
+def _fetch_index_headlines(day: str, *, limit: int = 6) -> list[dict[str, Any]]:
+    """Headlines for Nifty / Indian market on a calendar day (hub SSOT with tags)."""
+    from trade_integrations.dataflows.news_hub_bridge import (
+        headlines_for_day,
+        ingest_rows_to_hub,
+        to_headline_dict,
+    )
 
-    if collect_headlines_for_day is not None:
-        rows = collect_headlines_for_day(day, ticker="NIFTY", limit=limit)
+    try:
+        rows = headlines_for_day(day, ticker="NIFTY", limit=limit, ingest_if_missing=True)
         if rows:
-            return [
-                {
-                    "title": str(r.get("title") or "")[:220],
-                    "source": str(r.get("source") or "news"),
-                    "summary": str(r.get("summary") or "")[:500],
-                }
-                for r in rows
-                if r.get("title")
-            ]
+            return [to_headline_dict(r) for r in rows]
+    except Exception as exc:
+        logger.debug("hub headlines_for_day failed for %s: %s", day, exc)
 
     try:
         from trade_integrations.dataflows.index_research.company_news_backfill import (
@@ -137,7 +132,7 @@ def _fetch_index_headlines(day: str, *, limit: int = 6) -> list[dict[str, str]]:
         "India FII DII stock market",
     ]
     seen: set[str] = set()
-    out: list[dict[str, str]] = []
+    raw_rows: list[dict[str, Any]] = []
     for query in queries:
         url = _google_news_rss_url(query, after=after, before=before)
         for row in _fetch_rss_headlines(url, limit=limit):
@@ -145,14 +140,43 @@ def _fetch_index_headlines(day: str, *, limit: int = 6) -> list[dict[str, str]]:
             if not title or title in seen:
                 continue
             seen.add(title)
-            out.append({"title": title[:220], "source": row.get("source") or "news"})
-            if len(out) >= limit:
-                return out
-    return out
+            raw_rows.append(
+                {
+                    "title": title[:220],
+                    "source": row.get("source") or "google_news_rss",
+                    "summary": "",
+                    "url": "",
+                    "published_at": f"{after}T09:00:00+00:00",
+                }
+            )
+            if len(raw_rows) >= limit:
+                break
+        if len(raw_rows) >= limit:
+            break
+
+    if raw_rows:
+        ingest_rows_to_hub(raw_rows, ticker="NIFTY", collection_day=after)
+        return [
+            {
+                "title": r["title"],
+                "source": r["source"],
+                "summary": r.get("summary") or "",
+                "tags": {},
+            }
+            for r in raw_rows
+        ]
+    return []
 
 
-def _headline_tags(title: str) -> list[str]:
-    lower = title.lower()
+def _headline_tags(title_or_item: str | dict[str, Any]) -> list[str]:
+    if isinstance(title_or_item, dict):
+        from trade_integrations.dataflows.index_research.news_tags import legacy_topic_tags_from_item
+
+        tagged = legacy_topic_tags_from_item(title_or_item)
+        if tagged:
+            return tagged
+        title_or_item = str(title_or_item.get("title") or "")
+    lower = str(title_or_item).lower()
     return [tag for tag, words in _NEWS_KEYWORDS.items() if any(w in lower for w in words)]
 
 

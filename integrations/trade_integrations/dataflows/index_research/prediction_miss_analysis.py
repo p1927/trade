@@ -254,10 +254,10 @@ def categorize_miss(
 
     tags_t1: set[str] = set()
     for headline in headlines_at_maturity:
-        tags_t1.update(_headline_tags(str(headline.get("title") or "")))
+        tags_t1.update(_headline_tags(headline))
     tags_t0: set[str] = set()
     for headline in headlines_at_t0 or []:
-        tags_t0.update(_headline_tags(str(headline.get("title") or "")))
+        tags_t0.update(_headline_tags(headline))
     new_tags = tags_t1 - tags_t0
     if new_tags & _EVENT_TAGS:
         pred_sign = predicted_return_pct >= 0

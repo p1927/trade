@@ -48,14 +48,19 @@ def main() -> int:
     parser.add_argument("--horizon-days", type=int, default=14)
     parser.add_argument("--prioritize-miss-dates", action="store_true")
     parser.add_argument("--force-reverify", action="store_true")
+    parser.add_argument("--repair-tags", action="store_true", help="Backfill tags on hub rows without re-verify")
     args = parser.parse_args()
 
     from trade_integrations.context.hub import get_hub_dir
     from trade_integrations.env import load_trade_env
-    from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headlines_for_day
+    from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headlines_for_day, repair_hub_tags
 
     load_trade_env()
     hub = get_hub_dir()
+    if args.repair_tags:
+        print(json.dumps(repair_hub_tags(ticker=args.ticker), indent=2))
+        return 0
+
     days_set: set[str] = set(_archive_days(hub, args.days))
     if args.prioritize_miss_dates:
         days_set.update(_miss_dates())
@@ -65,7 +70,7 @@ def main() -> int:
         for i in range(args.days):
             days_set.add((end - timedelta(days=i)).isoformat())
 
-    totals = {"days": 0, "ingested": 0, "cache_hits": 0, "verified": 0, "rejected": 0, "approved_ui": 0}
+    totals = {"days": 0, "ingested": 0, "cache_hits": 0, "tags_merged": 0, "verified": 0, "rejected": 0, "approved_ui": 0}
     for day in sorted(days_set):
         stats = ingest_headlines_for_day(
             ticker=args.ticker,
@@ -75,7 +80,7 @@ def main() -> int:
             force_reverify=args.force_reverify,
         )
         totals["days"] += 1
-        for key in ("ingested", "cache_hits", "verified", "rejected", "approved_ui"):
+        for key in ("ingested", "cache_hits", "tags_merged", "verified", "rejected", "approved_ui"):
             totals[key] += int(stats.get(key) or 0)
 
     print(json.dumps({"status": "ok", **totals}, indent=2))

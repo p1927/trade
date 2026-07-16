@@ -15,6 +15,41 @@ from trade_integrations.dataflows.index_research.cascade.heuristic_rules import 
 from trade_integrations.dataflows.index_research.simulate import macro_factors_from_rows
 
 
+def _suggested_factors_from_item(item: dict[str, Any], *, title: str) -> list[str]:
+    from trade_integrations.dataflows.index_research.news_tags import factors_from_record
+
+    factors = factors_from_record(item)
+    if factors:
+        return factors[:4]
+    hinted = [
+        t.get("factor")
+        for t in (item.get("tagged_factors") or [])
+        if t.get("factor")
+    ]
+    return hinted or _headline_factor_hints(title)
+
+
+def _headline_trigger_from_item(item: dict[str, Any], *, source_label: str) -> dict[str, Any] | None:
+    title = str(item.get("title") or "").strip()
+    if not title:
+        return None
+    suggested = _suggested_factors_from_item(item, title=title)
+    return {
+        "title": title[:200],
+        "source": str(item.get("source") or source_label)[:80],
+        "content_summary": str(item.get("content_summary") or "")[:400],
+        "sources": item.get("sources") or [],
+        "tags": item.get("tags") or {},
+        "verification_status": item.get("verification_status")
+        or (item.get("verification") or {}).get("status"),
+        "suggested_factors": suggested,
+        "primary_factor": suggested[0] if suggested else "index_sentiment",
+        "suggested_shock_pct": 5.0,
+        "why": _why_for_factor(suggested[0] if suggested else "index_sentiment"),
+        "kind": "verified_headline",
+    }
+
+
 def _headline_factor_hints(title: str) -> list[str]:
     lower = title.lower()
     matched: list[str] = []
@@ -83,57 +118,28 @@ def build_playground_context(
     today = date.today().isoformat()
     headlines: list[dict[str, Any]] = []
 
-    news_impact = getattr(doc, "news_impact", None) or {}
-    for item in (news_impact.get("items") or [])[:8]:
-        title = str(item.get("title") or "").strip()
-        if not title:
-            continue
-        suggested = [
-            t.get("factor")
-            for t in (item.get("tagged_factors") or [])
-            if t.get("factor")
-        ] or _headline_factor_hints(title)
-        headlines.append(
-            {
-                "title": title[:200],
-                "source": str(item.get("source") or "verified_news")[:80],
-                "content_summary": str(item.get("content_summary") or "")[:400],
-                "verification_status": (item.get("verification") or {}).get("status"),
-                "suggested_factors": suggested,
-                "primary_factor": suggested[0] if suggested else "index_sentiment",
-                "suggested_shock_pct": 5.0,
-                "why": _why_for_factor(suggested[0] if suggested else "index_sentiment"),
-                "kind": "verified_headline",
-            }
-        )
+    try:
+        from trade_integrations.dataflows import news_hub_bridge
 
-    if not headlines:
-        try:
-            from trade_integrations.dataflows.index_research.news_impact_engine import list_approved_for_date
+        news_impact = news_hub_bridge.resolve_news_impact(ticker=ticker, doc=doc, limit=8)
+        for item in (news_impact.get("items") or [])[:8]:
+            trigger = _headline_trigger_from_item(item, source_label="verified_news")
+            if trigger:
+                headlines.append(trigger)
 
-            for item in list_approved_for_date(today, limit=8):
-                title = str(item.get("title") or "").strip()
-                if not title:
-                    continue
-                suggested = [
-                    t.get("factor") for t in (item.get("tagged_factors") or []) if t.get("factor")
-                ] or _headline_factor_hints(title)
-                headlines.append(
-                    {
-                        "title": title[:200],
-                        "source": str(item.get("source") or "verified_hub")[:80],
-                        "content_summary": str(item.get("content_summary") or "")[:400],
-                        "sources": item.get("sources") or [],
-                        "verification_status": item.get("verification_status"),
-                        "suggested_factors": suggested,
-                        "primary_factor": suggested[0] if suggested else "index_sentiment",
-                        "suggested_shock_pct": 5.0,
-                        "why": _why_for_factor(suggested[0] if suggested else "index_sentiment"),
-                        "kind": "verified_headline",
-                    }
-                )
-        except Exception:
-            pass
+        if not headlines:
+            for item in news_hub_bridge.list_headlines_for_date(today, limit=8):
+                trigger = _headline_trigger_from_item(item, source_label="verified_hub")
+                if trigger:
+                    headlines.append(trigger)
+
+        if not headlines:
+            for item in news_hub_bridge.list_recent_headlines(ticker=ticker, limit=8):
+                trigger = _headline_trigger_from_item(item, source_label="verified_hub")
+                if trigger:
+                    headlines.append(trigger)
+    except Exception:
+        pass
 
     if not headlines:
         headlines_raw = _fetch_index_headlines(today, limit=8)

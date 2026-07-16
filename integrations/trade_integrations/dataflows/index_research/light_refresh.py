@@ -16,7 +16,7 @@ from trade_integrations.dataflows.index_research.attribution import (
 from trade_integrations.dataflows.index_research.constituent_momentum import (
     attach_constituent_momentum,
     momentum_coverage_stats,
-    rollup_constituent_momentum,
+    resolve_constituent_momentum_rollup,
 )
 from trade_integrations.dataflows.index_research.explain import build_factor_explanation_bundle
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
@@ -159,7 +159,23 @@ def run_index_light_refresh(
             upsert_flow_cash_cache,
         )
 
+        try:
+            from trade_integrations.nse_browser.repository import ingest_repository_to_hub
+
+            ingest_repository_to_hub()
+        except Exception as ingest_exc:
+            logger.debug("nse repo ingest skipped: %s", ingest_exc)
+
         today = _date.today().isoformat()
+        if os.environ.get("NSE_BROWSER_ON_REFRESH", "").strip().lower() in {"1", "true", "yes"}:
+            try:
+                from trade_integrations.dataflows.index_research.nse_browser_refresh import (
+                    refresh_nse_browser_for_prediction,
+                )
+
+                refresh_nse_browser_for_prediction(days=30, refresh=False)
+            except Exception as browser_exc:
+                logger.debug("nse_browser light_refresh skipped: %s", browser_exc)
         flow = merge_flow_derivatives_frame(today, today)
         if not flow.empty:
             upsert_flow_cash_cache(flow.to_dict("records"))
@@ -173,14 +189,17 @@ def run_index_light_refresh(
     except Exception as exc:
         logger.debug("light_refresh factor upsert skipped: %s", exc)
 
-    momentum_rollup = rollup_constituent_momentum(signals)
+    momentum_rollup, momentum_source = resolve_constituent_momentum_rollup(
+        signals,
+        fallback_factors=macro_factors,
+    )
     if momentum_rollup is not None:
         macro_factors["constituent_momentum_7d"] = momentum_rollup
         global_factors.append(
             {
                 "factor": "constituent_momentum_7d",
                 "value": momentum_rollup,
-                "source": "constituent_momentum",
+                "source": momentum_source,
             }
         )
 
@@ -217,6 +236,18 @@ def run_index_light_refresh(
     if prediction:
         prediction["top_drivers"] = rollup.get("top_drivers", [])[:5]
         prediction["momentum_coverage"] = momentum_coverage_stats(signals)
+        try:
+            from trade_integrations.knowledge.interpret import build_index_interpretation_bundle
+
+            prediction["interpretation"] = build_index_interpretation_bundle(
+                macro_factors,
+                horizon_name=horizon.name,
+                horizon_days=horizon.days,
+                trend_20d=_nifty_trend_20d(),
+                prediction=prediction,
+            )
+        except Exception as exc:
+            logger.debug("interpretation bundle skipped: %s", exc)
 
     scenarios = (
         build_index_scenarios(
@@ -287,6 +318,28 @@ def run_index_light_refresh(
             )
         )
 
+    news_impact: dict[str, Any] = getattr(cached_doc, "news_impact", None) or {}
+    try:
+        from trade_integrations.dataflows import news_hub_bridge
+
+        if news_hit:
+            macro_map = {
+                str(r.get("factor")): float(r.get("value"))
+                for r in global_factors
+                if r.get("factor") is not None and r.get("value") is not None
+            }
+            news_impact = news_hub_bridge.refresh_news_impact(
+                ticker=sym,
+                horizon_days=horizon.days,
+                spot=float(spot or 0),
+                macro_factors=macro_map,
+                refresh_ingest=True,
+            )
+        else:
+            news_impact = news_hub_bridge.resolve_news_impact(ticker=sym, doc=cached_doc, limit=12)
+    except Exception as exc:
+        logger.debug("light_refresh news_impact skipped: %s", exc)
+
     doc = IndexResearchDoc(
         ticker=sym,
         as_of=_stage_now(),
@@ -314,6 +367,9 @@ def run_index_light_refresh(
         factor_explanation=factor_bundle.get("factor_explanation") or {},
         factor_sensitivity=factor_bundle.get("factor_sensitivity") or [],
         event_impact_curves=factor_bundle.get("event_impact_curves") or [],
+        upcoming_events=(cached_doc.upcoming_events if cached_doc else []),
+        cascade_calibration=(getattr(cached_doc, "cascade_calibration", None) or {}),
+        news_impact=news_impact,
         stages=stages,
     )
     save_index_research(doc)

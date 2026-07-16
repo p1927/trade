@@ -16,10 +16,19 @@ from trade_integrations.dataflows.index_research.backtest_runner import (
 )
 from trade_integrations.dataflows.index_research.causal_attribution import _fetch_index_headlines
 from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
+from trade_integrations.dataflows.index_research.prediction_counterfactual import (
+    load_counterfactual_report,
+)
 from trade_integrations.dataflows.index_research.prediction_miss_analysis import (
     factor_snapshot_at,
     load_miss_analysis_report,
 )
+
+_MISS_CATEGORY_TO_CF = {
+    "cap_saturation": "cap_artifact",
+    "event_gap": "drift_dominant",
+    "mapping_error": "mapping_error_T0",
+}
 from trade_integrations.dataflows.index_research.scenarios import build_index_scenarios
 from trade_integrations.dataflows.index_research.sources.history_loader import load_aligned_factor_history
 
@@ -63,6 +72,22 @@ def _headline_tags(headlines: list[dict[str, str]]) -> set[str]:
     return tags
 
 
+def _headline_tags_from_hub(headlines: list[dict[str, Any]]) -> set[str]:
+    """Union hub tags.topics with title-keyword fallback for RSS-only rows."""
+    from trade_integrations.dataflows.index_research.news_tags import topics_from_record
+
+    tags: set[str] = set()
+    title_only: list[dict[str, str]] = []
+    for headline in headlines:
+        if headline.get("tags"):
+            tags.update(topics_from_record(headline))
+        else:
+            title_only.append(headline)
+    if title_only:
+        tags.update(_headline_tags(title_only))
+    return tags
+
+
 def _global_flags(factors: dict[str, float]) -> dict[str, Any]:
     return {
         "is_results_season": bool(factors.get("is_results_season")),
@@ -87,7 +112,7 @@ def classify_t0_information(
     if counterfactual_class == "cap_artifact":
         return "knowable_ignored"
 
-    tags = _headline_tags(headlines_t0)
+    tags = _headline_tags_from_hub(headlines_t0)
     has_oil_feature = "oil_brent" in factors_t0 or "oil_wti" in factors_t0
     has_flow_feature = "fii_net_5d" in factors_t0 or "dii_net_5d" in factors_t0
 
@@ -120,14 +145,19 @@ def audit_eval_row(
     pred_day = str(eval_row.get("prediction_date") or eval_row.get("date") or "")[:10]
     headlines_t0: list[dict[str, str]] = []
     try:
-        from trade_integrations.dataflows.index_research.news_impact_engine import list_approved_for_date
+        from trade_integrations.dataflows.news_hub_bridge import (
+            headlines_for_day,
+            to_headline_dict,
+        )
 
-        for item in list_approved_for_date(pred_day, limit=12):
+        for item in headlines_for_day(pred_day, limit=12, ingest_if_missing=True):
+            row = to_headline_dict(item)
             headlines_t0.append(
                 {
-                    "title": str(item.get("title") or "")[:220],
-                    "source": str(item.get("source") or "verified_hub"),
-                    "summary": str(item.get("content_summary") or "")[:500],
+                    "title": row["title"],
+                    "source": row["source"],
+                    "summary": row["summary"],
+                    "tags": row.get("tags") or {},
                 }
             )
     except Exception:
@@ -157,7 +187,13 @@ def audit_eval_row(
     predicted = float(eval_row.get("predicted_return_pct") or 0)
     material = abs(actual) >= 1.0 or abs(actual - predicted) >= 1.5
 
-    counterfactual_class = str(eval_row.get("counterfactual_class") or eval_row.get("miss_class") or "")
+    counterfactual_class = str(
+        eval_row.get("counterfactual_class")
+        or eval_row.get("classification")
+        or _MISS_CATEGORY_TO_CF.get(str(eval_row.get("miss_category") or ""), "")
+        or eval_row.get("miss_class")
+        or ""
+    )
 
     tag = classify_t0_information(
         prediction_date=pred_day,
@@ -174,7 +210,7 @@ def audit_eval_row(
         "actual_return_pct": round(actual, 4),
         "t0_information_tag": tag,
         "counterfactual_class": counterfactual_class or None,
-        "headline_tags_t0": sorted(_headline_tags(headlines_t0)),
+        "headline_tags_t0": sorted(_headline_tags_from_hub(headlines_t0)),
         "headlines_t0_count": len(headlines_t0),
         "calendar_events_t0": calendar,
         "global_flags_t0": _global_flags(factors_t0),
@@ -191,11 +227,25 @@ def run_t0_information_audit(
 ) -> dict[str, Any]:
     miss_report = load_miss_analysis_report(ticker)
     backtest = load_backtest_report(ticker)
+    counterfactual = load_counterfactual_report(ticker)
+    cf_by_date = {
+        str(row.get("prediction_date") or "")[:10]: str(row.get("classification") or "")
+        for row in (counterfactual or {}).get("rows") or []
+        if row.get("classification")
+    }
     eval_rows = (miss_report or {}).get("misses") or []
     if not eval_rows and backtest:
         eval_rows = [
             r for r in (backtest.get("daily_evaluations") or []) if r.get("direction_correct") is False
         ]
+    enriched_rows: list[dict[str, Any]] = []
+    for row in eval_rows:
+        merged = dict(row)
+        pred_day = str(row.get("prediction_date") or row.get("date") or "")[:10]
+        if pred_day and not merged.get("counterfactual_class"):
+            merged["counterfactual_class"] = cf_by_date.get(pred_day) or merged.get("counterfactual_class")
+        enriched_rows.append(merged)
+    eval_rows = enriched_rows
 
     frame = load_aligned_factor_history(days=days)
     if frame.empty:

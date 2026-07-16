@@ -11,7 +11,7 @@ from trade_integrations.dataflows.company_research.models import StageResult
 from trade_integrations.dataflows.index_research.constituent_momentum import (
     attach_constituent_momentum,
     momentum_coverage_stats,
-    rollup_constituent_momentum,
+    resolve_constituent_momentum_rollup,
 )
 from trade_integrations.dataflows.index_research.attribution import (
     attribute_constituents,
@@ -123,6 +123,21 @@ def run_index_research(
         refresh_constituents=refresh_constituents,
     )
 
+    try:
+        from trade_integrations.dataflows.index_research.data_completeness import (
+            ensure_factor_data_complete,
+        )
+
+        completeness = ensure_factor_data_complete()
+        log.info(
+            "data_completeness",
+            f"Flow coverage min {completeness.get('after', {}).get('min_pct')}% "
+            f"(gate={'pass' if completeness.get('passes_gate') else 'fail'})",
+            **{k: completeness.get(k) for k in ("enriched", "passes_gate")},
+        )
+    except Exception as exc:
+        logger.debug("data completeness check skipped: %s", exc)
+
     log.info(
         "constituents",
         "Loading NIFTY 50 constituent research (news, sentiment, calendar, filings)…",
@@ -200,15 +215,34 @@ def run_index_research(
     for err in macro_stage.errors or []:
         log.warn("macro", err)
 
-    momentum_rollup = rollup_constituent_momentum(signals)
+    global_factors = list(macro_stage.data.get("factor_rows") or [])
+
+    try:
+        from trade_integrations.dataflows.index_research.derivatives_bridge import (
+            load_derivatives_implied_factors,
+        )
+
+        for row in load_derivatives_implied_factors(sym):
+            factor = row.get("factor")
+            value = row.get("value")
+            if factor and value is not None:
+                macro_factors[str(factor)] = float(value)
+                global_factors.append(row)
+    except Exception as exc:
+        logger.debug("derivatives bridge skipped: %s", exc)
+
+    momentum_rollup, momentum_source = resolve_constituent_momentum_rollup(
+        signals,
+        fallback_factors=macro_factors,
+    )
     if momentum_rollup is not None:
         macro_factors["constituent_momentum_7d"] = momentum_rollup
         log.info(
             "momentum",
-            f"Weighted constituent momentum 7d: {momentum_rollup:.2f}%",
+            f"Weighted constituent momentum 7d: {momentum_rollup:.2f}% ({momentum_source})",
             value=momentum_rollup,
+            source=momentum_source,
         )
-    global_factors = list(macro_stage.data.get("factor_rows") or [])
     if momentum_rollup is not None:
         global_factors.append(
             {
@@ -243,6 +277,18 @@ def run_index_research(
     ) if spot > 0 else {}
     if prediction:
         prediction["momentum_coverage"] = momentum_coverage_stats(signals)
+        try:
+            from trade_integrations.knowledge.interpret import build_index_interpretation_bundle
+
+            prediction["interpretation"] = build_index_interpretation_bundle(
+                macro_factors,
+                horizon_name=horizon.name,
+                horizon_days=horizon.days,
+                trend_20d=trend,
+                prediction=prediction,
+            )
+        except Exception as exc:
+            logger.debug("interpretation bundle skipped: %s", exc)
         log.info(
             "predict",
             f"Forecast: {prediction.get('view')} {prediction.get('expected_return_pct'):+.2f}% "
@@ -384,23 +430,20 @@ def run_index_research(
 
     news_impact: dict[str, Any] = {}
     try:
-        from trade_integrations.dataflows.index_research.news_impact_engine import (
-            build_news_impact_snapshot,
-            save_news_impact_snapshot,
-        )
+        from trade_integrations.dataflows import news_hub_bridge
 
         macro_map = {
             str(r.get("factor")): float(r.get("value"))
             for r in global_factors
             if r.get("factor") is not None and r.get("value") is not None
         }
-        news_impact = build_news_impact_snapshot(
+        news_impact = news_hub_bridge.refresh_news_impact(
             ticker=sym,
             horizon_days=horizon.days,
             spot=float(spot or 0),
             macro_factors=macro_map,
+            refresh_ingest=True,
         )
-        save_news_impact_snapshot(news_impact, ticker=sym)
         stages.append(
             StageResult(
                 stage="news_impact",
