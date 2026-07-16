@@ -21,4 +21,6 @@ if [[ ! -x "$PY" ]]; then
 fi
 
 cd "$OPENALGO_DIR"
+export TRADE_INTEGRATIONS_SKIP_APPLY=1
+export PYTHONPATH="$ROOT/integrations:$ROOT/tradingagents${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PY" mcp/mcpserver.py "$@"
