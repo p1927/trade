@@ -127,4 +127,10 @@ def build_e2e_phase_delta(*, phase: str, market: str, symbol: str) -> str:
             f"Place two BUY and one SELL (partial exit) for {symbol} via Alpaca paper.\n"
             "Then set watch_spec and record decision.\n"
         )
+    if phase == "exit" and market == "US":
+        return (
+            f"\n## E2E Phase 5 — close position\n"
+            f"You hold open {symbol} shares. **SELL all remaining {symbol} shares** via "
+            f"`trading_place_order` @ **alpaca-paper-trade**, then `record_autonomous_decision` with EXIT.\n"
+        )
     return ""

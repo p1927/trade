@@ -167,6 +167,9 @@ def start_auto_paper(
 
 
 def stop_auto_paper(*, unregister_scheduler: bool = True) -> dict[str, Any]:
+    from trade_integrations.auto_paper.session_store import stop_all_paper_sessions
+
+    stop_all_paper_sessions()
     session = stop_session()
     scheduler_removed: dict[str, bool] = {}
     if unregister_scheduler:

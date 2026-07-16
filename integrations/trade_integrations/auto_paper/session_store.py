@@ -138,6 +138,28 @@ def get_vibe_session_id(*, autonomous_agent_id: str | None = None) -> str | None
     return str(value).strip() if value else None
 
 
+def stop_all_paper_sessions() -> int:
+    """Disable legacy and per-agent paper sessions; return count stopped."""
+    stopped = 0
+    legacy = _read_json(_legacy_session_path())
+    if legacy.get("enabled"):
+        legacy["enabled"] = False
+        legacy["stopped_at"] = datetime.now(timezone.utc).isoformat()
+        _write_json(_legacy_session_path(), legacy)
+        stopped += 1
+    sessions_dir = _sessions_dir()
+    if sessions_dir.is_dir():
+        for path in sessions_dir.glob("*.json"):
+            row = _read_json(path)
+            if row.get("enabled"):
+                row["enabled"] = False
+                row["stopped_at"] = datetime.now(timezone.utc).isoformat()
+                _write_json(path, row)
+                stopped += 1
+    _active_pointer_path().unlink(missing_ok=True)
+    return stopped
+
+
 def stop_session(*, autonomous_agent_id: str | None = None) -> dict[str, Any]:
     session = load_session(autonomous_agent_id=autonomous_agent_id)
     session["enabled"] = False

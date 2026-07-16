@@ -151,11 +151,21 @@ activemq-data/
 .env
 .envrc
 .venv
+.venv-*/
+.venv-nautilus/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Node.js dependencies (never commit installed packages)
+node_modules/
+**/node_modules/
+
+# Local Nautilus / bridge runtime artifacts
+.nautilus/
+nautilus_trader/.venv/
 
 # Spyder project settings
 .spyderproject

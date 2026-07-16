@@ -317,7 +317,8 @@ def dispatch_us_watch_alert(
         ltp=ltp,
     )
     quotes = {symbol: QuoteSnapshot(symbol=symbol, exchange="US", ltp=ltp)}
-    return dispatch_watch_alert_sync(agent_id, alert, quotes=quotes)
+    result = dispatch_watch_alert_sync(agent_id, alert, quotes=quotes)
+    return result
 
 
 def mechanical_us_entry(symbol: str, *, orders: int = 2, qty_each: float = 1.0) -> float:
@@ -491,6 +492,18 @@ def stop_agent(agent_id: str) -> None:
         pass
 
 
+def wait_for_agent_idle(agent_id: str, *, timeout_sec: int = 120) -> bool:
+    from trade_integrations.autonomous_agents.store import get_agent
+
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        agent = get_agent(agent_id) or {}
+        if not agent.get("streaming"):
+            return True
+        time.sleep(2)
+    return False
+
+
 def build_e2e_integration_preamble(*, agent_id: str, phase: str) -> str:
     return (
         f"\n## Integration test (authorized E2E)\n"
@@ -533,6 +546,10 @@ def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = N
     mc["market_hours_only"] = False
     agent["mandate_config"] = mc
     save_agent(agent)
+    try:
+        vibe_post(f"/autonomous-agents/{agent_id}/pause")
+    except Exception:
+        pass
     return str(agent_id), str(session_id)
 
 

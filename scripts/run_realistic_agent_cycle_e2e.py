@@ -183,6 +183,7 @@ def main() -> int:
     agent = get_agent(agent_id) or {}
 
     print("\n── Phase 1: Analysis turn (no orders) ──", flush=True)
+    lib.wait_for_agent_idle(agent_id, timeout_sec=60)
     analysis_prompt = build_full_reasoning_prompt(agent=agent, turn_kind="research")
     analysis_prompt += lib.build_e2e_integration_preamble(agent_id=agent_id, phase="Phase 1 analysis")
     analysis_prompt += build_e2e_phase_delta(
@@ -207,6 +208,7 @@ def main() -> int:
 
     # --- Phase 2: Forced execution ---
     print("\n── Phase 2: Forced execution (multi-order + partial exit + watch) ──", flush=True)
+    lib.wait_for_agent_idle(agent_id, timeout_sec=180)
     exec_prompt = lib.build_e2e_integration_preamble(agent_id=agent_id, phase="Phase 2 execution")
     exec_prompt += build_e2e_phase_delta(
         phase="execution",
@@ -239,6 +241,7 @@ def main() -> int:
     entry_ltp = 0.0
     client = stack if not e2e_market.is_us else None
     legs: list[Any] = []
+    mechanical_used = False
 
     if e2e_market.is_us:
         qty = lib.alpaca_spy_qty(list_alpaca_positions(), sym)
@@ -247,7 +250,8 @@ def main() -> int:
             q = fetch_alpaca_quote(sym)
             entry_ltp = float((q or {}).get("ltp") or 0)
         else:
-            _log("alpaca after LLM", "flat — mechanical fallback", ok=True)
+            mechanical_used = True
+            _log("alpaca after LLM", "flat — mechanical fallback", ok=False)
             try:
                 entry_ltp = lib.mechanical_us_entry(sym, orders=2, qty_each=1.0)
                 lib.mechanical_us_partial_exit(sym, qty=1.0)
@@ -256,6 +260,8 @@ def main() -> int:
             except Exception as exc:
                 _fail("mechanical US fallback", str(exc))
                 return 1
+        if mechanical_used:
+            _fail("LLM execution", "agent did not place Alpaca orders; mechanical fallback used")
     else:
         from nautilus_openalgo_bridge.handoff import load_handoff
 
@@ -356,17 +362,49 @@ def main() -> int:
         decision = agent.get("last_decision") or {}
         if decision:
             _log("post-alert decision", f"{decision.get('decision')} — {str(decision.get('rationale') or '')[:80]}")
+            if str(decision.get("decision") or "").upper() == "HOLD" and e2e_market.is_us:
+                _fail("alert revision", "agent HOLD after watch alert; expected REVISE/EXIT/ADJUST")
         messages = vibe_get(f"/sessions/{session_id}/messages?limit=20")
         if isinstance(messages, list):
             for msg in reversed(messages):
                 if msg.get("role") != "assistant":
                     continue
-                content = str(msg.get("content") or "").lower()
-                if "nautilus watch alert" in content or "strategy revision" in content:
+                content = str(msg.get("content") or "")
+                content_l = content.lower()
+                if "nautilus watch alert" in content_l or "strategy revision" in content_l:
                     continue
-                if any(w in content for w in ("exit", "adjust", "enter", "hold", "sell", "buy", "leg")):
-                    _log("revision reply", str(msg.get("content") or "")[:120].replace("\n", " "))
+                if not lib.assert_turn_not_defender_refusal(content, fail=_fail, step="alert revision"):
                     break
+                if any(w in content_l for w in ("exit", "adjust", "enter", "hold", "sell", "buy", "leg")):
+                    _log("revision reply", content[:120].replace("\n", " "))
+                    break
+
+    # --- Phase 5: Agent closes remaining position (US) ---
+    if e2e_market.is_us and not args.skip_flatten:
+        print("\n── Phase 5: Agent closes position ──", flush=True)
+        qty_open = lib.alpaca_spy_qty(list_alpaca_positions(), sym)
+        if qty_open >= 1:
+            lib.wait_for_agent_idle(agent_id, timeout_sec=300)
+            exit_prompt = lib.build_e2e_integration_preamble(agent_id=agent_id, phase="Phase 5 exit")
+            exit_prompt += build_e2e_phase_delta(phase="exit", market="US", symbol=sym)
+            try:
+                dispatch5 = vibe_post(f"/sessions/{session_id}/messages", {"content": exit_prompt})
+                attempt5 = dispatch5.get("attempt_id")
+                if not attempt5:
+                    _fail("exit dispatch", json.dumps(dispatch5)[:200])
+                else:
+                    msg5 = wait_for_attempt(session_id, attempt5, timeout_sec=args.turn_timeout)
+                    content5 = str(msg5.get("content") or "")
+                    lib.assert_turn_not_defender_refusal(content5, fail=_fail, step="exit turn")
+                    qty_after = lib.alpaca_spy_qty(list_alpaca_positions(), sym)
+                    if qty_after >= 1:
+                        _fail("agent exit", f"still holding {qty_after} {sym} after exit turn")
+                    else:
+                        _log("agent exit", f"flat — LLM closed {sym}")
+            except Exception as exc:
+                _fail("exit turn", str(exc))
+        else:
+            _log("agent exit", "already flat before phase 5")
 
     if watch_proc and watch_proc.poll() is None:
         lib.stop_watch_node(watch_proc)
