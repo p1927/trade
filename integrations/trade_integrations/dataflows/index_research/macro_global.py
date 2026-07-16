@@ -330,7 +330,7 @@ def _fetch_nifty_technical_factors() -> dict[str, Any] | None:
         technical_factor_rows,
     )
 
-    history = load_nifty_history(days=90)
+    history = load_nifty_history(days=280)
     rows = technical_factor_rows(history)
     if not rows:
         return None

@@ -29,6 +29,22 @@ logger = logging.getLogger(__name__)
 _SENTIMENT_SCALE = 10.0
 
 
+def _prepare_nse_repository_layers() -> dict[str, int | dict[str, int]]:
+    """Sync git-tracked data/nse seeds (FII/DII, SEBI monthly, sector CSVs) into hub."""
+    try:
+        from trade_integrations.nse_browser.repository import (
+            ingest_repository_to_hub,
+            sync_all_repo_seed_layers,
+        )
+
+        seed_counts = sync_all_repo_seed_layers()
+        hub_counts = ingest_repository_to_hub()
+        return {"seed": seed_counts, "hub": hub_counts}
+    except Exception as exc:
+        logger.warning("NSE repository sync failed: %s", exc)
+        return {"seed": {}, "hub": {}, "error": str(exc)}
+
+
 def fetch_fii_history_frame() -> pd.DataFrame:
     """Load daily FII/DII/PCR history (real rows only, no seeded continuity)."""
     return fetch_mrchartist_flow_frame(include_seeded=False)
@@ -202,6 +218,7 @@ def purge_anomalous_factor_snapshots() -> list[str]:
 
 def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
     """Merge missing factors (repo_rate, FII, PE, momentum, sentiment proxies) into daily store."""
+    repo_sync = _prepare_nse_repository_layers()
     removed = purge_anomalous_factor_snapshots()
     nifty = load_nifty_history(days=days)
     if nifty.empty:
@@ -223,6 +240,34 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
     pe_series = build_nifty_pe_proxy_series(nifty)
     momentum = build_constituent_momentum_series(trading_dates, start=start, end=end)
     flow_summary = flow_backfill_summary(days=days)
+
+    sector_factors: dict[str, pd.Series] = {}
+    try:
+        from trade_integrations.dataflows.index_research.sources.sector_index_factors import (
+            build_monthly_equity_flow_series,
+            build_sector_price_factor_series,
+        )
+        from trade_integrations.nse_browser.repository import (
+            load_repo_dataset,
+            load_sector_indices_frame,
+        )
+
+        sector_frame = load_sector_indices_frame(start, end)
+        sector_factors = build_sector_price_factor_series(sector_frame, trading_dates)
+        mf_monthly = load_repo_dataset("mf_sebi")
+        fii_monthly = load_repo_dataset("fii_sebi")
+        sector_factors["mf_equity_net_monthly_cr"] = build_monthly_equity_flow_series(
+            mf_monthly,
+            trading_dates,
+            factor_name="mf_equity_net_monthly_cr",
+        )
+        sector_factors["fii_equity_net_monthly_cr"] = build_monthly_equity_flow_series(
+            fii_monthly,
+            trading_dates,
+            factor_name="fii_equity_net_monthly_cr",
+        )
+    except Exception as exc:
+        logger.warning("sector / monthly flow factors failed: %s", exc)
 
     days_enriched = 0
     for _, row in nifty.iterrows():
@@ -346,6 +391,20 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
                     ]
                 )
 
+        for factor_name, series in sector_factors.items():
+            if series.empty or day not in series.index:
+                continue
+            val = series[day]
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                continue
+            rows.append(
+                {
+                    "factor": factor_name,
+                    "value": float(val),
+                    "source": "backfill_sector_indices",
+                }
+            )
+
         upsert_daily_factors(day, rows)
         days_enriched += 1
 
@@ -354,12 +413,14 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
         "start": start,
         "end": end,
         "removed_anomalous_files": removed,
+        "repo_sync": repo_sync,
         "fao_backfill": fao_backfill,
         "flow_summary": flow_summary,
         "fii_days": int(fii_5d.notna().sum()) if not fii_5d.empty else 0,
         "dii_days": int(dii_5d.notna().sum()) if not dii_5d.empty else 0,
         "pcr_days": int(flow_frame["nifty_pcr"].notna().sum()) if "nifty_pcr" in flow_frame.columns else 0,
         "momentum_days": int(momentum.notna().sum()) if not momentum.empty else 0,
+        "sector_breadth_days": int(sector_factors.get("sector_breadth_price_7d", pd.Series()).notna().sum()),
     }
 
 

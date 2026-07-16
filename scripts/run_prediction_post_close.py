@@ -24,6 +24,9 @@ def main() -> int:
 
     results: dict[str, object] = {"status": "ok"}
 
+    from trade_integrations.dataflows.index_research.nse_browser_refresh import (
+        refresh_nse_browser_for_prediction,
+    )
     from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
         enrich_factor_history,
     )
@@ -33,6 +36,11 @@ def main() -> int:
     )
     from trade_integrations.dataflows.index_research.prediction_counterfactual import (
         run_and_save_counterfactual,
+    )
+
+    results["nse_browser"] = refresh_nse_browser_for_prediction(
+        days=args.days,
+        refresh=True,
     )
 
     if args.skip_fao:

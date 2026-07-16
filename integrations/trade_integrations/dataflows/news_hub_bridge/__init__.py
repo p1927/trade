@@ -30,6 +30,7 @@ __all__ = [
     "ingest_searxng_results",
     "enrich_articles_with_hub_tags",
     "headlines_for_day",
+    "headlines_for_prediction_date",
     "to_headline_dict",
     "list_headlines_for_date",
     "list_recent_headlines",
@@ -64,6 +65,30 @@ def headlines_for_day(
         horizon_days=horizon_days,
         spot=spot,
         macro_factors=macro_factors,
+    )
+
+
+def headlines_for_prediction_date(
+    prediction_date: str,
+    *,
+    ticker: str = "NIFTY",
+    lookback_days: int = 7,
+    limit: int = 12,
+    ingest_if_missing: bool = True,
+    horizon_days: int = 14,
+) -> list[dict[str, Any]]:
+    """Headlines knowable at prediction time (publish_day <= prediction_date)."""
+    from trade_integrations.dataflows.index_research.news_impact_engine import (
+        headlines_for_prediction_date as _fn,
+    )
+
+    return _fn(
+        prediction_date,
+        ticker=ticker,
+        lookback_days=lookback_days,
+        limit=limit,
+        ingest_if_missing=ingest_if_missing,
+        horizon_days=horizon_days,
     )
 
 

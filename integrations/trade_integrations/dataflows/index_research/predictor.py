@@ -47,11 +47,17 @@ def shrink_macro_delta(
     scenario_anchor_return_pct: float | None = None,
 ) -> float:
     """Shrink extreme raw macro toward scenario anchor before hard cap."""
-    if scenario_anchor_return_pct is None or abs(raw_macro) <= _MACRO_SHRINK_THRESHOLD_PCT:
-        return cap_macro_delta(raw_macro)
-    excess = abs(raw_macro) - _MACRO_SHRINK_THRESHOLD_PCT
+    adjusted = raw_macro
+    if scenario_anchor_return_pct is not None and abs(raw_macro) > _MACRO_SHRINK_THRESHOLD_PCT:
+        if raw_macro * scenario_anchor_return_pct < 0:
+            # Sign conflict: saturated macro vs scenario — blend toward anchor first.
+            conflict_weight = min(0.85, abs(raw_macro) / _MACRO_DELTA_CAP_PCT)
+            adjusted = raw_macro * (1.0 - conflict_weight) + scenario_anchor_return_pct * conflict_weight
+    if scenario_anchor_return_pct is None or abs(adjusted) <= _MACRO_SHRINK_THRESHOLD_PCT:
+        return cap_macro_delta(adjusted)
+    excess = abs(adjusted) - _MACRO_SHRINK_THRESHOLD_PCT
     weight = min(0.75, excess / 4.0)
-    shrunk = raw_macro * (1.0 - weight) + scenario_anchor_return_pct * weight
+    shrunk = adjusted * (1.0 - weight) + scenario_anchor_return_pct * weight
     return cap_macro_delta(shrunk)
 
 

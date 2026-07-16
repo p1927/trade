@@ -96,16 +96,33 @@ _NEWS_KEYWORDS: dict[str, list[str]] = {
 }
 
 
-def _fetch_index_headlines(day: str, *, limit: int = 6) -> list[dict[str, Any]]:
+def _fetch_index_headlines(
+    day: str,
+    *,
+    limit: int = 6,
+    as_of_day: str | None = None,
+    lookback_days: int = 0,
+) -> list[dict[str, Any]]:
     """Headlines for Nifty / Indian market on a calendar day (hub SSOT with tags)."""
     from trade_integrations.dataflows.news_hub_bridge import (
         headlines_for_day,
+        headlines_for_prediction_date,
         ingest_rows_to_hub,
         to_headline_dict,
     )
 
+    as_of = (as_of_day or day)[:10]
     try:
-        rows = headlines_for_day(day, ticker="NIFTY", limit=limit, ingest_if_missing=True)
+        if lookback_days > 0:
+            rows = headlines_for_prediction_date(
+                as_of,
+                ticker="NIFTY",
+                lookback_days=lookback_days,
+                limit=limit,
+                ingest_if_missing=True,
+            )
+        else:
+            rows = headlines_for_day(day, ticker="NIFTY", limit=limit, ingest_if_missing=True)
         if rows:
             return [to_headline_dict(r) for r in rows]
     except Exception as exc:

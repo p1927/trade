@@ -286,6 +286,8 @@ def run_index_research(
                 horizon_days=horizon.days,
                 trend_20d=trend,
                 prediction=prediction,
+                sector_breadth=_sector_breadth(signals),
+                ticker=sym,
             )
         except Exception as exc:
             logger.debug("interpretation bundle skipped: %s", exc)

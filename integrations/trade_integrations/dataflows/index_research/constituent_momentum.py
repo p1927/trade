@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+import pandas as pd
+
 from trade_integrations.dataflows.index_research.models import ConstituentSignal
 
 logger = logging.getLogger(__name__)
@@ -18,6 +20,60 @@ def _yfinance_symbol(symbol: str) -> str:
     if sym.endswith(".NS") or sym.endswith(".BO"):
         return sym
     return f"{sym}{_YFINANCE_SUFFIX}"
+
+
+def batch_fetch_returns_7d(symbols: list[str]) -> dict[str, float]:
+    """Batch-fetch 7d returns for many NSE symbols (one yfinance download)."""
+    import yfinance as yf
+
+    if not symbols:
+        return {}
+
+    yf_symbols = [_yfinance_symbol(s) for s in symbols]
+    unique = sorted(set(yf_symbols))
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=max(_LOOKBACK_DAYS, 12))
+
+    try:
+        panel = yf.download(
+            unique,
+            start=start.date().isoformat(),
+            end=end.date().isoformat(),
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+        )
+    except Exception as exc:
+        logger.debug("batch momentum download failed: %s", exc)
+        return {}
+
+    if panel is None or panel.empty:
+        return {}
+
+    out: dict[str, float] = {}
+    close_col = "Close" if "Close" in panel.columns else "close"
+    if isinstance(panel.columns, pd.MultiIndex):
+        for yf_sym in unique:
+            try:
+                closes = panel[(close_col, yf_sym)].astype(float).dropna()
+            except (KeyError, TypeError):
+                continue
+            if len(closes) < 2:
+                continue
+            first = float(closes.iloc[0])
+            last = float(closes.iloc[-1])
+            if first > 0:
+                base = yf_sym.replace(".NS", "").replace(".BO", "")
+                out[base] = (last - first) / first * 100.0
+    else:
+        closes = panel[close_col].astype(float).dropna()
+        if len(closes) >= 2 and unique:
+            first = float(closes.iloc[0])
+            last = float(closes.iloc[-1])
+            if first > 0:
+                base = unique[0].replace(".NS", "").replace(".BO", "")
+                out[base] = (last - first) / first * 100.0
+    return out
 
 
 def fetch_symbol_return_7d(symbol: str) -> float | None:
@@ -48,23 +104,53 @@ def attach_constituent_momentum(
     *,
     returns_by_symbol: dict[str, float] | None = None,
 ) -> list[ConstituentSignal]:
-    """Attach ``momentum_7d_pct`` to each signal (fetch or use injected map)."""
+    """Attach ``momentum_7d_pct`` to each signal (batch fetch or injected map)."""
     from dataclasses import replace
+
+    if returns_by_symbol is None and signals:
+        symbols = [s.symbol for s in signals]
+        returns_by_symbol = batch_fetch_returns_7d(symbols)
 
     updated: list[ConstituentSignal] = []
     for signal in signals:
         momentum: float | None = None
         if returns_by_symbol is not None:
             raw = returns_by_symbol.get(signal.symbol.upper())
+            if raw is None:
+                raw = returns_by_symbol.get(_yfinance_symbol(signal.symbol).replace(".NS", ""))
             if raw is not None:
                 momentum = float(raw)
-        else:
+        if momentum is None:
             try:
                 momentum = fetch_symbol_return_7d(signal.symbol)
             except Exception as exc:
                 logger.debug("momentum fetch failed for %s: %s", signal.symbol, exc)
         updated.append(replace(signal, momentum_7d_pct=momentum))
     return updated
+
+
+def resolve_constituent_momentum_rollup(
+    signals: list[ConstituentSignal],
+    *,
+    fallback_factors: dict[str, float] | None = None,
+) -> tuple[float | None, str]:
+    """Return weighted rollup with index 7d return fallback when coverage is thin."""
+    rollup = rollup_constituent_momentum(signals)
+    if rollup is not None:
+        return rollup, "constituent_momentum"
+
+    stats = momentum_coverage_stats(signals)
+    if stats.get("coverage_pct", 0) >= 30.0 and rollup is not None:
+        return rollup, "constituent_momentum_partial"
+
+    if fallback_factors:
+        index_ret = fallback_factors.get("nifty_return_7d")
+        if index_ret is not None:
+            try:
+                return float(index_ret), "nifty_return_7d_fallback"
+            except (TypeError, ValueError):
+                pass
+    return None, "missing"
 
 
 def rollup_constituent_momentum(signals: list[ConstituentSignal]) -> float | None:

@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 REMEDIATION_HINTS: dict[str, str] = {
     "nse_403": (
         "NSE blocks direct API/scraper requests (Akamai bot protection). "
-        "Use OpenAlgo for live NSE data, or rely on nselib/yfinance/BSE fallbacks."
+        "Run scripts/run_nse_browser_fetch.py --mission fii_dii_history --refresh-cookies, "
+        "or use OpenAlgo/nselib/BSE fallbacks."
     ),
     "openalgo_not_configured": (
         "Set OPENALGO_API_KEY in .env after logging into OpenAlgo and generating an API key."

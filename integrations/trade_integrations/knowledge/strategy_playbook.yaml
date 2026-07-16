@@ -1,0 +1,87 @@
+# India NIFTY strategy profiles — adapted from QuantMuse card format.
+profiles:
+  momentum:
+    label: Momentum
+    when: "VIX < 18 and 20d trend up"
+    logic: "Ride 7d/14d strength; RSI elevated but not extreme in low-VIX regimes."
+    risks: "Trend reversal on global shock; reduce size near event weeks."
+    indicators_to_watch: [nifty_return_7d, nifty_return_14d, nifty_rsi_14, nifty_macd_histogram, sp500]
+    conflicts_with: [mean_reversion]
+    options_handoff: "Bull call spread / long futures on directional confirmation"
+    horizon_fit: [A, B]
+  mean_reversion:
+    label: Mean reversion
+    when: "VIX > 18 or RSI extreme with fading MACD"
+    logic: "Fade stretched moves toward MA20; contrarian at RSI >70 or <30 in high fear."
+    risks: "Trend continuation in melt-up; strict stops required."
+    indicators_to_watch: [nifty_rsi_14, nifty_ma20_distance_pct, nifty_bb_percent_b, india_vix]
+    conflicts_with: [momentum]
+    options_handoff: "Iron condor / short strangle when range confirmed"
+    horizon_fit: [A, B]
+  flow_driven:
+    label: Flow driven
+    when: "FII selling with DII absorbing (dii_absorption_ratio elevated)"
+    logic: "Range-bound index while domestic flows cushion foreign outflows."
+    risks: "Sustained FII outflows overwhelm DII; global risk-off accelerates."
+    indicators_to_watch: [fii_net_5d, dii_net_5d, institutional_net_5d, dii_absorption_ratio]
+    conflicts_with: [global_risk_off]
+    options_handoff: "Protective puts / put spreads on breakdown"
+    horizon_fit: [B]
+  global_risk_off:
+    label: Global risk-off
+    when: "S&P down and USD/INR weakening"
+    logic: "Bearish bias via FII rotation and import-cost pressure."
+    risks: "DII SIP cushion can delay decline; policy surprise."
+    indicators_to_watch: [sp500, usd_inr, us_10y, fii_net_5d, oil_brent]
+    conflicts_with: [momentum]
+    options_handoff: "Bear put spread / long puts"
+    horizon_fit: [A, B]
+  low_vol_carry:
+    label: Low-vol carry
+    when: "VIX low and ADX < 20"
+    logic: "Range-bound; sell vol bias when expected move compresses."
+    risks: "Vol spike on event; gamma risk near expiry."
+    indicators_to_watch: [india_vix, nifty_adx_14, qfinindia_expected_move, nifty_bb_percent_b]
+    conflicts_with: [event_vol]
+    options_handoff: "Iron condor / calendar spreads"
+    horizon_fit: [B]
+  event_vol:
+    label: Event vol
+    when: "Budget week, results season, or RBI policy window"
+    logic: "Widen range; lower directional confidence; vol expansion likely."
+    risks: "Gap moves beyond expected move; liquidity thins."
+    indicators_to_watch: [is_budget_week, is_results_season, days_to_monthly_expiry, qfinindia_expected_move]
+    conflicts_with: [low_vol_carry]
+    options_handoff: "Straddle / reduce size; wait for post-event fade"
+    horizon_fit: [A, B]
+  structural_trend:
+    label: Structural trend
+    when: "Horizon 60d+; MA200 slope positive"
+    logic: "Directional positional view; breadth and MA50/200 alignment."
+    risks: "Macro regime shift; slow to react at tactical horizon."
+    indicators_to_watch: [nifty_ma200_distance_pct, nifty_ma50_distance_pct, constituent_momentum_7d, nifty_pe]
+    conflicts_with: [mean_reversion]
+    options_handoff: "Positional LEAPS / futures with hedges"
+    horizon_fit: [C]
+  sector_rotation:
+    label: Sector rotation
+    when: "Wide sector sentiment dispersion; leaders diverge from laggards"
+    logic: "Index range with sector leadership rotation — trade relative strength via heavyweights/options."
+    risks: "Macro shock flattens dispersion; high turnover near events."
+    indicators_to_watch: [sector_breadth_mean_sentiment, constituent_momentum_7d, sp500, india_vix]
+    conflicts_with: [low_vol_carry]
+    options_handoff: "Sector-heavy bull spreads / reduce index delta; watch heavyweight earnings"
+    horizon_fit: [B]
+  defensive:
+    label: Defensive
+    when: "High VIX + negative institutional flows"
+    logic: "Capital preservation; reduce delta; hedge tail risk. Watch realized vol and tail-risk options."
+    risks: "Missing rebound if flows reverse quickly."
+    indicators_to_watch: [india_vix, institutional_net_5d, qfinindia_tail_risk, nifty_pcr, nifty_realized_vol_20d]
+    conflicts_with: [momentum]
+    options_handoff: "Hedges; flatten directional exposure"
+    horizon_fit: [A, B, C]
+    risk_notes:
+      - "Elevated realized vol → widen stop bands; reduce position size."
+      - "Tail risk from chain → favor protective puts over naked short vol."
+      - "VaR proxy: 1d move ≈ ATR% of spot; use for hedge sizing."

@@ -18,8 +18,7 @@ from trade_integrations.dataflows.index_research.backtest_runner import (
 from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS, build_factor_matrix
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.predictor import (
-    _predict_macro_delta,
-    cap_macro_delta,
+    shrink_macro_delta,
     train_macro_ridge,
 )
 from trade_integrations.dataflows.index_research.sources.history_loader import load_aligned_factor_history
@@ -33,7 +32,42 @@ FACTOR_BLOCKS: dict[str, list[str]] = {
         "nifty_return_14d",
         "nifty_rsi_14",
         "nifty_ma20_distance_pct",
+        "nifty_ma50_distance_pct",
+        "nifty_ma200_distance_pct",
+        "nifty_macd_line",
+        "nifty_macd_signal",
+        "nifty_macd_histogram",
+        "nifty_bb_percent_b",
+        "nifty_bb_width_pct",
+        "nifty_stoch_k",
+        "nifty_stoch_d",
+        "nifty_williams_r",
+        "nifty_cci_20",
+        "nifty_adx_14",
+        "nifty_atr_pct",
+        "nifty_golden_cross_signal",
         "constituent_momentum_7d",
+    ],
+    "technical_extended": [
+        "nifty_macd_line",
+        "nifty_macd_signal",
+        "nifty_macd_histogram",
+        "nifty_bb_percent_b",
+        "nifty_bb_width_pct",
+        "nifty_stoch_k",
+        "nifty_stoch_d",
+        "nifty_williams_r",
+        "nifty_cci_20",
+        "nifty_ma50_distance_pct",
+        "nifty_ma200_distance_pct",
+        "nifty_adx_14",
+        "nifty_atr_pct",
+        "nifty_golden_cross_signal",
+    ],
+    "derivatives_implied": [
+        "qfinindia_skew",
+        "qfinindia_expected_move",
+        "qfinindia_tail_risk",
     ],
     "flows": ["fii_net_5d", "dii_net_5d", "fii_fut_long_short_ratio", "nifty_pcr", "institutional_net_5d", "dii_absorption_ratio"],
     "global": ["oil_brent", "oil_wti", "usd_inr", "gold", "sp500", "us_10y"],
@@ -121,6 +155,12 @@ def _walk_forward_hit_rate(
     exclude_factors: set[str] | None = None,
 ) -> float | None:
     """Direction hit rate with optional factor exclusion (block ablation)."""
+    from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
+    from trade_integrations.dataflows.index_research.scenarios import (
+        build_index_scenarios,
+        scenario_weighted_return_pct,
+    )
+
     horizon = resolve_horizon(horizon_days)
     work = frame.copy()
     if exclude_factors:
@@ -147,8 +187,15 @@ def _walk_forward_hit_rate(
         if not artifact.feature_names:
             continue
         factors = _row_factor_dict(row, feature_cols)
-        raw = _predict_macro_delta(factors, horizon, artifact)
-        predicted = cap_macro_delta(raw)
+        raw_macro = predict_macro_delta_gated(factors, horizon, artifact)
+        scenario_anchor = None
+        try:
+            close = float(row["close"])
+            scenarios = build_index_scenarios([], factors, spot=close, horizon_days=horizon.days)
+            scenario_anchor = scenario_weighted_return_pct(scenarios, spot=close)
+        except Exception:
+            scenario_anchor = None
+        predicted = shrink_macro_delta(raw_macro, scenario_anchor)
         pred_dir = predicted > 0
         actual_dir = float(actual) > 0
         if pred_dir == actual_dir:

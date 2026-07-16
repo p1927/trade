@@ -463,14 +463,81 @@ def flow_effective_start(frame: pd.DataFrame) -> str | None:
     return None
 
 
+def load_nse_browser_fii_dii_frame(start: str, end: str) -> pd.DataFrame:
+    """Load FII/DII daily rows persisted by the nse_browser module."""
+    try:
+        from trade_integrations.nse_browser.hub_writer import load_fii_dii_daily
+    except ImportError:
+        return pd.DataFrame()
+    frame = load_fii_dii_daily()
+    if frame.empty or "date" not in frame.columns:
+        return pd.DataFrame()
+    out = frame.copy()
+    out["date"] = out["date"].astype(str).str[:10]
+    out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
+    if "granularity" in out.columns:
+        out = out[out["granularity"].astype(str) != "monthly"]
+    if not out.empty and "source" not in out.columns:
+        out["source"] = "nse_browser"
+    return out.reset_index(drop=True)
+
+
+def fetch_web_flow_cash_frame(start: str, end: str) -> pd.DataFrame:
+    """Load FII/DII cash rows from Nifty Invest API cache + saved HTML snapshots."""
+    frames: list[pd.DataFrame] = []
+    try:
+        from trade_integrations.dataflows.index_research.sources.web_flow_fetch import (
+            fetch_niftyinvest_flow_frame,
+        )
+
+        api_frame = fetch_niftyinvest_flow_frame(start=start, end=end)
+        if not api_frame.empty:
+            frames.append(api_frame)
+    except ImportError:
+        pass
+    try:
+        from trade_integrations.nse_browser.missions.web_flow_history import load_web_flow_from_raw_cache
+
+        cached = load_web_flow_from_raw_cache()
+        if not cached.empty and "date" in cached.columns:
+            out = cached.copy()
+            out["date"] = out["date"].astype(str).str[:10]
+            out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
+            if "granularity" in out.columns:
+                out = out[out["granularity"].astype(str) != "monthly"]
+            if not out.empty:
+                frames.append(out)
+    except ImportError:
+        pass
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.sort_values("date").drop_duplicates("date", keep="last")
+    return combined.reset_index(drop=True)
+
+
 def merge_flow_derivatives_frame(start: str, end: str) -> pd.DataFrame:
-    """Merge Mr. Chartist history, NSE today, flow cache, and optional FAO archives."""
+    """Merge web scrape, Mr. Chartist, nse repo/hub, NSE today, flow cache, and FAO archives."""
+    try:
+        from trade_integrations.nse_browser.repository import load_nse_repository_fii_dii_frame
+
+        repo_flow = load_nse_repository_fii_dii_frame(start, end)
+    except ImportError:
+        repo_flow = pd.DataFrame()
+
+    browser_flow = load_nse_browser_fii_dii_frame(start, end)
+    web_flow = fetch_web_flow_cash_frame(start, end)
     mr = fetch_mrchartist_flow_frame(include_seeded=False)
     latest = fetch_mrchartist_latest_session()
     nse = fetch_nselib_fii_dii_frame(start, end)
     cache = load_flow_cash_cache()
 
-    frames = [f for f in (cache, mr, latest, nse) if f is not None and not f.empty]
+    # Last wins: cache → web (Moneycontrol/NiftyInvest) → mrchartist → nselib/latest → repo → hub
+    frames = [
+        f
+        for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow)
+        if f is not None and not f.empty
+    ]
     if not frames:
         return pd.DataFrame()
 
@@ -581,9 +648,10 @@ def flow_backfill_summary(*, days: int = 365) -> dict[str, int | str]:
         "flow_era_trading_days": len(era_dates),
         "fii_net_era_coverage_pct": round(100.0 * era_fii / era_total, 1),
         "monthly_gaps": flow_coverage_gaps_by_month(frame),
-        "primary_source": "mrchartist_history_full+nse_fao_archive+flow_cache",
+        "primary_source": "nse_browser_fii_dii+mrchartist_history_full+nse_fao_archive+flow_cache",
         "fii_cash_limit_note": (
-            "Pre-2026-01-14 cash absent from free APIs; NSE fiidiiTradeReact is today-only. "
-            "Coverage gate uses flow-era (first real cash row) not pre-source calendar days."
+            "Pre-2026-01-14 cash may be backfilled via nse_browser CSV mission; "
+            "NSE fiidiiTradeReact remains today-only. Coverage gate uses flow-era "
+            "(first real cash row) not pre-source calendar days."
         ),
     }

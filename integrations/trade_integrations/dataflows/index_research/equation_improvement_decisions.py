@@ -11,7 +11,10 @@ from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.equation_diagnostics import load_diagnostics_report
 from trade_integrations.dataflows.index_research.prediction_counterfactual import load_counterfactual_report
 from trade_integrations.dataflows.index_research.backtest_runner import load_backtest_report
+from trade_integrations.dataflows.index_research.hub_data_audit import load_data_audit_report
 from trade_integrations.dataflows.index_research.t0_information_audit import load_t0_audit_report
+
+_ABLATION_ACCEPT_PP = 3.0
 
 _DECISIONS_PATH = lambda ticker: (
     get_hub_dir() / ticker.strip().upper() / "index_research" / "equation_improvement_decisions.md"
@@ -27,7 +30,8 @@ STRUCTURAL_CHANGES: list[dict[str, Any]] = [
     {
         "id": "joint_flow_features",
         "hypothesis": "institutional_net_5d + dii_absorption_ratio capture post-2023 DII-dominance regime.",
-        "status": "accepted_pending_ablation",
+        "status": "pending_ablation",
+        "ablation_block": "joint_flows",
     },
     {
         "id": "regime_gates",
@@ -64,6 +68,31 @@ STRUCTURAL_CHANGES: list[dict[str, Any]] = [
 ]
 
 
+def _resolve_structural_changes(
+    diagnostics: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    ablation = {row["block"]: row for row in (diagnostics or {}).get("block_ablation") or []}
+    resolved: list[dict[str, Any]] = []
+    for change in STRUCTURAL_CHANGES:
+        item = dict(change)
+        block = item.pop("ablation_block", None)
+        if item.get("status") == "pending_ablation" and block:
+            row = ablation.get(block) or {}
+            delta_pp = row.get("delta_pp")
+            if delta_pp is not None and float(delta_pp) >= _ABLATION_ACCEPT_PP:
+                item["status"] = "accepted"
+            else:
+                item["status"] = "rejected"
+                item["rejection_reason"] = (
+                    f"Walk-forward ablation delta {delta_pp} pp < {_ABLATION_ACCEPT_PP} pp gate "
+                    f"(without block hit rate {row.get('direction_hit_rate_without_block')}, "
+                    f"baseline {row.get('baseline_hit_rate')})."
+                )
+            item["ablation"] = row
+        resolved.append(item)
+    return resolved
+
+
 def _format_decisions_md(
     *,
     ticker: str,
@@ -71,6 +100,7 @@ def _format_decisions_md(
     counterfactual: dict[str, Any] | None,
     diagnostics: dict[str, Any] | None,
     t0_audit: dict[str, Any] | None,
+    data_audit: dict[str, Any] | None,
 ) -> str:
     metrics = (backtest or {}).get("metrics") or {}
     cf_summary = (counterfactual or {}).get("summary") or {}
@@ -102,12 +132,20 @@ def _format_decisions_md(
     ]
 
     ablation = {row["block"]: row for row in (diagnostics or {}).get("block_ablation") or []}
-    for change in STRUCTURAL_CHANGES:
+    structural_changes = _resolve_structural_changes(diagnostics)
+    for change in structural_changes:
         lines.append(f"### {change['id']} — {change['status']}")
         lines.append("")
         lines.append(f"**Hypothesis:** {change['hypothesis']}")
         if change["status"] == "rejected":
             lines.append(f"**Rejected because:** {change.get('rejection_reason')}")
+        elif change.get("ablation"):
+            row = change["ablation"]
+            lines.append(
+                f"**Ablation:** without {row.get('block')} block hit rate "
+                f"{row.get('direction_hit_rate_without_block')} "
+                f"(baseline {row.get('baseline_hit_rate')}, delta {row.get('delta_pp')} pp)."
+            )
         else:
             if change["id"] == "delta_features":
                 delta_row = ablation.get("delta") or {}
@@ -117,9 +155,19 @@ def _format_decisions_md(
                     f"(baseline {delta_row.get('baseline_hit_rate')})."
                 )
             if change["id"] == "dii_backfill":
-                audit = (backtest or {}).get("factor_audit") or []
-                dii = next((r for r in audit if r.get("factor") == "dii_net_5d"), {})
-                lines.append(f"**Data:** DII coverage {dii.get('coverage_pct')}%")
+                coverage_rows = (data_audit or {}).get("factor_coverage") or []
+                dii = next((r for r in coverage_rows if r.get("factor") == "dii_net_5d"), {})
+                flow_pct = dii.get("flow_era_coverage_pct")
+                full_pct = dii.get("coverage_pct")
+                lines.append(
+                    f"**Data:** DII full-window coverage {full_pct}%; "
+                    f"flow-era (≥{data_audit.get('flow_effective_start')}) {flow_pct}%."
+                )
+            if change["id"] == "scenario_shrinkage":
+                lines.append(
+                    f"**Measurement:** cap_artifact misses remain {cf_summary.get('cap_artifact_count')} "
+                    f"after shrinkage (target ≤2)."
+                )
         lines.append("")
 
     lines.append("## Logic conflict register")
@@ -135,12 +183,14 @@ def generate_equation_improvement_decisions(*, ticker: str = "NIFTY") -> Path:
     counterfactual = load_counterfactual_report(ticker)
     diagnostics = load_diagnostics_report(ticker)
     t0_audit = load_t0_audit_report(ticker)
+    data_audit = load_data_audit_report(ticker)
     content = _format_decisions_md(
         ticker=ticker,
         backtest=backtest,
         counterfactual=counterfactual,
         diagnostics=diagnostics,
         t0_audit=t0_audit,
+        data_audit=data_audit,
     )
     path = _DECISIONS_PATH(ticker)
     path.parent.mkdir(parents=True, exist_ok=True)

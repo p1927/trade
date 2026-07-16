@@ -21,17 +21,28 @@ def main() -> int:
     parser.add_argument("--horizon-days", type=int, default=14)
     parser.add_argument("--skip-factors", action="store_true")
     parser.add_argument("--skip-news", action="store_true")
+    parser.add_argument("--skip-nse-browser", action="store_true")
     parser.add_argument("--news-sleep", type=float, default=0.35)
     args = parser.parse_args()
 
     results: dict[str, object] = {"status": "ok"}
 
-    if not args.skip_factors:
-        from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
-            enrich_factor_history,
+    if not args.skip_nse_browser:
+        from trade_integrations.dataflows.index_research.nse_browser_refresh import (
+            refresh_nse_browser_for_prediction,
         )
 
-        results["factor_enrichment"] = enrich_factor_history(days=args.days)
+        results["nse_browser"] = refresh_nse_browser_for_prediction(
+            days=args.days,
+            refresh=True,
+        )
+
+    if not args.skip_factors:
+        from trade_integrations.dataflows.index_research.factor_backfill import (
+            backfill_factor_history,
+        )
+
+        results["factor_backfill"] = backfill_factor_history(days=args.days)
 
     if not args.skip_news:
         from trade_integrations.dataflows.index_research.backtest_runner import load_backtest_report

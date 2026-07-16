@@ -362,7 +362,7 @@ def enrich_eval_row_horizon(
     actual = float(eval_row.get("actual_forward_return_pct") or 0)
     direction_correct = bool(eval_row.get("direction_correct"))
 
-    headlines_t0 = _fetch_index_headlines(pred_day, limit=5)
+    headlines_t0 = _fetch_index_headlines(pred_day, as_of_day=pred_day, lookback_days=7, limit=5)
     headlines = _fetch_index_headlines(maturity, limit=5)
     out["headlines_at_t0"] = headlines_t0
     out["headlines_at_maturity"] = headlines

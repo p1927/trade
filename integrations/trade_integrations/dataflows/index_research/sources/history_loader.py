@@ -44,7 +44,18 @@ def load_nifty_history(days: int = 365) -> pd.DataFrame:
         frame["close"] = frame["close"].astype(float)
     else:
         return pd.DataFrame(columns=["date", "close"])
-    return frame[["date", "close"]].sort_values("date").reset_index(drop=True)
+
+    for src, dst in (("High", "high"), ("Low", "low"), ("Open", "open"), ("Volume", "volume")):
+        if src in frame.columns:
+            frame[dst] = frame[src].astype(float)
+        elif dst in frame.columns:
+            frame[dst] = frame[dst].astype(float)
+
+    cols = ["date", "close"]
+    for optional in ("high", "low", "open", "volume"):
+        if optional in frame.columns:
+            cols.append(optional)
+    return frame[cols].sort_values("date").reset_index(drop=True)
 
 
 def _append_calendar_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -68,17 +79,18 @@ def _append_institutional_joint_columns(frame: pd.DataFrame) -> pd.DataFrame:
     """Joint FII–DII features (literature: absorption ratio, post-2023 regime)."""
     if frame.empty:
         return frame
+    if "fii_net_5d" not in frame.columns or "dii_net_5d" not in frame.columns:
+        return frame
     out = frame.copy()
-    fii = pd.to_numeric(out.get("fii_net_5d"), errors="coerce")
-    dii = pd.to_numeric(out.get("dii_net_5d"), errors="coerce")
-    if fii is not None and dii is not None:
-        out["institutional_net_5d"] = fii + dii
-        denom = fii.abs().clip(lower=50.0)
-        out["dii_absorption_ratio"] = np.where(
-            fii < 0,
-            dii / denom,
-            np.where(fii > 0, dii / denom, np.nan),
-        )
+    fii = pd.to_numeric(out["fii_net_5d"], errors="coerce")
+    dii = pd.to_numeric(out["dii_net_5d"], errors="coerce")
+    out["institutional_net_5d"] = fii + dii
+    denom = fii.abs().clip(lower=50.0)
+    out["dii_absorption_ratio"] = np.where(
+        fii < 0,
+        dii / denom,
+        np.where(fii > 0, dii / denom, np.nan),
+    )
     return out
 
 

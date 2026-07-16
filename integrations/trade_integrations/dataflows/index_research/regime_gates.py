@@ -14,6 +14,13 @@ MOMENTUM_FACTORS = frozenset(
         "nifty_return_14d",
         "nifty_rsi_14",
         "nifty_ma20_distance_pct",
+        "nifty_ma50_distance_pct",
+        "nifty_ma200_distance_pct",
+        "nifty_macd_histogram",
+        "nifty_bb_percent_b",
+        "nifty_adx_14",
+        "nifty_atr_pct",
+        "nifty_golden_cross_signal",
         "constituent_momentum_7d",
     }
 )

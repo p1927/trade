@@ -245,6 +245,8 @@ def run_index_light_refresh(
                 horizon_days=horizon.days,
                 trend_20d=_nifty_trend_20d(),
                 prediction=prediction,
+                sector_breadth=_sector_breadth(signals),
+                ticker=sym,
             )
         except Exception as exc:
             logger.debug("interpretation bundle skipped: %s", exc)

@@ -178,6 +178,18 @@ def _load_records_frame() -> pd.DataFrame:
     return frame
 
 
+def _coerce_records_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize dtypes so parquet writes stay stable after row-wise merges."""
+    if frame.empty:
+        return frame
+    if "horizon_trading_days" in frame.columns:
+        frame["horizon_trading_days"] = pd.to_numeric(
+            frame["horizon_trading_days"],
+            errors="coerce",
+        ).astype("Int64")
+    return frame
+
+
 def upsert_verified_record(record: dict[str, Any]) -> None:
     """Insert or merge a canonical story record in hub parquet."""
     story_id = str(record.get("canonical_story_id") or "").strip()
@@ -221,7 +233,7 @@ def upsert_verified_record(record: dict[str, Any]) -> None:
         if incoming.get("maturity_date"):
             existing["maturity_date"] = incoming["maturity_date"]
         if incoming.get("horizon_trading_days"):
-            existing["horizon_trading_days"] = incoming["horizon_trading_days"]
+            existing["horizon_trading_days"] = int(incoming["horizon_trading_days"])
         existing["sources_json"] = _json_dumps(merged_sources)
         existing["title"] = incoming.get("title") or existing.get("title")
         existing["published_at"] = incoming.get("published_at") or existing.get("published_at")
@@ -233,7 +245,7 @@ def upsert_verified_record(record: dict[str, Any]) -> None:
         new_row = pd.DataFrame([incoming])
         frame = pd.concat([frame, new_row], ignore_index=True)
 
-    write_dataframe(frame, verified_records_path())
+    write_dataframe(_coerce_records_frame(frame), verified_records_path())
 
 
 def get_verified_record(story_id: str) -> dict[str, Any] | None:
@@ -360,6 +372,15 @@ def count_by_status(*, ticker: str = "NIFTY") -> dict[str, int]:
     return counts
 
 
+def _coerce_impact_ledger_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    for col in ("predicted_return_pct", "predicted_nifty_points"):
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    return frame
+
+
 def append_impact_ledger_row(row: dict[str, Any]) -> None:
     path = impact_ledger_path()
     new_frame = pd.DataFrame([row])
@@ -371,7 +392,7 @@ def append_impact_ledger_row(row: dict[str, Any]) -> None:
         key_cols = [c for c in ("canonical_story_id", "maturity_date", "reconciled_at") if c in combined.columns]
         if key_cols:
             combined = combined.drop_duplicates(subset=key_cols, keep="last")
-    write_dataframe(combined, path)
+    write_dataframe(_coerce_impact_ledger_frame(combined), path)
 
 
 def build_snapshot_from_hub(

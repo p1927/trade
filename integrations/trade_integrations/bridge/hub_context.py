@@ -255,6 +255,41 @@ def _format_index_research_context(
     if accuracy.get("direction_hit_rate") is not None:
         lines.append(f"model_direction_hit_rate: {accuracy.get('direction_hit_rate')}")
 
+    pred_block = artifact.get("prediction") or {}
+    interpretation = pred_block.get("interpretation") or {}
+    if interpretation.get("strategy_context"):
+        lines.append(f"strategy_context: {interpretation['strategy_context']}")
+    if interpretation.get("technical_interpretation"):
+        lines.append(f"technical_interpretation: {interpretation['technical_interpretation']}")
+    if interpretation.get("active_strategy_profile"):
+        lines.append(f"active_strategy_profile: {interpretation['active_strategy_profile']}")
+    if interpretation.get("strategy_when"):
+        lines.append(f"strategy_when: {interpretation['strategy_when']}")
+    if interpretation.get("strategy_rationale"):
+        lines.append(f"strategy_rationale: {interpretation['strategy_rationale']}")
+    if interpretation.get("strategy_risks"):
+        lines.append(f"strategy_risks: {interpretation['strategy_risks']}")
+    if interpretation.get("strategy_options_handoff"):
+        lines.append(f"strategy_options_handoff: {interpretation['strategy_options_handoff']}")
+    watch = interpretation.get("indicators_to_watch") or []
+    if watch:
+        lines.append(f"indicators_to_watch: {', '.join(str(w) for w in watch)}")
+    risk_notes = interpretation.get("risk_notes") or []
+    if risk_notes:
+        lines.append("risk_notes:")
+        for note in risk_notes[:4]:
+            lines.append(f"  - {note}")
+    factor_notes = interpretation.get("factor_notes") or {}
+    if factor_notes:
+        lines.append("factor_notes_with_trust:")
+        for key, note in list(factor_notes.items())[:6]:
+            lines.append(f"  - {key}: {note}")
+    tech_readings = interpretation.get("technical_readings") or {}
+    if tech_readings:
+        lines.append("technical_readings:")
+        for key, value in sorted(tech_readings.items())[:12]:
+            lines.append(f"  - {key}: {value}")
+
     stage_errors = artifact.get("stage_errors") or []
     if stage_errors:
         lines.append(f"stage_errors: {'; '.join(str(e) for e in stage_errors[:3])}")

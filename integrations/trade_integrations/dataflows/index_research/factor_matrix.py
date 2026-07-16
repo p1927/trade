@@ -31,6 +31,23 @@ MACRO_FACTOR_KEYS: tuple[str, ...] = (
     "nifty_rsi_14",
     "nifty_realized_vol_20d",
     "nifty_ma20_distance_pct",
+    "nifty_ma50_distance_pct",
+    "nifty_ma200_distance_pct",
+    "nifty_macd_line",
+    "nifty_macd_signal",
+    "nifty_macd_histogram",
+    "nifty_bb_percent_b",
+    "nifty_bb_width_pct",
+    "nifty_stoch_k",
+    "nifty_stoch_d",
+    "nifty_williams_r",
+    "nifty_cci_20",
+    "nifty_adx_14",
+    "nifty_atr_pct",
+    "nifty_golden_cross_signal",
+    "qfinindia_skew",
+    "qfinindia_expected_move",
+    "qfinindia_tail_risk",
     "constituent_momentum_7d",
     "days_to_monthly_expiry",
     "is_budget_week",
@@ -64,9 +81,22 @@ def _forward_return_pct(close: pd.Series, horizon_days: int) -> pd.Series:
 _EXCLUDED_REDUNDANT: frozenset[str] = frozenset({"sector_breadth_mean_sentiment"})
 
 
-def _select_macro_columns(history_df: pd.DataFrame) -> list[str]:
+def _select_macro_columns(
+    history_df: pd.DataFrame,
+    horizon: HorizonProfile | None = None,
+) -> list[str]:
+    from trade_integrations.dataflows.index_research.horizon_features import (
+        extended_macro_keys_for_horizon,
+    )
+
+    if horizon is not None:
+        preferred = list(extended_macro_keys_for_horizon(horizon))
+        ordered = preferred + [key for key in MACRO_FACTOR_KEYS if key not in preferred]
+    else:
+        ordered = list(MACRO_FACTOR_KEYS)
+
     present = [
-        key for key in MACRO_FACTOR_KEYS if key in history_df.columns and key not in _EXCLUDED_REDUNDANT
+        key for key in ordered if key in history_df.columns and key not in _EXCLUDED_REDUNDANT
     ]
     if present:
         return present
@@ -94,7 +124,7 @@ def build_factor_matrix(
     frame = frame.sort_values("date").reset_index(drop=True)
     frame["target"] = _forward_return_pct(frame["close"].astype(float), horizon.days)
 
-    macro_cols = _select_macro_columns(frame)
+    macro_cols = _select_macro_columns(frame, horizon)
     if not macro_cols:
         return np.empty((0, 0)), np.empty(0), []
 

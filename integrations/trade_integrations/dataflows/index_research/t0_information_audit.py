@@ -146,11 +146,11 @@ def audit_eval_row(
     headlines_t0: list[dict[str, str]] = []
     try:
         from trade_integrations.dataflows.news_hub_bridge import (
-            headlines_for_day,
+            headlines_for_prediction_date,
             to_headline_dict,
         )
 
-        for item in headlines_for_day(pred_day, limit=12, ingest_if_missing=True):
+        for item in headlines_for_prediction_date(pred_day, lookback_days=7, limit=12, ingest_if_missing=True):
             row = to_headline_dict(item)
             headlines_t0.append(
                 {

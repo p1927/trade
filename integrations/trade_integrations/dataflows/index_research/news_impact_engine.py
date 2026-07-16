@@ -492,7 +492,18 @@ def ingest_headline_rows(
         else:
             spot = 0.0
 
-    stats = {"ingested": len(rows), "cache_hits": 0, "tags_merged": 0, "verified": 0, "rejected": 0, "approved_ui": 0}
+    from trade_integrations.dataflows.index_research.news_dedup import filter_headlines_on_or_before
+
+    rows, skipped_lookahead = filter_headlines_on_or_before(rows, today)
+    stats = {
+        "ingested": len(rows),
+        "skipped_lookahead": skipped_lookahead,
+        "cache_hits": 0,
+        "tags_merged": 0,
+        "verified": 0,
+        "rejected": 0,
+        "approved_ui": 0,
+    }
     macro_clean = {k: float(v) for k, v in (macro_factors or {}).items() if v is not None}
     for row in rows:
         story_id = story_key_from_row(row)
@@ -522,6 +533,95 @@ def ingest_headline_rows(
             if rec and rec.get("verification_status") == "rejected":
                 stats["rejected"] += 1
     return stats
+
+
+def ingest_lookback_for_prediction_date(
+    prediction_date: str,
+    *,
+    ticker: str = "NIFTY",
+    lookback_days: int = 7,
+    horizon_days: int = 14,
+    headline_limit: int = 12,
+    force_reverify: bool = False,
+) -> dict[str, int]:
+    """Ingest headlines for each day in [prediction_date - lookback, prediction_date]."""
+    from datetime import date, timedelta
+
+    pred = prediction_date[:10]
+    try:
+        end_d = date.fromisoformat(pred)
+    except ValueError:
+        return {"days": 0, "ingested": 0, "skipped_lookahead": 0}
+
+    totals = {
+        "days": 0,
+        "ingested": 0,
+        "cache_hits": 0,
+        "tags_merged": 0,
+        "verified": 0,
+        "rejected": 0,
+        "approved_ui": 0,
+        "skipped_lookahead": 0,
+    }
+    day = end_d - timedelta(days=max(lookback_days, 0))
+    while day <= end_d:
+        stats = ingest_headlines_for_day(
+            ticker=ticker,
+            day=day.isoformat(),
+            horizon_days=horizon_days,
+            headline_limit=headline_limit,
+            force_reverify=force_reverify,
+        )
+        totals["days"] += 1
+        for key in totals:
+            if key != "days":
+                totals[key] += int(stats.get(key) or 0)
+        day += timedelta(days=1)
+    return totals
+
+
+def headlines_for_prediction_date(
+    prediction_date: str,
+    *,
+    ticker: str = "NIFTY",
+    lookback_days: int = 7,
+    limit: int = 12,
+    ingest_if_missing: bool = True,
+    horizon_days: int = 14,
+) -> list[dict[str, Any]]:
+    """Headlines knowable at prediction time: publish_day in [pred-lookback, pred], never after pred."""
+    from datetime import date, timedelta
+
+    from trade_integrations.dataflows.index_research.news_dedup import publish_day_on_or_before
+
+    pred = prediction_date[:10]
+    try:
+        since = (date.fromisoformat(pred) - timedelta(days=max(lookback_days, 0))).isoformat()
+    except ValueError:
+        since = pred
+
+    if ingest_if_missing:
+        ingest_lookback_for_prediction_date(
+            pred,
+            ticker=ticker,
+            lookback_days=lookback_days,
+            horizon_days=horizon_days,
+            headline_limit=max(limit, 12),
+        )
+
+    rows = list_verified_records(
+        status=["approved", "partial"],
+        since=since,
+        until=pred,
+        limit=limit * 3,
+        ticker=ticker,
+    )
+    safe = [row for row in rows if publish_day_on_or_before(row, pred)]
+    safe.sort(
+        key=lambda r: publish_day_from_value(str(r.get("published_at") or "")),
+        reverse=True,
+    )
+    return [hydrate_news_item_from_hub(row, ticker=ticker) for row in safe[:limit]]
 
 
 def headlines_for_day(

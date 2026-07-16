@@ -1,0 +1,208 @@
+# India NIFTY factor pedagogy — single source for agent + UI notes.
+factors:
+  oil_brent:
+    label: Brent crude
+    category: global
+    expected_direction: mixed
+    summary: "India is a net importer; oil spikes hurt margins and INR, but Nifty–oil link varies by regime."
+    caveat: "Short-run correlation can be positive during global growth rallies."
+    india_caveat: "Pass-through to Nifty is lagged; watch USD/INR same day."
+  oil_wti:
+    label: WTI crude
+    category: global
+    expected_direction: mixed
+    summary: "Same transmission as Brent via import bill and inflation."
+  usd_inr:
+    label: USD/INR
+    category: global
+    expected_direction: mixed
+    summary: "Short-run Nifty and INR often co-move via FII; long-run can diverge."
+    caveat: "FX volatility shocks hurt Nifty in short run per NARDL studies."
+  gold:
+    label: Gold
+    category: global
+    expected_direction: mixed
+    summary: "Safe-haven vs real yields; risk-on days can lift both gold and equities."
+  sp500:
+    label: S&P 500
+    category: global
+    expected_direction: positive
+    summary: "Global risk appetite; EM indices co-move with US equities on FII days."
+    india_caveat: "Top drift factor T0→maturity in miss analysis — path risk not level only."
+  us_10y:
+    label: US 10Y yield
+    category: global
+    expected_direction: mixed
+    summary: "Higher yields tighten global financial conditions via FII rotation."
+  india_vix:
+    label: India VIX
+    category: vol
+    expected_direction: negative
+    summary: "Fear gauge; spikes align with drawdowns. Use as regime switch, not only linear driver."
+    interpretation_rules:
+      - "VIX > 18 → high_fear regime; reduce momentum factor weight."
+      - "VIX < 14 → low-vol carry / range regimes more likely."
+  fii_net_5d:
+    label: FII net 5d
+    category: flows
+    expected_direction: context
+    summary: "Primary liquidity driver; post-2023 causality weakened — use with DII context."
+    india_caveat: "Contrarian at 14d in some windows; pair with dii_absorption_ratio."
+  dii_net_5d:
+    label: DII net 5d
+    category: flows
+    expected_direction: context
+    summary: "Often offsets FII selling; pro-cyclical SIP flows."
+  institutional_net_5d:
+    label: Institutional net 5d
+    category: flows
+    expected_direction: mixed
+    summary: "Combined FII+DII impulse on index liquidity."
+  dii_absorption_ratio:
+    label: DII absorption ratio
+    category: flows
+    expected_direction: positive
+    summary: "DII/DII offset when FII selling; >1 means full absorption."
+  nifty_pcr:
+    label: NIFTY PCR
+    category: derivatives
+    expected_direction: mixed
+    summary: "High PCR = put support / fear; contrarian at extremes."
+  nifty_return_7d:
+    label: NIFTY 7d return
+    category: technical
+    expected_direction: mixed
+    summary: "Short momentum; sign depends on VIX regime."
+  nifty_return_14d:
+    label: NIFTY 14d return
+    category: technical
+    expected_direction: mixed
+    summary: "Horizon-aligned autoregressive feature."
+  nifty_rsi_14:
+    label: RSI(14)
+    category: technical
+    expected_direction: mixed
+    summary: "Overbought >70 / oversold <30; mean-reversion in high VIX, momentum in low VIX."
+    interpretation_rules:
+      - "RSI > 70 + VIX < 18 → extended but trend can continue (momentum)."
+      - "RSI > 70 + VIX > 18 → fade risk elevated (mean-reversion)."
+      - "RSI < 30 → oversold bounce watch; confirm with MACD histogram."
+  nifty_ma20_distance_pct:
+    label: MA20 distance
+    category: technical
+    expected_direction: mixed
+    summary: "Distance from 20d SMA (%); positive = above trend line."
+  nifty_ma50_distance_pct:
+    label: MA50 distance
+    category: technical
+    expected_direction: mixed
+    summary: "Medium-term trend distance; structural horizon B/C signal."
+  nifty_ma200_distance_pct:
+    label: MA200 distance
+    category: technical
+    expected_direction: mixed
+    summary: "Long-term trend; golden/death cross context for horizon C."
+  nifty_macd_histogram:
+    label: MACD histogram
+    category: technical
+    expected_direction: mixed
+    summary: "Momentum turning: positive hist = bullish impulse; negative = fading."
+    interpretation_rules:
+      - "Histogram crossing zero → short-term direction change watch."
+  nifty_macd_line:
+    label: MACD line
+    category: technical
+    expected_direction: mixed
+    summary: "Fast EMA minus slow EMA; above signal line = bullish momentum."
+  nifty_macd_signal:
+    label: MACD signal
+    category: technical
+    expected_direction: mixed
+    summary: "9-period EMA of MACD; cross above = buy impulse, below = sell impulse."
+  nifty_bb_percent_b:
+    label: Bollinger %B
+    category: technical
+    expected_direction: mixed
+    summary: "Position in bands: >1 overbought, <0 oversold, 0.5 mid-band."
+  nifty_bb_width_pct:
+    label: Bollinger width %
+    category: technical
+    expected_direction: context
+    summary: "Band squeeze when width compresses; expansion signals breakout risk."
+    interpretation_rules:
+      - "Width at multi-week low → volatility expansion likely ahead."
+  nifty_stoch_k:
+    label: Stochastic %K
+    category: technical
+    expected_direction: mixed
+    summary: "Close vs 14d range; >80 overbought, <20 oversold."
+  nifty_stoch_d:
+    label: Stochastic %D
+    category: technical
+    expected_direction: mixed
+    summary: "3-period SMA of %K; cross confirms momentum turns."
+  nifty_williams_r:
+    label: Williams %R
+    category: technical
+    expected_direction: mixed
+    summary: "Inverted stochastic scale; -20 overbought, -80 oversold."
+  nifty_cci_20:
+    label: CCI(20)
+    category: technical
+    expected_direction: mixed
+    summary: "Typical price vs mean deviation; >100 extended up, <-100 extended down."
+  nifty_adx_14:
+    label: ADX(14)
+    category: technical
+    expected_direction: context
+    summary: "Trend strength; ADX > 25 = trending, < 20 = range."
+  nifty_atr_pct:
+    label: ATR %
+    category: technical
+    expected_direction: negative
+    summary: "Normalized volatility expansion; widen scenario ranges when elevated."
+  nifty_realized_vol_20d:
+    label: Realized vol 20d
+    category: vol
+    expected_direction: negative
+    summary: "Vol clusters; correlated with VIX — keep one primary vol feature."
+  constituent_momentum_7d:
+    label: Constituent momentum 7d
+    category: breadth
+    expected_direction: positive
+    summary: "Bottom-up weighted 7d rollup; falls back to index 7d return when sparse."
+  qfinindia_skew:
+    label: Vol skew
+    category: derivatives
+    expected_direction: mixed
+    summary: "Put/call skew from chain; negative skew = put demand / fear."
+  qfinindia_expected_move:
+    label: Expected move
+    category: derivatives
+    expected_direction: context
+    summary: "ATM-implied range into expiry; anchors scenario width."
+  qfinindia_tail_risk:
+    label: Tail risk
+    category: derivatives
+    expected_direction: negative
+    summary: "OTM wing demand; elevated = hedge demand / downside fear."
+  index_sentiment:
+    label: Index sentiment
+    category: sentiment
+    expected_direction: positive
+    summary: "FinBERT aggregate; regime input not precise return predictor."
+  days_to_monthly_expiry:
+    label: Days to expiry
+    category: calendar
+    expected_direction: context
+    summary: "Expiry-week pinning and rollover flows."
+  is_budget_week:
+    label: Budget week
+    category: calendar
+    expected_direction: context
+    summary: "Union budget volatility flag."
+  is_results_season:
+    label: Results season
+    category: calendar
+    expected_direction: context
+    summary: "Earnings cluster calendar flag."

@@ -134,6 +134,33 @@ def _anomalous_snapshots() -> list[str]:
     return sorted(bad)
 
 
+def _nse_browser_source_coverage() -> dict[str, Any]:
+    """Coverage summary for nodriver-persisted NSE/NSDL datasets."""
+    try:
+        from trade_integrations.nse_browser.hub_writer import (
+            load_fii_dii_daily,
+            load_fpi_daily,
+            load_mission_status,
+        )
+    except ImportError:
+        return {"available": False}
+
+    fii = load_fii_dii_daily()
+    fpi = load_fpi_daily()
+    missions = {
+        mid: load_mission_status(mid)
+        for mid in ("fii_dii_history", "fpi_nsdl", "market_archives")
+    }
+    return {
+        "available": True,
+        "fii_dii_daily_rows": len(fii),
+        "fii_net_days": int(fii["fii_net"].notna().sum()) if not fii.empty and "fii_net" in fii.columns else 0,
+        "dii_net_days": int(fii["dii_net"].notna().sum()) if not fii.empty and "dii_net" in fii.columns else 0,
+        "fpi_daily_rows": len(fpi),
+        "missions": missions,
+    }
+
+
 def run_hub_data_audit(
     *,
     days: int = 365,
@@ -231,7 +258,9 @@ def run_hub_data_audit(
             macro_gaps=macro_gaps,
             constituent_mean=constituent_coverage.get("mean_coverage_pct") or 0,
             anomalous=_anomalous_snapshots(),
+            nse_browser=_nse_browser_source_coverage(),
         ),
+        "nse_browser": _nse_browser_source_coverage(),
     }
 
 
@@ -240,11 +269,23 @@ def _recommendations(
     macro_gaps: list[dict[str, Any]],
     constituent_mean: float,
     anomalous: list[str],
+    nse_browser: dict[str, Any] | None = None,
 ) -> list[str]:
     notes: list[str] = []
     if macro_gaps:
         keys = ", ".join(str(g.get("factor")) for g in macro_gaps[:5])
         notes.append(f"Run enrich_factor_history for low-coverage macro keys: {keys}")
+        if any(str(g.get("factor")) in {"fii_net_5d", "dii_net_5d"} for g in macro_gaps):
+            notes.append(
+                "Run get_nse_browser_data(dataset='fii_dii', refresh=true) "
+                "or scripts/run_prediction_data_backfill.py --days 365"
+            )
+    nse = nse_browser or {}
+    fii_rows = int(nse.get("fii_dii_daily_rows") or 0)
+    if nse.get("available") and fii_rows < 30:
+        notes.append(
+            "nse_browser hub sparse — get_nse_browser_data(dataset='fii_dii', refresh=true) after market close"
+        )
     if constituent_mean < 30:
         notes.append(
             "Constituent company_research history sparse — run backfill_nifty_constituent_news for eval dates"

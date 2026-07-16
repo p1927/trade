@@ -29,6 +29,33 @@ def publish_day_from_value(value: str, *, fallback: str = "") -> str:
     return fb
 
 
+def publish_day_on_or_before(row: dict[str, Any], as_of_day: str) -> bool:
+    """True when the row's publish day is on or before ``as_of_day`` (lookahead-safe)."""
+    as_of = (as_of_day or "")[:10]
+    if len(as_of) < 10:
+        return True
+    pub = publish_day_from_value(
+        str(row.get("published_at") or ""),
+        fallback=str(row.get("collection_day") or row.get("publish_day") or ""),
+    )
+    return bool(pub) and pub <= as_of
+
+
+def filter_headlines_on_or_before(
+    rows: list[dict[str, Any]],
+    as_of_day: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop rows published after ``as_of_day``; returns (kept, skipped_count)."""
+    kept: list[dict[str, Any]] = []
+    skipped = 0
+    for row in rows:
+        if publish_day_on_or_before(row, as_of_day):
+            kept.append(row)
+        else:
+            skipped += 1
+    return kept, skipped
+
+
 def normalize_published_at(value: str, *, fallback_day: str = "") -> str:
     """Return ISO-8601 published_at; preserves time when parseable."""
     text = (value or "").strip()
