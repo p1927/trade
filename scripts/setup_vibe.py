@@ -117,6 +117,9 @@ def _redact_agent_json(payload: dict) -> dict:
         args = server.get("args") or []
         if len(args) >= 2 and isinstance(args[1], str) and args[1] not in ("REPLACE_ME", ""):
             args[1] = "***"
+        env = server.get("env") or {}
+        if isinstance(env.get("SKYVERN_API_KEY"), str) and env["SKYVERN_API_KEY"] not in ("", "REPLACE_ME"):
+            env["SKYVERN_API_KEY"] = "***"
     return redacted
 
 
