@@ -380,3 +380,141 @@ def prefetch_stock_research(ticker: str) -> bool:
 
     fetch_stock_research_report(ticker)
     return True
+
+
+def _index_research_dir(ticker: str) -> Path:
+    return get_hub_dir() / _ticker_key(ticker) / "index_research"
+
+
+def _index_doc_from_json(payload: dict):
+    from trade_integrations.dataflows.company_research.models import StageResult
+    from trade_integrations.dataflows.index_research.models import IndexResearchDoc
+
+    stages = [
+        StageResult(
+            stage=s["stage"],
+            status=s["status"],
+            vendor=s["vendor"],
+            fetched_at=datetime.fromisoformat(s["fetched_at"]),
+            data=s.get("data") or {},
+            errors=list(s.get("errors") or []),
+        )
+        for s in payload.get("stages") or []
+    ]
+    as_of = datetime.fromisoformat(payload["as_of"])
+    return IndexResearchDoc(
+        ticker=payload["ticker"],
+        as_of=as_of,
+        horizon=dict(payload.get("horizon") or {}),
+        spot=payload.get("spot"),
+        prediction=dict(payload.get("prediction") or {}),
+        regime=dict(payload.get("regime") or {}),
+        global_factors=list(payload.get("global_factors") or []),
+        constituent_signals=list(payload.get("constituent_signals") or []),
+        sector_breadth=dict(payload.get("sector_breadth") or {}),
+        scenarios=list(payload.get("scenarios") or []),
+        accuracy=dict(payload.get("accuracy") or {}),
+        stages=stages,
+    )
+
+
+def save_index_research(doc) -> Path:
+    """Write latest index research markdown + JSON under the shared hub."""
+    from trade_integrations.dataflows.index_research.format import format_index_report
+
+    out_dir = _index_research_dir(doc.ticker)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "latest.md").write_text(format_index_report(doc), encoding="utf-8")
+    payload = asdict(doc)
+    payload["as_of"] = doc.as_of.isoformat()
+    payload["stages"] = [
+        {**asdict(stage), "fetched_at": stage.fetched_at.isoformat()} for stage in doc.stages
+    ]
+    json_path = out_dir / "latest.json"
+    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return json_path
+
+
+def load_index_research_json(ticker: str):
+    """Load cached index research JSON when present."""
+    path = _index_research_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return _index_doc_from_json(payload)
+
+
+def load_index_research_markdown(ticker: str) -> str | None:
+    """Load cached index research markdown when present."""
+    path = _index_research_dir(ticker) / "latest.md"
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def is_index_research_cache_fresh(ticker: str) -> bool:
+    """Return True when cached index research is younger than company research TTL."""
+    max_age = _cache_max_age_minutes()
+    if max_age == 0:
+        return False
+    path = _index_research_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return False
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    age_minutes = (datetime.now(timezone.utc) - mtime).total_seconds() / 60.0
+    return age_minutes <= max_age
+
+
+_DEBATE_CACHE_MINUTES_ENV = "TRADINGAGENTS_DEBATE_CACHE_MINUTES"
+
+
+def _agent_debate_dir(ticker: str) -> Path:
+    return get_hub_dir() / _ticker_key(ticker) / "agent_debate"
+
+
+def _debate_cache_max_age_minutes() -> int:
+    try:
+        return max(0, int(os.getenv(_DEBATE_CACHE_MINUTES_ENV, "720")))
+    except ValueError:
+        return 720
+
+
+def save_agent_debate(ticker: str, payload: dict) -> Path:
+    """Write latest TradingAgents debate summary under the shared hub."""
+    from trade_integrations.dataflows.agent_debate.format import format_agent_debate_report
+
+    out_dir = _agent_debate_dir(ticker)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "latest.md").write_text(format_agent_debate_report(payload), encoding="utf-8")
+    json_path = out_dir / "latest.json"
+    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return json_path
+
+
+def load_agent_debate_json(ticker: str) -> dict | None:
+    """Load cached agent debate JSON when present."""
+    path = _agent_debate_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_agent_debate_markdown(ticker: str) -> str | None:
+    """Load cached agent debate markdown when present."""
+    path = _agent_debate_dir(ticker) / "latest.md"
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def is_agent_debate_cache_fresh(ticker: str) -> bool:
+    """Return True when cached debate is younger than the configured TTL."""
+    max_age = _debate_cache_max_age_minutes()
+    if max_age == 0:
+        return False
+    path = _agent_debate_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return False
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    age_minutes = (datetime.now(timezone.utc) - mtime).total_seconds() / 60.0
+    return age_minutes <= max_age
