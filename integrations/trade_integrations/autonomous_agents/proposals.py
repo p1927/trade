@@ -257,10 +257,29 @@ def commit_autonomous_agent(
             "Do not apply US Alpaca rules or prior memory about other agents. "
             f"{_prefetch_note}"
         )
-    vibe_session = session_service.create_session(
-        title=f"autonomous:{name}",
-        config=session_cfg,
-    )
+    orch_sid = str(orchestrator_session_id or proposal.get("orchestrator_session_id") or "").strip()
+    vibe_session = None
+    if orch_sid:
+        existing = session_service.get_session(orch_sid)
+        if existing is not None:
+            from src.session.orchestrator_profile import is_orchestrator_session
+            from trade_integrations.autonomous_agents.session_promotion import promote_orchestrator_session
+
+            if is_orchestrator_session(existing.config):
+                promote_orchestrator_session(
+                    session_service=session_service,
+                    orchestrator_session_id=orch_sid,
+                    agent_id=agent_id,
+                    name=name,
+                    session_cfg=session_cfg,
+                )
+                vibe_session = existing
+
+    if vibe_session is None:
+        vibe_session = session_service.create_session(
+            title=f"autonomous:{name}",
+            config=session_cfg,
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     agent: dict[str, Any] = {
@@ -289,6 +308,10 @@ def commit_autonomous_agent(
         "created_at": now,
     }
     save_agent(agent)
+
+    from trade_integrations.autonomous_agents.store import clear_orchestrator_meta
+
+    clear_orchestrator_meta()
 
     paper_session_warnings: list[str] = []
     if profile.uses_openalgo_auto_paper:
