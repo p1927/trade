@@ -39,11 +39,22 @@ When the user asks where NIFTY is going, what drives the index, factor attributi
 From the JSON, explain in plain language:
 
 - `prediction` — view (bullish/bearish/neutral), expected return %, **range low/high**, confidence
+- `prediction.interpretation` — **`technical_interpretation`**, **`strategy_context`** (full QuantMuse-style card), **`active_strategy_profile`**, **`strategy_when`**, **`strategy_rationale`**, **`strategy_risks`**, **`strategy_options_handoff`**, **`indicators_to_watch`**, **`risk_notes`**, **`factor_notes`** (with OOS trust snippets), **`technical_readings`**
 - `factor_explanation.contributors` — top macro/constituent drivers with **contribution %** and index points
 - `regime` — risk-on/off, volatility regime
 - `constituent_signals` — which heavyweights pull the index up or down
 - `scenarios` — event × outcome → index range with probability
 - `accuracy` — recent model direction hit rate (when present)
+
+When `technical_interpretation` is present in hub context (`[index_research_context]`), use it to explain RSI/MA/MACD in plain language — do not invent TA jargon the user did not ask for.
+
+### Step 2a — Quant review (second opinion, optional)
+
+When the user asks what the model might be missing, or wants TA vs forecast comparison:
+
+1. Call **`run_quant_review(ticker, horizon_days)`** (see [quant-reviewer](../quant-reviewer/SKILL.md)).
+2. Present `disagreements_with_forecast` and `surprises` **labeled separate** from Ridge `prediction.view`.
+3. Do not replace the headline forecast with TA consensus.
 
 ### Step 2b — Show interactive index widget (**required** for index analysis questions)
 
@@ -87,6 +98,7 @@ Do **not** skip the index widget when the question is index-level, even if optio
 |------|-----|
 | `get_index_trade_plan` | Load/generate index research (prediction, factors, scenarios) |
 | `get_index_trade_widget` | **Vibe index widget** — factor chart, range, scenarios |
+| `run_quant_review` | Second opinion — surprises + disagreements vs Ridge |
 | `get_index_research` | LangChain/TradingAgents tool (same hub data as markdown) |
 | `get_options_trade_widget` | F&O follow-through after index view |
 | `run_tradingagents_analysis` | Multi-agent debate on finalize |

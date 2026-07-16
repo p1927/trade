@@ -7,6 +7,7 @@ import pytest
 from trade_integrations.dataflows.index_research.constituent_momentum import (
     attach_constituent_momentum,
     momentum_coverage_stats,
+    resolve_constituent_momentum_rollup,
     rollup_constituent_momentum,
 )
 from trade_integrations.dataflows.index_research.models import ConstituentSignal
@@ -54,3 +55,18 @@ def test_attach_constituent_momentum_uses_injected_returns():
     )
     assert attached[0].momentum_7d_pct == pytest.approx(3.0)
     assert attached[1].momentum_7d_pct == pytest.approx(-1.0)
+
+
+@pytest.mark.unit
+def test_resolve_constituent_momentum_rollup_falls_back_to_index_return():
+    signals = [
+        ConstituentSignal(symbol="RELIANCE", weight=0.5),
+        ConstituentSignal(symbol="TCS", weight=0.5),
+    ]
+    value, source = resolve_constituent_momentum_rollup(
+        signals,
+        fallback_factors={"nifty_return_7d": 2.5},
+    )
+    assert value == pytest.approx(2.5)
+    assert source == "nifty_return_7d_fallback"
+

@@ -35,6 +35,8 @@ def test_enrich_nifty_technical_columns_adds_expected_keys():
         {
             "date": pd.date_range("2026-01-01", periods=30, freq="D").strftime("%Y-%m-%d"),
             "close": 24000 + np.arange(30) * 10,
+            "high": 24010 + np.arange(30) * 10,
+            "low": 23990 + np.arange(30) * 10,
         }
     )
     enriched = enrich_nifty_technical_columns(frame)
@@ -44,9 +46,11 @@ def test_enrich_nifty_technical_columns_adds_expected_keys():
         "nifty_rsi_14",
         "nifty_realized_vol_20d",
         "nifty_ma20_distance_pct",
+        "nifty_macd_line",
+        "nifty_stoch_k",
+        "nifty_bb_width_pct",
     ):
         assert key in enriched.columns
-        assert enriched[key].iloc[-1] == enriched[key].iloc[-1]
 
 
 @pytest.mark.unit

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -53,7 +54,7 @@ def test_reconcile_predictions_fills_actual(tmp_path, monkeypatch):
     append_prediction(
         _sample_record(
             predicted_at=predicted_at,
-            horizon_days=5,
+            horizon_days=1,
             spot_at_prediction=24000.0,
             expected_return_pct=2.0,
         )
@@ -61,8 +62,8 @@ def test_reconcile_predictions_fills_actual(tmp_path, monkeypatch):
 
     history = pd.DataFrame(
         {
-            "date": ["2026-06-01", "2026-06-06"],
-            "close": [24000.0, 24480.0],
+            "date": ["2026-06-01", "2026-06-02", "2026-06-03"],
+            "close": [24000.0, 24480.0, 24500.0],
         }
     )
     monkeypatch.setattr(
@@ -81,6 +82,62 @@ def test_reconcile_predictions_fills_actual(tmp_path, monkeypatch):
     assert updated == 1
     assert float(ledger.iloc[0]["actual_return_pct"]) == pytest.approx(2.0)
     assert bool(ledger.iloc[0]["direction_correct"]) is True
+
+
+@pytest.mark.unit
+def test_reconcile_writes_ledger_counterfactual(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+
+    predicted_at = datetime(2026, 6, 1, 9, 30, tzinfo=timezone.utc)
+    append_prediction(
+        _sample_record(
+            predicted_at=predicted_at,
+            horizon_days=1,
+            spot_at_prediction=24000.0,
+            expected_return_pct=2.0,
+            metadata={
+                "global_factors": {
+                    "sp500": 5200.0,
+                    "fii_net_5d": -1000.0,
+                    "dii_net_5d": 500.0,
+                    "india_vix": 14.0,
+                    "nifty_rsi_14": 55.0,
+                }
+            },
+        )
+    )
+
+    history = pd.DataFrame(
+        {
+            "date": ["2026-06-01", "2026-06-02", "2026-06-03"],
+            "close": [24000.0, 23950.0, 24100.0],
+        }
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.prediction_ledger.load_nifty_history",
+        lambda days=400: history,
+    )
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.prediction_miss_analysis.analyze_ledger_misses",
+        lambda rows: [],
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.prediction_counterfactual.analyze_ledger_counterfactual",
+        lambda rows, **kwargs: (
+            [{"classification": "drift_dominant", "prediction_date": "2026-06-01"}] if rows else []
+        ),
+    )
+
+    as_of = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    updated = reconcile_predictions(as_of=as_of)
+    assert updated == 1
+
+    cf_path = tmp_path / "_data" / "index_predictions" / "ledger_counterfactual_latest.json"
+    assert cf_path.is_file()
+    payload = json.loads(cf_path.read_text(encoding="utf-8"))
+    assert payload.get("rows")
+    assert payload["rows"][0].get("classification") is not None
 
 
 @pytest.mark.unit

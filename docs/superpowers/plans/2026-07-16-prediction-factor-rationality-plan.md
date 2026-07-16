@@ -28,8 +28,9 @@
 
 | Data | Official / primary source | Our pipeline | Real-time (market hours / post-close) |
 |------|---------------------------|--------------|--------------------------------------|
-| FII/DII cash net (₹ Cr) | [NSE FII/DII report](https://www.nseindia.com/reports/fii-dii) CSV; API `fiidiiTradeReact` | `nse_flow_derivatives_backfill.fetch_nselib_fii_dii_frame` | Same API after ~18:00 IST; provisional until custodian confirm |
-| FII/DII history + F&O OI, PCR | [Mr. Chartist API](https://fii-diidata.mrchartist.com/data-api.html) — sourced from NSE, `_source=fetch-pipeline` | `fetch_mrchartist_flow_frame`, `/api/history-full` | `GET /api/data` (latest session) |
+| FII/DII cash net (₹ Cr) | [NSE FII/DII report](https://www.nseindia.com/reports/fii-dii) + historical archives | **`nse_browser`** MCP `get_nse_browser_data(dataset="fii_dii")` → hub parquet → `load_nse_browser_fii_dii_frame` | `get_nse_browser_data(refresh=true)` post-close |
+| FII/DII history + F&O OI, PCR | [Mr. Chartist API](https://fii-diidata.mrchartist.com/data-api.html) — supplemental (~111 days) | `fetch_mrchartist_flow_frame`, `/api/history-full` | `GET /api/data` (latest session) |
+| NSDL FPI debt/equity | [NSDL FPI reports](https://www.fpi.nsdl.co.in/) | **`nse_browser`** `get_nse_browser_data(dataset="fpi")` | Same |
 | Nifty spot / technicals | yfinance `^NSEI` | `history_loader.load_nifty_history` | yfinance on light_refresh poll |
 | India VIX | yfinance `^INDIAVIX` | `macro_global._fetch_india_vix` | Same |
 | Global (oil, USD/INR, S&P, gold) | yfinance | `macro_global._YFINANCE_FACTORS` | Same |
@@ -37,7 +38,35 @@
 | RBI repo | RBI schedule | `rbi_repo_schedule.repo_rate_on` | Calendar lookup |
 | Constituent research | Hub `company_research/history/{date}.json` | `company_news_backfill` | `batch_constituent_research` on refresh |
 
-**Coverage gap root cause:** Factor store had ~50% FII/DII because (a) only Mr. Chartist cash history ~111–800 sessions merged unevenly, (b) `None.csv` anomalous snapshots, (c) enrich not run on full window. **Mitigation:** `enrich_factor_history` + purge anomalous files + prefer Mr. Chartist full history over today-only NSE for backfill.
+**Coverage gap root cause (updated July 2026):** `nse_browser` MCP is built but hub has only 1 day; Mr. Chartist caps at ~111 days; NSE `fiidiiTradeReact` is today-only. **Mitigation:** Phase 6 — `get_nse_browser_data(dataset="fii_dii", refresh=true)` + historical CSV discovery on NSE archives hub, then `enrich_factor_history`.
+
+**Cross-link:** [`2026-07-16-prediction-master-plan.md`](2026-07-16-prediction-master-plan.md) Phase 6; v2 plan `.cursor/plans/prediction_plan_v2_1f9c7faa.plan.md`.
+
+---
+
+## July 2026 re-verification (challenge prior assumptions)
+
+| Prior assumption | New evidence | Revised stance |
+|------------------|--------------|----------------|
+| `fii_net_5d` level → 14d direction | OOS corr −0.44; [JCAR 2024](https://doi.org/10.21863/jcar/2024.13.4.008): Nifty Granger-causes FII, not reverse | Flows are **regime context**, not standalone linear drivers at 14d |
+| `institutional_net_5d` + DAR improve OOS | Ablation **delta 0.0 pp — rejected** | Need **regime-conditional buckets**, not linear joint features |
+| Scenario shrinkage fixes cap artifacts | Still **4** cap misses after shrinkage | Fixes magnitude, not **sign conflict** when saturated bullish raw meets bearish outcome |
+| Hybrid bottom-up improves direction | **16.7%** vs **44.4%** macro (n=12) | RSS lexicon backfill (`backfill: true`) adds noise — gate on archive quality |
+| 44% OOS means broken equation | Ridge + static macro at 14d is structurally hard; small eval set (18 rows) | Target **calibrated confidence + range honesty**, not coef chasing |
+
+**Still rejected:** delta features (−9.1 pp OOS), joint flow linear block, lower Ridge α, widen macro cap.
+
+---
+
+## Success metrics
+
+| Metric | July 2026 actual | Target |
+|--------|------------------|--------|
+| Direction OOS (365d) | **44.4%** | ≥47% only if Phase 8 structural change passes +3 pp gate |
+| FII/DII full-window coverage | 49.6% (flow-era 100%) | >90% full-window after Phase 6 nse_browser |
+| Block ablation | numeric | joint_flows rejected (0.0 pp) |
+| Cap_artifact misses | 4 | ≤2 after Phase 8 cap/sign gate |
+| Hybrid eval rows | 12 | Quality-gated (non-backfill archives only) |
 
 ---
 
@@ -127,18 +156,6 @@
 
 ---
 
-## Success metrics
-
-| Metric | Current | Target |
-|--------|---------|--------|
-| Direction OOS (365d) | 35.3% | ≥44% (restore baseline), then ≥47% with joint flows if ablation passes |
-| FII/DII coverage | 49.6% | >90% |
-| Block ablation | all `null` | numeric hit rates per block |
-| Cap_artifact misses | 4 | ≤2 after scenario shrinkage in backtest |
-| Hybrid eval rows | 0 | ≥8 eval dates with archives |
-
----
-
 ## References
 
 - NSE FII/DII: https://www.nseindia.com/reports/fii-dii
@@ -146,5 +163,8 @@
 - FPI outflows 2025 / weakened causality: https://rspublication.com/ijrm/2026/e1/16.pdf
 - DII dominance / DAR: https://www.mdpi.com/1911-8074/19/5/315
 - DII–Nifty Granger bidirectional: https://doi.org/10.21511/imfi.22(3).2025.14
+- JCAR 2024 FII/DII Granger (returns → flows): https://doi.org/10.21863/jcar/2024.13.4.008
+- Short-horizon macro staleness: https://doi.org/10.54254/2754-1169/2025.bj30479
+- nse_browser MCP: `get_nse_browser_data`, `get_nse_browser_status` in `openalgo/mcp/mcpserver.py`
 - OOS predictability limits: Welch & Goyal (2008); emerging markets OOS study
 - Regime / VIX switching: https://equitiesindia.com/glossary/market-regime-detection

@@ -9,18 +9,38 @@
 
 ---
 
-## Current state (after investigation + partial rationality work)
+## Current state (July 2026 — Phases 0–5 shipped)
 
-| Metric | Baseline | Delta regression | After revert + gates |
-|--------|----------|----------------|----------------------|
-| Direction OOS (365d, 18 eval rows) | 44.4% | 35.3% (−9.1 pp) | **44.4%** restored |
-| MAE OOS | 4.50% | 4.37% | **4.07%** |
-| FII/DII coverage | 49.6% | 49.6% | **49.6%** (still blocking) |
-| Hybrid eval rows | 0 | 0 | 0 |
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Direction OOS (365d, walk-forward) | **55.6%** | Up from 44.4% after Nifty Invest API backfill (Jul 2026) |
+| MAE OOS | **3.46%** | Down from 3.92% |
+| FII/DII full-window coverage | **100%** | Nifty Invest API: 338 daily rows (Mar 2025–Jul 2026) |
+| FII/DII flow-era coverage | **101.6%** | Gate **passed** via `web_flow_fetch.py` |
+| Hybrid eval count | **12** | Hybrid direction **16.7%** — RSS backfill noise |
+| Joint flow features | **Rejected** | Ablation delta 0.0 pp |
+| `cap_artifact` misses | **4** | Shrinkage did not reduce |
+| `nse_browser` hub rows | **111+ daily** | MCP + repo seeds; web scrape mission added |
 
-**Key lesson:** Delta features (`fii_net_5d_change_5d`, etc.) hurt OOS despite plausible economics — **reverted**. Joint flow features (`institutional_net_5d`, `dii_absorption_ratio`) added but **not yet ablation-validated**.
+**Counterfactual on misses (10):** 1 mapping_error_T0, 5 drift_dominant, 4 cap_artifact.
 
-**Counterfactual on misses (11):** 3 mapping_error_T0, 4 drift_dominant, 4 cap_artifact. Top drift: `sp500`, `fii_fut_long_short_ratio`, `dii_net_5d`, `fii_net_5d`.
+**Assumption register:** [`2026-07-16-prediction-factor-rationality-plan.md`](2026-07-16-prediction-factor-rationality-plan.md) — see § July 2026 re-verification (Phase 7).
+
+---
+
+## nse_browser MCP (primary data path for Phase 6)
+
+Built module: [`integrations/trade_integrations/nse_browser/`](../../integrations/trade_integrations/nse_browser/)
+
+| MCP tool | Purpose |
+|----------|---------|
+| **`get_nse_browser_data`** | Primary — fetch-if-stale by dataset; returns `records[]`, writes hub parquet |
+| `get_nse_browser_status` | Row counts + freshness (no fetch) |
+| `run_nse_browser_mission` | Low-level; prefer `get_nse_browser_data` |
+
+**Prediction datasets:** `fii_dii` (cash flows), `fpi` (NSDL portfolio). Already merged in [`nse_flow_derivatives_backfill.py`](../../integrations/trade_integrations/dataflows/index_research/sources/nse_flow_derivatives_backfill.py).
+
+**v2 plan:** [`.cursor/plans/prediction_plan_v2_1f9c7faa.plan.md`](../../../.cursor/plans/prediction_plan_v2_1f9c7faa.plan.md)
 
 ---
 
@@ -46,6 +66,21 @@ Extend FII/DII via Mr. Chartist + NSE FAO archives + flow cache; enrich factor s
 
 **Gate:** `data_audit_latest.json` shows `fii_net_5d` and `dii_net_5d` coverage **>90%**.
 
+### Phase 1B — Multi-source web acquisition (NEW)
+
+Use the **shared nodriver browser session** (same anti-block rules as NSE) to scrape institutional flow history from public sites when NSE/Mr Chartist depth is insufficient.
+
+| Source | URL | Data | Notes |
+|--------|-----|------|-------|
+| **Moneycontrol** | [fii_dii_activity](https://www.moneycontrol.com/stocks/marketstats/fii_dii_activity/) | Daily cash FII/DII gross buy/sell/net; MF SEBI + FII SEBI monthly tabs | Month/year navigation back to **2006**; **login wall** — browser alone insufficient |
+| **Nifty Invest** | [fii-history](https://niftyinvest.com/fii-dii-data/fii-history) | Capital market daily + CSV download per month | **Public API** `GET /fii-dii-data/api/v1/month?yearMonth=YYYY-Mmm` — **preferred HTTP path** (17 months as of Jul 2026) |
+| **Mr. Chartist** | `/api/history-full` | ~111d cash + F&O OI/PCR | HTTP OK; overlay wins on overlap |
+| **NSE** | `fii-dii` report + legacy archives | Today + deep daily (when CDP works) | Primary when available |
+
+**Implementation:** `missions/web_flow_history.py`, `parsers/web_flow.py`, merge in `nse_flow_derivatives_backfill.fetch_web_flow_cash_frame()` (priority: cache → **web** → mrchartist → … → hub). Raw HTML → `data/nse/raw/web_flow/` (gitignored). Seeds: monthly cash + MF/FII SEBI CSV in repo.
+
+**Gate:** Full-window daily FII/DII **>90%** after web scrape + enrich; no zero-imputation.
+
 ### Phase 2 — Factor rationality & OOS gates
 
 Ablation joint flows (+3pp), regime buckets, redundancy cleanup, cap_artifact remeasure.
@@ -58,9 +93,23 @@ T0 audit tags, constituent archive backfill, hybrid backtest `--include-bottom-u
 
 Ledger counterfactual, walk-forward direction in UI, scheduled post-close enrich.
 
-### Phase 5 — Decision record
+### Phase 5 — Decision record (DONE)
 
-Regenerate `equation_improvement_decisions.md` with full accept/reject evidence.
+Regenerated `equation_improvement_decisions.md` with accept/reject evidence.
+
+### Phase 6 — nse_browser ingestion (IN PROGRESS)
+
+Operationalize **`get_nse_browser_data`** into prediction pipeline via `nse_browser_refresh.py`; extend `fii_dii_history` for NSE historical CSV archives.
+
+**Gate:** Full-window FII/DII coverage >90%; hub ≥200 trading days.
+
+### Phase 7 — Assumption register refresh
+
+Update factor-rationality plan with web research + empirical rejects (joint flows, shrinkage, hybrid RSS).
+
+### Phase 8 — Direction structural experiments (OOS-gated)
+
+Cap/sign conflict gate (shipped in `shrink_macro_delta`), flow regime buckets, hybrid quality gate (non-backfill archives only).
 
 ---
 
