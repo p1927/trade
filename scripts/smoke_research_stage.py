@@ -78,7 +78,10 @@ _STAGE_RUNNERS = {
     ),
     "filings_us": lambda args: fetch_filings_us(_norm(args, Market.US)),
     "news": lambda args: fetch_news(_norm(args, Market.IN), lookback_days=args.days),
-    "sentiment": lambda args: fetch_sentiment(text=args.text or "Reliance Q1 profit beats estimates"),
+    "sentiment": lambda args: fetch_sentiment(
+        headlines=[],
+        text=args.text or "Apple beats Q1 earnings estimates by 12%",
+    ),
     "macro_in": lambda args: fetch_macro_in(),
     "macro_us": lambda args: fetch_macro_us(),
     "earnings_signal": lambda args: fetch_earnings_signal(_norm(args, Market.US), market=Market.US),
