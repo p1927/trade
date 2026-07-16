@@ -1,0 +1,65 @@
+{
+  "files": [
+    {
+      "path": "fpi/fpi_daily.parquet",
+      "dataset": "fpi",
+      "sha256": "a0ba4f0e15bcc0e55584e956ab342cc73bc51fd188f85b0d9f7e3fcd52ae03a7",
+      "rows": 1,
+      "date_range": {
+        "start": "2026-07-16",
+        "end": "2026-07-16"
+      },
+      "fetched_at": "2026-07-16T22:30:24.682432+00:00",
+      "source": "nse_browser_nsdl"
+    },
+    {
+      "path": "mf_sebi/mf_sebi_monthly.parquet",
+      "dataset": "mf_sebi",
+      "sha256": "05e6f3a423afda633fee8f0bdb89c698aed6154e82ed93532608d51716166a34",
+      "rows": 30,
+      "date_range": {
+        "start": "2024-01-31",
+        "end": "2026-06-30"
+      },
+      "fetched_at": "2026-07-16T23:05:34.175624+00:00",
+      "source": "nse_mf_sebi_monthly"
+    },
+    {
+      "path": "fii_sebi/fii_sebi_monthly.parquet",
+      "dataset": "fii_sebi",
+      "sha256": "4aec53b92d01daef145dd1a970effe95e4620c1c402d8152b6cbfe9ae3aad98a",
+      "rows": 30,
+      "date_range": {
+        "start": "2024-01-31",
+        "end": "2026-06-30"
+      },
+      "fetched_at": "2026-07-16T23:05:34.183396+00:00",
+      "source": "nse_fii_sebi_monthly"
+    },
+    {
+      "path": "sector_indices/sector_index_daily.parquet",
+      "dataset": "sector_indices",
+      "sha256": "93d1157d8b70b195c05bea5f844ff0f841541209cde10f595b0b2b49889a85aa",
+      "rows": 2450,
+      "date_range": {
+        "start": "2025-07-18",
+        "end": "2026-07-16"
+      },
+      "fetched_at": "2026-07-16T23:05:34.583510+00:00",
+      "source": "nse_sector_csv"
+    },
+    {
+      "path": "fii_dii/fii_dii_daily.parquet",
+      "dataset": "fii_dii",
+      "sha256": "d42f4c24f06e07dbedda89f1e2b33d77867ea852acd46669f24ad2bc614ec655",
+      "rows": 482,
+      "date_range": {
+        "start": "2024-01-31",
+        "end": "2026-07-16"
+      },
+      "fetched_at": "2026-07-16T23:05:45.088634+00:00",
+      "source": "niftyinvest_api"
+    }
+  ],
+  "updated_at": "2026-07-16T23:05:45.088751+00:00"
+}
