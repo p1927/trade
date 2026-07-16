@@ -47,6 +47,50 @@ async def _append_watch_system_message(session_id: str, summary: str) -> None:
         logger.warning("failed to append watch summary to session %s: %s", session_id, exc)
 
 
+def _detached_nautilus_watching(agent_id: str) -> bool:
+    """True when the detached Nautilus watch process owns polling for this agent."""
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import get_watch_process_status
+
+        status = get_watch_process_status()
+        if not status.get("alive"):
+            return False
+        bound = str(status.get("bound_agent_id") or "").strip()
+        return not bound or bound == agent_id
+    except Exception:
+        return False
+
+
+def should_post_watch_to_chat(*, agent: dict[str, Any], feedback: dict[str, Any], market_closed: bool) -> bool:
+    """Whether a watch tick should append a system line to the agent session chat."""
+    if market_closed:
+        return False
+    if _detached_nautilus_watching(str(agent.get("id") or "")):
+        return bool(feedback.get("requires_action")) or bool(feedback.get("alerts"))
+    return True
+
+
+def _persist_watch_state(
+    agent: dict[str, Any],
+    *,
+    summary: str,
+    feedback: dict[str, Any] | None = None,
+    status: str = "watch",
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    agent["last_watch_at"] = now
+    payload = {
+        "at": now,
+        "status": status,
+        "summary": summary,
+        "requires_action": bool((feedback or {}).get("requires_action")),
+        "alerts": list((feedback or {}).get("alerts") or [])[:3],
+        "focus_ticker": (feedback or {}).get("focus_ticker"),
+    }
+    agent["last_watch_summary"] = payload
+    save_agent(agent)
+
+
 def _nautilus_watch_enabled() -> bool:
     try:
         from nautilus_openalgo_bridge.config import is_watch_enabled
@@ -74,42 +118,55 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     session_id = str(agent.get("vibe_session_id") or "")
 
     if mc.market_hours_only and not is_market_session_open(cfg):
-        now = datetime.now(timezone.utc).isoformat()
-        agent["last_watch_at"] = now
-        save_agent(agent)
         summary = "[autonomous_watch] market closed — summary only"
-        await _append_watch_system_message(session_id, summary)
+        feedback = {"alerts": [], "requires_action": False, "focus_ticker": focus}
+        _persist_watch_state(agent, summary=summary, feedback=feedback, status="closed")
+        if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=True):
+            await _append_watch_system_message(session_id, summary)
         return {"status": "watch_only", "reason": "outside_market_hours", "summary": summary}
 
     profile = resolve_profile(agent=agent)
     bridge_agent = profile.uses_nautilus_handoff
+    nautilus_primary = _detached_nautilus_watching(agent_id)
 
     if bridge_agent and not bridge_watch_required():
-        now = datetime.now(timezone.utc).isoformat()
-        agent["last_watch_at"] = now
-        save_agent(agent)
         summary = "[autonomous_watch] Nautilus bridge required for India agents — set NAUTILUS_WATCH_ENABLE=true"
-        await _append_watch_system_message(session_id, summary)
+        feedback = {"alerts": [summary], "requires_action": False, "focus_ticker": focus}
+        _persist_watch_state(agent, summary=summary, feedback=feedback, status="degraded")
+        if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
+            await _append_watch_system_message(session_id, summary)
         return {"status": "degraded", "reason": "nautilus_watch_required", "summary": summary}
 
+    if nautilus_primary and bridge_agent:
+        summary = build_watch_summary_message(
+            agent=agent,
+            feedback={"alerts": [], "requires_action": False, "focus_ticker": focus},
+        )
+        feedback = {"alerts": [], "requires_action": False, "focus_ticker": focus}
+        _persist_watch_state(agent, summary=summary, feedback=feedback, status="watch")
+        return {
+            "status": "watch",
+            "summary": summary,
+            "watch_path": "nautilus_bridge",
+            "nautilus_primary": True,
+            "delegated_to_detached": True,
+        }
+
     if bridge_agent or _nautilus_watch_enabled():
-        now = datetime.now(timezone.utc).isoformat()
-        agent["last_watch_at"] = now
-        save_agent(agent)
         try:
             from nautilus_openalgo_bridge.runtime.poll_loop import run_once
 
             bridge = run_once(agent_id=agent_id, trigger_vibe=True, process_intents=True)
             alerts = list(bridge.get("alerts") or [])
-            summary = build_watch_summary_message(
-                agent=agent,
-                feedback={
-                    "alerts": [str(a.get("message") or a) for a in alerts[:3]],
-                    "requires_action": bool(alerts),
-                    "focus_ticker": focus,
-                },
-            )
-            await _append_watch_system_message(session_id, summary)
+            feedback = {
+                "alerts": [str(a.get("message") or a) for a in alerts[:3]],
+                "requires_action": bool(alerts),
+                "focus_ticker": focus,
+            }
+            summary = build_watch_summary_message(agent=agent, feedback=feedback)
+            _persist_watch_state(agent, summary=summary, feedback=feedback, status="watch")
+            if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
+                await _append_watch_system_message(session_id, summary)
             return {
                 "status": "watch",
                 "summary": summary,
@@ -120,7 +177,10 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("nautilus bridge watch tick failed for %s: %s", agent_id, exc)
             summary = f"[autonomous_watch] Nautilus bridge error: {exc}"
-            await _append_watch_system_message(session_id, summary)
+            feedback = {"alerts": [summary], "requires_action": False, "focus_ticker": focus}
+            _persist_watch_state(agent, summary=summary, feedback=feedback, status="error")
+            if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
+                await _append_watch_system_message(session_id, summary)
             if bridge_agent:
                 return {
                     "status": "error",
@@ -135,11 +195,11 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
             }
 
     if is_bridge_autonomous_agent(agent_id):
-        now = datetime.now(timezone.utc).isoformat()
-        agent["last_watch_at"] = now
-        save_agent(agent)
         summary = "[autonomous_watch] India agent requires Nautilus bridge — auto_paper watch disabled"
-        await _append_watch_system_message(session_id, summary)
+        feedback = {"alerts": [summary], "requires_action": False, "focus_ticker": focus}
+        _persist_watch_state(agent, summary=summary, feedback=feedback, status="degraded")
+        if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
+            await _append_watch_system_message(session_id, summary)
         return {
             "status": "degraded",
             "reason": "nautilus_watch_required",
@@ -155,13 +215,12 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
         logger.warning("watch feedback failed for %s: %s", agent_id, exc)
         feedback = {"alerts": [f"feedback_error:{exc}"], "requires_action": False}
 
-    now = datetime.now(timezone.utc).isoformat()
-    agent["last_watch_at"] = now
+    feedback.setdefault("focus_ticker", focus)
     agent["last_market_feedback"] = feedback
-    save_agent(agent)
-
     summary = build_watch_summary_message(agent=agent, feedback=feedback)
-    await _append_watch_system_message(session_id, summary)
+    _persist_watch_state(agent, summary=summary, feedback=feedback, status="watch")
+    if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
+        await _append_watch_system_message(session_id, summary)
 
     requires_action = bool(feedback.get("requires_action")) or bool(feedback.get("alerts"))
     if requires_action and mc.revision_policy != "scheduled_only":
@@ -171,10 +230,35 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     return {"status": "watch", "summary": summary, "feedback": feedback, "watch_path": "auto_paper_legacy"}
 
 
+def _research_turn_recently_ran(agent: dict[str, Any], *, cooldown_min: float = 15.0) -> bool:
+    last_at = str(agent.get("last_full_reasoning_at") or "")
+    if not last_at:
+        return False
+    try:
+        dt = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
+        age_min = (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+    except ValueError:
+        return False
+    if age_min > cooldown_min:
+        return False
+    last_revision = str(agent.get("last_revision_at") or "")
+    if last_revision and last_revision > last_at:
+        return False
+    return True
+
+
 async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research") -> bool:
     """Enqueue a full reasoning turn on the agent's bound session. Returns True if dispatched."""
     agent = get_agent(agent_id)
     if not agent or str(agent.get("status")) != "running":
+        return False
+
+    if turn_kind == "research" and _research_turn_recently_ran(agent):
+        logger.info("skip research turn for %s: recent full reasoning within cooldown", agent_id)
+        return False
+
+    if str(agent.get("bootstrap_status") or "") in {"pending", "running"} and turn_kind == "research":
+        logger.info("skip research turn for %s: bootstrap still in flight", agent_id)
         return False
 
     if agent.get("streaming"):

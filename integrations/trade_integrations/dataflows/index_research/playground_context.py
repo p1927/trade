@@ -108,6 +108,34 @@ def build_playground_context(
         )
 
     if not headlines:
+        try:
+            from trade_integrations.dataflows.index_research.news_impact_engine import list_approved_for_date
+
+            for item in list_approved_for_date(today, limit=8):
+                title = str(item.get("title") or "").strip()
+                if not title:
+                    continue
+                suggested = [
+                    t.get("factor") for t in (item.get("tagged_factors") or []) if t.get("factor")
+                ] or _headline_factor_hints(title)
+                headlines.append(
+                    {
+                        "title": title[:200],
+                        "source": str(item.get("source") or "verified_hub")[:80],
+                        "content_summary": str(item.get("content_summary") or "")[:400],
+                        "sources": item.get("sources") or [],
+                        "verification_status": item.get("verification_status"),
+                        "suggested_factors": suggested,
+                        "primary_factor": suggested[0] if suggested else "index_sentiment",
+                        "suggested_shock_pct": 5.0,
+                        "why": _why_for_factor(suggested[0] if suggested else "index_sentiment"),
+                        "kind": "verified_headline",
+                    }
+                )
+        except Exception:
+            pass
+
+    if not headlines:
         headlines_raw = _fetch_index_headlines(today, limit=8)
         for item in headlines_raw:
             title = str(item.get("title") or "").strip()

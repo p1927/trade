@@ -167,6 +167,12 @@ def mcp_record_decision(
         if entry["decision"] in {"REVISE", "ADJUST"}:
             agent["last_revision_at"] = entry["at"]
         save_agent(agent)
+        try:
+            from trade_integrations.autonomous_agents.bootstrap import finalize_bootstrap_if_ready
+
+            finalize_bootstrap_if_ready(agent_id)
+        except Exception:
+            pass
         return {
             "status": "ok",
             "agent_id": agent_id,
@@ -216,6 +222,12 @@ def mcp_record_decision(
         except Exception:
             pass
     save_agent(agent)
+    try:
+        from trade_integrations.autonomous_agents.bootstrap import finalize_bootstrap_if_ready
+
+        finalize_bootstrap_if_ready(agent_id)
+    except Exception:
+        pass
     return {
         "status": "ok",
         "agent_id": agent_id,

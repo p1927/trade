@@ -131,6 +131,7 @@ def run_evening_hub_maintenance(config: dict[str, Any] | None = None) -> dict[st
 
     summary["steps"]["market_intelligence"] = _run_market_intelligence_step(as_of_date)
     summary["steps"]["timescale_export"] = _run_timescale_export_step()
+    summary["steps"]["news_impact_reconcile"] = _run_news_impact_reconcile_step()
 
     try:
         from trade_integrations.hub_analytics.manifest import write_hub_manifest
@@ -162,4 +163,14 @@ def _run_market_intelligence_step(as_of_date: str) -> dict[str, Any]:
         return archive_market_intelligence(as_of_date=as_of_date)
     except Exception as exc:
         logger.exception("market intelligence archive failed")
+        return {"status": "error", "error": str(exc)}
+
+
+def _run_news_impact_reconcile_step() -> dict[str, Any]:
+    try:
+        from trade_integrations.dataflows.index_research.news_impact_engine import reconcile_matured_impacts
+
+        return reconcile_matured_impacts(ticker="NIFTY")
+    except Exception as exc:
+        logger.exception("news impact reconcile failed")
         return {"status": "error", "error": str(exc)}

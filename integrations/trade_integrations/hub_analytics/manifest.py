@@ -87,6 +87,8 @@ def build_manifest(hub: Path | None = None) -> dict[str, Any]:
         "auto_paper_outcomes": data / "auto_paper" / "outcomes.parquet",
         "trade_executions": data / "trades" / "executions.parquet",
         "trade_fills": data / "trades" / "fills.parquet",
+        "news_verified_records": data / "news_verified" / "records.parquet",
+        "news_impact_ledger": data / "news_impact" / "ledger.parquet",
     }
     for name, path in ledger_specs.items():
         rows = _parquet_rows(path)

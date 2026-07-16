@@ -11,6 +11,34 @@ from trade_integrations.autonomous_agents.watch import dispatch_full_reasoning, 
 logger = logging.getLogger(__name__)
 
 
+def finalize_bootstrap_if_ready(agent_id: str) -> bool:
+    """Mark bootstrap done once the first decision is recorded."""
+    agent = get_agent(agent_id)
+    if not agent or str(agent.get("bootstrap_status")) != "running":
+        return False
+    if not agent.get("last_decision"):
+        return False
+
+    agent["bootstrap_status"] = "done"
+    agent["bootstrap_completed_at"] = datetime.now(timezone.utc).isoformat()
+    agent.pop("bootstrap_error", None)
+    save_agent(agent)
+
+    try:
+        import sys
+        from pathlib import Path
+
+        agent_src = Path(__file__).resolve().parents[3] / "vibetrading" / "agent"
+        if agent_src.is_dir() and str(agent_src) not in sys.path:
+            sys.path.insert(0, str(agent_src))
+        from src.scheduled_research.autonomous_agent_jobs import schedule_first_research_after_bootstrap
+
+        schedule_first_research_after_bootstrap(agent_id)
+    except Exception as exc:
+        logger.debug("schedule first research after bootstrap failed for %s: %s", agent_id, exc)
+    return True
+
+
 async def bootstrap_agent(agent_id: str) -> None:
     """Run first watch tick and bootstrap research turn for a newly committed agent."""
     agent = get_agent(agent_id)
@@ -35,8 +63,4 @@ async def bootstrap_agent(agent_id: str) -> None:
         save_agent(latest)
         return
 
-    latest = get_agent(agent_id) or agent
-    latest["bootstrap_status"] = "done"
-    latest["bootstrap_completed_at"] = datetime.now(timezone.utc).isoformat()
-    latest.pop("bootstrap_error", None)
-    save_agent(latest)
+    # bootstrap_status stays "running" until record_autonomous_decision + session finalize

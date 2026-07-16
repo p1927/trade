@@ -357,7 +357,15 @@ def load_news_impact_snapshot(ticker: str = "NIFTY") -> dict[str, Any] | None:
 
 
 def list_approved_for_date(day: str, *, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
-    return list_verified_records(status=["approved", "partial"], since=day, limit=limit, ticker=ticker)
+    records = list_verified_records(
+        status=["approved", "partial"],
+        limit=max(limit * 5, 50),
+        ticker=ticker,
+    )
+    target = day[:10]
+    return [
+        r for r in records if str(r.get("published_at") or "")[:10] == target
+    ][:limit]
 
 
 def reconcile_matured_impacts(*, as_of: str | None = None, ticker: str = "NIFTY") -> dict[str, Any]:

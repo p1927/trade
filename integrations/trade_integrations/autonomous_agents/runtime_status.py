@@ -276,6 +276,7 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
         "handoff_active": watch_configured or position_tracked,
         "paper_session_linked": linked,
         "last_decision": last_decision,
+        "last_watch_summary": agent.get("last_watch_summary"),
         "last_revision_at": agent.get("last_revision_at"),
         "last_bridge_alert_at": agent.get("last_bridge_alert_at"),
         "open_positions": paper.get("open_positions") if linked else None,

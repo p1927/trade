@@ -51,6 +51,7 @@ def main() -> int:
         "trade_integrations.hub_storage.openalgo_fills_export",
         "trade_integrations.hub_storage.timescale_ticks",
         "trade_integrations.hub_storage.market_intelligence_archive",
+        "trade_integrations.hub_storage.verified_news_store",
         "trade_integrations.hub_analytics.duckdb_views",
         "trade_integrations.hub_analytics.calibration_orchestrator",
         "trade_integrations.hub_analytics.manifest",
@@ -72,6 +73,7 @@ def main() -> int:
         "fills_parquet": data / "trades" / "fills.parquet",
         "outcomes_parquet": data / "auto_paper" / "outcomes.parquet",
         "manifest": data / "manifest.json",
+        "news_verified_records": data / "news_verified" / "records.parquet",
     }
     for key, path in paths.items():
         exists = path.is_file()
@@ -83,7 +85,16 @@ def main() -> int:
         con = get_hub_connection()
         views = {row[0] for row in con.execute("SHOW TABLES").fetchall()}
         con.close()
-        expected = {"executions", "outcomes", "fills", "index_predictions", "news_daily", "derivatives_chain_daily"}
+        expected = {
+            "executions",
+            "outcomes",
+            "fills",
+            "index_predictions",
+            "news_daily",
+            "derivatives_chain_daily",
+            "news_verified",
+            "news_impact_ledger",
+        }
         missing = expected - views
         results.append(_check("duckdb_views", not missing, f"missing={sorted(missing)}" if missing else "ok"))
     except Exception as exc:

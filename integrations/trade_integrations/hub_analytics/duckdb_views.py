@@ -20,6 +20,8 @@ HUB_VIEWS = (
     "ticks_daily",
     "news_daily",
     "derivatives_chain_daily",
+    "news_verified",
+    "news_impact_ledger",
 )
 
 _BUILTIN_QUERIES: dict[str, str] = {
@@ -162,6 +164,8 @@ def hub_data_paths() -> dict[str, Path]:
         "ticks_daily": data / "ticks" / "daily",
         "news_daily": data / "news" / "daily",
         "derivatives_chain_daily": data / "derivatives_chain" / "daily",
+        "news_verified": data / "news_verified" / "records.parquet",
+        "news_impact_ledger": data / "news_impact" / "ledger.parquet",
     }
 
 
@@ -176,6 +180,8 @@ def register_hub_views(con: duckdb.DuckDBPyConnection) -> list[str]:
         "outcomes": paths["outcomes"],
         "executions": paths["executions"],
         "fills": paths["fills"],
+        "news_verified": paths["news_verified"],
+        "news_impact_ledger": paths["news_impact_ledger"],
     }
     for view_name, path in single_views.items():
         source = _read_fn(path)
