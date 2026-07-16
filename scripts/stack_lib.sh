@@ -76,6 +76,20 @@ stack_read_pid() {
   fi
 }
 
+stack_port_listener_pid() {
+  local port="$1"
+  lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -1 || true
+}
+
+stack_sync_pidfile_from_port() {
+  local pidfile="$1" port="$2"
+  local listener
+  listener="$(stack_port_listener_pid "$port")"
+  if [[ -n "$listener" ]]; then
+    echo "$listener" >"$pidfile"
+  fi
+}
+
 # Start a detached process; writes the child PID to pidfile.
 stack_launch_detached() {
   local pidfile="$1" logfile="$2" workdir="$3"
@@ -92,27 +106,29 @@ stack_launch_detached() {
 
   : >>"$logfile"
 
-  (
-    cd "$workdir" || exit 1
-    nohup "$@" >>"$logfile" 2>&1 &
-    echo $! >"$pidfile"
-  )
+  local prev="$PWD" pid
+  cd "$workdir" || return 1
+  nohup "$@" >>"$logfile" 2>&1 < /dev/null &
+  pid=$!
+  disown "$pid" 2>/dev/null || true
+  echo "$pid" >"$pidfile"
+  cd "$prev" || true
 
-  sleep 3
+  sleep 2
   existing="$(stack_read_pid "$pidfile")"
   if stack_pid_alive "$existing"; then
     return 0
   fi
 
-  echo "[stack] failed to start in $workdir: $*" >&2
-  tail -5 "$logfile" 2>/dev/null >&2 || true
-  return 1
+  # uv run / vite may fork; parent exits while the listener keeps running.
+  # Caller validates with stack_wait_for_url + stack_sync_pidfile_from_port.
+  return 0
 }
 
 stack_stop_pidfile() {
   local name="$1" pidfile="$2" pkill_pattern="${3:-}"
 
-  local pid
+  local pid stopped=0
   pid="$(stack_read_pid "$pidfile")"
   if stack_pid_alive "$pid"; then
     echo "[stack] stopping $name (pid $pid) ..."
@@ -124,11 +140,16 @@ stack_stop_pidfile() {
     if stack_pid_alive "$pid"; then
       kill -9 "$pid" 2>/dev/null || true
     fi
+    stopped=1
   fi
   rm -f "$pidfile"
 
-  if [[ -n "$pkill_pattern" ]]; then
-    pkill -f "$pkill_pattern" 2>/dev/null || true
+  # Only pattern-kill when pidfile was stale but matching processes remain.
+  if [[ -n "$pkill_pattern" && "$stopped" -eq 0 ]]; then
+    if pgrep -f "$pkill_pattern" >/dev/null 2>&1; then
+      echo "[stack] stopping stray $name processes ..."
+      pkill -f "$pkill_pattern" 2>/dev/null || true
+    fi
   fi
 }
 
@@ -137,12 +158,12 @@ stack_pick_openalgo_cmd() {
   root="$(stack_root)"
   openalgo_dir="$root/openalgo"
 
-  if command -v uv >/dev/null 2>&1; then
-    echo "uv run app.py"
-    return
-  fi
   if [[ -x "$openalgo_dir/.venv/bin/python" ]]; then
     echo "$openalgo_dir/.venv/bin/python app.py"
+    return
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    echo "uv run app.py"
     return
   fi
   echo "python3 app.py"
@@ -170,6 +191,7 @@ stack_start_openalgo() {
   base="${base%/}"
 
   if stack_http_ok "$base/"; then
+    stack_sync_pidfile_from_port "$pidfile" "$port"
     echo "[stack] OpenAlgo already up at $base"
     return 0
   fi
@@ -177,11 +199,17 @@ stack_start_openalgo() {
   stack_kill_port "$port"
   stack_kill_port 8765
 
-  runner="$(stack_pick_openalgo_cmd)"
   echo "[stack] starting OpenAlgo on :$port ..."
-  # shellcheck disable=SC2086
-  stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" bash -lc "exec $runner"
+  if [[ -x "$root/openalgo/.venv/bin/python" ]]; then
+    stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" \
+      "$root/openalgo/.venv/bin/python" app.py
+  else
+    runner="$(stack_pick_openalgo_cmd)"
+    # shellcheck disable=SC2086
+    stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" bash -lc "exec $runner"
+  fi
   stack_wait_for_url "OpenAlgo" "$base/" 90
+  stack_sync_pidfile_from_port "$pidfile" "$port"
 }
 
 stack_start_vibe_api() {
@@ -212,6 +240,7 @@ stack_start_vibe_api() {
     "$pidfile" "$logfile" "$agent_dir" \
     "$py" -m cli._legacy serve --port "$port"
   stack_wait_for_url "Vibe API" "$base/" 60
+  stack_sync_pidfile_from_port "$pidfile" "$port"
 }
 
 stack_start_vibe_ui() {
@@ -245,6 +274,7 @@ stack_start_vibe_ui() {
     "$pidfile" "$logfile" "$frontend" \
     "$frontend/node_modules/.bin/vite" --port "$port" --host 127.0.0.1
   stack_wait_for_url "Vibe UI" "$url/" 60
+  stack_sync_pidfile_from_port "$pidfile" "$port"
 }
 
 stack_kill_port() {
@@ -289,6 +319,15 @@ stack_start_vibe_stack() {
   stack_start_vibe_ui
 }
 
+# Start only services that are down (no full stop — avoids killing healthy processes).
+stack_ensure_vibe_stack() {
+  local ok=0
+  stack_start_openalgo || ok=1
+  stack_start_vibe_api || ok=1
+  stack_start_vibe_ui || ok=1
+  return "$ok"
+}
+
 stack_print_ready() {
   local openalgo_port api_port ui_port
   openalgo_port="$(stack_openalgo_port)"
@@ -319,17 +358,28 @@ stack_status_vibe_stack() {
   for svc in "OpenAlgo:$openalgo_port:$log_dir/openalgo.pid" \
              "Vibe API:$api_port:$log_dir/vibe-api.pid" \
              "Vibe UI:$ui_port:$log_dir/vibe-ui.pid"; do
-    local name port pidfile pid http_code
+    local name port pidfile pid http_code alive="dead"
     name="${svc%%:*}"
     port="${svc#*:}"; port="${port%%:*}"
     pidfile="${svc##*:}"
     pid="$(stack_read_pid "$pidfile")"
     http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 3 "http://127.0.0.1:${port}/" 2>/dev/null || echo "---")"
-    local alive="dead"
-    if stack_pid_alive "$pid"; then alive="alive"; fi
+    local listener
+    listener="$(stack_port_listener_pid "$port")"
+    if [[ -n "$listener" ]] && kill -0 "$listener" 2>/dev/null; then
+      alive="alive"
+      if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        pid="$listener"
+      fi
+    elif stack_pid_alive "$pid"; then
+      alive="alive"
+    fi
 
     if [[ "$http_code" == "200" ]]; then
       echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid:-?} ($alive)"
+    elif stack_pid_alive "$pid"; then
+      echo "  ⚠ $name  :$port  HTTP $http_code  pid=${pid:-?} (alive, not ready)"
+      ok=0
     else
       echo "  ✗ $name  :$port  HTTP $http_code  pid=${pid:-none} ($alive)"
       ok=0
@@ -338,5 +388,7 @@ stack_status_vibe_stack() {
 
   echo "══════════════════════════════════════════════════════════"
   if (( ok )); then return 0; fi
+  echo "  Restart: ./scripts/restart_vibe_stack.sh  (or: trade restart)"
+  echo "══════════════════════════════════════════════════════════"
   return 1
 }
