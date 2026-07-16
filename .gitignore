@@ -233,6 +233,11 @@ __marimo__/
 reports/
 stack/vibe-upstream/
 
+# NSE data repository — track parquet + manifest; raw downloads local only
+data/nse/raw/
+!data/nse/manifest.json
+!data/nse/**/*.parquet
+
 # Local stack launcher
 .stack.pids
 .exposure.state

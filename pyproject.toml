@@ -41,6 +41,19 @@ options = [
 dev = [
     "pytest>=8.0",
 ]
+nse-browser = [
+    "nodriver>=0.38",
+    "curl_cffi>=0.7",
+    "opencv-python-headless>=4.8",
+    "openai>=1.40",
+    "beautifulsoup4>=4.12",
+    "pandas>=2.0",
+    "requests>=2.31",
+]
+nse-browser-agent = [
+    "trade-stack[nse-browser]",
+    "skyvern>=0.2.0",
+]
 nautilus = [
     "nautilus_trader>=1.228",
     "redis>=5.0",

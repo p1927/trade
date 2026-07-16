@@ -1,0 +1,85 @@
+# Skyvern agentic browser sidecar for Trade stack.
+# Start: docker compose -f docker-compose.skyvern.yml up -d
+# UI: http://localhost:8080  API: http://localhost:8000
+# Copy SKYVERN_API_KEY from UI settings into repo .env after first boot.
+
+services:
+  skyvern-postgres:
+    image: postgres:14-alpine
+    restart: unless-stopped
+    volumes:
+      - ./.skyvern-data/postgres:/var/lib/postgresql/data
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_USER: skyvern
+      POSTGRES_PASSWORD: skyvern
+      POSTGRES_DB: skyvern
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skyvern"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  skyvern:
+    image: public.ecr.aws/skyvern/skyvern:latest
+    restart: on-failure
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env.skyvern
+    ports:
+      - "8000:8000"
+      - "6080:6080"
+    volumes:
+      - ./.skyvern-data/artifacts:/data/artifacts
+      - ./.skyvern-data/videos:/data/videos
+      - ./.skyvern-data/har:/data/har
+      - ./.skyvern-data/log:/data/log
+      - ./.skyvern-data/downloads:/data/downloads
+      - ./.skyvern-data/browser_sessions:/data/browser_sessions
+      - ./.skyvern-data/credential_vault:/data/credential_vault
+      - ./.skyvern-data/.skyvern:/app/.skyvern
+    environment:
+      DATABASE_STRING: postgresql+psycopg://skyvern:skyvern@skyvern-postgres:5432/skyvern
+      BROWSER_STREAMING_MODE: ${BROWSER_STREAMING_MODE:-cdp}
+      BROWSER_TYPE: ${BROWSER_TYPE:-chromium-headful}
+      DOWNLOAD_PATH: /data/downloads
+      BROWSER_SESSION_BASE_PATH: /data/browser_sessions
+      CREDENTIAL_VAULT_TYPE: ${CREDENTIAL_VAULT_TYPE:-skyvern}
+      ENABLE_LOCAL_CREDENTIAL_VAULT: "true"
+      LOCAL_CREDENTIAL_VAULT_PATH: /data/credential_vault
+      ENABLE_CODE_BLOCK: "true"
+    depends_on:
+      skyvern-postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/heartbeat', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 180s
+
+  skyvern-ui:
+    image: public.ecr.aws/skyvern/skyvern-ui:latest
+    restart: on-failure
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./.skyvern-data/artifacts:/data/artifacts
+      - ./.skyvern-data/videos:/data/videos
+      - ./.skyvern-data/har:/data/har
+      - ./.skyvern-data/.skyvern:/app/.skyvern
+    env_file:
+      - .env.skyvern
+    environment:
+      VITE_BROWSER_STREAMING_MODE: ${VITE_BROWSER_STREAMING_MODE:-cdp}
+    depends_on:
+      skyvern:
+        condition: service_healthy
