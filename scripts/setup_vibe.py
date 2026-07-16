@@ -66,6 +66,11 @@ def openalgo_mcp_wrapper() -> Path:
     return (ROOT / "scripts" / "run_openalgo_mcp.sh").resolve()
 
 
+def skyvern_mcp_wrapper() -> Path:
+    """Return the stdio wrapper that launches Skyvern MCP."""
+    return (ROOT / "scripts" / "run_skyvern_mcp.sh").resolve()
+
+
 def verify_openalgo_mcp() -> tuple[bool, str]:
     """Check that OpenAlgo MCP can import its SDK from openalgo/.venv."""
     wrapper = openalgo_mcp_wrapper()
@@ -124,10 +129,17 @@ def render_agent_json() -> dict:
             file=sys.stderr,
         )
     template = TEMPLATE.read_text(encoding="utf-8")
+    skyvern_key = os.getenv("SKYVERN_API_KEY", "").strip()
+    skyvern_base = (os.getenv("SKYVERN_BASE_URL") or "http://localhost:8000").rstrip("/")
+    skyvern_prefix = os.getenv("SKYVERN_API_PREFIX", "/api/v1").strip() or "/api/v1"
     rendered = (
         template.replace("{{OPENALGO_MCP_WRAPPER}}", str(openalgo_mcp_wrapper()))
         .replace("{{OPENALGO_API_KEY}}", api_key or "REPLACE_ME")
         .replace("{{OPENALGO_HOST}}", host)
+        .replace("{{SKYVERN_MCP_WRAPPER}}", str(skyvern_mcp_wrapper()))
+        .replace("{{SKYVERN_API_KEY}}", skyvern_key or "REPLACE_ME")
+        .replace("{{SKYVERN_BASE_URL}}", skyvern_base)
+        .replace("{{SKYVERN_API_PREFIX}}", skyvern_prefix)
     )
     return json.loads(rendered)
 

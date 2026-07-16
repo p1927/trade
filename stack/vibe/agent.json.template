@@ -8,6 +8,17 @@
       ],
       "toolTimeout": 60,
       "enabledTools": ["*"]
+    },
+    "skyvern": {
+      "command": "{{SKYVERN_MCP_WRAPPER}}",
+      "args": [],
+      "env": {
+        "SKYVERN_BASE_URL": "{{SKYVERN_BASE_URL}}",
+        "SKYVERN_API_KEY": "{{SKYVERN_API_KEY}}",
+        "SKYVERN_API_PREFIX": "{{SKYVERN_API_PREFIX}}"
+      },
+      "toolTimeout": 120,
+      "enabledTools": ["*"]
     }
   }
 }
