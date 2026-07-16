@@ -91,3 +91,16 @@ cd ../.. && python -m pytest vibetrading/agent/tests/test_orchestrator_profile.p
 ```
 
 Manual: run US E2E and confirm prefetch log/context shows SPY only, no NIFTY blocks prepended.
+
+---
+
+## Status (2026-07-16)
+
+All tasks implemented and committed to `main`:
+
+- [x] Task 1: `session_context.py` + hub prefetch wiring
+- [x] Task 2: E2E preamble (no NIFTY literal)
+- [x] Task 3: Market-filtered memory recall
+- [x] Task 4: Autonomous system notes (US + IN)
+- [x] Task 5: Phase 2 full mandate + `trading_place_order` assertion
+- [x] Task 6: Widget guard session ticker parity
