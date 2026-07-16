@@ -136,6 +136,8 @@ def load_latest_proposal_for_orchestrator(orchestrator_session_id: str) -> dict[
             continue
         if data.get("committed_agent_id"):
             continue
+        if data.get("superseded"):
+            continue
         expires = int(data.get("expires_at_ms") or 0)
         if expires and now_ms > expires:
             continue
@@ -148,6 +150,37 @@ def load_latest_proposal_for_orchestrator(orchestrator_session_id: str) -> dict[
     elif best is not None:
         best.setdefault("session_id", orch)
     return best
+
+
+def mark_superseded_proposals(orchestrator_session_id: str, *, except_proposal_id: str) -> int:
+    """Mark prior uncommitted proposals in the same orchestrator session as superseded."""
+    orch = str(orchestrator_session_id or "").strip()
+    keep = str(except_proposal_id or "").strip()
+    if not orch:
+        return 0
+    root = _agents_root() / _PROPOSAL_DIR
+    if not root.is_dir():
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    count = 0
+    for path in root.glob("aap_*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("orchestrator_session_id") or "") != orch:
+            continue
+        pid = str(data.get("proposal_id") or path.stem)
+        if pid == keep or data.get("committed_agent_id") or data.get("superseded"):
+            continue
+        data["superseded"] = True
+        data["superseded_at"] = now
+        data["superseded_by"] = keep
+        path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        count += 1
+    return count
 
 
 def delete_proposal(proposal_id: str) -> bool:

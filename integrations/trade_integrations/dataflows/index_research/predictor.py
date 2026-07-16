@@ -26,6 +26,7 @@ from trade_integrations.dataflows.index_research.models import ConstituentSignal
 
 _DEFAULT_MAE_PCT = 1.5
 _MACRO_DELTA_CAP_PCT = 5.0
+_MACRO_SHRINK_THRESHOLD_PCT = 3.0
 _RIDGE_ALPHA = 50.0
 _MACRO_TRUST_MAE_GOOD = 1.5
 _MACRO_TRUST_MAE_POOR = 7.0
@@ -39,6 +40,19 @@ _MIN_WALK_FORWARD_TRAIN = 15
 def cap_macro_delta(macro_delta: float) -> float:
     """Clamp raw Ridge macro delta to a plausible 14d move."""
     return max(-_MACRO_DELTA_CAP_PCT, min(_MACRO_DELTA_CAP_PCT, macro_delta))
+
+
+def shrink_macro_delta(
+    raw_macro: float,
+    scenario_anchor_return_pct: float | None = None,
+) -> float:
+    """Shrink extreme raw macro toward scenario anchor before hard cap."""
+    if scenario_anchor_return_pct is None or abs(raw_macro) <= _MACRO_SHRINK_THRESHOLD_PCT:
+        return cap_macro_delta(raw_macro)
+    excess = abs(raw_macro) - _MACRO_SHRINK_THRESHOLD_PCT
+    weight = min(0.75, excess / 4.0)
+    shrunk = raw_macro * (1.0 - weight) + scenario_anchor_return_pct * weight
+    return cap_macro_delta(shrunk)
 
 
 @dataclass
@@ -418,6 +432,7 @@ def predict_nifty(
     horizon: HorizonProfile,
     *,
     model_artifact: ModelArtifact | None = None,
+    scenario_anchor_return_pct: float | None = None,
 ) -> dict[str, Any]:
     """Hybrid forecast: bottom-up constituent attribution + macro Ridge delta."""
     artifact = model_artifact or load_stored_model_artifact()
@@ -425,8 +440,8 @@ def predict_nifty(
     rollup = rollup_attribution(attributed)
     bottom_up = float(rollup["total_contribution_pct"])
 
-    macro_delta = _predict_macro_delta(macro_factors, horizon, artifact)
-    macro_delta = cap_macro_delta(macro_delta)
+    raw_macro = _predict_macro_delta(macro_factors, horizon, artifact)
+    macro_delta = shrink_macro_delta(raw_macro, scenario_anchor_return_pct)
     expected_return_pct = bottom_up + macro_delta
     mae = artifact.mae if artifact else _DEFAULT_MAE_PCT
 
@@ -452,9 +467,12 @@ def predict_nifty(
         "expected_return_pct": expected_return_pct,
         "bottom_up_return_pct": bottom_up,
         "macro_delta_pct": macro_delta,
+        "raw_macro_delta_pct": round(raw_macro, 4),
         "direction_view": direction_view,
         "direction_confidence": direction_prob,
+        "direction_model_score": direction_prob,
         "direction_hit_rate_oos": artifact.direction_hit_rate_oos if artifact else None,
+        "direction_hit_rate_walk_forward": artifact.direction_hit_rate_oos if artifact else None,
         "range": {
             "low": range_low,
             "high": range_high,
@@ -467,6 +485,7 @@ def predict_nifty(
             "r2_walk_forward": r2,
             "direction_coefficients": artifact.direction_coefficients if artifact else {},
             "direction_intercept": artifact.direction_intercept if artifact else 0.0,
+            "direction_hit_rate_oos": artifact.direction_hit_rate_oos if artifact else None,
         },
         "horizon": {"name": horizon.name, "days": horizon.days},
     }

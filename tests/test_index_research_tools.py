@@ -8,6 +8,8 @@ from unittest.mock import patch
 import pytest
 
 from trade_integrations.dataflows.index_research.models import IndexResearchDoc
+from trade_integrations.research.orchestrator import ResearchResult
+from trade_integrations.research.registry import ResearchKind
 from trade_integrations.tools.index_research_tools import (
     fetch_index_research_report,
     get_index_research,
@@ -31,40 +33,43 @@ class TestIndexResearchTool:
         result = fetch_index_research_report("RELIANCE")
         assert "not available" in result.lower()
 
-    def test_tool_invokes_fetch(self):
+    def test_tool_invokes_orchestrator(self):
         doc = IndexResearchDoc(
             ticker="NIFTY",
             as_of=datetime.now(timezone.utc),
             horizon={"name": "B", "days": 14},
             spot=24500.0,
         )
+        result = ResearchResult(status="complete", kind=ResearchKind.INDEX, ticker="NIFTY", doc=doc)
         with patch(
-            "trade_integrations.tools.index_research_tools.is_index_research_cache_fresh",
-            return_value=False,
-        ):
+            "trade_integrations.tools.index_research_tools.ensure_research_complete",
+            return_value=result,
+        ) as orch_mock:
             with patch(
-                "trade_integrations.tools.index_research_tools.run_index_research",
-                return_value=doc,
+                "trade_integrations.tools.index_research_tools.format_index_report",
+                return_value="# Index Research — NIFTY",
             ):
-                with patch(
-                    "trade_integrations.tools.index_research_tools.save_index_research",
-                ) as save_mock:
-                    with patch(
-                        "trade_integrations.tools.index_research_tools.format_index_report",
-                        return_value="# Index Research — NIFTY",
-                    ):
-                        out = get_index_research.invoke({"ticker": "NIFTY"})
+                out = get_index_research.invoke({"ticker": "NIFTY"})
         assert "Index Research" in out
-        save_mock.assert_called_once_with(doc)
+        orch_mock.assert_called_once()
 
-    def test_uses_cache_when_fresh(self):
+    def test_refresh_bypasses_cache(self):
+        doc = IndexResearchDoc(
+            ticker="NIFTY",
+            as_of=datetime.now(timezone.utc),
+            horizon={"name": "B", "days": 14},
+            spot=24500.0,
+        )
+        result = ResearchResult(status="complete", kind=ResearchKind.INDEX, ticker="NIFTY", doc=doc)
         with patch(
-            "trade_integrations.tools.index_research_tools.is_index_research_cache_fresh",
-            return_value=True,
-        ):
+            "trade_integrations.tools.index_research_tools.ensure_research_complete",
+            return_value=result,
+        ) as orch_mock:
             with patch(
-                "trade_integrations.tools.index_research_tools.load_index_research_markdown",
-                return_value="cached index report",
+                "trade_integrations.tools.index_research_tools.format_index_report",
+                return_value="fresh index report",
             ):
-                out = fetch_index_research_report("NIFTY")
-        assert out == "cached index report"
+                out = fetch_index_research_report("NIFTY", use_cache=False)
+        assert out == "fresh index report"
+        orch_mock.assert_called_once()
+        assert orch_mock.call_args.kwargs["refresh"] is True

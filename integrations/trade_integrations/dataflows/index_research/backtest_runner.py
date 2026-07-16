@@ -12,6 +12,11 @@ import numpy as np
 import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
+from trade_integrations.dataflows.index_research.attribution import (
+    attribute_constituents,
+    rollup_attribution,
+)
+from trade_integrations.dataflows.index_research.models import ConstituentSignal
 from trade_integrations.dataflows.index_research.calendar_features import (
     calendar_factor_dict,
     days_to_monthly_expiry,
@@ -24,7 +29,7 @@ from trade_integrations.dataflows.index_research.factor_matrix import (
 )
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.predictor import (
-    cap_macro_delta,
+    shrink_macro_delta,
     train_macro_ridge,
 )
 from trade_integrations.dataflows.index_research.drawdown_attribution import enrich_drawdowns
@@ -60,6 +65,44 @@ _FACTOR_LABELS: dict[str, str] = {
 
 _MIN_TRAIN_ROWS = 45
 _DEFAULT_EVAL_STEP = 5
+_MIN_HYBRID_CONSTITUENTS = 8
+
+
+def _company_history_path(symbol: str, day: str) -> Path:
+    return get_hub_dir() / symbol.strip().upper() / "company_research" / "history" / f"{day[:10]}.json"
+
+
+def _bottom_up_from_archives(day: str, *, horizon_days: int) -> float | None:
+    """Replay bottom-up attribution when archived company_research/history exists."""
+    from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
+
+    signals: list[ConstituentSignal] = []
+    for row in load_nifty50_constituents():
+        path = _company_history_path(row.symbol, day)
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        sentiment = (payload.get("sentiment") or {}).get("score")
+        try:
+            sentiment_f = float(sentiment) if sentiment is not None else None
+        except (TypeError, ValueError):
+            sentiment_f = None
+        signals.append(
+            ConstituentSignal(
+                symbol=row.symbol,
+                weight=row.weight,
+                sector=row.sector,
+                sentiment_score=sentiment_f,
+            )
+        )
+    if len(signals) < _MIN_HYBRID_CONSTITUENTS:
+        return None
+    attributed = attribute_constituents(signals, horizon_days=horizon_days)
+    rollup = rollup_attribution(attributed)
+    return float(rollup["total_contribution_pct"])
 
 
 def _backtest_report_path(ticker: str = "NIFTY") -> Path:
@@ -283,6 +326,7 @@ def run_walk_forward_backtest(
     horizon_days: int | None = 14,
     min_train_rows: int = _MIN_TRAIN_ROWS,
     eval_step: int = _DEFAULT_EVAL_STEP,
+    include_bottom_up: bool = False,
 ) -> dict[str, Any]:
     """Expanding-window macro backtest on aligned Nifty + factor history."""
     horizon = resolve_horizon(horizon_days)
@@ -315,6 +359,8 @@ def run_walk_forward_backtest(
     errors: list[float] = []
     directions_hit = 0
     directions_total = 0
+    hybrid_hits = 0
+    hybrid_total = 0
 
     max_i = len(frame) - horizon.days - 1
     indices = list(range(min_train_rows, max_i + 1, max(1, eval_step)))
@@ -340,8 +386,15 @@ def run_walk_forward_backtest(
         from trade_integrations.dataflows.index_research.predictor import _predict_macro_delta
 
         raw_macro = _predict_macro_delta(factors_today, horizon, artifact)
-        macro = cap_macro_delta(raw_macro)
+        macro = shrink_macro_delta(raw_macro)
         predicted = macro  # macro-only backtest (no historical constituent research)
+        day_str = str(row["date"])[:10]
+        bottom_up = None
+        hybrid_predicted = None
+        if include_bottom_up:
+            bottom_up = _bottom_up_from_archives(day_str, horizon_days=horizon.days)
+            if bottom_up is not None:
+                hybrid_predicted = bottom_up + macro
 
         err = float(predicted) - float(actual)
         errors.append(abs(err))
@@ -350,8 +403,11 @@ def run_walk_forward_backtest(
         if pred_dir == actual_dir:
             directions_hit += 1
         directions_total += 1
+        if hybrid_predicted is not None:
+            if (hybrid_predicted > 0) == actual_dir:
+                hybrid_hits += 1
+            hybrid_total += 1
 
-        day_str = str(row["date"])[:10]
         try:
             as_of = date.fromisoformat(day_str)
         except ValueError:
@@ -375,6 +431,10 @@ def run_walk_forward_backtest(
                 "direction_correct": pred_dir == actual_dir,
                 "macro_delta_pct": round(macro, 3),
                 "macro_raw_pct": round(raw_macro, 3),
+                "bottom_up_return_pct": round(bottom_up, 3) if bottom_up is not None else None,
+                "hybrid_predicted_return_pct": round(hybrid_predicted, 3)
+                if hybrid_predicted is not None
+                else None,
                 "factor_drivers": drivers,
                 "calendar_events": _calendar_events_for_date(as_of),
                 "implied_level": round(close * (1.0 + predicted / 100.0), 2),
@@ -405,6 +465,7 @@ def run_walk_forward_backtest(
 
     mae = float(np.mean(errors)) if errors else None
     hit_rate = directions_hit / directions_total if directions_total else None
+    hybrid_hit_rate = hybrid_hits / hybrid_total if hybrid_total else None
 
     # Full-sample train metrics for comparison
     X, y, names = build_factor_matrix(frame.dropna(subset=["target"]), horizon)
@@ -429,6 +490,9 @@ def run_walk_forward_backtest(
         "metrics": {
             "mae_pct": round(mae, 4) if mae is not None else None,
             "direction_hit_rate": round(hit_rate, 4) if hit_rate is not None else None,
+            "macro_only_direction_hit_rate": round(hit_rate, 4) if hit_rate is not None else None,
+            "hybrid_direction_hit_rate": round(hybrid_hit_rate, 4) if hybrid_hit_rate is not None else None,
+            "hybrid_eval_count": hybrid_total,
             "in_sample_mae_pct": in_sample_artifact.mae if in_sample_artifact else None,
             "in_sample_r2": in_sample_artifact.r2_walk_forward if in_sample_artifact else None,
             "in_sample_direction_hit_rate": in_sample_artifact.direction_hit_rate_oos

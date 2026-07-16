@@ -358,11 +358,52 @@ stack_start_vibe_stack() {
 }
 
 # Start only services that are down (no full stop — avoids killing healthy processes).
+stack_primary_nautilus_agent_id() {
+  local root py
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  "$py" - "$root" <<'PY' 2>/dev/null || true
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "integrations"))
+try:
+    from trade_integrations.autonomous_agents.store import list_agents
+    from trade_integrations.execution.profile import resolve_profile
+except Exception:
+    raise SystemExit(0)
+for agent in list_agents():
+    if str(agent.get("status")) != "running":
+        continue
+    try:
+        profile = resolve_profile(agent=agent)
+    except Exception:
+        continue
+    if profile.uses_nautilus_handoff:
+        aid = str(agent.get("id") or "").strip()
+        if aid:
+            print(aid)
+            raise SystemExit(0)
+PY
+}
+
+stack_ensure_nautilus_watch() {
+  local agent_id="${1:-$(stack_primary_nautilus_agent_id)}"
+  if [[ -z "$agent_id" ]]; then
+    return 0
+  fi
+  stack_start_nautilus_watch "$agent_id" || {
+    echo "[stack] Nautilus watch not started — bootstrap poll ticks still run via Vibe scheduler" >&2
+    return 0
+  }
+}
+
 stack_ensure_vibe_stack() {
   local ok=0
   stack_start_openalgo || ok=1
   stack_start_vibe_api || ok=1
   stack_start_vibe_ui || ok=1
+  stack_ensure_nautilus_watch || true
   return "$ok"
 }
 
@@ -457,13 +498,32 @@ stack_nautilus_python() {
 }
 
 stack_start_nautilus_watch() {
-  local root log_dir pidfile logfile py agent_id
+  local root log_dir pidfile logfile agent_id_file py agent_id legacy=0
   root="$(stack_root)"
   log_dir="$(stack_log_dir)"
   pidfile="$log_dir/nautilus-watch.pid"
   logfile="$log_dir/nautilus-watch.log"
-  py="$(stack_nautilus_python)"
+  agent_id_file="$log_dir/nautilus-watch.agent_id"
   agent_id="${NAUTILUS_AGENT_ID:-}"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent-id)
+        agent_id="${2:-}"
+        shift 2
+        ;;
+      --agent-id=*)
+        agent_id="${1#*=}"
+        shift
+        ;;
+      *)
+        if [[ -z "$agent_id" && "$1" == aa_* ]]; then
+          agent_id="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
 
   if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
     echo "[stack] NAUTILUS_WATCH_ENABLE=0 — skip Nautilus watch node"
@@ -471,24 +531,48 @@ stack_start_nautilus_watch() {
   fi
 
   existing="$(stack_read_pid "$pidfile")"
+  bound_agent=""
+  if [[ -f "$agent_id_file" ]]; then
+    bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
+  fi
   if stack_pid_alive "$existing"; then
-    echo "[stack] Nautilus watch already running (pid $existing)"
-    return 0
+    if [[ -n "$agent_id" && -n "$bound_agent" && "$bound_agent" != "$agent_id" ]]; then
+      echo "[stack] Nautilus watch bound to $bound_agent — restarting for $agent_id ..."
+      stack_stop_nautilus_watch
+    elif [[ -n "$agent_id" && -z "$bound_agent" ]]; then
+      echo "$agent_id" >"$agent_id_file"
+      echo "[stack] Nautilus watch already running (pid $existing) — bound to $agent_id"
+      return 0
+    else
+      echo "[stack] Nautilus watch already running (pid $existing${bound_agent:+, agent $bound_agent})"
+      return 0
+    fi
   fi
 
-  if [[ ! -x "$root/.venv-nautilus/bin/python" ]]; then
-    echo "[stack] Nautilus venv missing — run ./scripts/setup_nautilus.sh" >&2
+  if [[ -x "$root/.venv-nautilus/bin/python" ]]; then
+    py="$root/.venv-nautilus/bin/python"
+  elif [[ -x "$root/.venv/bin/python" ]]; then
+    py="$root/.venv/bin/python"
+    legacy=1
+    echo "[stack] .venv-nautilus missing — starting legacy poll watch (run ./scripts/setup_nautilus.sh for TradingNode)"
+  else
+    echo "[stack] No Python venv found for Nautilus watch" >&2
     return 1
   fi
 
   echo "[stack] starting Nautilus watch node ..."
-  local cmd=("$root/scripts/run_nautilus_watch.sh")
+  local cmd=("$py" -m nautilus_openalgo_bridge.runtime.run_watch_node)
+  if (( legacy )); then
+    cmd+=(--legacy-poll)
+  fi
   if [[ -n "$agent_id" ]]; then
     cmd+=(--agent-id "$agent_id")
+    echo "$agent_id" >"$agent_id_file"
   fi
   stack_launch_detached "$pidfile" "$logfile" "$root" "${cmd[@]}"
 }
 
 stack_stop_nautilus_watch() {
   stack_stop_pidfile "Nautilus watch" "$(stack_log_dir)/nautilus-watch.pid" "run_watch_node"
+  rm -f "$(stack_log_dir)/nautilus-watch.agent_id"
 }

@@ -439,6 +439,39 @@ def mechanical_straddle_entry(agent_id: str, client: Any, *, strategy: str) -> t
     return legs, spot
 
 
+def assert_handoff_active(agent_id: str, *, require_legs: bool = False) -> dict[str, Any]:
+    """M3 checkpoint: bridge handoff file exists (optionally with open legs)."""
+    from nautilus_openalgo_bridge.handoff import load_handoff
+
+    handoff = load_handoff(agent_id)
+    if handoff is None:
+        raise AssertionError(f"handoff missing for {agent_id}")
+    if require_legs and not handoff.legs:
+        raise AssertionError(f"handoff for {agent_id} has no legs")
+    return {
+        "agent_id": agent_id,
+        "underlying": handoff.underlying,
+        "entry_spot": handoff.entry_spot,
+        "leg_count": len(handoff.legs or []),
+        "watch_rules": len(handoff.watch_spec.rules or []),
+    }
+
+
+def assert_m3_bridge_loop_ready(agent_id: str, client: Any) -> dict[str, Any]:
+    """Verify handoff + OpenAlgo positionbook alignment before watch/EXIT phases."""
+    from nautilus_openalgo_bridge.handoff import load_handoff
+    from nautilus_openalgo_bridge.reconcile import open_positions_from_book
+
+    handoff = load_handoff(agent_id)
+    if handoff is None:
+        raise AssertionError(f"M3 preflight: no handoff for {agent_id}")
+    rows = open_positions_from_book(client.get_position_book())
+    return {
+        "handoff": assert_handoff_active(agent_id, require_legs=bool(handoff.legs)),
+        "open_positions": len(rows),
+    }
+
+
 def mechanical_partial_exit(agent_id: str, client: Any, legs: list[Any], *, strategy: str) -> None:
     from nautilus_openalgo_bridge.execute import execute_intent
     from nautilus_openalgo_bridge.models import ExecutionIntent, ExecutionLeg, IntentAction

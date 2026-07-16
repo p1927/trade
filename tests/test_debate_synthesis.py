@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 
 from trade_integrations.research.debate_synthesis import (
+    apply_debate_bias_to_stock_ranked,
     extract_structured_debate,
+    merge_index_prediction,
+    merge_options_context,
     merge_stock_prediction,
 )
 
@@ -59,3 +62,40 @@ class TestDebateSynthesis:
         merged = merge_stock_prediction({}, quant, spot=1296.0)
         assert merged["provenance"]["direction"] == "quant"
         assert merged["target"] == 1320.0
+
+    def test_bearish_debate_promotes_hold_cash(self):
+        ranked = [
+            {"name": "event_play", "score": 0.62, "tier": "Recommended", "action": "BUY"},
+            {"name": "buy_dip", "score": 0.58, "action": "BUY"},
+            {"name": "hold_cash", "score": 0.45, "action": "HOLD"},
+        ]
+        out = apply_debate_bias_to_stock_ranked(
+            ranked,
+            debate_view="bearish",
+            debate_confidence=0.7,
+        )
+        assert out[0]["name"] == "hold_cash"
+        assert out[0]["score"] > ranked[2]["score"]
+
+    def test_merge_index_prediction(self):
+        debate = {"view": "bearish", "direction_confidence": 0.65, "rationale": "Trim exposure", "debate_as_of": "2026-07-16"}
+        base = {"view": "bullish", "confidence": 0.8, "expected_return_pct": 1.2}
+        merged = merge_index_prediction(debate, base)
+        assert merged["view"] == "bearish"
+        assert merged["provenance"]["direction"] == "debate"
+        assert merged["confidence"] == 0.65
+
+    def test_merge_options_context_biases_puts(self):
+        doc = {
+            "ranked_strategies": [
+                {"name": "bull_call_spread", "score": 0.7, "tier": "Recommended", "legs": []},
+                {"name": "bear_put_spread", "score": 0.55, "tier": "Consider", "legs": []},
+            ],
+            "recommended": {"name": "bull_call_spread", "score": 0.7},
+            "prediction": {"view": "neutral"},
+        }
+        debate = {"view": "bearish", "direction_confidence": 0.75, "debate_as_of": "2026-07-16"}
+        merged = merge_options_context(debate, doc)
+        assert merged["ranked_strategies"][0]["name"] == "bear_put_spread"
+        assert merged["recommended"]["name"] == "bear_put_spread"
+        assert merged["prediction"]["debate_view"] == "bearish"

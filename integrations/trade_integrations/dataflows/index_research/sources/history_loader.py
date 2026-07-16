@@ -64,12 +64,30 @@ def _append_calendar_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _append_delta_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add horizon-aware change features (acceleration / path signals)."""
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    if "fii_net_5d" in out.columns:
+        out["fii_net_5d_change_5d"] = pd.to_numeric(out["fii_net_5d"], errors="coerce").diff(5)
+    if "dii_net_5d" in out.columns:
+        out["dii_net_5d_change_5d"] = pd.to_numeric(out["dii_net_5d"], errors="coerce").diff(5)
+    if "oil_brent" in out.columns:
+        brent = pd.to_numeric(out["oil_brent"], errors="coerce")
+        out["oil_brent_change_7d"] = (brent - brent.shift(7)) / brent.shift(7).replace(0, np.nan) * 100.0
+    if "india_vix" in out.columns:
+        out["india_vix_change_5d"] = pd.to_numeric(out["india_vix"], errors="coerce").diff(5)
+    return out
+
+
 def enrich_history_features(frame: pd.DataFrame) -> pd.DataFrame:
-    """Add technical + calendar columns derived from Nifty close history."""
+    """Add technical + calendar + delta columns derived from Nifty close history."""
     if frame.empty:
         return frame
     enriched = enrich_nifty_technical_columns(frame)
-    return _append_calendar_columns(enriched)
+    enriched = _append_calendar_columns(enriched)
+    return _append_delta_columns(enriched)
 
 
 def load_aligned_factor_history(days: int = 365) -> pd.DataFrame:

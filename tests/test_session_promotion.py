@@ -66,10 +66,11 @@ def test_promote_orchestrator_session_updates_config_and_title(tmp_path, monkeyp
     assert svc.store.session.config["session_kind"] == "autonomous_agent"
     assert svc.store.session.config["autonomous_agent_id"] == "aa_abc"
     assert svc.store.session.title == "autonomous:NIFTY autonomous"
-    assert len(svc.store.messages) == 1
+    assert len(svc.store.messages) == 2
     assert "NIFTY autonomous" in svc.store.messages[0].content
+    assert "Orchestrator phase complete" in svc.store.messages[1].content
 
-    assert len(svc.events) == 2
+    assert len(svc.events) == 3
     sid0, ev0, payload0 = svc.events[0]
     assert sid0 == "orch123"
     assert ev0 == "message.received"
@@ -79,8 +80,13 @@ def test_promote_orchestrator_session_updates_config_and_title(tmp_path, monkeyp
 
     sid1, ev1, payload1 = svc.events[1]
     assert sid1 == "orch123"
-    assert ev1 == "session.promoted"
-    assert payload1 == {
+    assert ev1 == "message.received"
+    assert "Orchestrator phase complete" in payload1["content"]
+
+    sid2, ev2, payload2 = svc.events[2]
+    assert sid2 == "orch123"
+    assert ev2 == "session.promoted"
+    assert payload2 == {
         "session_id": "orch123",
         "agent_id": "aa_abc",
         "session_kind": "autonomous_agent",

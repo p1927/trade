@@ -51,6 +51,26 @@ def _resolve_watch_spec(agent_id: str | None) -> WatchSpec:
     return _default_watch_spec()
 
 
+def maybe_reload_watch_spec(
+    agent_id: str | None,
+    spec: WatchSpec,
+    *,
+    last_handoff_mtime: float | None,
+    last_agent_mtime: float | None,
+) -> tuple[WatchSpec, float | None, float | None]:
+    """Re-read watch spec when handoff or agent JSON changes on disk."""
+    if not agent_id:
+        return spec, last_handoff_mtime, last_agent_mtime
+
+    mt = handoff_mtime(agent_id)
+    am = _agent_mtime(agent_id)
+    if mt is not None and mt != last_handoff_mtime:
+        return _resolve_watch_spec(agent_id), mt, am if am is not None else last_agent_mtime
+    if am is not None and am != last_agent_mtime:
+        return _resolve_watch_spec(agent_id), last_handoff_mtime, am
+    return spec, last_handoff_mtime, last_agent_mtime
+
+
 def run_once(
     *,
     agent_id: str | None = None,
@@ -156,14 +176,12 @@ def run_poll_loop(
 
     while True:
         if agent_id:
-            mt = handoff_mtime(agent_id)
-            am = _agent_mtime(agent_id)
-            if mt is not None and mt != last_handoff_mtime:
-                spec = _resolve_watch_spec(agent_id)
-                last_handoff_mtime = mt
-            elif am is not None and am != last_agent_mtime:
-                spec = _resolve_watch_spec(agent_id)
-                last_agent_mtime = am
+            spec, last_handoff_mtime, last_agent_mtime = maybe_reload_watch_spec(
+                agent_id,
+                spec,
+                last_handoff_mtime=last_handoff_mtime,
+                last_agent_mtime=last_agent_mtime,
+            )
 
         if process_intents:
             try:

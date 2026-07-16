@@ -33,13 +33,14 @@ Do **not** call `execute_auto_paper_basket`, `get_options_trade_widget`, `get_au
 Note: US options pipeline is limited — prefer equity until full US options support ships.""",
     "in_options_paper": """## Required flow (India — Nautilus watch → OpenAlgo execution)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")` — trust tool output; watch alerts come from Nautilus bridge only
-2. Hub research + `get_options_trade_widget` / `get_options_trade_plan` when plan is stale
-3. Refine thesis; state confidence 0–100
-4. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — routes through bridge → OpenAlgo (do not call `place_order` directly)
-5. On strategy change: **REVISE** with leg diff via bridge basket
-6. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})` — Nautilus maintains watch after handoff
-7. On EXIT: `submit_bridge_execution_intent(agent_id="{agent_id}", action="EXIT", rationale=...)` or let Nautilus stop rules fire
-8. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP
+2. `get_research_status(ticker, asset_type="options")` — verify stages complete before presenting a plan
+3. Hub research + `get_options_trade_widget` / `get_options_trade_plan` when plan is stale — cite prediction and debate provenance
+4. Refine thesis; state confidence 0–100
+5. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — routes through bridge → OpenAlgo (do not call `place_order` directly)
+6. On strategy change: **REVISE** with leg diff via bridge basket
+7. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})` — Nautilus maintains watch after handoff
+8. On EXIT: `submit_bridge_execution_intent(agent_id="{agent_id}", action="EXIT", rationale=...)` or let Nautilus stop rules fire
+9. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP
 
 Do **not** use `get_auto_paper_market_feedback` for watch alerts — Nautilus bridge owns watch for India agents.""",
     "in_equity_paper": """## Required flow (India equity — Nautilus watch → OpenAlgo execution)

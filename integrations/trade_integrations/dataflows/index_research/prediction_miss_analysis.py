@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,9 @@ from trade_integrations.dataflows.index_research.causal_attribution import (
 )
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
+from trade_integrations.dataflows.index_research.horizon_dates import (
+    resolve_maturity_trading_date,
+)
 from trade_integrations.dataflows.index_research.predictor import _MACRO_DELTA_CAP_PCT
 from trade_integrations.dataflows.index_research.sources.history_loader import load_aligned_factor_history
 
@@ -85,14 +88,8 @@ def resolve_maturity_date(
     horizon_days: int,
     trading_dates: list[str],
 ) -> str | None:
-    """Trading date on or before prediction_date + horizon_days calendar days."""
-    try:
-        pred = date.fromisoformat(prediction_date[:10])
-    except ValueError:
-        return None
-    target = pred + timedelta(days=horizon_days)
-    eligible = [d for d in trading_dates if d <= target.isoformat()]
-    return eligible[-1] if eligible else None
+    """Trading date ``horizon_days`` sessions after ``prediction_date``."""
+    return resolve_maturity_trading_date(prediction_date, horizon_days, trading_dates)
 
 
 def factor_snapshot_at(
@@ -234,6 +231,7 @@ def categorize_miss(
     macro_delta_pct: float | None = None,
     factor_delta_horizon: list[dict[str, Any]],
     headlines_at_maturity: list[dict[str, str]],
+    headlines_at_t0: list[dict[str, str]] | None = None,
     missing_factors_t0: list[str],
     missing_factors_t1: list[str],
     scope: str = "macro_only",
@@ -254,10 +252,14 @@ def categorize_miss(
             if pred_sign != actual_sign:
                 return "cap_saturation"
 
-    tags: set[str] = set()
+    tags_t1: set[str] = set()
     for headline in headlines_at_maturity:
-        tags.update(_headline_tags(str(headline.get("title") or "")))
-    if tags & _EVENT_TAGS:
+        tags_t1.update(_headline_tags(str(headline.get("title") or "")))
+    tags_t0: set[str] = set()
+    for headline in headlines_at_t0 or []:
+        tags_t0.update(_headline_tags(str(headline.get("title") or "")))
+    new_tags = tags_t1 - tags_t0
+    if new_tags & _EVENT_TAGS:
         pred_sign = predicted_return_pct >= 0
         actual_sign = actual_return_pct >= 0
         if pred_sign != actual_sign:
@@ -360,7 +362,9 @@ def enrich_eval_row_horizon(
     actual = float(eval_row.get("actual_forward_return_pct") or 0)
     direction_correct = bool(eval_row.get("direction_correct"))
 
+    headlines_t0 = _fetch_index_headlines(pred_day, limit=5)
     headlines = _fetch_index_headlines(maturity, limit=5)
+    out["headlines_at_t0"] = headlines_t0
     out["headlines_at_maturity"] = headlines
 
     if not direction_correct:
@@ -371,6 +375,7 @@ def enrich_eval_row_horizon(
             macro_delta_pct=eval_row.get("macro_delta_pct"),
             factor_delta_horizon=deltas,
             headlines_at_maturity=headlines,
+            headlines_at_t0=headlines_t0,
             missing_factors_t0=missing_t0,
             missing_factors_t1=missing_t1,
         )

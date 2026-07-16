@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from trade_integrations.context.hub import (
-    is_index_research_cache_fresh,
-    load_index_research_markdown,
-    save_index_research,
-)
 from trade_integrations.dataflows.company_research.india_symbols import india_index_tickers
-from trade_integrations.dataflows.index_research.aggregator import run_index_research
 from trade_integrations.dataflows.index_research.format import format_index_report
+from trade_integrations.research.orchestrator import ensure_research_complete
+from trade_integrations.research.registry import ResearchKind
 
 
 def is_index_research_eligible(ticker: str) -> bool:
@@ -35,18 +31,19 @@ def fetch_index_research_report(
             "Supported indices include NIFTY, BANKNIFTY, and other NSE index symbols."
         )
 
-    if use_cache and is_index_research_cache_fresh(sym):
-        cached = load_index_research_markdown(sym)
-        if cached:
-            return cached
-
-    doc = run_index_research(
+    result = ensure_research_complete(
         sym,
-        horizon_days=horizon_days,
+        kind=ResearchKind.INDEX,
+        refresh=not use_cache,
+        horizon_days=horizon_days or 14,
         refresh_constituents=refresh_constituents,
+        require_debate=False,
     )
-    save_index_research(doc)
-    return format_index_report(doc)
+    if result.error and result.doc is None:
+        return f"Index research failed for {sym}: {result.error}"
+    if result.doc is None:
+        return f"No index research available for {sym}."
+    return format_index_report(result.doc)
 
 
 def get_index_research(

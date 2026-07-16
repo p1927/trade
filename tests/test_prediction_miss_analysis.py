@@ -36,10 +36,10 @@ def _synthetic_frame(rows: int = 40) -> pd.DataFrame:
 
 @pytest.mark.unit
 def test_resolve_maturity_date_finds_trading_day():
-    trading = ["2025-10-01", "2025-10-02", "2025-10-03", "2025-10-06"]
+    trading = pd.date_range("2025-10-01", periods=20, freq="B").strftime("%Y-%m-%d").tolist()
     maturity = resolve_maturity_date("2025-10-01", 14, trading)
     assert maturity is not None
-    assert maturity <= (date.fromisoformat("2025-10-01") + timedelta(days=14)).isoformat()
+    assert maturity == trading[14]
 
 
 @pytest.mark.unit

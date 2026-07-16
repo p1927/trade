@@ -14,6 +14,14 @@ from trade_integrations.execution.prompt_fragments import (
     session_header_for,
 )
 
+_RUNNING_AGENT_FOOTER = """
+## Output rules (mandatory)
+- Decide autonomously on this turn — **do not ask the user questions** or offer optional follow-ups.
+- Call `record_autonomous_decision` with ENTER | REVISE | EXIT | HOLD | SKIP and confidence 0–100.
+- If below the confidence threshold, record HOLD or SKIP with rationale — do not prompt for permission.
+- Use hub research and live tools; cite prediction range and provenance when recommending a strategy.
+"""
+
 
 def _symbols_line(symbols: list[str]) -> str:
     return ", ".join(symbols) if symbols else "NIFTY"
@@ -145,7 +153,8 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 {mandate_json}
 {thesis_block}{guidance_block}{scorer_block}
 {bootstrap_block}{flow}
-{harness_block}"""
+{harness_block}
+{_RUNNING_AGENT_FOOTER}"""
 
 
 def build_orchestrator_system_note() -> str:

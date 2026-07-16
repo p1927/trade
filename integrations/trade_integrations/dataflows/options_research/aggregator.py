@@ -210,6 +210,31 @@ def run_options_research(
         }
     )
 
+    from trade_integrations.context.hub import load_agent_debate_json
+    from trade_integrations.research.debate_synthesis import (
+        extract_structured_debate,
+        merge_options_context,
+    )
+
+    debate_raw = load_agent_debate_json(instrument.display_symbol)
+    debate_struct = extract_structured_debate(debate_raw)
+    if debate_struct and ranked:
+        merged_ctx = merge_options_context(debate_struct, doc)
+        ranked = merged_ctx.get("ranked_strategies") or ranked
+        doc.ranked_strategies = ranked
+        if merged_ctx.get("prediction"):
+            doc.prediction.update(merged_ctx["prediction"])
+        if debate_raw:
+            doc.stages.append(
+                StageResult(
+                    stage="debate_synthesis",
+                    status="ok",
+                    vendor="agent_debate",
+                    fetched_at=now,
+                    data={"debate_as_of": debate_raw.get("as_of"), "view": debate_struct.get("view")},
+                )
+            )
+
     if ranked:
         top = ranked[0]
         doc.recommended = {

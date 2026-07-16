@@ -35,6 +35,10 @@ MACRO_FACTOR_KEYS: tuple[str, ...] = (
     "days_to_monthly_expiry",
     "is_budget_week",
     "is_results_season",
+    "fii_net_5d_change_5d",
+    "dii_net_5d_change_5d",
+    "oil_brent_change_7d",
+    "india_vix_change_5d",
 )
 
 _MAX_FEATURES = 40
@@ -48,6 +52,10 @@ _PINNED_MACRO_FACTORS: frozenset[str] = frozenset(
         "oil_brent",
         "india_vix",
         "nifty_pcr",
+        "fii_net_5d_change_5d",
+        "dii_net_5d_change_5d",
+        "oil_brent_change_7d",
+        "india_vix_change_5d",
     }
 )
 

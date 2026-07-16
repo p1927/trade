@@ -45,6 +45,7 @@ Maintenance:
 Examples:
   trade start openalgo              # OpenAlgo only (for webhook setup)
   trade start daemon                # OpenAlgo + Vibe in background
+  trade start nautilus-watch --agent-id aa_abc123   # continuous India watch node
   trade restart                     # restart background stack
   trade stop                        # stop background stack
   trade tunnel quick                # expose OpenAlgo to the internet
@@ -115,10 +116,10 @@ case "$cmd" in
         # shellcheck disable=SC1091
         source "$ROOT/scripts/stack_lib.sh"
         stack_load_env
-        stack_start_nautilus_watch
+        stack_start_nautilus_watch "$@"
         ;;
       -h|--help|help)
-        echo "Usage: trade start [vibe|openalgo|cli|full|daemon|nautilus-watch]"
+        echo "Usage: trade start nautilus-watch [--agent-id aa_...]"
         ;;
       *)
         echo "Unknown start mode: $mode (try: vibe, openalgo, cli, full)" >&2

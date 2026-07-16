@@ -30,10 +30,23 @@ def _parse_price(text: str) -> float | None:
 
 def _view_from_text(text: str) -> str | None:
     lower = text.lower()
-    if any(w in lower for w in ("bullish", "buy", "accumulate", "long")):
-        return "bullish"
-    if any(w in lower for w in ("bearish", "sell", "short", "avoid")):
+    if any(
+        w in lower
+        for w in (
+            "bearish",
+            "sell",
+            "short",
+            "avoid",
+            "underweight",
+            "trim",
+            "reduce exposure",
+            "reduce holdings",
+            "exit",
+        )
+    ):
         return "bearish"
+    if any(w in lower for w in ("bullish", "buy", "accumulate", "long", "overweight", "add exposure")):
+        return "bullish"
     if "neutral" in lower or "hold" in lower or "sideways" in lower:
         return "neutral"
     return None
@@ -195,4 +208,127 @@ def merge_index_prediction(
             float(base.get("confidence") or 1.0),
             float(d["direction_confidence"]),
         )
+    if d.get("rationale"):
+        base["debate_rationale"] = d["rationale"][:300]
     return base
+
+
+def apply_debate_bias_to_stock_ranked(
+    ranked: list[dict[str, Any]],
+    *,
+    debate_view: str | None,
+    debate_confidence: float = 0.0,
+) -> list[dict[str, Any]]:
+    """Adjust stock strategy scores from TradingAgents debate direction."""
+    if not ranked or not debate_view:
+        return ranked
+    boost = min(0.25, 0.1 + debate_confidence * 0.15)
+    out: list[dict[str, Any]] = []
+    for row in ranked:
+        item = dict(row)
+        name = str(item.get("name") or "")
+        score = float(item.get("score") or 0.5)
+        if debate_view == "bearish":
+            if name in ("buy_dip", "momentum_breakout", "event_play"):
+                score -= boost
+            elif name == "hold_cash":
+                score += boost
+        elif debate_view == "bullish":
+            if name in ("buy_dip", "momentum_breakout", "event_play"):
+                score += boost * 0.8
+            elif name == "hold_cash":
+                score -= boost * 0.5
+        item["score"] = round(min(max(score, 0.2), 0.95), 3)
+        if debate_view == "bearish" and name == "hold_cash" and item["score"] >= 0.55:
+            item["tier"] = "Recommended"
+        out.append(item)
+    out.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return out
+
+
+def _options_name_bias(name: str, debate_view: str) -> float:
+    n = name.lower()
+    if debate_view == "bullish":
+        if "bull" in n or ("call" in n and "spread" in n):
+            return 0.12
+        if "bear" in n or "put" in n:
+            return -0.08
+    elif debate_view == "bearish":
+        if "bear" in n or ("put" in n and "spread" in n):
+            return 0.12
+        if "bull" in n or "call" in n:
+            return -0.08
+    elif debate_view == "neutral":
+        if "condor" in n or "iron" in n:
+            return 0.06
+    return 0.0
+
+
+def merge_options_context(
+    debate: dict[str, Any] | None,
+    options_doc: Any,
+) -> dict[str, Any]:
+    """
+    Bias options ranked strategy scores from debate; enrich prediction provenance.
+
+    Does not replace chain analytics — adjusts ranker output only.
+    """
+    d = debate or {}
+    from dataclasses import asdict, is_dataclass
+
+    if is_dataclass(options_doc):
+        base = asdict(options_doc)
+    elif isinstance(options_doc, dict):
+        base = dict(options_doc)
+    else:
+        base = getattr(options_doc, "__dict__", {}) or {}
+
+    ranked = [dict(r) for r in (base.get("ranked_strategies") or [])]
+    prediction = dict(base.get("prediction") or {})
+    view = d.get("view")
+    conf = float(d.get("direction_confidence") or 0.0)
+    top: dict[str, Any] = {}
+
+    if view and ranked:
+        boost = min(0.2, 0.08 + conf * 0.12)
+        for row in ranked:
+            delta = _options_name_bias(str(row.get("name") or ""), view) * (1 + boost)
+            row["score"] = round(min(max(float(row.get("score") or 0.5) + delta, 0.2), 0.95), 3)
+            row["debate_bias"] = round(delta, 3)
+        ranked.sort(key=lambda r: r.get("score", 0), reverse=True)
+        top = ranked[0]
+
+    if view:
+        prediction["debate_view"] = view
+        prov = dict(prediction.get("provenance") or {})
+        prov["direction"] = "debate"
+        prov["debate_as_of"] = d.get("debate_as_of")
+        prediction["provenance"] = prov
+        if d.get("rationale"):
+            prediction["debate_rationale"] = d["rationale"][:300]
+
+    recommended = dict(base.get("recommended") or {})
+    if ranked and top:
+        if recommended.get("name") != top.get("name"):
+            recommended = {
+                "name": top.get("name"),
+                "score": top.get("score"),
+                "tier": top.get("tier"),
+                "rationale": top.get("rationale"),
+                "legs": top.get("legs") or [],
+                "max_profit": top.get("max_profit"),
+                "max_loss": top.get("max_loss"),
+                "net_max_profit": top.get("net_max_profit"),
+                "net_max_loss": top.get("net_max_loss"),
+                "net_debit_credit": top.get("net_debit_credit"),
+                "breakevens": top.get("breakevens"),
+            }
+
+    return {
+        "ranked_strategies": ranked,
+        "recommended": recommended,
+        "prediction": prediction,
+        "payoff": top.get("payoff") or base.get("payoff"),
+        "charges": top.get("charges") or base.get("charges"),
+        "payoff_over_time": top.get("payoff_over_time") or base.get("payoff_over_time"),
+    }

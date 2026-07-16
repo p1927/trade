@@ -4,15 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from trade_integrations.context.hub import (
-    is_options_cache_fresh,
-    load_options_research_json,
-    load_options_research_markdown,
-    save_options_research,
-)
-from trade_integrations.dataflows.options_research.market import is_options_research_eligible
-from trade_integrations.dataflows.options_research.aggregator import run_options_research
 from trade_integrations.dataflows.options_research.format import format_options_report
+from trade_integrations.dataflows.options_research.market import is_options_research_eligible
+from trade_integrations.research.orchestrator import ensure_research_complete
+from trade_integrations.research.registry import ResearchKind
 
 
 def fetch_options_research_report(
@@ -26,32 +21,19 @@ def fetch_options_research_report(
     if not is_options_research_eligible(ticker):
         return f"Options research is not available for {ticker!r}."
 
-    if use_cache and is_options_cache_fresh(ticker):
-        doc = load_options_research_json(ticker)
-        if doc is not None and _options_doc_is_usable(doc):
-            cached = load_options_research_markdown(ticker)
-            if cached:
-                return cached
-        use_cache = False
-
-    doc = run_options_research(
+    result = ensure_research_complete(
         ticker,
+        kind=ResearchKind.OPTIONS,
+        refresh=not use_cache,
+        horizon_days=lookahead_days or 14,
         expiry_date=expiry_date,
-        lookahead_days=lookahead_days,
+        require_debate=False,
     )
-    save_options_research(doc)
-    return format_options_report(doc)
-
-
-def _options_doc_is_usable(doc) -> bool:
-    """True when cached hub doc has ranked strategies (chain succeeded)."""
-    rec = doc.recommended or {}
-    if rec.get("name") and doc.ranked_strategies:
-        return True
-    for stage in doc.stages or []:
-        if getattr(stage, "stage", None) == "chain" and getattr(stage, "status", None) == "error":
-            return False
-    return bool(doc.ranked_strategies)
+    if result.error and result.doc is None:
+        return f"Options research failed for {ticker}: {result.error}"
+    if result.doc is None:
+        return f"No options research available for {ticker}."
+    return format_options_report(result.doc)
 
 
 def get_options_research(

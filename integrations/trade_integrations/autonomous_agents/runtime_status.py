@@ -218,6 +218,13 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
     nautilus_on = _nautilus_watch_enabled()
     nautilus_alive = _nautilus_process_alive()
     nautilus_state = _nautilus_state_for_agent(agent)
+    nautilus_bound_agent: str | None = None
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import get_watch_process_status
+
+        nautilus_bound_agent = get_watch_process_status().get("bound_agent_id")  # type: ignore[assignment]
+    except Exception:
+        pass
     watch_configured, position_tracked = _handoff_details(agent_id) if agent_id else (False, False)
 
     if profile is not None and profile.uses_nautilus_handoff:
@@ -250,11 +257,13 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
             "thesis_break": alert_rules.get("thesis_break", True),
         },
         "bootstrap_status": agent.get("bootstrap_status"),
+        "bootstrap_error": agent.get("bootstrap_error"),
         "scheduler_health": scheduler_health,
         "market_open": paper.get("market_open"),
         "nautilus_watch_enabled": nautilus_on,
         "nautilus_process_alive": nautilus_alive,
         "nautilus_state": nautilus_state,
+        "nautilus_bound_agent_id": nautilus_bound_agent,
         "watch_path": watch_path,
         "watch_configured": watch_configured,
         "position_tracked": position_tracked,
@@ -285,13 +294,21 @@ def build_stack_health() -> dict[str, Any]:
             pass
 
     nautilus_state = "off"
+    nautilus_bound_agent: str | None = None
     if _nautilus_watch_enabled():
         nautilus_state = "node_on" if _nautilus_process_alive() else "expected"
+        try:
+            from trade_integrations.autonomous_agents.nautilus_watch import get_watch_process_status
+
+            nautilus_bound_agent = get_watch_process_status().get("bound_agent_id")  # type: ignore[assignment]
+        except Exception:
+            pass
 
     return {
         "nautilus_watch_enabled": _nautilus_watch_enabled(),
         "nautilus_process_alive": _nautilus_process_alive(),
         "nautilus_state": nautilus_state,
+        "nautilus_bound_agent_id": nautilus_bound_agent,
         "scheduler_health": scheduler_health,
         "market_open": paper.get("market_open"),
         "paper_session_enabled": bool(session.get("enabled")),

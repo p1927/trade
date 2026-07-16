@@ -272,6 +272,31 @@ def run_index_research(
                 after=after,
             )
 
+    from trade_integrations.context.hub import load_agent_debate_json
+    from trade_integrations.research.debate_synthesis import (
+        extract_structured_debate,
+        merge_index_prediction,
+    )
+
+    debate_raw = load_agent_debate_json(sym)
+    debate_struct = extract_structured_debate(debate_raw)
+    if debate_struct and prediction:
+        prediction = merge_index_prediction(debate_struct, prediction)
+        stages.append(
+            StageResult(
+                stage="debate_synthesis",
+                status="ok",
+                vendor="agent_debate",
+                fetched_at=now,
+                data={"debate_as_of": debate_raw.get("as_of"), "view": debate_struct.get("view")},
+            )
+        )
+        log.info(
+            "debate",
+            f"Merged agent debate view: {debate_struct.get('view')}",
+            debate_view=debate_struct.get("view"),
+        )
+
     factor_bundle: dict[str, Any] = {}
     if spot > 0 and prediction:
         log.info("explain", "Building factor explanation and sensitivity…")

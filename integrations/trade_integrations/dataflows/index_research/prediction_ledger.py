@@ -13,6 +13,7 @@ from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.models import PredictionRecord
 from trade_integrations.dataflows.index_research.factor_store import load_factor_history
 from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
+from trade_integrations.dataflows.index_research.horizon_dates import resolve_maturity_trading_date
 from trade_integrations.dataflows.index_research.sources.history_loader import (
     NIFTY_SYMBOL,
     load_nifty_history,
@@ -233,6 +234,7 @@ def reconcile_predictions(*, as_of: datetime | None = None) -> int:
         return 0
 
     history = load_nifty_history(days=400)
+    trading_dates = history["date"].astype(str).str[:10].tolist() if not history.empty else []
     updated = 0
 
     for idx, row in ledger.iterrows():
@@ -244,7 +246,14 @@ def reconcile_predictions(*, as_of: datetime | None = None) -> int:
             predicted_at = datetime.fromisoformat(str(predicted_at))
         pred_date = predicted_at.date() if hasattr(predicted_at, "date") else predicted_at
         horizon_days = int(row["horizon_days"])
-        maturity = pred_date + timedelta(days=horizon_days)
+        pred_day = pred_date.isoformat() if hasattr(pred_date, "isoformat") else str(pred_date)[:10]
+        maturity_day = resolve_maturity_trading_date(pred_day, horizon_days, trading_dates)
+        if not maturity_day:
+            continue
+        try:
+            maturity = date.fromisoformat(maturity_day[:10])
+        except ValueError:
+            continue
         if maturity > today:
             continue
 
@@ -299,6 +308,21 @@ def _persist_ledger_miss_analysis(ledger: pd.DataFrame) -> None:
         analyses = analyze_ledger_misses(rows)
         if analyses:
             _write_parquet(pd.DataFrame(analyses), get_miss_analysis_path())
+        try:
+            from trade_integrations.dataflows.index_research.prediction_counterfactual import (
+                analyze_ledger_counterfactual,
+            )
+
+            cf_rows = analyze_ledger_counterfactual(rows)
+            if cf_rows:
+                cf_path = get_hub_dir() / _LEDGER_SUBDIR / "ledger_counterfactual_latest.json"
+                cf_path.parent.mkdir(parents=True, exist_ok=True)
+                cf_path.write_text(
+                    json.dumps({"rows": cf_rows, "as_of": datetime.now(timezone.utc).isoformat()}, indent=2),
+                    encoding="utf-8",
+                )
+        except Exception:
+            pass
     except Exception:
         pass
 

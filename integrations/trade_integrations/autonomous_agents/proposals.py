@@ -29,6 +29,7 @@ from trade_integrations.autonomous_agents.store import (
     get_agent,
     list_agents,
     load_proposal,
+    mark_superseded_proposals,
     new_agent_id,
     new_proposal_id,
     save_agent,
@@ -229,6 +230,10 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     proposal["routing_errors"] = routing_errors
     if routing_errors:
         proposal["status"] = "incomplete"
+
+    orch_sid = str(proposal.get("orchestrator_session_id") or "").strip()
+    if orch_sid:
+        mark_superseded_proposals(orch_sid, except_proposal_id=proposal_id)
 
     save_proposal(proposal)
 
@@ -476,6 +481,25 @@ def commit_autonomous_agent(
         paper_session_warnings.append(
             "US agent — OpenAlgo INR auto-paper session not started; use Alpaca paper tools."
         )
+
+    if profile.uses_nautilus_handoff:
+        try:
+            from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+
+            watch_warning = ensure_nautilus_watch_for_agent(agent_id)
+            if watch_warning:
+                paper_session_warnings.append(watch_warning)
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "ensure_nautilus_watch on commit failed",
+                exc_info=True,
+            )
+            paper_session_warnings.append(
+                f"Nautilus watch not started ({exc}). "
+                f"Run: trade start nautilus-watch --agent-id {agent_id}"
+            )
 
     try:
         from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff

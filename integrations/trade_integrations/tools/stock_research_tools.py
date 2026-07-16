@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from trade_integrations.context.hub import (
-    is_stock_cache_fresh,
-    is_stock_research_eligible,
-    load_stock_research_markdown,
-    save_stock_research,
-)
-from trade_integrations.dataflows.stock_research.aggregator import run_stock_research
+from trade_integrations.context.hub import is_stock_research_eligible
 from trade_integrations.dataflows.stock_research.format import format_stock_report
+from trade_integrations.research.orchestrator import ensure_research_complete
+from trade_integrations.research.registry import ResearchKind
 
 
 def fetch_stock_research_report(
@@ -27,14 +23,18 @@ def fetch_stock_research_report(
             "(indices and non-stock instruments are excluded)."
         )
 
-    if use_cache and is_stock_cache_fresh(ticker):
-        cached = load_stock_research_markdown(ticker)
-        if cached:
-            return cached
-
-    doc = run_stock_research(ticker, lookahead_days=lookahead_days or 14)
-    save_stock_research(doc)
-    return format_stock_report(doc)
+    result = ensure_research_complete(
+        ticker,
+        kind=ResearchKind.STOCK,
+        refresh=not use_cache,
+        horizon_days=lookahead_days or 14,
+        require_debate=False,
+    )
+    if result.error and result.doc is None:
+        return f"Stock research failed for {ticker}: {result.error}"
+    if result.doc is None:
+        return f"No stock research available for {ticker}."
+    return format_stock_report(result.doc)
 
 
 def get_stock_research(

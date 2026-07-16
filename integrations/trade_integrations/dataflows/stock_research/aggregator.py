@@ -70,6 +70,7 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
 
     from trade_integrations.context.hub import load_agent_debate_json
     from trade_integrations.research.debate_synthesis import (
+        apply_debate_bias_to_stock_ranked,
         extract_structured_debate,
         merge_stock_prediction,
     )
@@ -85,6 +86,13 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
         spot=spot,
         horizon_days=lookahead_days,
     )
+
+    if ranked and debate_struct.get("view"):
+        ranked = apply_debate_bias_to_stock_ranked(
+            ranked,
+            debate_view=debate_struct.get("view"),
+            debate_confidence=float(debate_struct.get("direction_confidence") or 0.0),
+        )
 
     if ranked and merged_prediction.get("target"):
         ranked[0]["target"] = merged_prediction["target"]
@@ -132,7 +140,50 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
 
     if ranked:
         top = ranked[0]
-        legs = [
+        rng = merged_prediction.get("range") or {}
+        for row in ranked[:5]:
+            action = str(row.get("action", "BUY")).upper()
+            if action == "HOLD":
+                continue
+            target_px = row.get("target") or merged_prediction.get("target")
+            stop_px = row.get("stop") or merged_prediction.get("stop")
+            if action == "BUY" and spot > 0:
+                if target_px is None or float(target_px) <= spot:
+                    target_px = rng.get("high") or row.get("target")
+                if stop_px is None or float(stop_px) >= spot:
+                    stop_px = rng.get("low") or row.get("stop")
+            row["target"] = target_px
+            row["stop"] = stop_px
+            legs = [
+                {
+                    "symbol": sym,
+                    "side": action,
+                    "price": spot,
+                    "quantity": row.get("quantity", 1),
+                    "product": row.get("product", "CNC"),
+                }
+            ]
+            row_charges = calculate_equity_charges(legs, product=row.get("product", "CNC"))
+            entry_charges = float((row_charges.get("total") or {}).get("total_charges") or 0)
+            exit_charges = float(row_charges.get("exit_charges") or 0)
+            row_payoff = build_stock_payoff(
+                spot,
+                int(row.get("quantity", 1)),
+                target=target_px,
+                stop=stop_px,
+                entry_charges=entry_charges,
+                exit_charges=exit_charges,
+            )
+            row["legs"] = legs
+            row["charges"] = row_charges
+            row["payoff"] = row_payoff
+            row["max_profit"] = row_payoff.get("max_profit")
+            row["max_loss"] = row_payoff.get("max_loss")
+            row["net_max_profit"] = row_payoff.get("net_max_profit")
+            row["net_max_loss"] = row_payoff.get("net_max_loss")
+
+        top = ranked[0]
+        legs = top.get("legs") or [
             {
                 "symbol": sym,
                 "side": top.get("action", "BUY"),
@@ -142,25 +193,10 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
             }
         ]
         doc.recommended = dict(top)
-        doc.charges = calculate_equity_charges(legs, product=top.get("product", "CNC"))
-        entry_charges = float((doc.charges.get("total") or {}).get("total_charges") or 0)
-        exit_charges = float(doc.charges.get("exit_charges") or 0)
+        doc.charges = top.get("charges") or calculate_equity_charges(legs, product=top.get("product", "CNC"))
+        doc.payoff = top.get("payoff") or {}
         target_px = top.get("target") or merged_prediction.get("target")
         stop_px = top.get("stop") or merged_prediction.get("stop")
-        if str(top.get("action", "BUY")).upper() == "BUY" and spot > 0:
-            rng = merged_prediction.get("range") or {}
-            if target_px is None or float(target_px) <= spot:
-                target_px = rng.get("high") or top.get("target")
-            if stop_px is None or float(stop_px) >= spot:
-                stop_px = rng.get("low") or top.get("stop")
-        doc.payoff = build_stock_payoff(
-            spot,
-            int(top.get("quantity", 1)),
-            target=target_px,
-            stop=stop_px,
-            entry_charges=entry_charges,
-            exit_charges=exit_charges,
-        )
         doc.recommended["max_profit"] = doc.payoff.get("max_profit")
         doc.recommended["max_loss"] = doc.payoff.get("max_loss")
         doc.recommended["net_max_profit"] = doc.payoff.get("net_max_profit")

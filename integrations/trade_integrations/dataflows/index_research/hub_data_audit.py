@@ -13,6 +13,7 @@ from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
 from trade_integrations.dataflows.index_research.factor_store import get_factor_data_dir, load_factor_history
+from trade_integrations.dataflows.index_research.horizon_dates import resolve_maturity_trading_date
 from trade_integrations.dataflows.index_research.sources.history_loader import load_aligned_factor_history
 
 _ANOMALOUS_STEMS = frozenset({"None", "none", "null", "NaT"})
@@ -46,12 +47,7 @@ def _trading_date_on_or_before(dates: list[str], target: date) -> str | None:
 
 
 def _maturity_date(prediction_date: str, horizon_days: int, trading_dates: list[str]) -> str | None:
-    try:
-        pred = date.fromisoformat(prediction_date[:10])
-    except ValueError:
-        return None
-    target = pred + timedelta(days=horizon_days)
-    return _trading_date_on_or_before(trading_dates, target)
+    return resolve_maturity_trading_date(prediction_date, horizon_days, trading_dates)
 
 
 def _constituent_history_coverage(hub: Path, trading_days: list[str]) -> dict[str, Any]:

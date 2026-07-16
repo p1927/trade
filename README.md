@@ -106,7 +106,28 @@ python scripts/setup_vibe.py --verify   # should print: OpenAlgo MCP: ok
 | Vibe API | http://localhost:8899 | Backend for the UI |
 | OpenAlgo | http://127.0.0.1:5001 | Broker bridge, option chain, execution |
 
-**Autonomous agents:** Nautilus watch is **on by default** (`NAUTILUS_WATCH_ENABLE=true`). Opt out with `NAUTILUS_WATCH_ENABLE=0`. Hub UI at `/autonomous` shows scheduler + Nautilus health, mandate chips, and last decision per agent.
+**Autonomous agents:** Hub UI at `/autonomous` — create agents in chat, confirm proposals, then bootstrap runs immediately (watch summary + first research turn in agent chat). Cards show `initializing` → `scheduler ok`, Nautilus `poll` / `expected` / `node_on`, and `watch ready` vs `position tracked`.
+
+| Setting | Default | Role |
+|---------|---------|------|
+| `NAUTILUS_WATCH_ENABLE` | `true` | India watch bridge (opt out with `0`) |
+| `AUTONOMOUS_AGENTS_ENABLE_SCHEDULER` | `1` | Per-agent watch + research jobs |
+| `VIBE_TRADING_ENABLE_SCHEDULER` | `1` | Vibe API job executor (required for bootstrap resume) |
+
+**Nautilus watch process** (continuous alerts between scheduler ticks):
+
+```bash
+# After confirming an India agent (aa_… id shown in hub or commit toast):
+trade start nautilus-watch --agent-id aa_your_agent_id
+
+# Or set in .env and restart stack:
+# NAUTILUS_AGENT_ID=aa_your_agent_id
+
+# Background stack (OpenAlgo + Vibe) also auto-starts watch when a running India agent exists:
+trade start daemon
+```
+
+If `.venv-nautilus` is missing, the stack falls back to the **legacy poll loop** (same OpenAlgo feed; run `./scripts/setup_nautilus.sh` for full TradingNode). Verify: `./scripts/verify_autonomous_integration.py`
 
 ### Troubleshooting
 

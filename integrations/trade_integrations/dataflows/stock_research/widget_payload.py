@@ -162,6 +162,12 @@ def build_stock_trade_widget_from_doc(
                 "score": s.get("score"),
                 "action": s.get("action"),
                 "rationale": (s.get("rationale") or "")[:200],
+                "max_profit": s.get("max_profit"),
+                "max_loss": s.get("max_loss"),
+                "net_max_profit": s.get("net_max_profit"),
+                "net_max_loss": s.get("net_max_loss"),
+                "target": s.get("target"),
+                "stop": s.get("stop"),
             }
             for s in ranked[:5]
         ],
