@@ -174,3 +174,9 @@ def save_orchestrator_meta(meta: dict[str, Any]) -> dict[str, Any]:
     meta["updated_at"] = datetime.now(timezone.utc).isoformat()
     path.write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
     return meta
+
+
+def clear_orchestrator_meta() -> None:
+    path = _agents_root() / _ORCHESTRATOR_FILE
+    if path.is_file():
+        path.unlink()
