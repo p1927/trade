@@ -23,13 +23,16 @@ class FactorSnapshot:
 
 @dataclass
 class PredictionRecord:
-    """Logged forecast for later reconciliation (minimal stub for Phase 1)."""
+    """Logged forecast for later reconciliation against actual Nifty moves."""
 
-    as_of: datetime
+    predicted_at: datetime
     horizon_days: int
-    expected_return_pct: float | None = None
-    range_low: float | None = None
-    range_high: float | None = None
+    spot_at_prediction: float
+    expected_return_pct: float
+    range_low: float
+    range_high: float
+    actual_return_pct: float | None = None
+    direction_correct: bool | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
