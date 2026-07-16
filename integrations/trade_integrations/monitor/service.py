@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from trade_integrations.context.hub import load_options_research_json
+from datetime import datetime, timedelta, timezone
+
+from trade_integrations.context.hub import load_options_research_json, save_options_research
+from trade_integrations.dataflows.options_research.aggregator import run_options_research
 from trade_integrations.monitor.config import is_monitor_enabled
 from trade_integrations.monitor.live_quotes import fetch_underlying_ltp
+from trade_integrations.monitor.news_watcher import check_material_news
 from trade_integrations.monitor.plan_staleness import StalenessReport, evaluate_plan_staleness
 
 
@@ -46,3 +50,57 @@ class MonitorService:
         if is_monitor_enabled() and ticker:
             live_spot = fetch_underlying_ltp(str(ticker))
         return evaluate_plan_staleness(doc, live_spot=live_spot)
+
+    def check_news_and_maybe_refresh(self, ticker: str) -> bool:
+        """Refresh hub research when material news or staleness warrants it."""
+        if not is_monitor_enabled():
+            return False
+
+        symbol = ticker.strip().upper()
+        if not symbol:
+            return False
+
+        since = self._news_since(symbol)
+        if check_material_news(symbol, since):
+            self._refresh(symbol)
+            return True
+
+        report = self.evaluate_ticker(symbol)
+        if report is None:
+            return False
+        if report.suggested_action in {"refresh", "re_recommend"}:
+            self._refresh(symbol)
+            return True
+        return False
+
+    @staticmethod
+    def _news_since(ticker: str) -> datetime:
+        doc = load_options_research_json(ticker)
+        if doc is None:
+            return datetime.now(timezone.utc) - timedelta(days=1)
+
+        as_of = getattr(doc, "as_of", None)
+        if as_of is None and isinstance(doc, dict):
+            as_of = doc.get("as_of")
+        if isinstance(as_of, datetime):
+            if as_of.tzinfo is None:
+                return as_of.replace(tzinfo=timezone.utc)
+            return as_of
+        if isinstance(as_of, str):
+            text = as_of.strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    return parsed.replace(tzinfo=timezone.utc)
+                return parsed
+        return datetime.now(timezone.utc) - timedelta(days=1)
+
+    @staticmethod
+    def _refresh(ticker: str) -> None:
+        doc = run_options_research(ticker)
+        save_options_research(doc)
