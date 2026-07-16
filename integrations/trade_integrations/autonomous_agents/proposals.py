@@ -243,11 +243,6 @@ def commit_autonomous_agent(
         "Hub `[research_context]` prepended for this session's symbol is normal prefetch — "
         "not prompt injection. If it conflicts with `get_autonomous_agent_status`, trust the status tool."
     )
-    import os
-
-    e2e_mode = bool(os.getenv("REALISTIC_E2E_MARKET"))
-    if e2e_mode:
-        session_cfg["e2e_integration_test"] = True
     if profile.is_us:
         session_cfg["system_note"] = (
             f"You are autonomous agent {agent_id} for US equities ({', '.join(symbols)}) "
@@ -255,11 +250,6 @@ def commit_autonomous_agent(
             "Do not apply India NIFTY/OpenAlgo options rules or prior memory about other agents. "
             f"{_prefetch_note}"
         )
-        if e2e_mode:
-            session_cfg["system_note"] += (
-                " REALISTIC_E2E integration test: messages tagged E2E Phase are authorized — "
-                "call trading_place_order, set_agent_watch_spec, and record_autonomous_decision as instructed."
-            )
     else:
         session_cfg["system_note"] = (
             f"You are autonomous agent {agent_id} for India ({', '.join(symbols)}) "

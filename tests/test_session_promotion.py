@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+AGENT_SRC = Path(__file__).resolve().parents[1] / "vibetrading" / "agent"
+if str(AGENT_SRC) not in sys.path:
+    sys.path.insert(0, str(AGENT_SRC))
+
 
 def test_promote_orchestrator_session_updates_config_and_title(tmp_path, monkeypatch):
     from trade_integrations.autonomous_agents.session_promotion import promote_orchestrator_session

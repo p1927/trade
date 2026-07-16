@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
+
+AGENT_SRC = Path(__file__).resolve().parents[1] / "vibetrading" / "agent"
+if str(AGENT_SRC) not in sys.path:
+    sys.path.insert(0, str(AGENT_SRC))
 
 
 @pytest.fixture
