@@ -29,6 +29,12 @@ PROVIDER_KEY_ENV = {
     "minimax": "MINIMAX_API_KEY",
 }
 
+PROVIDER_BASE_URL_ENV = {
+    "minimax": ("MINIMAX_BASE_URL", "https://api.minimax.io/v1"),
+    "moonshot": ("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
+    "deepseek": ("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+}
+
 
 def _load_trade_env() -> None:
     env_file = ROOT / ".env"
@@ -178,6 +184,10 @@ def sync_vibe_env(dry_run: bool = False, force: bool = False) -> Path | None:
     if api_key:
         key_env = PROVIDER_KEY_ENV.get(provider, "OPENAI_API_KEY")
         lines.append(f"{key_env}={api_key}")
+    if provider in PROVIDER_BASE_URL_ENV:
+        env_name, default_url = PROVIDER_BASE_URL_ENV[provider]
+        base_url = os.getenv(env_name, "").strip() or default_url
+        lines.append(f"{env_name}={base_url}")
 
     hub = hub_dir()
     allowed = [str(hub), str(ROOT / "reports"), str(ROOT)]
