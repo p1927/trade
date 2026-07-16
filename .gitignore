@@ -226,6 +226,7 @@ stack/vibe-upstream/
 # Local stack launcher
 .stack.pids
 .exposure.state
+.exposure.pids
 cookies.txt
 
 # Editor / local IDE
