@@ -98,7 +98,7 @@ stack_launch_detached() {
     echo $! >"$pidfile"
   )
 
-  sleep 1
+  sleep 3
   existing="$(stack_read_pid "$pidfile")"
   if stack_pid_alive "$existing"; then
     return 0
@@ -175,6 +175,7 @@ stack_start_openalgo() {
   fi
 
   stack_kill_port "$port"
+  stack_kill_port 8765
 
   runner="$(stack_pick_openalgo_cmd)"
   echo "[stack] starting OpenAlgo on :$port ..."
@@ -277,6 +278,7 @@ stack_stop_vibe_stack() {
   stack_kill_port "$ui_port"
   stack_kill_port "$api_port"
   stack_kill_port "$openalgo_port"
+  stack_kill_port 8765
 
   sleep 1
 }
