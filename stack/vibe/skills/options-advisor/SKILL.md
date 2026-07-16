@@ -50,7 +50,7 @@ From the JSON, explain:
 - `recommended` (legs, rationale, gross + **net** payoff, charges, `net_debit_credit`)
 - `payoff_over_time.samples` — P&L at different days-to-expiry (theta decay at current spot)
 
-### Step 2b — Show interactive trade widget (preferred for strategy questions)
+### Step 2b — Show interactive trade widget (**required** for strategy questions)
 
 When the user asks what to trade, which strategy to pick, or wants scenarios with payoff/charges:
 
@@ -65,7 +65,23 @@ When the user asks what to trade, which strategy to pick, or wants scenarios wit
 4. Summarize in chat: why the **recommended** tier wins vs alternatives; mention earnings/corp-event signals when present.
 5. Use `refresh=true` when chain moved or user asks for fresh research.
 
-Do **not** only paste markdown when a widget would help — call `get_options_trade_widget` so the user can choose and execute.
+**Wrong** — markdown-only strategy list without calling the widget:
+
+```
+Top strategies for NIFTY:
+1. Iron condor (tier A, score 0.82)
+2. Bull call spread (tier B, score 0.71)
+Recommended: iron condor with legs 24000 PE / 24100 PE / 24500 CE / 24600 CE
+```
+
+**Right** — call `get_options_trade_widget(ticker)` in the same turn, then summarize:
+
+```
+Calling get_options_trade_widget("NIFTY") — the interactive card below shows payoff, charges, and execute steps.
+Iron condor ranks first because IV is elevated and the expected range is narrow into expiry.
+```
+
+Do **not** answer strategy questions with markdown-only lists — always call `get_options_trade_widget` so the user can visualize, adjust strikes, and execute.
 
 ### Step 3 — Validate live
 

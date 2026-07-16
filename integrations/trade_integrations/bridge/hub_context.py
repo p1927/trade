@@ -76,6 +76,11 @@ def format_research_context_for_agent(artifact: dict[str, Any] | None) -> str:
         "refresh=true) and get_options_trade_plan(ticker, refresh=true) before recommending legs. "
         "For stock underlyings use get_stock_trade_widget / get_stock_trade_plan instead."
     )
+    lines.append(
+        "MANDATORY: When presenting an options strategy recommendation, ranked strategies, "
+        "scenarios, or trade plan, you MUST call get_options_trade_widget(ticker) in the same turn. "
+        "Do not answer with markdown-only strategy lists. If plan_status is stale, use refresh=true."
+    )
     return "\n".join(lines)
 
 
