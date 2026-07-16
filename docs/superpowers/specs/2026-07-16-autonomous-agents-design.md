@@ -99,8 +99,7 @@ User opens /autonomous → card hub (View A)
   → AutonomousAgentProposalCard renders in chat
   → User clicks Confirm → POST /autonomous-agents/commit
   → Backend: create aa_<id>, vibe_session_id, register schedules, start
-  → User taps ← Back (or auto-navigate) → new agent card visible on hub
-  → Optional: auto drill-down into new agent's session chat
+  → User stays on same session (promoted to aa_*); hub Create agent opens a new empty orchestrator session
 ```
 
 **Defaults when user doesn't specify:**
