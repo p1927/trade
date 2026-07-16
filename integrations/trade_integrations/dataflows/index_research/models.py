@@ -35,9 +35,10 @@ class PredictionRecord:
 
 @dataclass
 class ConstituentRow:
-    """Static constituent metadata (minimal stub for Phase 1)."""
+    """Static constituent metadata for index attribution."""
 
     symbol: str
+    name: str = ""
     weight: float = 0.0
     sector: str = ""
 
