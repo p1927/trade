@@ -10,3 +10,7 @@
 	path = vibetrading
 	url = https://github.com/p1927/Vibe-Trading.git
 	branch = main
+[submodule "ed-alpha"]
+	path = ed-alpha
+	url = https://github.com/p1927/ED-ALPHA.git
+	branch = main

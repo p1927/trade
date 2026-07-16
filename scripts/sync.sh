@@ -6,6 +6,7 @@
 #   ./scripts/sync.sh tradingagents
 #   ./scripts/sync.sh openalgo
 #   ./scripts/sync.sh vibetrading
+#   ./scripts/sync.sh ed-alpha
 #   ./scripts/sync.sh status
 
 set -euo pipefail
@@ -60,6 +61,19 @@ sync_vibetrading() {
   echo "    Commit and push trade when ready: git commit -m 'chore: bump vibetrading submodule'"
 }
 
+sync_ed_alpha() {
+  echo "==> Syncing ED-ALPHA (upstream -> p1927/ED-ALPHA submodule)"
+  ensure_upstream "$ROOT/ed-alpha" "https://github.com/E9Technologies/ED-ALPHA.git"
+  cd "$ROOT/ed-alpha"
+  git fetch upstream
+  git merge --no-edit upstream/main
+  git push origin main
+  cd "$ROOT"
+  git add ed-alpha
+  echo "    Updated ed-alpha submodule pointer."
+  echo "    Commit and push trade when ready: git commit -m 'chore: bump ed-alpha submodule'"
+}
+
 show_status() {
   echo "==> Trade repository"
   cd "$ROOT"
@@ -86,6 +100,16 @@ show_status() {
   else
     echo "    vibetrading/ submodule not initialized"
   fi
+  echo
+  echo "==> ED-ALPHA upstream delta"
+  if [[ -d "$ROOT/ed-alpha/.git" ]]; then
+    ensure_upstream "$ROOT/ed-alpha" "https://github.com/E9Technologies/ED-ALPHA.git"
+    cd "$ROOT/ed-alpha"
+    git fetch upstream --quiet
+    git log --oneline HEAD..upstream/main | head -10 || true
+  else
+    echo "    ed-alpha/ submodule not initialized"
+  fi
 }
 
 case "$TARGET" in
@@ -98,10 +122,14 @@ case "$TARGET" in
   vibetrading|vibe|vt)
     sync_vibetrading
     ;;
+  ed-alpha|edalpha|ea)
+    sync_ed_alpha
+    ;;
   all)
     sync_tradingagents
     sync_openalgo
     sync_vibetrading
+    sync_ed_alpha
     ;;
   status)
     show_status
@@ -115,6 +143,7 @@ Targets:
   tradingagents   Merge upstream TradingAgents into tradingagents/
   openalgo        Merge upstream OpenAlgo into openalgo/
   vibetrading     Merge upstream HKUDS/Vibe-Trading into vibetrading/
+  ed-alpha        Merge upstream E9Technologies/ED-ALPHA into ed-alpha/
   status          Show pending upstream commits for all submodules
 EOF
     ;;
