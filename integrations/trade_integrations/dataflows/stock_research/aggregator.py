@@ -14,6 +14,7 @@ from .browse_summary import build_stock_browse_summary
 from .format import format_stock_report
 from .models import StockResearchDoc
 from .payoff_charges import build_stock_payoff, calculate_equity_charges
+from .predictor import predict_stock
 from .strategy_ranker import build_stock_scenarios, rank_stock_strategies
 
 
@@ -66,8 +67,29 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
 
     ranked = rank_stock_strategies(payload, spot=spot) if spot > 0 else []
     scenarios = build_stock_scenarios(payload.get("calendar_events") or [], ranked)
-    sentiment = payload.get("sentiment") or {}
-    view = "bullish" if (sentiment.get("score") or 0) > 0.15 else "bearish" if (sentiment.get("score") or 0) < -0.15 else "neutral"
+
+    from trade_integrations.context.hub import load_agent_debate_json
+    from trade_integrations.research.debate_synthesis import (
+        extract_structured_debate,
+        merge_stock_prediction,
+    )
+
+    events = payload.get("calendar_events") or []
+    earnings_near = any("earn" in str(e.get("type", "")).lower() for e in events[:3])
+    quant = predict_stock(sym, spot, horizon_days=lookahead_days, earnings_widen=earnings_near)
+    debate_raw = load_agent_debate_json(sym)
+    debate_struct = extract_structured_debate(debate_raw)
+    merged_prediction = merge_stock_prediction(
+        debate_struct,
+        quant,
+        spot=spot,
+        horizon_days=lookahead_days,
+    )
+
+    if ranked and merged_prediction.get("target"):
+        ranked[0]["target"] = merged_prediction["target"]
+    if ranked and merged_prediction.get("stop"):
+        ranked[0]["stop"] = merged_prediction["stop"]
 
     doc = StockResearchDoc(
         ticker=sym,
@@ -76,15 +98,10 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
         market=payload.get("market") or "IN",
         spot=spot or None,
         browse_summary=browse,
-        events=list(payload.get("calendar_events") or []),
+        events=list(events),
         scenarios=scenarios,
         ranked_strategies=ranked,
-        prediction={
-            "view": view,
-            "horizon_days": lookahead_days,
-            "confidence": ranked[0]["score"] if ranked else 0,
-            "sentiment": sentiment.get("score"),
-        },
+        prediction=merged_prediction,
         stages=[
             StageResult(
                 stage="company_research",
@@ -92,9 +109,26 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
                 vendor="hub",
                 fetched_at=now,
                 data={"ticker": sym},
-            )
+            ),
+            StageResult(
+                stage="stock_quant_predict",
+                status="ok",
+                vendor=quant.get("source") or "quant",
+                fetched_at=now,
+                data={"horizon_days": lookahead_days},
+            ),
         ],
     )
+    if debate_raw:
+        doc.stages.append(
+            StageResult(
+                stage="debate_synthesis",
+                status="ok",
+                vendor="agent_debate",
+                fetched_at=now,
+                data={"debate_as_of": debate_raw.get("as_of")},
+            )
+        )
 
     if ranked:
         top = ranked[0]
