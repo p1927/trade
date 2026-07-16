@@ -192,9 +192,42 @@ def _provider_from_trade_env() -> tuple[str, str, str]:
     return provider, model, api_key
 
 
+def _patch_vibe_env_keys(target: Path, *, dry_run: bool = False) -> None:
+    """Append trade-stack keys to an existing ~/.vibe-trading/.env when missing."""
+    hub = hub_dir()
+    required = {
+        "TRADE_STACK_HUB_DIR": str(hub),
+        "TRADE_STACK_ROOT": str(ROOT),
+    }
+    openalgo_host = (os.getenv("OPENALGO_HOST") or "http://127.0.0.1:5001").rstrip("/")
+    openalgo_key = os.getenv("OPENALGO_API_KEY", "").strip()
+    paper_mode = os.getenv("OPENALGO_PAPER_MODE", "true").strip().lower()
+    required["OPENALGO_HOST"] = openalgo_host
+    required["OPENALGO_PAPER_MODE"] = "true" if paper_mode in ("1", "true", "yes") else "false"
+    if openalgo_key:
+        required["OPENALGO_API_KEY"] = openalgo_key
+
+    existing = target.read_text(encoding="utf-8") if target.is_file() else ""
+    present = {
+        line.split("=", 1)[0].strip()
+        for line in existing.splitlines()
+        if "=" in line and not line.strip().startswith("#")
+    }
+    additions = [f"{k}={v}" for k, v in required.items() if k not in present]
+    if not additions:
+        return
+    block = "\n# Patched by scripts/setup_vibe.py\n" + "\n".join(additions) + "\n"
+    if dry_run:
+        print(block.rstrip())
+        return
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(block)
+
+
 def sync_vibe_env(dry_run: bool = False, force: bool = False) -> Path | None:
     target = vibe_home() / ".env"
     if target.is_file() and not force:
+        _patch_vibe_env_keys(target, dry_run=dry_run)
         return None
 
     provider, model, api_key = _provider_from_trade_env()
@@ -216,6 +249,7 @@ def sync_vibe_env(dry_run: bool = False, force: bool = False) -> Path | None:
     allowed = [str(hub), str(ROOT / "reports"), str(ROOT)]
     lines.append(f"VIBE_TRADING_ALLOWED_FILE_ROOTS={','.join(allowed)}")
     lines.append(f"TRADE_STACK_HUB_DIR={hub}")
+    lines.append(f"TRADE_STACK_ROOT={ROOT}")
 
     openalgo_host = (os.getenv("OPENALGO_HOST") or "http://127.0.0.1:5001").rstrip("/")
     openalgo_key = os.getenv("OPENALGO_API_KEY", "").strip()
@@ -264,7 +298,8 @@ def main() -> int:
     if env_path:
         print(f"Wrote {env_path}")
     else:
-        print(f"Kept existing {vibe_home() / '.env'} (use --force-env to replace)")
+        patched = vibe_home() / ".env"
+        print(f"Patched/kept {patched} (use --force-env to replace)")
 
     ok, message = verify_openalgo_mcp()
     if ok:

@@ -62,6 +62,8 @@ For index or F&O stock options, use the **options-advisor** skill and hub path:
 
 **Vibe automation (OpenAlgo MCP):** `get_options_browse` for in-chat chain tables; `get_options_trade_plan` to load or refresh the full plan.
 
+On **finalize**, call `run_tradingagents_analysis` — debate appears in the Research side panel (Agent debate tab).
+
 Regenerate: `python scripts/run_options_research.py NIFTY`
 Quick browse only: `python scripts/browse_options.py NIFTY`
 

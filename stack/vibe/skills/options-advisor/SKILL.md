@@ -24,6 +24,8 @@ Supported underlyings: India **indices** (NIFTY, BANKNIFTY, …) and **F&O stock
 
 When the user asks what to trade, which strategy, or how to execute before expiry:
 
+**Automatic research (Vibe backend):** When the user mentions a ticker, the session prefetches the hub trade plan and opens the **Research** side panel (Trade plan tab). You do not need to re-fetch if the panel already shows fresh data — but always call MCP tools when explaining strategies so the user gets the widget.
+
 ### Step 0 — Browse what's available (always start here for "what can I trade?")
 
 1. Call OpenAlgo MCP **`get_options_browse`** (compact table) or read `browse_summary` from `latest.json`.
@@ -77,6 +79,17 @@ Link Strategy Builder (user must be logged into OpenAlgo):
 - **Live P&L over time:** `{meta.strategy_builder_pnl_url}` (`&tab=pnl`)
 - **Execute wizard:** `{meta.strategy_builder_execute_url}` (`&execute=1`)
 
+### Step 4b — Finalize with TradingAgents debate
+
+When the user **finalizes** a plan, asks for a **second opinion**, or says **confirm / ready to trade**:
+
+1. Call OpenAlgo MCP **`run_tradingagents_analysis(ticker)`** (or rely on auto-trigger if the **Agent debate** side panel is already loading).
+2. Read the debate summary: bull/bear investment debate, risk trio, final rating.
+3. **Reconcile** hub `recommended` strategy with the debate rating and risk view — state clearly where they agree or conflict.
+4. Only then proceed to margin check and execution (Step 5).
+
+The debate artifact lives at `{{TRADE_STACK_HUB_DIR}}/{UNDERLYING}/agent_debate/latest.json` and appears in the Vibe **Research → Agent debate** tab.
+
 ### Step 5 — Execute only after explicit user confirmation
 
 **Preferred:** user clicks **Execute in OpenAlgo** on the trade widget (Vibe proxies `POST /trade/execute-basket`).
@@ -129,6 +142,15 @@ The options plan **reads hub signals** (`earnings_signal`, `corp_events`) into e
 | `get_trade_charges` | Brokerage, STT, GST, stamp, exchange, net_debit_credit |
 | `calculate_margin` | Pre-trade margin check |
 | `place_basket_order` | Multi-leg execution after confirm |
+| `run_tradingagents_analysis` | **Multi-agent debate** on finalize — bull/bear/risk, saved to hub |
+
+## Research side panel
+
+Vibe shows hub research in a collapsible **Research** panel on the right:
+- **Trade plan** — prediction, ranked strategies, scenarios (from hub)
+- **Agent debate** — TradingAgents bull/bear/risk summary (on finalize or manual run)
+
+Refer to what the panel shows; do not contradict structured hub data without calling `refresh=true`.
 
 ## Charges and net P&L
 
