@@ -143,12 +143,25 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
         ]
         doc.recommended = dict(top)
         doc.charges = calculate_equity_charges(legs, product=top.get("product", "CNC"))
+        entry_charges = float((doc.charges.get("total") or {}).get("total_charges") or 0)
+        exit_charges = float(doc.charges.get("exit_charges") or 0)
+        target_px = top.get("target") or merged_prediction.get("target")
+        stop_px = top.get("stop") or merged_prediction.get("stop")
         doc.payoff = build_stock_payoff(
             spot,
             int(top.get("quantity", 1)),
-            target=top.get("target"),
-            stop=top.get("stop"),
+            target=target_px,
+            stop=stop_px,
+            entry_charges=entry_charges,
+            exit_charges=exit_charges,
         )
+        doc.recommended["max_profit"] = doc.payoff.get("max_profit")
+        doc.recommended["max_loss"] = doc.payoff.get("max_loss")
+        doc.recommended["net_max_profit"] = doc.payoff.get("net_max_profit")
+        doc.recommended["net_max_loss"] = doc.payoff.get("net_max_loss")
+        doc.recommended["target"] = target_px
+        doc.recommended["stop"] = stop_px
+        doc.recommended["legs"] = legs
         doc.implementation_steps = [
             {"step": 1, "action": "preview", "description": "Review entry, target, stop"},
             {

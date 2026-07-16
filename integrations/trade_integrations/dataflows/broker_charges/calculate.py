@@ -196,3 +196,128 @@ def calculate_charges_with_exit_for_legs(
     entry["exit_charges"] = round(exit_total, 2)
     entry["round_trip_charges"] = round(entry_total + exit_total, 2)
     return entry
+
+
+def _equity_brokerage(turnover: float, *, broker_cfg: dict[str, Any], product: str) -> float:
+    product_u = product.upper()
+    if product_u == "CNC":
+        flat = float(broker_cfg.get("equity_cnc_brokerage_inr") or 0)
+        rate = float(broker_cfg.get("equity_cnc_brokerage_rate") or 0)
+        if rate > 0:
+            return min(20.0, turnover * rate)
+        return flat
+    flat = float(broker_cfg.get("equity_mis_brokerage_inr") or 20)
+    rate = float(broker_cfg.get("equity_mis_brokerage_rate") or 0.0003)
+    return min(flat, turnover * rate)
+
+
+def calculate_equity_leg_charges(
+    leg: dict[str, Any],
+    *,
+    broker: str | None = None,
+    product: str = "CNC",
+) -> dict[str, Any]:
+    """Per-leg NSE equity delivery/MIS charges from broker presets."""
+    presets = load_presets()
+    broker_id = normalize_broker_id(broker or presets.get("default_broker"))
+    broker_cfg = presets["brokers"][broker_id]
+    stat = presets["statutory"]["nse_equity"]
+    side = str(leg.get("side") or "BUY").upper()
+    turnover = _leg_turnover(leg)
+    prod = str(leg.get("product") or product or "CNC").upper()
+    brokerage = _equity_brokerage(turnover, broker_cfg=broker_cfg, product=prod)
+    stt = turnover * stat["stt_sell_rate"] if side == "SELL" else 0.0
+    exchange = turnover * stat["exchange_rate"]
+    sebi = turnover * (stat["sebi_per_crore"] / 1e7)
+    stamp = turnover * stat["stamp_buy_rate"] if side == "BUY" else 0.0
+    gst = stat["gst_rate"] * (brokerage + exchange + sebi)
+    total = brokerage + stt + exchange + gst + stamp + sebi
+    return {
+        "symbol": leg.get("symbol"),
+        "side": side,
+        "product": prod,
+        "brokerage": round(brokerage, 2),
+        "stt": round(stt, 2),
+        "exchange": round(exchange, 2),
+        "gst": round(gst, 2),
+        "stamp": round(stamp, 2),
+        "sebi": round(sebi, 2),
+        "total_charges": round(total, 2),
+        "turnover": round(turnover, 2),
+        "source": broker_id,
+        "segment": "equity",
+    }
+
+
+def calculate_equity_charges_for_legs(
+    legs: list[dict[str, Any]],
+    *,
+    broker: str | None = None,
+    product: str = "CNC",
+    include_exit: bool = True,
+) -> dict[str, Any]:
+    """Entry + optional exit (reverse side) equity charges with round-trip total."""
+    if not legs:
+        presets = load_presets()
+        broker_id = normalize_broker_id(broker or presets.get("default_broker"))
+        return {
+            "per_leg": [],
+            "total": {},
+            "broker_preset": broker_id,
+            "net_debit_credit": 0.0,
+            "round_trip_charges": 0.0,
+            "charge_source": broker_id,
+        }
+
+    prod = str(legs[0].get("product") or product or "CNC").upper()
+    entry_legs = [{**leg, "product": prod} for leg in legs]
+    per_leg = [
+        calculate_equity_leg_charges(leg, broker=broker, product=prod) for leg in entry_legs
+    ]
+    totals = {
+        "brokerage": 0.0,
+        "stt": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "stamp": 0.0,
+        "sebi": 0.0,
+        "total_charges": 0.0,
+    }
+    for row in per_leg:
+        for k in totals:
+            totals[k] += float(row.get(k) or 0)
+    for k in totals:
+        totals[k] = round(totals[k], 2)
+
+    net = sum(
+        -float(l.get("price", 0)) * _leg_qty(l)
+        if str(l.get("side", "BUY")).upper() == "BUY"
+        else float(l.get("price", 0)) * _leg_qty(l)
+        for l in entry_legs
+    )
+
+    entry_total = totals["total_charges"]
+    exit_total = 0.0
+    if include_exit:
+        exit_legs = []
+        for leg in entry_legs:
+            side = "SELL" if str(leg.get("side", "BUY")).upper() == "BUY" else "BUY"
+            exit_legs.append({**leg, "side": side})
+        exit_rows = [
+            calculate_equity_leg_charges(leg, broker=broker, product=prod) for leg in exit_legs
+        ]
+        exit_total = round(sum(float(r.get("total_charges") or 0) for r in exit_rows), 2)
+
+    presets = load_presets()
+    broker_id = normalize_broker_id(broker or presets.get("default_broker"))
+    return {
+        "per_leg": per_leg,
+        "total": totals,
+        "broker_preset": broker_id,
+        "broker_display": presets["brokers"][broker_id]["display_name"],
+        "net_debit_credit": round(net, 2),
+        "round_trip_charges": round(entry_total + exit_total, 2),
+        "exit_charges": exit_total,
+        "charge_source": broker_id,
+        "pricing_url": presets["brokers"][broker_id].get("pricing_url"),
+    }

@@ -25,6 +25,14 @@
       "stamp_buy_rate": 0.00002,
       "sebi_per_crore": 10,
       "gst_rate": 0.18
+    },
+    "nse_equity": {
+      "stt_sell_rate": 0.001,
+      "stt_note": "0.1% on sell-side delivery turnover",
+      "exchange_rate": 0.0000345,
+      "stamp_buy_rate": 0.00015,
+      "sebi_per_crore": 10,
+      "gst_rate": 0.18
     }
   },
   "brokers": {
@@ -32,18 +40,30 @@
       "display_name": "Groww",
       "fno_options_brokerage_inr": 20,
       "fno_futures_brokerage_inr": 20,
+      "equity_cnc_brokerage_inr": 0,
+      "equity_cnc_brokerage_rate": 0,
+      "equity_mis_brokerage_inr": 20,
+      "equity_mis_brokerage_rate": 0.0003,
       "pricing_url": "https://groww.in/pricing"
     },
     "indmoney": {
       "display_name": "INDmoney",
       "fno_options_brokerage_inr": 20,
       "fno_futures_brokerage_inr": 20,
+      "equity_cnc_brokerage_inr": 0,
+      "equity_cnc_brokerage_rate": 0,
+      "equity_mis_brokerage_inr": 20,
+      "equity_mis_brokerage_rate": 0.0003,
       "pricing_url": "https://www.indmoney.com/futures-and-options"
     },
     "zerodha": {
       "display_name": "Zerodha",
       "fno_options_brokerage_inr": 20,
       "fno_futures_brokerage_inr": 20,
+      "equity_cnc_brokerage_inr": 0,
+      "equity_cnc_brokerage_rate": 0,
+      "equity_mis_brokerage_inr": 20,
+      "equity_mis_brokerage_rate": 0.0003,
       "pricing_url": "https://zerodha.com/charges"
     }
   },
