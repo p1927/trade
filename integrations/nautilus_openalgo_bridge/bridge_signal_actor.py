@@ -125,7 +125,8 @@ class BridgeSignalActor(Actor):
         )
         try:
             result = dispatch_watch_alert_sync(agent_id, alert)
-            self.log.info(f"Vibe dispatch: {result.get('status')}")
+            reason = result.get("reason") or result.get("error") or ""
+            self.log.info(f"Vibe dispatch: {result.get('status')}" + (f" ({reason})" if reason else ""))
         except Exception as exc:
             self.log.error(f"Vibe dispatch failed: {exc}")
 

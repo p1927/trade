@@ -653,6 +653,7 @@ def _index_doc_from_json(payload: dict):
         factor_sensitivity=list(payload.get("factor_sensitivity") or []),
         event_impact_curves=list(payload.get("event_impact_curves") or []),
         upcoming_events=list(payload.get("upcoming_events") or []),
+        news_impact=dict(payload.get("news_impact") or {}),
         pipeline_log=list(payload.get("pipeline_log") or []),
         stages=stages,
     )

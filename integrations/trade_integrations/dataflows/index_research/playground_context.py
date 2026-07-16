@@ -81,24 +81,51 @@ def build_playground_context(
     from trade_integrations.monitor.news_watcher import check_material_news
 
     today = date.today().isoformat()
-    headlines_raw = _fetch_index_headlines(today, limit=8)
     headlines: list[dict[str, Any]] = []
-    for item in headlines_raw:
+
+    news_impact = getattr(doc, "news_impact", None) or {}
+    for item in (news_impact.get("items") or [])[:8]:
         title = str(item.get("title") or "").strip()
         if not title:
             continue
-        suggested = _headline_factor_hints(title)
+        suggested = [
+            t.get("factor")
+            for t in (item.get("tagged_factors") or [])
+            if t.get("factor")
+        ] or _headline_factor_hints(title)
         headlines.append(
             {
                 "title": title[:200],
-                "source": str(item.get("source") or "")[:80],
+                "source": str(item.get("source") or "verified_news")[:80],
+                "content_summary": str(item.get("content_summary") or "")[:400],
+                "verification_status": (item.get("verification") or {}).get("status"),
                 "suggested_factors": suggested,
-                "primary_factor": suggested[0],
+                "primary_factor": suggested[0] if suggested else "index_sentiment",
                 "suggested_shock_pct": 5.0,
-                "why": _why_for_factor(suggested[0]),
-                "kind": "headline",
+                "why": _why_for_factor(suggested[0] if suggested else "index_sentiment"),
+                "kind": "verified_headline",
             }
         )
+
+    if not headlines:
+        headlines_raw = _fetch_index_headlines(today, limit=8)
+        for item in headlines_raw:
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            suggested = _headline_factor_hints(title)
+            headlines.append(
+                {
+                    "title": title[:200],
+                    "source": str(item.get("source") or "")[:80],
+                    "content_summary": str(item.get("summary") or title)[:400],
+                    "suggested_factors": suggested,
+                    "primary_factor": suggested[0],
+                    "suggested_shock_pct": 5.0,
+                    "why": _why_for_factor(suggested[0]),
+                    "kind": "headline",
+                }
+            )
 
     try:
         material = check_material_news(ticker)

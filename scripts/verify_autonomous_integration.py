@@ -241,7 +241,27 @@ def wait_for_vibe(*, attempts: int = 12, delay_sec: float = 2.5) -> bool:
     return False
 
 
-def ensure_agent_ready(agent_id: str, *, label: str, timeout_sec: int = 240) -> bool:
+def _session_turn_in_flight(session_id: str) -> bool:
+    messages = vibe_get(f"/sessions/{session_id}/messages?limit=30")
+    if not isinstance(messages, list):
+        return False
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        meta = msg.get("metadata") or {}
+        status = str(meta.get("status") or "").lower()
+        if status in {"running", "streaming", "pending"}:
+            return True
+    return False
+
+
+def ensure_agent_ready(
+    agent_id: str,
+    *,
+    session_id: str | None = None,
+    label: str,
+    timeout_sec: int = 240,
+) -> bool:
     """Wait for post-commit bootstrap + in-flight Vibe turns to finish."""
     from trade_integrations.autonomous_agents.store import get_agent, save_agent
 
@@ -250,16 +270,21 @@ def ensure_agent_ready(agent_id: str, *, label: str, timeout_sec: int = 240) -> 
         agent = get_agent(agent_id) or {}
         bootstrap = str(agent.get("bootstrap_status") or "")
         streaming = bool(agent.get("streaming"))
-        if not streaming and bootstrap in ("", "done", "failed"):
+        session_busy = bool(session_id and _session_turn_in_flight(session_id))
+        if not streaming and not session_busy and bootstrap in ("", "done", "failed"):
             _log(label, f"ready (bootstrap={bootstrap or 'n/a'})")
             return True
         time.sleep(3)
 
     agent = get_agent(agent_id) or {}
-    if agent.get("streaming"):
-        _log(label, f"clearing stale streaming after {timeout_sec}s", ok=True)
-        agent["streaming"] = False
-        save_agent(agent)
+    if agent.get("streaming") or (session_id and _session_turn_in_flight(session_id)):
+        if agent.get("streaming"):
+            _log(label, f"clearing stale streaming after {timeout_sec}s", ok=True)
+            agent["streaming"] = False
+            save_agent(agent)
+        if session_id and _session_turn_in_flight(session_id):
+            _log(label, f"session still has running attempt after {timeout_sec}s", ok=False)
+            return False
         return True
 
     _fail(
@@ -354,7 +379,7 @@ def verify_direct_alert_dispatch(agent_id: str, session_id: str) -> bool:
     if not wait_for_vibe():
         _fail("vibe api", "unreachable before alert dispatch")
         return False
-    if not ensure_agent_ready(agent_id, label="pre-dispatch idle"):
+    if not ensure_agent_ready(agent_id, session_id=session_id, label="pre-dispatch idle"):
         return False
     from nautilus_openalgo_bridge.models import BridgeSignal, WatchAlert, WatchRule
     from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
@@ -530,7 +555,7 @@ def main() -> int:
         )
         _log("india test agent", f"{agent_id} session={session_id}")
 
-        if not ensure_agent_ready(agent_id, label="post-commit idle"):
+        if not ensure_agent_ready(agent_id, session_id=session_id, label="post-commit idle"):
             ok_node = ok_alert = False
         else:
             ok_node = True

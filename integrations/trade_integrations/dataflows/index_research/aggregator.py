@@ -360,6 +360,46 @@ def run_index_research(
             f"{len(upcoming_events)} upcoming events in {horizon.days}d horizon",
             count=len(upcoming_events),
         )
+
+    news_impact: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.index_research.news_impact_engine import (
+            build_news_impact_snapshot,
+            save_news_impact_snapshot,
+        )
+
+        macro_map = {
+            str(r.get("factor")): float(r.get("value"))
+            for r in global_factors
+            if r.get("factor") is not None and r.get("value") is not None
+        }
+        news_impact = build_news_impact_snapshot(
+            ticker=sym,
+            horizon_days=horizon.days,
+            spot=float(spot or 0),
+            macro_factors=macro_map,
+        )
+        save_news_impact_snapshot(news_impact, ticker=sym)
+        stages.append(
+            StageResult(
+                stage="news_impact",
+                status="ok",
+                vendor="news_verification",
+                fetched_at=now,
+                data={
+                    "approved": (news_impact.get("summary") or {}).get("approved_count"),
+                    "items": len(news_impact.get("items") or []),
+                },
+            )
+        )
+        log.info(
+            "news_impact",
+            f"{len(news_impact.get('items') or [])} verified headlines",
+            skipped=(news_impact.get("summary") or {}).get("rejected_skipped"),
+        )
+    except Exception as exc:
+        log.info("news_impact", f"skipped: {exc}")
+
     return IndexResearchDoc(
         ticker=sym,
         as_of=now,
@@ -388,6 +428,7 @@ def run_index_research(
         factor_sensitivity=factor_bundle.get("factor_sensitivity") or [],
         event_impact_curves=factor_bundle.get("event_impact_curves") or [],
         upcoming_events=upcoming_events,
+        news_impact=news_impact,
         stages=stages,
         pipeline_log=log.to_dicts(),
     )

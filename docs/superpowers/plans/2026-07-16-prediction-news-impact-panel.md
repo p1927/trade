@@ -411,7 +411,10 @@ python scripts/run_index_research.py --symbol NIFTY --horizon-days 14
 
 ```mermaid
 flowchart LR
-  A[Phase A News plumbing fix] --> B[Phase B Engine]
+  F[Phase F Enrichment] --> G[Phase G Verification gate]
+  G --> A[Phase A News plumbing fix]
+  A --> B[Phase B Engine]
+  G --> B
   A --> E[Phase E Backfill]
   B --> C[Phase C API]
   C --> D[Phase D UI]

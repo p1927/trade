@@ -80,5 +80,6 @@ class IndexResearchDoc:
     event_impact_curves: list[dict[str, Any]] = field(default_factory=list)
     upcoming_events: list[dict[str, Any]] = field(default_factory=list)
     cascade_calibration: dict[str, Any] = field(default_factory=dict)
+    news_impact: dict[str, Any] = field(default_factory=dict)
     stages: list[StageResult] = field(default_factory=list)
     pipeline_log: list[dict[str, Any]] = field(default_factory=list)
