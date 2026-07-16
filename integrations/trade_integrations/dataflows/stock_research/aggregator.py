@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from datetime import datetime, timezone
 
 from trade_integrations.context.hub import load_company_research_json, save_company_research
@@ -13,6 +15,11 @@ from .format import format_stock_report
 from .models import StockResearchDoc
 from .payoff_charges import build_stock_payoff, calculate_equity_charges
 from .strategy_ranker import build_stock_scenarios, rank_stock_strategies
+
+
+def _strategy_builder_base() -> str:
+    host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
+    return f"{host}/strategybuilder"
 
 
 def _stage_now() -> datetime:
@@ -136,6 +143,6 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
                 },
             },
         ]
-        doc.meta["strategy_builder_url"] = f"http://127.0.0.1:5000/strategybuilder?plan={sym}&asset=stock"
+        doc.meta["strategy_builder_url"] = f"{_strategy_builder_base()}?plan={sym}&asset=stock"
 
     return doc
