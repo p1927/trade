@@ -76,7 +76,7 @@ USD/INR and oil are the largest macro contributors; bottom-up constituent rollup
 After the index view, if the user asks **what to trade** or wants legs/payoff/charges:
 
 1. Switch to [options-advisor](../options-advisor/SKILL.md) workflow.
-2. Call **`get_options_trade_widget(ticker)`** for ranked strategies aligned with the index view.
+2. Call **`get_options_trade_widget(ticker)`** when the options hub has ranked strategies to present.
 3. Reconcile index **prediction.view** with the recommended options strategy (e.g. bullish index → call spreads / bull structures).
 
 Do **not** skip the index widget when the question is index-level, even if options are mentioned later in the same thread.

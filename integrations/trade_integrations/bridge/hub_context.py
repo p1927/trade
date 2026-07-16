@@ -9,6 +9,17 @@ def normalize_strategy_key(name: str) -> str:
     return name.strip().lower().replace(" ", "_").replace("-", "_")
 
 
+def has_strategy_options_to_present(artifact: dict[str, Any] | None) -> bool:
+    """True when hub research has ranked strategies or a recommended plan with legs."""
+    if not artifact:
+        return False
+    ranked = artifact.get("ranked_strategies") or []
+    if ranked:
+        return True
+    rec = artifact.get("recommended") or {}
+    return bool(rec.get("name") and rec.get("legs"))
+
+
 def infer_debate_asset_type(ticker: str, explicit: str | None = None) -> str:
     """Choose stock vs options context for TradingAgents debate."""
     if explicit in ("options", "stock"):
@@ -102,11 +113,25 @@ def _format_options_stock_context(artifact: dict[str, Any]) -> str:
             "Plan is stale or broken — call get_options_trade_widget(ticker, refresh=true) "
             "and get_options_trade_plan(ticker, refresh=true) before recommending legs."
         )
-    lines.append(
-        "MANDATORY: When presenting an options strategy recommendation, ranked strategies, "
-        "scenarios, or trade plan, you MUST call get_options_trade_widget(ticker) in the same turn. "
-        "Do not answer with markdown-only strategy lists. If plan_status is stale, use refresh=true."
+    asset = artifact.get("asset_type", "options")
+    widget_tool = (
+        "get_stock_trade_widget(ticker)"
+        if asset == "stock"
+        else "get_options_trade_widget(ticker)"
     )
+    if has_strategy_options_to_present(artifact):
+        lines.append(
+            f"When presenting ranked strategy options or the recommended trade plan with legs, "
+            f"call OpenAlgo MCP {widget_tool} in the same turn so the user can compare "
+            f"alternatives, see payoff/charges, and execute. Do not answer with markdown-only "
+            f"strategy lists. If plan_status is stale, use refresh=true."
+        )
+    else:
+        lines.append(
+            f"Do not call {widget_tool} for prediction, events, or browse-only answers — "
+            f"explain from research_context without the widget until ranked_strategies is "
+            f"populated. Refresh the plan first if the user asks which strategy to trade."
+        )
     return "\n".join(lines)
 
 
@@ -182,7 +207,8 @@ def _format_index_research_context(artifact: dict[str, Any]) -> str:
     lines.append(
         "MANDATORY: When answering where the index is headed, which factors drive NIFTY, "
         "or index scenarios, you MUST call get_index_trade_widget(ticker) — not markdown-only prose. "
-        "For F&O strategy legs after the index view, also call get_options_trade_widget(ticker)."
+        "For F&O strategy legs after the index view, call get_options_trade_widget(ticker) "
+        "only when presenting ranked strategy options from the options hub plan."
     )
     return "\n".join(lines)
 

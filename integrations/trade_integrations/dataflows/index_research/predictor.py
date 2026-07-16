@@ -97,10 +97,17 @@ def _predict_macro_delta(
     if artifact is None or not artifact.feature_names:
         return 0.0
 
-    raw = np.array(
-        [float(macro_factors.get(name, 0.0) or 0.0) for name in artifact.feature_names],
-        dtype=float,
-    ).reshape(1, -1)
+    values: list[float] = []
+    for name in artifact.feature_names:
+        raw = macro_factors.get(name, 0.0)
+        if raw is None or isinstance(raw, (dict, list, tuple, set)):
+            values.append(0.0)
+            continue
+        try:
+            values.append(float(raw))
+        except (TypeError, ValueError):
+            values.append(0.0)
+    raw = np.array(values, dtype=float).reshape(1, -1)
     expanded, poly_names = _expand_poly(raw, artifact.feature_names, artifact.poly_degree)
     coefs = np.array([artifact.coefficients.get(name, 0.0) for name in poly_names], dtype=float)
     return float(artifact.intercept + np.dot(expanded.flatten(), coefs))

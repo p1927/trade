@@ -51,11 +51,11 @@ From the JSON, explain:
 - `recommended` (legs, rationale, gross + **net** payoff, charges, `net_debit_credit`)
 - `payoff_over_time.samples` — P&L at different days-to-expiry (theta decay at current spot)
 
-### Step 2b — Show interactive trade widget (**required** for strategy questions)
+### Step 2b — Show interactive trade widget (when presenting strategy options)
 
-When the user asks what to trade, which strategy to pick, or wants scenarios with payoff/charges:
+When the user asks what to trade, which strategy to pick, or wants to compare ranked strategies with payoff/charges:
 
-1. Call OpenAlgo MCP **`get_options_trade_widget(ticker)`** (not just markdown).
+1. Call OpenAlgo MCP **`get_options_trade_widget(ticker)`** only when `ranked_strategies` or a recommended plan with legs is available (not for browse-only or prediction-only answers).
 2. The tool persists a `trade_plan.widget` payload; Vibe chat renders it as a card with:
    - scenario tiles (agent assumptions + probability)
    - **interactive payoff chart** with adjustable strike sliders (OpenAlgo Strategy Builder component)
@@ -82,7 +82,7 @@ Calling get_options_trade_widget("NIFTY") — the interactive card below shows p
 Iron condor ranks first because IV is elevated and the expected range is narrow into expiry.
 ```
 
-Do **not** answer strategy questions with markdown-only lists — always call `get_options_trade_widget` so the user can visualize, adjust strikes, and execute.
+Do **not** answer strategy-comparison questions with markdown-only lists — call `get_options_trade_widget` when ranked strategies exist so the user can visualize, adjust strikes, and execute. Skip the widget for chain browse, IV regime, or event summaries without actionable legs.
 
 ### Step 3 — Validate live
 

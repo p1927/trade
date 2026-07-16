@@ -55,7 +55,8 @@ def test_combined_options_and_index_context():
         "underlying": "NIFTY",
         "asset_type": "options",
         "plan_status": "ready",
-        "recommended": {"name": "Iron condor"},
+        "ranked_strategies": [{"name": "Iron condor", "tier": "A", "score": 0.82}],
+        "recommended": {"name": "Iron condor", "legs": [{"side": "SELL", "strike": 24000}]},
     }
     index_artifact = {
         "underlying": "NIFTY",

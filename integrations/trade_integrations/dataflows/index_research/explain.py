@@ -6,12 +6,42 @@ import copy
 import logging
 from typing import Any
 
+from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
 from trade_integrations.dataflows.index_research.horizon import HorizonProfile
 from trade_integrations.dataflows.index_research.predictor import (
     ModelArtifact,
     _predict_macro_delta,
     load_stored_model_artifact,
 )
+
+_NON_SCALAR_MACRO_KEYS = frozenset({"rbi_events", "rbi_context", "metadata", "source"})
+
+
+def _macro_factor_value(macro_factors: dict[str, Any], factor: str) -> float:
+    """Coerce one macro factor to float; non-scalar entries resolve to 0."""
+    raw = macro_factors.get(factor, 0.0)
+    if raw is None or isinstance(raw, (dict, list, tuple, set)):
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _iter_macro_factor_names(
+    macro_factors: dict[str, Any],
+    artifact: ModelArtifact | None,
+) -> list[str]:
+    if artifact and artifact.feature_names:
+        return list(artifact.feature_names)
+    known = [key for key in MACRO_FACTOR_KEYS if key in macro_factors]
+    if known:
+        return known
+    return [
+        key
+        for key, raw in macro_factors.items()
+        if key not in _NON_SCALAR_MACRO_KEYS and not isinstance(raw, (dict, list, tuple, set))
+    ]
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +133,7 @@ def _marginal_macro_impact(
     step_pct: float = 0.05,
 ) -> float:
     base = _predict_macro_delta(macro_factors, horizon, artifact)
-    base_val = float(macro_factors.get(factor, 0.0) or 0.0)
+    base_val = _macro_factor_value(macro_factors, factor)
     if factor in _ABSOLUTE_SHOCK_FACTORS:
         step = max(abs(step_pct) * 10, 0.1)
         perturbed = copy.deepcopy(macro_factors)
@@ -130,7 +160,7 @@ def _try_shap_macro_contributions(
         return None
 
     names = list(artifact.feature_names)
-    baseline = np.array([float(macro_factors.get(n, 0.0) or 0.0) for n in names], dtype=float)
+    baseline = np.array([_macro_factor_value(macro_factors, n) for n in names], dtype=float)
 
     def predict_fn(X: np.ndarray) -> np.ndarray:
         out = []
@@ -194,7 +224,7 @@ def explain_macro_factors(
     if shap_raw:
         raw = shap_raw
     else:
-        factors = artifact.feature_names if artifact and artifact.feature_names else list(macro_factors.keys())
+        factors = _iter_macro_factor_names(macro_factors, artifact)
         raw = {
             f: _marginal_macro_impact(macro_factors, f, artifact, horizon)
             for f in factors
@@ -246,14 +276,18 @@ def build_factor_sensitivity(
         for row in explanation.get("contributors", [])[:max_factors]
     ]
     if not top_factors:
-        top_factors = [k for k in macro_factors if k not in {"rbi_events"}][:max_factors]
+        top_factors = [
+            k
+            for k in _iter_macro_factor_names(macro_factors, artifact)
+            if k in macro_factors
+        ][:max_factors]
 
     curves: list[dict[str, Any]] = []
     start, end, step = sweep_pct
     pct_grid = list(range(start, end + 1, step))
 
     for factor in top_factors:
-        base_val = float(macro_factors.get(factor, 0.0) or 0.0)
+        base_val = _macro_factor_value(macro_factors, factor)
         points: list[dict[str, Any]] = []
         for pct in pct_grid:
             perturbed = copy.deepcopy(macro_factors)

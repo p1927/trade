@@ -299,7 +299,10 @@ def fetch_global_macro_snapshot(
         for row in rbi_attempt.data.get("rows", []):
             factor_rows.append(row)
             factors[row["factor"]] = row["value"]
-        factors["rbi_context"] = rbi_attempt.data.get("context", {})
+        context = rbi_attempt.data.get("context") or {}
+        rbi_events = context.get("rbi_events") or []
+        if rbi_events:
+            factors["rbi_events"] = rbi_events
 
     if constituent_sentiments:
         sentiment_attempt = _attempt_from_fetch(
