@@ -249,4 +249,37 @@ def run_options_research(
             data={"has_payoff": bool(doc.payoff), "has_charges": bool(doc.charges)},
         )
     )
+
+    if ranked and doc.recommended.get("name") and spot > 0 and doc.expiry:
+        try:
+            from trade_integrations.dataflows.options_research.prediction_ledger import (
+                OptionsPredictionRecord,
+                append_options_prediction,
+            )
+
+            expected_move = float(
+                doc.prediction.get("expected_move_pct")
+                or doc.prediction.get("expected_move")
+                or 0.0
+            )
+            append_options_prediction(
+                OptionsPredictionRecord(
+                    underlying=doc.underlying,
+                    predicted_at=now,
+                    expiry_date=str(doc.expiry),
+                    spot_at_prediction=spot,
+                    prediction_view=str(doc.prediction.get("view") or "neutral"),
+                    expected_move_pct=expected_move,
+                    strategy_name=str(doc.recommended.get("name") or ""),
+                    strategy_score=float(doc.recommended.get("score") or ranked[0].get("score") or 0.0),
+                    metadata={
+                        "instrument_type": doc.instrument_type,
+                        "iv_regime": iv_regime,
+                        "tier": doc.recommended.get("tier"),
+                    },
+                )
+            )
+        except Exception:
+            pass
+
     return doc

@@ -141,6 +141,15 @@ def rank_strategies(
             + 0.15 * min(1.0, rr)
             + 0.10 * (1.0 if liquidity_ok else 0.0)
         )
+        try:
+            from trade_integrations.dataflows.options_research.prediction_ledger import (
+                calibration_confidence_adjustment,
+            )
+
+            score += calibration_confidence_adjustment()
+        except Exception:
+            pass
+        score = max(0.0, min(1.0, score))
         tier = _tier_label(iv_rank_ok=iv_rank_ok, liquidity_ok=liquidity_ok, event_fit=event_fit, pop=pop)
 
         ranked.append(
