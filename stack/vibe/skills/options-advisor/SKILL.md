@@ -119,6 +119,21 @@ With **`OPENALGO_PAPER_MODE=true`** (default in `setup_vibe.py`), executes route
 
 Never place live orders without clear user approval in chat.
 
+## Position review (open executed plans)
+
+When the user asks about an **open trade**, **position P&L**, whether the thesis still holds, or a **`thesis.broken`** / superseding widget event:
+
+1. Identify the executed widget id (`tp_*`) from chat history or the user's message.
+2. Call OpenAlgo MCP **`get_plan_position_status(widget_id)`** — returns ledger entry, matched broker positions, and thesis-break reasons (empty when monitor is off).
+3. Call **`get_options_trade_widget(ticker, refresh=true)`** to load the latest hub plan.
+4. If the widget has **`supersedes`** and **`revision_reason`**, explain what changed vs the prior plan and how it affects the open position.
+5. Compare old vs new: prediction view, recommended strategy, legs, max loss/profit, scenarios.
+6. State a clear recommendation: hold, adjust strikes, or exit — with confidence and charge-aware net P&L impact.
+
+**Never auto-execute** a replacement basket after thesis break; user must confirm in chat or via the widget Execute button.
+
+Ledger storage: `{{TRADE_STACK_HUB_DIR}}/_data/executions/ledger.json`.
+
 ## User-adjusted legs in chat
 
 When the user message contains `[trade_widget_context] ... [/trade_widget_context]`:
@@ -159,6 +174,7 @@ The options plan **reads hub signals** (`earnings_signal`, `corp_events`) into e
 | `get_trade_charges` | Brokerage, STT, GST, stamp, exchange, net_debit_credit |
 | `calculate_margin` | Pre-trade margin check |
 | `place_basket_order` | Multi-leg execution after confirm |
+| `get_plan_position_status` | **Open position review** — ledger + matched positions + thesis-break (monitor-gated) |
 | `run_tradingagents_analysis` | **Multi-agent debate** on finalize — bull/bear/risk, saved to hub |
 
 ## Research side panel

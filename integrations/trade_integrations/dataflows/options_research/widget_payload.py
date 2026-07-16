@@ -217,7 +217,12 @@ def _attach_monitor_context(payload: dict[str, Any], doc: OptionsResearchDoc) ->
     }
 
 
-def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, Any]:
+def build_options_trade_widget_from_doc(
+    doc: OptionsResearchDoc,
+    *,
+    supersedes: str | None = None,
+    revision_reason: str | None = None,
+) -> dict[str, Any]:
     """Build Vibe ``trade_plan.widget`` payload from an options research doc."""
     pred = doc.prediction or {}
     rec = doc.recommended or {}
@@ -285,6 +290,10 @@ def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, An
         "meta": dict(doc.meta or {}),
         "browse_summary": doc.browse_summary or {},
     }
+    if supersedes:
+        payload["supersedes"] = supersedes
+    if revision_reason:
+        payload["revision_reason"] = revision_reason
     _attach_monitor_context(payload, doc)
     return payload
 
@@ -295,6 +304,8 @@ def build_options_trade_widget(
     expiry_date: str | None = None,
     lookahead_days: int | None = None,
     refresh: bool = False,
+    supersedes: str | None = None,
+    revision_reason: str | None = None,
 ) -> dict[str, Any]:
     """Load or run options research and return widget payload."""
     if not refresh:
@@ -303,10 +314,18 @@ def build_options_trade_widget(
             if plan_status_from_doc(cached) == "incomplete":
                 refresh = True
             else:
-                return build_options_trade_widget_from_doc(cached)
+                return build_options_trade_widget_from_doc(
+                    cached,
+                    supersedes=supersedes,
+                    revision_reason=revision_reason,
+                )
     doc = run_options_research(
         ticker,
         expiry_date=expiry_date,
         lookahead_days=lookahead_days,
     )
-    return build_options_trade_widget_from_doc(doc)
+    return build_options_trade_widget_from_doc(
+        doc,
+        supersedes=supersedes,
+        revision_reason=revision_reason,
+    )

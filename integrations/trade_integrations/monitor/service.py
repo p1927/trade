@@ -7,9 +7,15 @@ from datetime import datetime, timedelta, timezone
 from trade_integrations.context.hub import load_options_research_json, save_options_research
 from trade_integrations.dataflows.options_research.aggregator import run_options_research
 from trade_integrations.monitor.config import is_monitor_enabled
+from trade_integrations.monitor.execution_ledger import (
+    fetch_position_book,
+    get_ledger_entry,
+    match_positions_for_entry,
+)
 from trade_integrations.monitor.live_quotes import fetch_underlying_ltp
 from trade_integrations.monitor.news_watcher import check_material_news
 from trade_integrations.monitor.plan_staleness import StalenessReport, evaluate_plan_staleness
+from trade_integrations.monitor.thesis_break import ThesisBreakReport, evaluate_thesis_break
 
 
 class MonitorService:
@@ -50,6 +56,37 @@ class MonitorService:
         if is_monitor_enabled() and ticker:
             live_spot = fetch_underlying_ltp(str(ticker))
         return evaluate_plan_staleness(doc, live_spot=live_spot)
+
+    def evaluate_position_thesis(self, widget_id: str) -> ThesisBreakReport | None:
+        """Evaluate thesis break for an executed trade-plan widget."""
+        if not is_monitor_enabled():
+            return None
+
+        ledger_entry = get_ledger_entry(widget_id)
+        if ledger_entry is None:
+            return None
+
+        underlying = str(ledger_entry.get("underlying") or "").strip().upper()
+        if not underlying:
+            return None
+
+        doc = load_options_research_json(underlying)
+        live_spot = fetch_underlying_ltp(underlying)
+        position_pnl = self._position_pnl_for_entry(ledger_entry)
+        return evaluate_thesis_break(
+            doc,
+            ledger_entry,
+            live_spot=live_spot,
+            position_pnl=position_pnl,
+        )
+
+    @staticmethod
+    def _position_pnl_for_entry(ledger_entry: dict) -> float | None:
+        position_book = fetch_position_book()
+        if position_book is None:
+            return None
+        _, position_pnl = match_positions_for_entry(ledger_entry, position_book)
+        return position_pnl
 
     def check_news_and_maybe_refresh(self, ticker: str) -> bool:
         """Refresh hub research when material news or staleness warrants it."""
