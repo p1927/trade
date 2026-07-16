@@ -2,19 +2,43 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
 
 _FACTOR_SUBDIR = "_data/index_factors/daily"
+_MODEL_SUBDIR = "_data/index_factors/model"
+_MODEL_FILENAME = "latest.json"
 
 
 def get_factor_data_dir() -> Path:
     """Return the directory for daily factor parquet files."""
     return get_hub_dir() / _FACTOR_SUBDIR
+
+
+def get_model_artifact_path() -> Path:
+    """Return path to the persisted hybrid predictor model artifact."""
+    return get_hub_dir() / _MODEL_SUBDIR / _MODEL_FILENAME
+
+
+def save_model_artifact(artifact: dict[str, Any]) -> None:
+    """Persist trained model coefficients and metadata as JSON."""
+    path = get_model_artifact_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(artifact, indent=2, default=str), encoding="utf-8")
+
+
+def load_model_artifact() -> dict[str, Any] | None:
+    """Load the latest model artifact, or ``None`` if missing."""
+    path = get_model_artifact_path()
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _daily_path(day: str) -> Path:
