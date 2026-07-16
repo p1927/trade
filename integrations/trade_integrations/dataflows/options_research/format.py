@@ -69,12 +69,30 @@ def format_options_report(doc: OptionsResearchDoc) -> str:
         f"- **Expected move %:** {pred.get('expected_move_pct', '—')}",
         f"- **Confidence (top score):** {pred.get('confidence', '—')}",
         "",
-        "## Events",
-        "",
-        _events_table(doc.events),
-        "## Scenarios",
+        "## Browse (chain snapshot)",
         "",
     ]
+    browse = doc.browse_summary or {}
+    if browse:
+        parts.append(
+            f"- **Spot:** {browse.get('spot')} | **ATM:** {browse.get('atm_strike')} | "
+            f"**PCR:** {browse.get('pcr')} | **Rows:** {browse.get('chain_rows')}"
+        )
+        if browse.get("expiries"):
+            parts.append(f"- **Expiries:** {', '.join(str(e) for e in browse['expiries'][:5])}")
+        if browse.get("top_strikes"):
+            parts.append("\n| Strike | CE LTP | PE LTP | CE OI | PE OI |")
+            parts.append("|--------|--------|--------|-------|-------|")
+            for row in browse["top_strikes"][:6]:
+                parts.append(
+                    f"| {row.get('strike')} | {row.get('ce_ltp')} | {row.get('pe_ltp')} | "
+                    f"{row.get('ce_oi')} | {row.get('pe_oi')} |"
+                )
+    else:
+        parts.append("_Chain browse summary unavailable._")
+    parts.extend(["", "## Events", ""])
+    parts.append(_events_table(doc.events).rstrip())
+    parts.extend(["", "## Scenarios", ""])
     if doc.scenarios:
         for sc in doc.scenarios:
             parts.append(
@@ -119,8 +137,20 @@ def format_options_report(doc: OptionsResearchDoc) -> str:
             parts.append(f"\n**Charges (est.):** ₹{total}")
             if ndc is not None:
                 parts.append(f"  \n**Net debit/credit at entry:** ₹{ndc}")
-        if doc.meta.get("strategy_builder_url"):
-            parts.append(f"\n**Strategy Builder:** {doc.meta['strategy_builder_url']}")
+            rtc = doc.charges.get("round_trip_charges")
+            if rtc is not None:
+                parts.append(f"  \n**Round-trip charges (est.):** ₹{rtc}")
+        if doc.payoff_over_time and doc.payoff_over_time.get("samples"):
+            parts.append("\n**P&L over time (at current spot):**")
+            for s in doc.payoff_over_time["samples"][:6]:
+                parts.append(
+                    f"- DTE {s.get('days_to_expiry')}: gross ₹{s.get('pnl')} "
+                    f"net ₹{s.get('net_pnl')}"
+                )
+        if doc.meta.get("strategy_builder_pnl_url"):
+            parts.append(f"\n**Live P&L tab:** {doc.meta['strategy_builder_pnl_url']}")
+        if doc.meta.get("strategy_builder_execute_url"):
+            parts.append(f"**Execute wizard:** {doc.meta['strategy_builder_execute_url']}")
         if doc.implementation_steps:
             parts.append("\n## Implementation steps")
             for step in doc.implementation_steps:

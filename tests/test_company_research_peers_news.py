@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from trade_integrations.dataflows.company_research.market import Market, normalize_ticker
-from trade_integrations.dataflows.company_research.sources.news import fetch_news
+from trade_integrations.dataflows.company_research.sources.news import _extract_headlines, fetch_news
 from trade_integrations.dataflows.company_research.sources.peers_in import fetch_peers_in
 
 
@@ -52,3 +52,13 @@ class TestNewsStage:
         assert result.stage == "news"
         assert result.status == "ok"
         assert "Reliance beats" in (result.data or {}).get("markdown", "")
+
+    def test_extract_headlines_from_h3_markdown(self):
+        md = (
+            "## RELIANCE.NS News, from 2026-07-02 to 2026-07-16:\n\n"
+            "### RELIANCE Q4 earnings beat (source: searxng)\n"
+            "Summary text here.\n"
+        )
+        headlines = _extract_headlines(md)
+        assert len(headlines) == 1
+        assert "earnings beat" in headlines[0]["title"]

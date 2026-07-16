@@ -24,7 +24,7 @@ class TestOpenAlgoOptionChain:
             pytest.skip("OPENALGO_API_KEY not set")
         chain = fetch_option_chain(
             "NIFTY",
-            "NSE_INDEX",
+            "NFO",
             expiry_date="21JUL26",
             strike_count=5,
         )

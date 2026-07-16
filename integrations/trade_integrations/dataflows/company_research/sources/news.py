@@ -25,12 +25,16 @@ def _extract_headlines(markdown: str, *, limit: int = 15) -> list[dict[str, str]
     headlines: list[dict[str, str]] = []
     for line in markdown.splitlines():
         line = line.strip()
-        if not line.startswith(("-", "*")):
+        if not line:
             continue
-        text = line.lstrip("-* ").strip()
-        if not text or text.startswith("#"):
-            continue
-        headlines.append({"title": text[:500]})
+        if line.startswith("###"):
+            title = line.lstrip("#").strip()
+            if title and "news, from" not in title.lower():
+                headlines.append({"title": title[:500]})
+        elif line.startswith(("-", "*")):
+            text = line.lstrip("-* ").strip()
+            if text and not text.startswith("#"):
+                headlines.append({"title": text[:500]})
         if len(headlines) >= limit:
             break
     return headlines
