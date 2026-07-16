@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from trade_integrations.dataflows.index_research.causal_attribution import _NEWS_KEYWORDS
+from trade_integrations.dataflows.index_research.news_tags import ArticleTags, build_article_tags
 from trade_integrations.dataflows.index_research.playground_context import _headline_factor_hints
 
 _CLICKBAIT_PREFIXES = (
@@ -38,11 +39,13 @@ class EnrichedNewsItem:
     published_at: str = ""
     content_summary: str = ""
     structured_summary: StructuredSummary = field(default_factory=StructuredSummary)
+    tags: ArticleTags = field(default_factory=ArticleTags)
     raw_headline: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["structured_summary"] = asdict(self.structured_summary)
+        payload["tags"] = self.tags.to_dict()
         return payload
 
 
@@ -144,8 +147,16 @@ def enrich_headline(
     url: str = "",
     source: str = "",
     published_at: str = "",
+    ticker: str = "NIFTY",
 ) -> EnrichedNewsItem:
     structured = build_structured_summary(title, summary)
+    tags = build_article_tags(
+        title,
+        summary,
+        ticker=ticker,
+        published_at=published_at,
+        implied_factors=structured.implied_factors,
+    )
     return EnrichedNewsItem(
         id=headline_id,
         title=de_clickbait_title(title),
@@ -154,5 +165,6 @@ def enrich_headline(
         published_at=published_at,
         content_summary=build_content_summary(title, summary),
         structured_summary=structured,
+        tags=tags,
         raw_headline=title,
     )

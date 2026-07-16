@@ -150,7 +150,7 @@ def _fetch_one_feed(
     timeout: float,
     inter_request_delay: float,
     is_first: bool,
-) -> str:
+) -> tuple[str, list[dict]]:
     if not is_first and inter_request_delay > 0:
         time.sleep(inter_request_delay)
 
@@ -160,13 +160,13 @@ def _fetch_one_feed(
             entries = _parse_feed_entries(resp.read(), limit)
     except HTTPError as exc:
         logger.warning("RSS feed %s fetch failed (%s): %s", label, url, exc)
-        return f"{label}: <unavailable: HTTP {exc.code}>"
+        return f"{label}: <unavailable: HTTP {exc.code}>", []
     except (OSError, http.client.HTTPException, ET.ParseError) as exc:
         logger.warning("RSS feed %s fetch failed (%s): %s", label, url, exc)
-        return f"{label}: <unavailable: {type(exc).__name__}>"
+        return f"{label}: <unavailable: {type(exc).__name__}>", []
 
     if not entries:
-        return f"{label}: <no items found>"
+        return f"{label}: <no items found>", []
 
     lines = [f"{label} — {len(entries)} recent items:"]
     for entry in entries:
@@ -178,7 +178,7 @@ def _fetch_one_feed(
         lines.append(f"  [{date}] {title}")
         if summary:
             lines.append(f"    {summary}")
-    return "\n".join(lines)
+    return "\n".join(lines), entries
 
 
 def fetch_rss_feeds(
@@ -196,16 +196,22 @@ def fetch_rss_feeds(
     for i, feed in enumerate(feeds):
         label = feed.get("label") or _label_from_url(feed["url"])
         url = _resolve_url(feed["url"], ticker)
-        blocks.append(
-            _fetch_one_feed(
-                label,
-                url,
-                limit_per_feed,
-                timeout,
-                inter_request_delay,
-                is_first=(i == 0),
-            )
+        block, entries = _fetch_one_feed(
+            label,
+            url,
+            limit_per_feed,
+            timeout,
+            inter_request_delay,
+            is_first=(i == 0),
         )
+        blocks.append(block)
+        if entries:
+            try:
+                from trade_integrations.dataflows.news_hub_bridge import ingest_rss_entries
+
+                ingest_rss_entries(entries, ticker=ticker, label=label, feed_url=url)
+            except Exception as exc:
+                logger.debug("hub ingest RSS skipped for %s: %s", label, exc)
 
     if all("<unavailable" in block or "<no items found>" in block for block in blocks):
         return (

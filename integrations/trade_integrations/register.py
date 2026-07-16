@@ -22,6 +22,7 @@ def apply() -> None:
     _patch_sentiment_analyst()
     _patch_news_analyst()
     _patch_trading_graph()
+    _patch_yfinance_news_hub()
     _APPLIED = True
 
 
@@ -201,3 +202,64 @@ def _patch_trading_graph() -> None:
 
     graph_module.TradingAgentsGraph._create_tool_nodes = _create_tool_nodes_patched
     graph_module.TradingAgentsGraph.propagate = propagate_patched
+
+
+def _patch_yfinance_news_hub() -> None:
+    """When news_data vendor is yfinance (not aggregated), still route through hub SSOT."""
+    import yfinance as yf
+    import tradingagents.dataflows.yfinance_news as yfn
+    from tradingagents.dataflows.symbol_utils import normalize_symbol
+    from trade_integrations.dataflows.news_aggregator.models import NewsArticle
+    from trade_integrations.dataflows.news_hub_bridge import ingest_news_articles
+
+    if getattr(yfn, "_hub_bridge_patched", False):
+        return
+
+    _orig_ticker = yfn.get_news_yfinance
+    _orig_global = yfn.get_global_news_yfinance
+
+    def _get_news_yfinance(ticker: str, start_date: str, end_date: str) -> str:
+        text = _orig_ticker(ticker, start_date, end_date)
+        try:
+            canonical = normalize_symbol(ticker)
+            stock = yf.Ticker(canonical)
+            raw = yfn.yf_retry(lambda: stock.get_news(count=yfn.get_config()["news_article_limit"]))
+            articles = [
+                NewsArticle(
+                    title=d["title"],
+                    summary=d["summary"],
+                    link=d["link"],
+                    source=d["publisher"],
+                    vendor="yfinance",
+                    pub_date=d["pub_date"],
+                )
+                for item in (raw or [])
+                for d in [yfn._extract_article_data(item)]
+                if d.get("title")
+            ]
+            ingest_news_articles(articles, ticker=ticker, collection_day=end_date)
+        except Exception:
+            pass
+        return text
+
+    def _get_global_news_yfinance(
+        curr_date: str,
+        look_back_days: int | None = None,
+        limit: int | None = None,
+    ) -> str:
+        text = _orig_global(curr_date, look_back_days=look_back_days, limit=limit)
+        try:
+            from trade_integrations.dataflows.news_aggregator.sources.yfinance import fetch_global_articles
+
+            config = yfn.get_config()
+            lb = look_back_days if look_back_days is not None else config["global_news_lookback_days"]
+            lim = limit if limit is not None else config["global_news_article_limit"]
+            articles = fetch_global_articles(curr_date=curr_date, look_back_days=lb, limit=lim)
+            ingest_news_articles(articles, ticker="NIFTY", kind="global", collection_day=curr_date)
+        except Exception:
+            pass
+        return text
+
+    yfn.get_news_yfinance = _get_news_yfinance
+    yfn.get_global_news_yfinance = _get_global_news_yfinance
+    yfn._hub_bridge_patched = True

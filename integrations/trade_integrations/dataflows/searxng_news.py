@@ -130,6 +130,13 @@ def get_news_searxng(ticker: str, start_date: str, end_date: str) -> str:
     if not results:
         return f"No news found for {ticker} via SearXNG"
 
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import ingest_searxng_results
+
+        ingest_searxng_results(results, ticker=ticker, collection_day=end_date)
+    except Exception as exc:
+        logger.debug("hub ingest searxng ticker skipped: %s", exc)
+
     return _format_results(
         results,
         header=f"{ticker} News",
@@ -168,6 +175,13 @@ def get_global_news_searxng(
 
     if not all_results:
         return f"No global news found for {curr_date} via SearXNG"
+
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import ingest_searxng_results
+
+        ingest_searxng_results(all_results, ticker="NIFTY", kind="global", collection_day=curr_date)
+    except Exception as exc:
+        logger.debug("hub ingest searxng global skipped: %s", exc)
 
     return _format_results(
         all_results,

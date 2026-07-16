@@ -1,4 +1,4 @@
-"""Unified headline collection for index research (RSS, archive, aggregator)."""
+"""Unified headline collection (internal — ingest via ``news_hub_bridge``)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,10 @@ from trade_integrations.dataflows.index_research.company_news_backfill import (
     _google_news_rss_url,
 )
 from trade_integrations.monitor.news_watcher import headline_fingerprint
-from trade_integrations.dataflows.index_research.news_dedup import merge_raw_headlines
+from trade_integrations.dataflows.index_research.news_dedup import (
+    merge_raw_headlines,
+    normalize_published_at,
+)
 
 _NEWS_DAILY = Path("_data") / "news" / "daily"
 
@@ -49,7 +52,10 @@ def _load_archive_headlines(day: str, *, symbol: str = "NIFTY", limit: int = 12)
             continue
         url = str(row.get("url") or row.get("link") or "")
         summary = str(row.get("summary") or "")
-        published = str(row.get("published_at") or row.get("captured_at") or day)
+        published = normalize_published_at(
+            str(row.get("published_at") or row.get("captured_at") or ""),
+            fallback_day=day,
+        )
         rows.append(
             {
                 "id": _headline_id(title, url, published),
@@ -133,12 +139,12 @@ def collect_headlines_for_day(
     for row in _load_archive_headlines(day, symbol=ticker, limit=limit):
         _add(row)
     if len(out) >= limit:
-        return merge_raw_headlines(out[:limit])
+        return merge_raw_headlines(out[:limit], ticker=ticker)
 
     for row in _fetch_aggregator_headlines(ticker, day, limit=limit):
         _add(row)
     if len(out) >= limit:
-        return merge_raw_headlines(out[:limit])
+        return merge_raw_headlines(out[:limit], ticker=ticker)
 
     after = day[:10]
     try:
@@ -159,7 +165,7 @@ def collect_headlines_for_day(
         if len(out) >= limit:
             break
 
-    return merge_raw_headlines(out[:limit])
+    return merge_raw_headlines(out[:limit], ticker=ticker)
 
 
 def collect_headlines_for_window(
@@ -181,4 +187,4 @@ def collect_headlines_for_window(
     while day <= end_d and len(rows) < max_total:
         rows.extend(collect_headlines_for_day(day.isoformat(), ticker=ticker, limit=limit_per_day))
         day += timedelta(days=1)
-    return merge_raw_headlines(rows[:max_total])
+    return merge_raw_headlines(rows[:max_total], ticker=ticker)

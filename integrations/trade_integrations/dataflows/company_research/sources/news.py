@@ -137,6 +137,16 @@ def fetch_news(
         f"### {b['label']} ({b['ticker']})\n{b['markdown']}" for b in blocks
     )
 
+    # Aggregator path already ingests via news_hub_bridge; record stage metadata.
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import query_verified_news
+
+        hub_sym = normalized.base_symbol
+        recent = query_verified_news(ticker=hub_sym, limit=5)
+        hub_count = len(recent)
+    except Exception:
+        hub_count = 0
+
     return StageResult(
         stage="news",
         status=status if blocks else "skipped",
@@ -146,6 +156,7 @@ def fetch_news(
             "blocks": blocks,
             "markdown": combined_md,
             "headline_count": sum(len(b.get("headlines") or []) for b in blocks),
+            "hub_verified_recent": hub_count,
             "source_attempts": [a.to_dict() for a in attempts],
         },
     )

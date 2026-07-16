@@ -148,6 +148,16 @@ def get_news_aggregated(ticker: str, start_date: str, end_date: str) -> str:
         end_dt=end_dt,
         limit=limit,
     )
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import (
+            enrich_articles_with_hub_tags,
+            ingest_news_articles,
+        )
+
+        ingest_news_articles(articles, ticker=canonical, collection_day=end_date)
+        articles = enrich_articles_with_hub_tags(articles, ticker=canonical)
+    except Exception as exc:
+        logger.debug("hub bridge ticker news skipped: %s", exc)
     return format_ticker_news(
         articles,
         ticker=ticker,
@@ -182,4 +192,14 @@ def get_global_news_aggregated(
         end_dt=curr_dt,
         limit=limit,
     )
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import (
+            enrich_articles_with_hub_tags,
+            ingest_news_articles,
+        )
+
+        ingest_news_articles(articles, ticker="NIFTY", kind="global", collection_day=curr_date)
+        articles = enrich_articles_with_hub_tags(articles, ticker="NIFTY")
+    except Exception as exc:
+        logger.debug("hub bridge global news skipped: %s", exc)
     return format_global_news(articles, start_date=start_date, end_date=curr_date)

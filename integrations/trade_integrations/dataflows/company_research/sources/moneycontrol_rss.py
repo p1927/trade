@@ -114,4 +114,26 @@ def fetch_results_news(symbol: str, *, limit: int = 20) -> list[dict[str, Any]]:
             }
         )
 
+    if events:
+        try:
+            from trade_integrations.dataflows.news_hub_bridge import ingest_rows_to_hub
+
+            rows = [
+                {
+                    "title": str(ev.get("description") or ""),
+                    "summary": str(ev.get("purpose") or ""),
+                    "source": str(ev.get("source") or "moneycontrol_rss"),
+                    "published_at": (
+                        f"{str(ev.get('date') or '')[:10]}T09:00:00+00:00"
+                        if ev.get("date")
+                        else ""
+                    ),
+                }
+                for ev in events
+                if ev.get("description")
+            ]
+            ingest_rows_to_hub(rows, ticker=symbol_upper)
+        except Exception as exc:
+            logger.debug("hub ingest moneycontrol rss skipped: %s", exc)
+
     return events

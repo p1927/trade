@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from trade_integrations.dataflows.news_aggregator.dedup import (
@@ -10,6 +11,41 @@ from trade_integrations.dataflows.news_aggregator.dedup import (
     normalize_title,
     normalize_url,
 )
+
+
+def publish_day_from_value(value: str, *, fallback: str = "") -> str:
+    """Normalize publish timestamps (RFC, ISO, or YYYY-MM-DD) to YYYY-MM-DD."""
+    text = (value or "").strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    try:
+        if text:
+            return parsedate_to_datetime(text).date().isoformat()
+    except (TypeError, ValueError, OverflowError):
+        pass
+    fb = (fallback or "").strip()[:10]
+    if len(fb) >= 10 and fb[4] == "-" and fb[7] == "-":
+        return fb
+    return fb
+
+
+def normalize_published_at(value: str, *, fallback_day: str = "") -> str:
+    """Return ISO-8601 published_at; preserves time when parseable."""
+    text = (value or "").strip()
+    day = publish_day_from_value(text, fallback=fallback_day)
+    if not day:
+        return text
+    if "T" in text and text[4] == "-" and text[7] == "-":
+        return text[:32]
+    try:
+        if text and text[4] != "-":
+            dt = parsedate_to_datetime(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.isoformat()
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return f"{day}T09:00:00+00:00"
 
 
 def canonical_story_id(title: str, url: str = "") -> str:
@@ -53,8 +89,26 @@ def _sources_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
     return [_source_entry(row)]
 
 
-def merge_raw_headlines(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge duplicate stories across sources into canonical rows with sources[]."""
+def _tags_from_row(row: dict[str, Any], *, ticker: str = "NIFTY") -> dict[str, Any]:
+    existing = row.get("tags")
+    if isinstance(existing, dict) and any(
+        existing.get(key) for key in ("topics", "factors", "themes")
+    ):
+        return existing
+    from trade_integrations.dataflows.index_research.news_tags import build_article_tags
+
+    return build_article_tags(
+        str(row.get("title") or ""),
+        str(row.get("summary") or ""),
+        ticker=ticker,
+        published_at=str(row.get("published_at") or ""),
+    ).to_dict()
+
+
+def merge_raw_headlines(rows: list[dict[str, Any]], *, ticker: str = "NIFTY") -> list[dict[str, Any]]:
+    """Merge duplicate stories across sources into canonical rows with sources[] and tags."""
+    from trade_integrations.dataflows.index_research.news_tags import merge_article_tags, tags_from_dict
+
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     title_to_key: dict[str, str] = {}
@@ -89,6 +143,7 @@ def merge_raw_headlines(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "source": src_entries[0]["vendor"],
                 "published_at": str(row.get("published_at") or ""),
                 "sources": list(src_entries),
+                "tags": _tags_from_row(row, ticker=ticker),
                 "fingerprint": row.get("fingerprint"),
             }
             continue
@@ -105,6 +160,10 @@ def merge_raw_headlines(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if not any(s.get("url") == src["url"] and s.get("vendor") == src["vendor"] for s in sources):
                 sources.append(src)
         existing["sources"] = sources
+        existing["tags"] = merge_article_tags(
+            tags_from_dict(existing.get("tags")),
+            tags_from_dict(_tags_from_row(row, ticker=ticker)),
+        ).to_dict()
 
     return [merged[k] for k in order]
 

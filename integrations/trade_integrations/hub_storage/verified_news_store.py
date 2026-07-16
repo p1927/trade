@@ -1,4 +1,7 @@
-"""Hub SSOT for verified, deduplicated news records."""
+"""Hub SSOT for verified, deduplicated news records (internal storage).
+
+Application code must read/query via ``trade_integrations.dataflows.news_hub_bridge``.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ _RECORD_COLUMNS = (
     "maturity_date",
     "horizon_trading_days",
     "tagged_factors_json",
+    "tags_json",
     "first_seen_at",
     "updated_at",
 )
@@ -125,6 +129,7 @@ def _record_to_row(record: dict[str, Any]) -> dict[str, Any]:
         "maturity_date": str(record.get("maturity_date") or "")[:10] or None,
         "horizon_trading_days": int(record.get("horizon_trading_days") or 0) or None,
         "tagged_factors_json": _json_dumps(record.get("tagged_factors")),
+        "tags_json": _json_dumps(record.get("tags")),
         "first_seen_at": str(record.get("first_seen_at") or now),
         "updated_at": now,
     }
@@ -152,6 +157,7 @@ def _row_to_record(row: dict[str, Any] | pd.Series) -> dict[str, Any]:
         "maturity_date": data.get("maturity_date"),
         "horizon_trading_days": data.get("horizon_trading_days"),
         "tagged_factors": _json_loads(data.get("tagged_factors_json"), []),
+        "tags": _json_loads(data.get("tags_json"), {}),
         "first_seen_at": data.get("first_seen_at"),
         "updated_at": data.get("updated_at"),
         "status": "reconciled" if data.get("actual_impact_json") else "live",
@@ -204,6 +210,14 @@ def upsert_verified_record(record: dict[str, Any]) -> None:
             existing["actual_impact_json"] = incoming["actual_impact_json"]
         if incoming.get("tagged_factors_json"):
             existing["tagged_factors_json"] = incoming["tagged_factors_json"]
+        if incoming.get("tags_json"):
+            from trade_integrations.dataflows.index_research.news_tags import merge_article_tags, tags_from_dict
+
+            merged_tags = merge_article_tags(
+                tags_from_dict(_json_loads(existing.get("tags_json"), {})),
+                tags_from_dict(_json_loads(incoming.get("tags_json"), {})),
+            )
+            existing["tags_json"] = _json_dumps(merged_tags.to_dict())
         if incoming.get("maturity_date"):
             existing["maturity_date"] = incoming["maturity_date"]
         if incoming.get("horizon_trading_days"):
@@ -236,10 +250,19 @@ def list_verified_records(
     *,
     status: str | list[str] | None = None,
     since: str | None = None,
+    until: str | None = None,
+    publish_day: str | None = None,
+    symbols: list[str] | None = None,
+    topics: list[str] | None = None,
+    factors: list[str] | None = None,
+    themes: list[str] | None = None,
+    tags: list[str] | None = None,
     limit: int = 50,
     ticker: str = "NIFTY",
     include_rejected: bool = False,
 ) -> list[dict[str, Any]]:
+    from trade_integrations.dataflows.index_research.news_tags import record_matches_filters
+
     frame = _load_records_frame()
     if frame.empty:
         return []
@@ -247,9 +270,6 @@ def list_verified_records(
     sym = ticker.strip().upper()
     if "ticker" in frame.columns:
         frame = frame[frame["ticker"].astype(str).str.upper() == sym]
-
-    if since:
-        frame = frame[frame["published_at"].astype(str).str[:10] >= since[:10]]
 
     statuses: set[str] | None = None
     if status is None and not include_rejected:
@@ -265,8 +285,52 @@ def list_verified_records(
     if frame.empty:
         return []
 
-    frame = frame.sort_values("published_at", ascending=False).head(limit)
-    return [_row_to_record(row) for _, row in frame.iterrows()]
+    records = [_row_to_record(row) for _, row in frame.sort_values("published_at", ascending=False).iterrows()]
+    filtered = [
+        rec
+        for rec in records
+        if record_matches_filters(
+            rec,
+            since=since,
+            until=until,
+            publish_day=publish_day,
+            symbols=symbols,
+            topics=topics,
+            factors=factors,
+            themes=themes,
+            tags=tags,
+        )
+    ]
+    return filtered[:limit]
+
+
+def list_tag_inventory(*, ticker: str = "NIFTY") -> dict[str, Any]:
+    """Summarize tag values present in hub for filter UIs."""
+    from trade_integrations.dataflows.index_research.news_tags import list_available_tag_vocab, tags_from_dict
+
+    records = list_verified_records(limit=5000, ticker=ticker, include_rejected=True)
+    used: dict[str, set[str]] = {
+        "topics": set(),
+        "themes": set(),
+        "factors": set(),
+        "symbols": set(),
+        "days": set(),
+    }
+    for rec in records:
+        tags = tags_from_dict(rec.get("tags"))
+        used["topics"].update(tags.topics)
+        used["themes"].update(tags.themes)
+        used["factors"].update(tags.factors)
+        used["symbols"].update(tags.symbols)
+        if tags.publish_day:
+            used["days"].add(tags.publish_day)
+    vocab = list_available_tag_vocab()
+    return {
+        "ticker": ticker,
+        "record_count": len(records),
+        "vocab": vocab,
+        "used": {k: sorted(v) for k, v in used.items()},
+    }
 
 
 def list_pending_maturity(as_of: str) -> list[dict[str, Any]]:
@@ -319,11 +383,18 @@ def build_snapshot_from_hub(
     limit: int = 20,
 ) -> dict[str, Any]:
     """Materialize UI snapshot from hub records (no re-verification)."""
-    approved_items = list_verified_records(
+    pool = list_verified_records(
         status=["approved", "partial"],
-        limit=limit,
+        limit=max(limit * 4, 80),
         ticker=ticker,
     )
+    reconciled_items = [
+        r for r in pool if (r.get("actual_impact") or r.get("actual") or {}).get("nifty_points") is not None
+    ]
+    live_items = [r for r in pool if r not in reconciled_items]
+    mix_limit = max(4, limit // 3)
+    items = (reconciled_items[:mix_limit] + live_items)[:limit]
+
     rejected_count = count_by_status(ticker=ticker).get("rejected", 0)
     if include_rejected:
         rejected_items = list_verified_records(
@@ -332,11 +403,12 @@ def build_snapshot_from_hub(
             ticker=ticker,
             include_rejected=True,
         )
-        items = approved_items + rejected_items
-    else:
-        items = approved_items
+        items = items + rejected_items
 
-    reconciled = sum(1 for i in items if i.get("actual_impact") or i.get("actual"))
+    reconciled = sum(
+        1 for i in items if (i.get("actual_impact") or i.get("actual") or {}).get("nifty_points") is not None
+    )
+    total_reconciled = len(reconciled_items)
     return {
         "status": "ok",
         "as_of": _now_iso(),
@@ -345,9 +417,14 @@ def build_snapshot_from_hub(
         "spot": spot,
         "items": items,
         "summary": {
-            "live_count": sum(1 for i in items if not (i.get("actual_impact") or i.get("actual"))),
+            "live_count": sum(
+                1
+                for i in items
+                if (i.get("actual_impact") or i.get("actual") or {}).get("nifty_points") is None
+            ),
             "pending_count": 0,
             "reconciled_count": reconciled,
+            "reconciled_total": total_reconciled,
             "approved_count": sum(1 for i in items if i.get("verification_status") == "approved"),
             "partial_count": sum(1 for i in items if i.get("verification_status") == "partial"),
             "rejected_count": rejected_count,

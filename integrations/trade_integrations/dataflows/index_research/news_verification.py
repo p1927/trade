@@ -229,20 +229,32 @@ def append_verified_ledger(rows: list[dict[str, Any]]) -> Path | None:
     if not rows:
         return None
     from trade_integrations.hub_storage.verified_news_store import upsert_verified_record
+    from trade_integrations.dataflows.index_research.news_dedup import publish_day_from_value
+    from trade_integrations.dataflows.index_research.news_tags import build_article_tags
 
     for row in rows:
         story_id = str(row.get("canonical_story_id") or row.get("id") or "").strip()
         if not story_id:
             continue
+        title = str(row.get("title") or "")
+        published = str(row.get("published_at") or "")
+        tags = build_article_tags(
+            title,
+            str(row.get("content_summary") or row.get("summary") or ""),
+            ticker=str(row.get("ticker") or "NIFTY"),
+            published_at=published,
+        ).to_dict()
         upsert_verified_record(
             {
                 "canonical_story_id": story_id,
                 "ticker": row.get("ticker") or "NIFTY",
-                "title": row.get("title") or "",
-                "published_at": row.get("published_at"),
+                "title": title,
+                "published_at": published,
                 "verification_status": row.get("verification_status") or "pending",
                 "predicted_impact": {"return_pct": row.get("predicted_return_pct")},
-                "verification_data_as_of": (row.get("published_at") or "")[:10],
+                "verification_data_as_of": tags.get("publish_day")
+                or publish_day_from_value(published),
+                "tags": tags,
             }
         )
     return verified_ledger_path()

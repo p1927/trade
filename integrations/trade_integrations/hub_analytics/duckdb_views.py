@@ -126,6 +126,20 @@ _BUILTIN_QUERIES: dict[str, str] = {
         ORDER BY e.executed_at DESC
         LIMIT 50
     """,
+    "verified_news_recent": """
+        SELECT
+            canonical_story_id,
+            title,
+            published_at,
+            verification_status,
+            maturity_date,
+            tags_json,
+            predicted_impact_json,
+            actual_impact_json
+        FROM news_verified
+        ORDER BY published_at DESC
+        LIMIT 50
+    """,
 }
 
 _FORBIDDEN_SQL = re.compile(

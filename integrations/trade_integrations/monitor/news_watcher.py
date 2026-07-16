@@ -119,7 +119,14 @@ def _fetch_ticker_articles(ticker: str, since: datetime) -> list[NewsArticle]:
         end_dt=end_dt.replace(tzinfo=None),
         limit=config["news_article_limit"],
     )
-    return [article for article in articles if _article_after_since(article, since_norm)]
+    filtered = [article for article in articles if _article_after_since(article, since_norm)]
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import ingest_news_articles
+
+        ingest_news_articles(filtered, ticker=ticker, collection_day=end_date)
+    except Exception:
+        pass
+    return filtered
 
 
 def _parse_headlines_from_aggregated(markdown: str) -> list[tuple[str, str]]:
@@ -151,6 +158,35 @@ def _fetch_headlines_via_aggregator(ticker: str, since: datetime) -> list[tuple[
         end_dt.strftime("%Y-%m-%d"),
     )
     return _parse_headlines_from_aggregated(markdown)
+
+
+_INDEX_HUB_TICKERS = frozenset({"NIFTY", "BANKNIFTY", "SENSEX", "INDEX"})
+
+
+def _persist_material_to_hub(symbol: str, material: list[MaterialHeadline]) -> None:
+    """Upsert material index headlines into verified news hub (dedup + tags)."""
+    if symbol not in _INDEX_HUB_TICKERS or not material:
+        return
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import ingest_rows_to_hub
+
+        rows = []
+        for item in material:
+            pub = ""
+            if item.pub_date is not None:
+                pub = _normalize_datetime(item.pub_date).isoformat()
+            rows.append(
+                {
+                    "title": item.title,
+                    "summary": "",
+                    "url": item.url,
+                    "source": "material_news",
+                    "published_at": pub or datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        ingest_rows_to_hub(rows, ticker=symbol)
+    except Exception:
+        return
 
 
 def check_material_news(ticker: str, since: datetime) -> list[MaterialHeadline]:
@@ -199,4 +235,5 @@ def check_material_news(ticker: str, since: datetime) -> list[MaterialHeadline]:
 
     if material:
         _save_seen_fingerprints(symbol, seen)
+        _persist_material_to_hub(symbol, material)
     return material
