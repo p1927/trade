@@ -63,6 +63,22 @@ def _fetch_fii_dii() -> dict[str, Any] | None:
         return None
 
 
+def _fetch_upcoming_expiries() -> list[str]:
+    try:
+        from nselib import derivatives
+
+        dates = derivatives.expiry_dates_option_index()
+        if dates is None:
+            return []
+        if isinstance(dates, list):
+            return [str(d) for d in dates[:6]]
+        if hasattr(dates, "tolist"):
+            return [str(d) for d in dates.tolist()[:6]]
+    except Exception as exc:
+        logger.debug("option index expiries unavailable: %s", exc)
+    return []
+
+
 def fetch_events_index(*, lookahead_days: int) -> StageResult:
     """Macro events and context for index options (no company calendar)."""
     now = _stage_now()
@@ -111,10 +127,30 @@ def fetch_events_index(*, lookahead_days: int) -> StageResult:
         }
     )
 
+    upcoming_expiries = _fetch_upcoming_expiries()
+    if upcoming_expiries:
+        events.append(
+            {
+                "date": upcoming_expiries[0],
+                "type": "index_expiry",
+                "description": f"Nearest index weekly/monthly expiry: {upcoming_expiries[0]}",
+                "source": "nselib",
+                "impact_on_price": "neutral",
+                "impact_on_vol": "elevated",
+                "upcoming_expiries": upcoming_expiries,
+            }
+        )
+
     return StageResult(
         stage="events",
-        status="ok" if vix or fii else "partial",
+        status="ok" if vix or fii or upcoming_expiries else "partial",
         vendor="nselib+yfinance",
         fetched_at=now,
-        data={"events": events, "vix": vix, "fii_dii": fii, "lookahead_days": lookahead_days},
+        data={
+            "events": events,
+            "vix": vix,
+            "fii_dii": fii,
+            "lookahead_days": lookahead_days,
+            "upcoming_expiries": upcoming_expiries,
+        },
     )

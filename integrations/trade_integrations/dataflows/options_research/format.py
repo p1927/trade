@@ -104,13 +104,21 @@ def format_options_report(doc: OptionsResearchDoc) -> str:
             )
         if doc.payoff:
             parts.append(
-                f"\n**Payoff:** max profit {doc.payoff.get('max_profit')}, "
-                f"max loss {doc.payoff.get('max_loss')}, "
+                f"\n**Payoff (gross):** max profit {doc.payoff.get('gross_max_profit') or doc.payoff.get('max_profit')}, "
+                f"max loss {doc.payoff.get('gross_max_loss') or doc.payoff.get('max_loss')}, "
                 f"breakevens {doc.payoff.get('breakevens')}"
             )
+            if doc.payoff.get("net_max_profit") is not None:
+                parts.append(
+                    f"\n**Payoff (net of entry charges):** max profit {doc.payoff.get('net_max_profit')}, "
+                    f"max loss {doc.payoff.get('net_max_loss')}"
+                )
         if doc.charges:
             total = (doc.charges.get("total") or {}).get("total_charges")
+            ndc = doc.charges.get("net_debit_credit")
             parts.append(f"\n**Charges (est.):** ₹{total}")
+            if ndc is not None:
+                parts.append(f"  \n**Net debit/credit at entry:** ₹{ndc}")
         if doc.meta.get("strategy_builder_url"):
             parts.append(f"\n**Strategy Builder:** {doc.meta['strategy_builder_url']}")
         if doc.implementation_steps:

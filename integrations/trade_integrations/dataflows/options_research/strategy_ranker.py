@@ -75,7 +75,13 @@ def rank_strategies(
         legs = cand.get("legs") or []
         if not _liquidity_ok(legs):
             continue
-        metrics = estimate_strategy_metrics(legs, spot=spot, broker_preset=broker_preset)
+        metrics = estimate_strategy_metrics(
+            legs,
+            spot=spot,
+            broker_preset=broker_preset,
+            expiry=str(chain_snapshot.get("expiry_date") or ""),
+            iv=analytics.get("atm_iv") or analytics.get("atm_vol"),
+        )
         pop = metrics.get("pop") or 0.5
         max_profit = metrics.get("max_profit")
         max_loss = metrics.get("max_loss")
@@ -106,6 +112,10 @@ def rank_strategies(
                 "payoff": metrics.get("payoff"),
                 "charges": metrics.get("charges"),
                 "event_fit": round(event_fit, 3),
+                "net_debit_credit": metrics.get("net_debit_credit"),
+                "net_max_profit": metrics.get("net_max_profit"),
+                "net_max_loss": metrics.get("net_max_loss"),
+                "pop_source": metrics.get("pop_source"),
             }
         )
 

@@ -7,6 +7,7 @@ import pytest
 from trade_integrations.dataflows.options_research.payoff_charges import (
     calculate_charges,
     compute_payoff,
+    estimate_strategy_metrics,
 )
 
 
@@ -35,3 +36,14 @@ class TestOptionsPayoff:
         charges = calculate_charges(legs)
         assert charges["total"]["total_charges"] > 0
         assert len(charges["per_leg"]) == 2
+        assert charges["net_debit_credit"] == round(30 * 50 - 50 * 50, 2)
+
+    def test_net_pnl_attached(self):
+        legs = [
+            {"side": "SELL", "option_type": "CE", "strike": 100, "price": 5, "quantity": 10},
+            {"side": "BUY", "option_type": "PE", "strike": 95, "price": 2, "quantity": 10},
+        ]
+        metrics = estimate_strategy_metrics(legs, spot=100.0)
+        assert metrics["net_debit_credit"] is not None
+        assert metrics["payoff"].get("net_max_profit") is not None
+        assert metrics["charges"].get("net_debit_credit") is not None

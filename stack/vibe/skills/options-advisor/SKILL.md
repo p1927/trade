@@ -31,7 +31,7 @@ When the user asks what to trade, which strategy, or how to execute before expir
    - `prediction` (view, IV regime, expected move)
    - `events` and `scenarios`
    - `ranked_strategies` (top 3–5 with scores/tiers)
-   - `recommended` (legs, rationale, payoff, charges)
+   - `recommended` (legs, rationale, gross + **net** payoff, charges, `net_debit_credit`)
 5. **Validate** — `get_strategy_payoff` and `get_trade_charges` on recommended legs; `calculate_margin` per `implementation_steps`.
 6. **Visual payoff** — link Strategy Builder: `http://127.0.0.1:5000/strategybuilder?plan={UNDERLYING}`
 7. **Execute only after explicit user confirmation** — follow `implementation_steps` in order:

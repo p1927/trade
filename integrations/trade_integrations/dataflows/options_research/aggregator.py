@@ -166,10 +166,14 @@ def run_options_research(
             "score": top.get("score"),
             "tier": top.get("tier"),
             "pop": top.get("pop"),
+            "pop_source": top.get("pop_source"),
             "rationale": top.get("rationale"),
             "legs": top.get("legs") or [],
             "max_profit": top.get("max_profit"),
             "max_loss": top.get("max_loss"),
+            "net_max_profit": top.get("net_max_profit"),
+            "net_max_loss": top.get("net_max_loss"),
+            "net_debit_credit": top.get("net_debit_credit"),
             "breakevens": top.get("breakevens"),
         }
         doc.payoff = top.get("payoff") or {}

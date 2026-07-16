@@ -53,7 +53,13 @@ def fetch_events_stock(instrument: OptionsInstrument, *, lookahead_days: int) ->
             status="skipped",
             vendor="company_research_hub",
             fetched_at=now,
-            data={"events": [], "reason": "no company_research cache — run run_company_research.py first"},
+            data={
+                "events": [],
+                "reason": (
+                    "no company_research cache — run: "
+                    f"python scripts/run_company_research.py {instrument.display_symbol}"
+                ),
+            },
         )
 
     raw_events = list(doc.calendar_events or [])
