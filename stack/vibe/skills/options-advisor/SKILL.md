@@ -80,6 +80,8 @@ Link Strategy Builder (user must be logged into OpenAlgo):
 
 **Preferred:** user clicks **Execute in OpenAlgo** on the trade widget (Vibe proxies `POST /trade/execute-basket`).
 
+With **`OPENALGO_PAPER_MODE=true`** (default in `setup_vibe.py`), executes route to OpenAlgo **analyzer/sandbox** — use this for strategy trials before going live. Toggle live mode in OpenAlgo UI or set `OPENALGO_PAPER_MODE=false`.
+
 **Fallback:** follow `implementation_steps` in order:
 - Step 2: `calculate_margin` with step payload
 - Step 4: `place_basket_order` with step payload (BUY legs first if splitting manually)

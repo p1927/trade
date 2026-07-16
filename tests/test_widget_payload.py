@@ -51,6 +51,22 @@ def _sample_doc() -> OptionsResearchDoc:
                 "max_loss": 4500,
                 "net_max_profit": 11500,
                 "net_max_loss": 5000,
+                "legs": [
+                    {"side": "BUY", "symbol": "NIFTY31JUL25C24500", "quantity": 50, "price": 120},
+                    {"side": "SELL", "symbol": "NIFTY31JUL25C24700", "quantity": 50, "price": 45},
+                ],
+                "payoff": {
+                    "max_profit": 12000,
+                    "max_loss": 4500,
+                    "samples": [
+                        {"spot": 24000, "pnl": -4500, "net_pnl": -5000},
+                        {"spot": 25000, "pnl": 12000, "net_pnl": 11500},
+                    ],
+                },
+                "charges": {
+                    "net_debit_credit": 3750,
+                    "round_trip_charges": 420,
+                },
             },
             {"name": "Iron Condor", "tier": "alternative", "score": 71},
         ],
@@ -111,6 +127,7 @@ class TestWidgetPayload:
     def test_build_widget_shape(self):
         widget = build_options_trade_widget_from_doc(_sample_doc())
         assert widget["type"] == "trade_plan.widget"
+        assert widget["asset_type"] == "options"
         assert widget["underlying"] == "NIFTY"
         assert widget["widget_id"].startswith("tp_NIFTY_")
         assert len(widget["scenarios"]) == 2
@@ -118,6 +135,8 @@ class TestWidgetPayload:
         assert len(widget["payoff"]["samples"]) == 3
         assert widget["charges"]["net_debit_credit"] == 3750
         assert widget["implementation_steps"][0]["action"] == "execute_basket"
+        assert "Bull Call Spread" in widget["strategy_variants"]
+        assert widget["strategy_variants"]["Bull Call Spread"]["implementation_steps"][-1]["action"] == "execute_basket"
 
     def test_prediction_includes_signal_summaries(self):
         widget = build_options_trade_widget_from_doc(_sample_doc())

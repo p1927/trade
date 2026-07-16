@@ -44,10 +44,19 @@ From JSON, explain:
 - `get_quote` for current price vs plan entry
 - `get_funds` before CNC buy
 
+### Step 2b — Interactive stock widget (preferred)
+
+When the user asks what stock trade to consider:
+
+1. Call **`get_stock_trade_widget(ticker)`** — Vibe renders scenarios, charges, and Execute button.
+2. Summarize why the agent-recommended approach wins vs alternatives.
+3. With `OPENALGO_PAPER_MODE=true` (default), Execute uses OpenAlgo sandbox — safe for trials.
+
 ### Step 4 — Execute after explicit confirmation
 
-Follow `implementation_steps`:
-- Step 4: `place_order` with CNC payload from the plan
+**Preferred:** user clicks **Execute (Paper)** or **Execute in OpenAlgo** on the widget.
+
+**Fallback:** follow `implementation_steps` — `place_order` or `place_basket_order` with CNC payload.
 
 Never place live orders without clear user approval.
 
@@ -63,6 +72,7 @@ python scripts/run_stock_research.py RELIANCE --days 14
 |------|-----|
 | `get_stock_browse` | In-chat equity snapshot |
 | `get_stock_trade_plan` | Full stock trade plan |
+| `get_stock_trade_widget` | **Vibe chat widget** — scenarios, charges, paper/live execute |
 | `get_quote` | Live price refresh |
 | `get_funds` | Cash available for CNC |
 | `place_order` | Single equity execution |

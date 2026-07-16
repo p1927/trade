@@ -219,7 +219,9 @@ def sync_vibe_env(dry_run: bool = False, force: bool = False) -> Path | None:
 
     openalgo_host = (os.getenv("OPENALGO_HOST") or "http://127.0.0.1:5001").rstrip("/")
     openalgo_key = os.getenv("OPENALGO_API_KEY", "").strip()
+    paper_mode = os.getenv("OPENALGO_PAPER_MODE", "true").strip().lower()
     lines.append(f"OPENALGO_HOST={openalgo_host}")
+    lines.append(f"OPENALGO_PAPER_MODE={'true' if paper_mode in ('1', 'true', 'yes') else 'false'}")
     if openalgo_key:
         lines.append(f"OPENALGO_API_KEY={openalgo_key}")
 
