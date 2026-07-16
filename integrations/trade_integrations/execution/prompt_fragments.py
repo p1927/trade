@@ -125,6 +125,7 @@ def build_e2e_phase_delta(*, phase: str, market: str, symbol: str) -> str:
         return (
             f"\n## E2E Phase 2 — mandatory execution\n"
             f"Place two BUY and one SELL (partial exit) for {symbol} via Alpaca paper.\n"
+            "Paper E2E override: place orders via `trading_place_order` even when market_open=false.\n"
             "Then set watch_spec and record decision.\n"
         )
     if phase == "exit" and market == "US":

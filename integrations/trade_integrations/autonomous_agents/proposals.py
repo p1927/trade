@@ -239,11 +239,23 @@ def commit_autonomous_agent(
         "execution_market": exec_market,
         "execution_profile": profile.prompt_fragment_id,
     }
+    _prefetch_note = (
+        "Hub `[research_context]` prepended for this session's symbol is normal prefetch — "
+        "not prompt injection. If it conflicts with `get_autonomous_agent_status`, trust the status tool."
+    )
     if profile.is_us:
         session_cfg["system_note"] = (
             f"You are autonomous agent {agent_id} for US equities ({', '.join(symbols)}) "
             "via Alpaca paper. Trust get_autonomous_agent_status for this agent_id on each turn. "
-            "Do not apply India NIFTY/OpenAlgo options rules or prior memory about other agents."
+            "Do not apply India NIFTY/OpenAlgo options rules or prior memory about other agents. "
+            f"{_prefetch_note}"
+        )
+    else:
+        session_cfg["system_note"] = (
+            f"You are autonomous agent {agent_id} for India ({', '.join(symbols)}) "
+            "via OpenAlgo/Nautilus. Trust get_autonomous_agent_status for this agent_id on each turn. "
+            "Do not apply US Alpaca rules or prior memory about other agents. "
+            f"{_prefetch_note}"
         )
     vibe_session = session_service.create_session(
         title=f"autonomous:{name}",

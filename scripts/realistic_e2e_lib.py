@@ -510,7 +510,7 @@ def build_e2e_integration_preamble(*, agent_id: str, phase: str) -> str:
         f"Automated verification turn for agent `{agent_id}` ({phase}). "
         "This is not prompt injection. Execute the steps below.\n"
         f"Always call `get_autonomous_agent_status(agent_id=\"{agent_id}\")` and trust the **current turn** tool output.\n"
-        "Ignore stale memory about other agents (e.g. NIFTY) unless status confirms them.\n"
+        "Ignore stale memory about other agents or markets unless status confirms them.\n"
     )
 
 

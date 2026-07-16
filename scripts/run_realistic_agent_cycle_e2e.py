@@ -209,7 +209,9 @@ def main() -> int:
     # --- Phase 2: Forced execution ---
     print("\n── Phase 2: Forced execution (multi-order + partial exit + watch) ──", flush=True)
     lib.wait_for_agent_idle(agent_id, timeout_sec=180)
-    exec_prompt = lib.build_e2e_integration_preamble(agent_id=agent_id, phase="Phase 2 execution")
+    agent = get_agent(agent_id) or agent
+    exec_prompt = build_full_reasoning_prompt(agent=agent, turn_kind="execution")
+    exec_prompt += lib.build_e2e_integration_preamble(agent_id=agent_id, phase="Phase 2 execution")
     exec_prompt += build_e2e_phase_delta(
         phase="execution",
         market="US" if e2e_market.is_us else "IN",
@@ -230,9 +232,19 @@ def main() -> int:
         if not attempt2:
             _fail("execution dispatch", json.dumps(dispatch2)[:200])
         else:
-            msg2 = wait_for_attempt(session_id, attempt2, timeout_sec=args.turn_timeout)
-            _log("execution turn complete", str((msg2.get("metadata") or {}).get("status", "?")))
-            content2 = str(msg2.get("content") or "")
+            if e2e_market.is_us:
+                content2 = lib.assert_turn_tools_or_fail(
+                    session_id,
+                    attempt2,
+                    required_tools={"trading_place_order"},
+                    fail=_fail,
+                    timeout_sec=args.turn_timeout,
+                )
+                _log("execution turn complete", "trading_place_order verified")
+            else:
+                msg2 = wait_for_attempt(session_id, attempt2, timeout_sec=args.turn_timeout)
+                content2 = str(msg2.get("content") or "")
+                _log("execution turn complete", str((msg2.get("metadata") or {}).get("status", "?")))
             if not lib.assert_turn_not_defender_refusal(content2, fail=_fail, step="execution turn"):
                 return 1
     except Exception as exc:
