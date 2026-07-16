@@ -10,6 +10,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+_FII_LIVE_URL = "https://fii-diidata.mrchartist.com/api/data"
 _FII_HISTORY_URL = "https://fii-diidata.mrchartist.com/api/history-full"
 _SEEDED_SOURCES = frozenset({"seeded", "estimate", "estimated", "synthetic"})
 
@@ -111,6 +112,46 @@ def fetch_mrchartist_flow_frame(*, include_seeded: bool = False) -> pd.DataFrame
     return frame
 
 
+def fetch_mrchartist_latest_session() -> pd.DataFrame:
+    """Latest FII/DII + derivatives from Mr. Chartist (NSE-sourced, post-close)."""
+    try:
+        import requests
+
+        response = requests.get(_FII_LIVE_URL, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logger.debug("Mr. Chartist /api/data unavailable: %s", exc)
+        return pd.DataFrame()
+
+    if not isinstance(payload, dict):
+        return pd.DataFrame()
+
+    day = _parse_api_date(str(payload.get("d") or payload.get("date") or ""))
+    if not day:
+        day = datetime.now().date().isoformat()
+
+    row: dict = {"date": day, "source": str(payload.get("_source") or "mrchartist_live")}
+    for src, dest in (
+        ("fn", "fii_net"),
+        ("fii_net", "fii_net"),
+        ("dn", "dii_net"),
+        ("dii_net", "dii_net"),
+        ("pcr", "nifty_pcr"),
+        ("sentiment_score", "fii_sentiment_score"),
+        ("fii_idx_fut_long", "fii_idx_fut_long"),
+        ("fii_idx_fut_short", "fii_idx_fut_short"),
+        ("fii_idx_opt_put_short", "fii_idx_put_oi"),
+        ("fii_idx_opt_call_short", "fii_idx_call_oi"),
+    ):
+        val = _float_or_none(payload.get(src))
+        if val is not None:
+            row[dest] = val
+    if row.get("fii_idx_fut_long") is not None and row.get("fii_idx_fut_short"):
+        row["fii_fut_long_short_ratio"] = row["fii_idx_fut_long"] / max(row["fii_idx_fut_short"], 1e-9)
+    return pd.DataFrame([row])
+
+
 def _fii_net_column(frame: pd.DataFrame) -> str | None:
     for column in frame.columns:
         label = str(column).lower()
@@ -199,35 +240,28 @@ def _row_dict(frame: pd.DataFrame, day: str) -> dict:
 
 
 def merge_flow_derivatives_frame(start: str, end: str) -> pd.DataFrame:
-    """Merge nselib FII/DII (full range) with Mr. Chartist derivatives fields."""
-    nse = fetch_nselib_fii_dii_frame(start, end)
+    """Merge Mr. Chartist history (full range) with NSE today + latest session."""
     mr = fetch_mrchartist_flow_frame(include_seeded=False)
+    latest = fetch_mrchartist_latest_session()
+    nse = fetch_nselib_fii_dii_frame(start, end)
 
-    dates = set()
-    if not nse.empty:
-        dates.update(nse["date"].astype(str).tolist())
-    if not mr.empty:
-        dates.update(mr["date"].astype(str).tolist())
-
-    if not dates:
+    frames = [f for f in (mr, latest, nse) if f is not None and not f.empty]
+    if not frames:
         return pd.DataFrame()
 
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.sort_values("date").drop_duplicates("date", keep="last")
+
+    dates = set(combined["date"].astype(str).tolist())
     rows: list[dict] = []
     for day in sorted(dates):
         if day < start[:10] or day > end[:10]:
             continue
-        nse_row = _row_dict(nse, day) if not nse.empty else {}
-        mr_row = _row_dict(mr, day) if not mr.empty else {}
-        merged: dict = {"date": day}
-        for col in _FLOW_COLS:
-            merged[col] = nse_row.get(col) if nse_row.get(col) is not None else mr_row.get(col)
-        for col in _DERIV_COLS:
-            if mr_row.get(col) is not None:
-                merged[col] = mr_row[col]
-        if merged.get("fii_net") is not None or merged.get("dii_net") is not None:
-            merged["source"] = "nselib" if nse_row.get("fii_net") is not None else "mrchartist"
-        elif any(merged.get(c) is not None for c in _DERIV_COLS):
-            merged["source"] = "mrchartist"
+        day_rows = combined[combined["date"].astype(str) == day[:10]]
+        if day_rows.empty:
+            continue
+        merged = day_rows.iloc[-1].to_dict()
+        merged["date"] = day[:10]
         rows.append(merged)
 
     if not rows:

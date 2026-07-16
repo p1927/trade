@@ -97,7 +97,25 @@ _NEWS_KEYWORDS: dict[str, list[str]] = {
 
 
 def _fetch_index_headlines(day: str, *, limit: int = 6) -> list[dict[str, str]]:
-    """Headlines for Nifty / Indian market on a calendar day (Google News RSS)."""
+    """Headlines for Nifty / Indian market on a calendar day."""
+    try:
+        from trade_integrations.dataflows.index_research.news_collect import collect_headlines_for_day
+    except ImportError:
+        collect_headlines_for_day = None  # type: ignore[assignment]
+
+    if collect_headlines_for_day is not None:
+        rows = collect_headlines_for_day(day, ticker="NIFTY", limit=limit)
+        if rows:
+            return [
+                {
+                    "title": str(r.get("title") or "")[:220],
+                    "source": str(r.get("source") or "news"),
+                    "summary": str(r.get("summary") or "")[:500],
+                }
+                for r in rows
+                if r.get("title")
+            ]
+
     try:
         from trade_integrations.dataflows.index_research.company_news_backfill import (
             _fetch_rss_headlines,

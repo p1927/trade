@@ -8,6 +8,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import pandas as pd
+
 from trade_integrations.dataflows.company_research.models import StageResult
 from trade_integrations.dataflows.company_research.sources.macro_in import (
     _fetch_nselib_vix,
@@ -188,11 +190,78 @@ def _fetch_flow_net_5d(*, factor: str, net_col_finder) -> dict[str, Any] | None:
     }
 
 
+def _fetch_flow_net_5d_from_mrchartist(*, net_key: str, factor: str) -> dict[str, Any] | None:
+    """Rolling 5-session sum from Mr. Chartist history + latest session."""
+    try:
+        from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+            fetch_mrchartist_flow_frame,
+            fetch_mrchartist_latest_session,
+        )
+    except ImportError:
+        return None
+
+    mr = fetch_mrchartist_flow_frame(include_seeded=False)
+    latest = fetch_mrchartist_latest_session()
+    frames = [f for f in (mr, latest) if f is not None and not f.empty]
+    if not frames:
+        return None
+    frame = pd.concat(frames, ignore_index=True).sort_values("date").drop_duplicates("date", keep="last")
+    col = "fii_net" if net_key == "fii" else "dii_net"
+    if col not in frame.columns:
+        return None
+    tail = frame.tail(5)[col].dropna()
+    if tail.empty:
+        return None
+    return {
+        "factor": factor,
+        "value": float(tail.sum()),
+        "source": "mrchartist",
+        "metadata": {"rows": len(tail), "column": col},
+    }
+
+
+def _fetch_institutional_net_5d() -> dict[str, Any] | None:
+    fii = _fetch_flow_net_5d_from_mrchartist(net_key="fii", factor="fii_net_5d")
+    dii = _fetch_flow_net_5d_from_mrchartist(net_key="dii", factor="dii_net_5d")
+    if not fii or not dii:
+        return None
+    fii_val = float(fii["value"])
+    dii_val = float(dii["value"])
+    return {
+        "factor": "institutional_net_5d",
+        "value": fii_val + dii_val,
+        "source": "mrchartist_joint",
+        "metadata": {"fii_net_5d": fii_val, "dii_net_5d": dii_val},
+    }
+
+
+def _fetch_dii_absorption_ratio() -> dict[str, Any] | None:
+    fii = _fetch_flow_net_5d_from_mrchartist(net_key="fii", factor="fii_net_5d")
+    dii = _fetch_flow_net_5d_from_mrchartist(net_key="dii", factor="dii_net_5d")
+    if not fii or not dii:
+        return None
+    fii_val = float(fii["value"])
+    dii_val = float(dii["value"])
+    denom = max(abs(fii_val), 50.0)
+    return {
+        "factor": "dii_absorption_ratio",
+        "value": dii_val / denom,
+        "source": "mrchartist_joint",
+        "metadata": {"fii_net_5d": fii_val, "dii_net_5d": dii_val},
+    }
+
+
 def _fetch_fii_net_5d() -> dict[str, Any] | None:
+    live = _fetch_flow_net_5d_from_mrchartist(net_key="fii", factor="fii_net_5d")
+    if live:
+        return live
     return _fetch_flow_net_5d(factor="fii_net_5d", net_col_finder=_fii_net_column)
 
 
 def _fetch_dii_net_5d() -> dict[str, Any] | None:
+    live = _fetch_flow_net_5d_from_mrchartist(net_key="dii", factor="dii_net_5d")
+    if live:
+        return live
     return _fetch_flow_net_5d(factor="dii_net_5d", net_col_finder=_dii_net_column)
 
 
@@ -365,6 +434,8 @@ def fetch_global_macro_snapshot(
         ("india_vix", _fetch_india_vix),
         ("fii_net_5d", _fetch_fii_net_5d),
         ("dii_net_5d", _fetch_dii_net_5d),
+        ("institutional_net_5d", _fetch_institutional_net_5d),
+        ("dii_absorption_ratio", _fetch_dii_absorption_ratio),
         ("nifty_pe", _fetch_nifty_pe),
         ("nifty_pcr", _fetch_nifty_pcr),
     ):

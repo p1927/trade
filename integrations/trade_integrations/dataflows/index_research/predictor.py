@@ -441,6 +441,11 @@ def predict_nifty(
     bottom_up = float(rollup["total_contribution_pct"])
 
     raw_macro = _predict_macro_delta(macro_factors, horizon, artifact)
+    from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
+
+    gated_raw = predict_macro_delta_gated(macro_factors, horizon, artifact)
+    if abs(gated_raw) > 1e-9:
+        raw_macro = gated_raw
     macro_delta = shrink_macro_delta(raw_macro, scenario_anchor_return_pct)
     expected_return_pct = bottom_up + macro_delta
     mae = artifact.mae if artifact else _DEFAULT_MAE_PCT

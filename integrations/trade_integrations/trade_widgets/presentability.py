@@ -70,7 +70,7 @@ def _stock_presentable(widget: dict[str, Any]) -> bool:
         return False
     if not _finite(charges.get("round_trip_charges")):
         return False
-    if not (charges.get("per_leg") or []):
+    if str(rec.get("action") or "").upper() != "HOLD" and not (charges.get("per_leg") or []):
         return False
     return bool(rec.get("action") or rec.get("legs"))
 

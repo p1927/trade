@@ -241,6 +241,35 @@ def wait_for_vibe(*, attempts: int = 12, delay_sec: float = 2.5) -> bool:
     return False
 
 
+def ensure_agent_ready(agent_id: str, *, label: str, timeout_sec: int = 240) -> bool:
+    """Wait for post-commit bootstrap + in-flight Vibe turns to finish."""
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        agent = get_agent(agent_id) or {}
+        bootstrap = str(agent.get("bootstrap_status") or "")
+        streaming = bool(agent.get("streaming"))
+        if not streaming and bootstrap in ("", "done", "failed"):
+            _log(label, f"ready (bootstrap={bootstrap or 'n/a'})")
+            return True
+        time.sleep(3)
+
+    agent = get_agent(agent_id) or {}
+    if agent.get("streaming"):
+        _log(label, f"clearing stale streaming after {timeout_sec}s", ok=True)
+        agent["streaming"] = False
+        save_agent(agent)
+        return True
+
+    _fail(
+        label,
+        f"agent not idle after {timeout_sec}s "
+        f"(bootstrap={agent.get('bootstrap_status')}, streaming={agent.get('streaming')})",
+    )
+    return False
+
+
 def verify_live_nautilus_node(agent_id: str, *, run_seconds: int = 90) -> bool:
     print("\n── 3. Live Nautilus TradingNode (watch ON) ──", flush=True)
     log_path = ROOT / "log" / "verify_nautilus_watch.log"
@@ -325,6 +354,8 @@ def verify_direct_alert_dispatch(agent_id: str, session_id: str) -> bool:
     if not wait_for_vibe():
         _fail("vibe api", "unreachable before alert dispatch")
         return False
+    if not ensure_agent_ready(agent_id, label="pre-dispatch idle"):
+        return False
     from nautilus_openalgo_bridge.models import BridgeSignal, WatchAlert, WatchRule
     from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
 
@@ -337,11 +368,22 @@ def verify_direct_alert_dispatch(agent_id: str, session_id: str) -> bool:
         ltp=24600.0,
         move_pct=0.55,
     )
-    result = dispatch_watch_alert_sync(agent_id, alert)
-    status = str(result.get("status"))
-    _log("dispatch_watch_alert_sync", status)
-    if status != "dispatched":
+    result: dict[str, Any] = {}
+    status = ""
+    for attempt in range(5):
+        result = dispatch_watch_alert_sync(agent_id, alert)
+        status = str(result.get("status"))
+        detail = status if attempt == 0 else f"{status} (retry {attempt})"
+        _log("dispatch_watch_alert_sync", detail)
+        if status == "dispatched":
+            break
+        if status == "skipped" and result.get("reason") == "turn_in_flight":
+            time.sleep(5)
+            continue
         _fail("direct dispatch", json.dumps(result)[:200])
+        return False
+    else:
+        _fail("direct dispatch", "turn_in_flight after retries")
         return False
 
     deadline = time.time() + 30
@@ -488,11 +530,14 @@ def main() -> int:
         )
         _log("india test agent", f"{agent_id} session={session_id}")
 
-        ok_node = True
-        if not args.skip_live_node:
-            ok_node = verify_live_nautilus_node(agent_id, run_seconds=args.node_seconds)
+        if not ensure_agent_ready(agent_id, label="post-commit idle"):
+            ok_node = ok_alert = False
+        else:
+            ok_node = True
+            if not args.skip_live_node:
+                ok_node = verify_live_nautilus_node(agent_id, run_seconds=args.node_seconds)
 
-        ok_alert = verify_direct_alert_dispatch(agent_id, session_id)
+            ok_alert = verify_direct_alert_dispatch(agent_id, session_id)
 
         ok_us = True
         if not args.skip_us:

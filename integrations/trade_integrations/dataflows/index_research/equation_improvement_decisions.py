@@ -21,7 +21,13 @@ STRUCTURAL_CHANGES: list[dict[str, Any]] = [
     {
         "id": "delta_features",
         "hypothesis": "Flow/oil/VIX acceleration features capture horizon path not visible in levels.",
-        "status": "accepted",
+        "status": "rejected",
+        "rejection_reason": "Walk-forward OOS direction fell 44.4% → 35.3% (−9.1 pp) on 365d eval; two direction flips + lost eval row.",
+    },
+    {
+        "id": "joint_flow_features",
+        "hypothesis": "institutional_net_5d + dii_absorption_ratio capture post-2023 DII-dominance regime.",
+        "status": "accepted_pending_ablation",
     },
     {
         "id": "regime_gates",

@@ -5,16 +5,17 @@ from __future__ import annotations
 
 import json
 import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "integrations"))
 sys.path.insert(0, str(ROOT / "tradingagents"))
-sys.path.insert(0, str(ROOT / "openalgo"))
 
 import os
 
 os.environ.setdefault("TRADE_INTEGRATIONS_SKIP_APPLY", "1")
+os.environ.setdefault("OPENALGO_MCP_HTTP_BOOT", "1")
 if not os.getenv("TRADE_STACK_HUB_DIR"):
     os.environ["TRADE_STACK_HUB_DIR"] = str(ROOT / "reports" / "hub")
 
@@ -23,6 +24,33 @@ def _check(label: str, ok: bool, detail: str = "") -> bool:
     mark = "PASS" if ok else "FAIL"
     print(f"[{mark}] {label}" + (f" — {detail}" if detail else ""))
     return ok
+
+
+def _is_hold_recommendation(rec: dict) -> bool:
+    return str(rec.get("action") or "").upper() == "HOLD" or rec.get("name") == "hold_cash"
+
+
+def _load_mcp_module():
+    """Load mcpserver without requiring pip-installed openalgo SDK."""
+    import importlib.util
+
+    if "openalgo" not in sys.modules:
+        stub = types.ModuleType("openalgo")
+        stub.api = lambda **kwargs: None
+        stub.ta = types.ModuleType("openalgo.ta")
+        sys.modules["openalgo"] = stub
+
+    mcpserver_path = ROOT / "openalgo" / "mcp" / "mcpserver.py"
+    spec = importlib.util.spec_from_file_location("openalgo_mcpserver_verify", mcpserver_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {mcpserver_path}")
+    mcp_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mcp_mod)
+    api_key = os.getenv("OPENALGO_API_KEY", "")
+    host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001")
+    if api_key and hasattr(mcp_mod, "init_for_http"):
+        mcp_mod.init_for_http(api_key, host)
+    return mcp_mod
 
 
 def main() -> int:
@@ -47,13 +75,19 @@ def main() -> int:
         pred = result.doc.prediction or {}
         rec = result.doc.recommended or {}
         ch = result.doc.charges or {}
+        hold = _is_hold_recommendation(rec)
         failures += not _check("prediction.range", bool(pred.get("range", {}).get("low") and pred.get("range", {}).get("high")))
         failures += not _check("prediction.provenance", bool(pred.get("provenance")))
-        failures += not _check("recommended.max_profit > 0 for BUY", (rec.get("max_profit") or 0) > 0, str(rec.get("max_profit")))
-        failures += not _check("recommended.max_loss < 0 for BUY", (rec.get("max_loss") or 0) < 0, str(rec.get("max_loss")))
-        failures += not _check("charges.round_trip", (ch.get("round_trip_charges") or 0) > 0, str(ch.get("round_trip_charges")))
+        if hold:
+            failures += not _check("recommended hold_cash", rec.get("name") == "hold_cash", str(rec.get("name")))
+            failures += not _check("recommended.max_profit == 0 for HOLD", rec.get("max_profit") == 0, str(rec.get("max_profit")))
+            failures += not _check("recommended.max_loss == 0 for HOLD", rec.get("max_loss") == 0, str(rec.get("max_loss")))
+        else:
+            failures += not _check("recommended.max_profit > 0 for BUY", (rec.get("max_profit") or 0) > 0, str(rec.get("max_profit")))
+            failures += not _check("recommended.max_loss < 0 for BUY", (rec.get("max_loss") or 0) < 0, str(rec.get("max_loss")))
+            failures += not _check("recommended.legs", bool(rec.get("legs")))
+        failures += not _check("charges.round_trip", (ch.get("round_trip_charges") or 0) >= 0, str(ch.get("round_trip_charges")))
         failures += not _check("charges.broker indmoney", ch.get("broker_preset") == "indmoney", str(ch.get("broker_preset")))
-        failures += not _check("recommended.legs", bool(rec.get("legs")))
 
     print("\n=== get_research_status ===")
     status = get_research_status("RELIANCE", kind=ResearchKind.STOCK)
@@ -75,20 +109,7 @@ def main() -> int:
 
     print("\n=== MCP tool simulation ===")
     try:
-        os.environ["OPENALGO_MCP_HTTP_BOOT"] = "1"
-        import importlib.util
-
-        mcpserver_path = ROOT / "openalgo" / "mcp" / "mcpserver.py"
-        spec = importlib.util.spec_from_file_location("openalgo_mcpserver", mcpserver_path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"cannot load {mcpserver_path}")
-        mcp_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mcp_mod)
-        api_key = os.getenv("OPENALGO_API_KEY", "")
-        host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001")
-        if api_key:
-            mcp_mod.init_for_http(api_key, host)
-
+        mcp_mod = _load_mcp_module()
         mcp_status_out = json.loads(mcp_mod.get_research_status("RELIANCE", asset_type="stock"))
         failures += not _check("MCP get_research_status", mcp_status_out.get("kind") == "stock")
 
@@ -112,7 +133,7 @@ def main() -> int:
             "prediction": widget.get("prediction"),
             "recommended": {
                 k: w_rec.get(k)
-                for k in ("name", "target", "stop", "max_profit", "max_loss", "net_max_profit", "net_max_loss")
+                for k in ("name", "action", "target", "stop", "max_profit", "max_loss", "net_max_profit", "net_max_loss")
             },
             "charges": {
                 "round_trip_charges": w_ch.get("round_trip_charges"),

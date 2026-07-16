@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from trade_integrations.dataflows.index_research.regime import classify_regime
 
 MOMENTUM_FACTORS = frozenset(
@@ -15,7 +17,8 @@ MOMENTUM_FACTORS = frozenset(
         "constituent_momentum_7d",
     }
 )
-FII_CONTRARIAN_FACTORS = frozenset({"fii_net_5d", "fii_net_5d_change_5d"})
+FII_CONTRARIAN_FACTORS = frozenset({"fii_net_5d"})
+JOINT_FLOW_FACTORS = frozenset({"institutional_net_5d", "dii_absorption_ratio"})
 
 _HIGH_FEAR_VIX = 18.0
 _TREND_DOWN_PCT = -3.0
@@ -50,10 +53,10 @@ def resolve_regime_label(factors: dict[str, Any]) -> str:
 def block_gate_weights(regime_label: str) -> dict[str, float]:
     """Pre-specified multipliers — not tuned on miss dates."""
     if regime_label == "high_fear":
-        return {"momentum": 0.5, "flows": 1.0, "global": 1.0, "vol": 1.0, "calendar": 1.0, "delta": 1.0}
+        return {"momentum": 0.5, "flows": 1.0, "global": 1.0, "vol": 1.0, "calendar": 1.0}
     if regime_label == "trend_down":
-        return {"momentum": 1.0, "flows": 0.0, "global": 1.0, "vol": 1.0, "calendar": 1.0, "delta": 1.0}
-    return {"momentum": 1.0, "flows": 1.0, "global": 1.0, "vol": 1.0, "calendar": 1.0, "delta": 1.0}
+        return {"momentum": 1.0, "flows": 0.0, "global": 1.0, "vol": 1.0, "calendar": 1.0}
+    return {"momentum": 1.0, "flows": 1.0, "global": 1.0, "vol": 1.0, "calendar": 1.0}
 
 
 def factor_gate_weight(factor_name: str, regime_label: str) -> float:
@@ -62,15 +65,56 @@ def factor_gate_weight(factor_name: str, regime_label: str) -> float:
         return weights["momentum"]
     if factor_name in FII_CONTRARIAN_FACTORS:
         return weights["flows"]
+    if factor_name in JOINT_FLOW_FACTORS:
+        return weights["flows"]
     if factor_name.startswith("oil_") or factor_name in {"usd_inr", "gold", "sp500", "us_10y"}:
         return weights["global"]
     if factor_name in {"india_vix", "nifty_realized_vol_20d", "india_vix_change_5d"}:
         return weights["vol"]
     if factor_name in {"days_to_monthly_expiry", "is_budget_week", "is_results_season"}:
         return weights["calendar"]
-    if factor_name.endswith("_change_5d") or factor_name.endswith("_change_7d"):
-        return weights["delta"]
     return 1.0
+
+
+def predict_macro_delta_gated(
+    macro_factors: dict[str, Any],
+    horizon: Any,
+    artifact: Any,
+) -> float:
+    """Apply pre-specified regime gates to macro Ridge output (no new coefficients)."""
+    from trade_integrations.dataflows.index_research.predictor import (
+        ModelArtifact,
+        _expand_poly,
+        _macro_trust_weight,
+        _scale_features,
+    )
+
+    if artifact is None or not getattr(artifact, "feature_names", None):
+        return 0.0
+
+    values: list[float] = []
+    gates: list[float] = []
+    regime = resolve_regime_label(macro_factors)
+    for name in artifact.feature_names:
+        raw = macro_factors.get(name, 0.0)
+        try:
+            val = float(raw) if raw is not None else 0.0
+        except (TypeError, ValueError):
+            val = 0.0
+        values.append(val)
+        gates.append(factor_gate_weight(name, regime))
+
+    raw_vec = np.array(values, dtype=float).reshape(1, -1)
+    gate_vec = np.array(gates, dtype=float).reshape(1, -1)
+    if artifact.feature_means and artifact.feature_stds:
+        scaled = _scale_features(raw_vec, artifact.feature_means, artifact.feature_stds)
+    else:
+        scaled = raw_vec
+    gated_input = scaled * gate_vec
+    expanded, poly_names = _expand_poly(gated_input, artifact.feature_names, artifact.poly_degree)
+    coefs = np.array([artifact.coefficients.get(name, 0.0) for name in poly_names], dtype=float)
+    trust = _macro_trust_weight(float(artifact.mae or 1.5))
+    return float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
 
 
 def apply_regime_gates_to_contributions(

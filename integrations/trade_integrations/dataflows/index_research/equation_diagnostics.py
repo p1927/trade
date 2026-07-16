@@ -35,16 +35,11 @@ FACTOR_BLOCKS: dict[str, list[str]] = {
         "nifty_ma20_distance_pct",
         "constituent_momentum_7d",
     ],
-    "flows": ["fii_net_5d", "dii_net_5d", "fii_fut_long_short_ratio", "nifty_pcr"],
+    "flows": ["fii_net_5d", "dii_net_5d", "fii_fut_long_short_ratio", "nifty_pcr", "institutional_net_5d", "dii_absorption_ratio"],
     "global": ["oil_brent", "oil_wti", "usd_inr", "gold", "sp500", "us_10y"],
     "vol": ["india_vix", "nifty_realized_vol_20d"],
     "calendar": ["days_to_monthly_expiry", "is_budget_week", "is_results_season"],
-    "delta": [
-        "fii_net_5d_change_5d",
-        "dii_net_5d_change_5d",
-        "oil_brent_change_7d",
-        "india_vix_change_5d",
-    ],
+    "joint_flows": ["institutional_net_5d", "dii_absorption_ratio"],
 }
 
 LITERATURE_SIGNS: dict[str, str] = {
@@ -129,9 +124,8 @@ def _walk_forward_hit_rate(
     horizon = resolve_horizon(horizon_days)
     work = frame.copy()
     if exclude_factors:
-        for col in exclude_factors:
-            if col in work.columns:
-                work[col] = np.nan
+        drop = [c for c in exclude_factors if c in work.columns]
+        work = work.drop(columns=drop, errors="ignore")
 
     work["target"] = _forward_return_pct(work["close"].astype(float), horizon.days)
     feature_cols = _feature_columns(work)

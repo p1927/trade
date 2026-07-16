@@ -12,9 +12,10 @@ from trade_integrations.dataflows.index_research.equation_diagnostics import (
 
 
 @pytest.mark.unit
-def test_factor_blocks_cover_delta_features():
-    assert "delta" in FACTOR_BLOCKS
-    assert "fii_net_5d_change_5d" in FACTOR_BLOCKS["delta"]
+def test_factor_blocks_include_joint_flows():
+    assert "joint_flows" in FACTOR_BLOCKS
+    assert "institutional_net_5d" in FACTOR_BLOCKS["joint_flows"]
+    assert "delta" not in FACTOR_BLOCKS
 
 
 @pytest.mark.unit

@@ -109,7 +109,7 @@ def audit_eval_row(
     frame,
     feature_cols: list[str],
 ) -> dict[str, Any]:
-    pred_day = str(eval_row.get("date") or "")[:10]
+    pred_day = str(eval_row.get("prediction_date") or eval_row.get("date") or "")[:10]
     headlines_t0 = _fetch_index_headlines(pred_day)
     factors_t0 = factor_snapshot_at(pred_day, frame, feature_cols, keys=MACRO_FACTOR_KEYS)
     try:

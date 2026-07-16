@@ -383,10 +383,20 @@ def run_walk_forward_backtest(
             continue
 
         factors_today = _row_factor_dict(row, feature_cols)
-        from trade_integrations.dataflows.index_research.predictor import _predict_macro_delta
+        from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
+        from trade_integrations.dataflows.index_research.scenarios import (
+            build_index_scenarios,
+            scenario_weighted_return_pct,
+        )
 
-        raw_macro = _predict_macro_delta(factors_today, horizon, artifact)
-        macro = shrink_macro_delta(raw_macro)
+        raw_macro = predict_macro_delta_gated(factors_today, horizon, artifact)
+        scenario_anchor = None
+        try:
+            scenarios = build_index_scenarios([], factors_today, spot=close, horizon_days=horizon.days)
+            scenario_anchor = scenario_weighted_return_pct(scenarios, spot=close)
+        except Exception:
+            scenario_anchor = None
+        macro = shrink_macro_delta(raw_macro, scenario_anchor)
         predicted = macro  # macro-only backtest (no historical constituent research)
         day_str = str(row["date"])[:10]
         bottom_up = None

@@ -183,55 +183,91 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
             row["net_max_loss"] = row_payoff.get("net_max_loss")
 
         top = ranked[0]
-        legs = top.get("legs") or [
-            {
-                "symbol": sym,
-                "side": top.get("action", "BUY"),
-                "price": spot,
-                "quantity": top.get("quantity", 1),
-                "product": top.get("product", "CNC"),
+        is_hold = str(top.get("action", "BUY")).upper() == "HOLD"
+
+        if is_hold:
+            from trade_integrations.research.broker_context import resolve_broker_preset
+
+            doc.recommended = dict(top)
+            doc.payoff = {
+                "entry": spot,
+                "quantity": 0,
+                "samples": [{"price": spot, "pnl": 0.0, "spot": spot}],
+                "max_profit": 0.0,
+                "max_loss": 0.0,
+                "net_max_profit": 0.0,
+                "net_max_loss": 0.0,
             }
-        ]
-        doc.recommended = dict(top)
-        doc.charges = top.get("charges") or calculate_equity_charges(legs, product=top.get("product", "CNC"))
-        doc.payoff = top.get("payoff") or {}
-        target_px = top.get("target") or merged_prediction.get("target")
-        stop_px = top.get("stop") or merged_prediction.get("stop")
-        doc.recommended["max_profit"] = doc.payoff.get("max_profit")
-        doc.recommended["max_loss"] = doc.payoff.get("max_loss")
-        doc.recommended["net_max_profit"] = doc.payoff.get("net_max_profit")
-        doc.recommended["net_max_loss"] = doc.payoff.get("net_max_loss")
-        doc.recommended["target"] = target_px
-        doc.recommended["stop"] = stop_px
-        doc.recommended["legs"] = legs
-        doc.implementation_steps = [
-            {"step": 1, "action": "preview", "description": "Review entry, target, stop"},
-            {
-                "step": 2,
-                "action": "funds",
-                "description": "Check available cash for CNC buy",
-                "mcp_tool": "get_funds",
-            },
-            {
-                "step": 3,
-                "action": "confirm",
-                "description": "User confirms stock order",
-            },
-            {
-                "step": 4,
-                "action": "execute",
-                "description": "Place CNC order",
-                "mcp_tool": "place_order",
-                "payload": {
+            doc.charges = {
+                "round_trip_charges": 0.0,
+                "per_leg": [],
+                "broker_preset": resolve_broker_preset(),
+                "charge_source": "hold_cash",
+            }
+            doc.recommended["max_profit"] = 0.0
+            doc.recommended["max_loss"] = 0.0
+            doc.recommended["net_max_profit"] = 0.0
+            doc.recommended["net_max_loss"] = 0.0
+            doc.recommended["legs"] = []
+            doc.recommended["target"] = None
+            doc.recommended["stop"] = None
+            doc.implementation_steps = [
+                {
+                    "step": 1,
+                    "action": "hold",
+                    "description": "Remain in cash — no equity order on this recommendation",
+                }
+            ]
+        else:
+            legs = top.get("legs") or [
+                {
                     "symbol": sym,
-                    "exchange": "NSE",
-                    "action": top.get("action", "BUY"),
+                    "side": top.get("action", "BUY"),
+                    "price": spot,
                     "quantity": top.get("quantity", 1),
-                    "product": "CNC",
-                    "pricetype": "MARKET",
+                    "product": top.get("product", "CNC"),
+                }
+            ]
+            doc.recommended = dict(top)
+            doc.charges = top.get("charges") or calculate_equity_charges(legs, product=top.get("product", "CNC"))
+            doc.payoff = top.get("payoff") or {}
+            target_px = top.get("target") or merged_prediction.get("target")
+            stop_px = top.get("stop") or merged_prediction.get("stop")
+            doc.recommended["max_profit"] = doc.payoff.get("max_profit")
+            doc.recommended["max_loss"] = doc.payoff.get("max_loss")
+            doc.recommended["net_max_profit"] = doc.payoff.get("net_max_profit")
+            doc.recommended["net_max_loss"] = doc.payoff.get("net_max_loss")
+            doc.recommended["target"] = target_px
+            doc.recommended["stop"] = stop_px
+            doc.recommended["legs"] = legs
+            doc.implementation_steps = [
+                {"step": 1, "action": "preview", "description": "Review entry, target, stop"},
+                {
+                    "step": 2,
+                    "action": "funds",
+                    "description": "Check available cash for CNC buy",
+                    "mcp_tool": "get_funds",
                 },
-            },
-        ]
+                {
+                    "step": 3,
+                    "action": "confirm",
+                    "description": "User confirms stock order",
+                },
+                {
+                    "step": 4,
+                    "action": "execute",
+                    "description": "Place CNC order",
+                    "mcp_tool": "place_order",
+                    "payload": {
+                        "symbol": sym,
+                        "exchange": "NSE",
+                        "action": top.get("action", "BUY"),
+                        "quantity": top.get("quantity", 1),
+                        "product": "CNC",
+                        "pricetype": "MARKET",
+                    },
+                },
+            ]
         doc.meta["strategy_builder_url"] = f"{_strategy_builder_base()}?plan={sym}&asset=stock"
 
     return doc

@@ -53,6 +53,8 @@ def _flatten_news_rows(symbol: str, payload: dict[str, Any], captured_at: str) -
                         "captured_at": captured_at,
                         "symbol": ticker,
                         "title": title[:500],
+                        "summary": str(headline.get("summary") or "")[:1000],
+                        "url": str(headline.get("url") or headline.get("link") or "")[:500],
                         "source": block.get("source") or news.get("source") or "news_aggregator",
                         "label": block.get("label"),
                     }
@@ -64,6 +66,8 @@ def _flatten_news_rows(symbol: str, payload: dict[str, Any], captured_at: str) -
                         "captured_at": captured_at,
                         "symbol": symbol.upper(),
                         "title": str(headline["title"])[:500],
+                        "summary": str(headline.get("summary") or "")[:1000],
+                        "url": str(headline.get("url") or headline.get("link") or "")[:500],
                         "source": news.get("source") or "news_aggregator",
                         "label": None,
                     }

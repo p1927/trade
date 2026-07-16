@@ -159,8 +159,47 @@ def _sentiment_proxy_from_momentum(momentum_pct: float) -> float:
     return float(np.clip(momentum_pct / _SENTIMENT_SCALE, -1.0, 1.0))
 
 
+def build_institutional_joint_series(
+    trading_dates: list[str],
+    start: str,
+    end: str,
+) -> tuple[pd.Series, pd.Series]:
+    """Rolling institutional_net_5d and dii_absorption_ratio aligned to Nifty dates."""
+    fii_5d = build_fii_net_5d_series(trading_dates, start, end)
+    dii_5d = build_dii_net_5d_series(trading_dates, start, end)
+    inst = fii_5d.add(dii_5d, fill_value=np.nan)
+    ratio = pd.Series(dtype=float)
+    if not fii_5d.empty and not dii_5d.empty:
+        aligned = pd.DataFrame({"fii": fii_5d, "dii": dii_5d}).dropna()
+        if not aligned.empty:
+            denom = aligned["fii"].abs().clip(lower=50.0)
+            ratio_vals = aligned["dii"] / denom
+            ratio = pd.Series(ratio_vals.values, index=aligned.index.astype(str))
+    return inst, ratio
+
+
+def purge_anomalous_factor_snapshots() -> list[str]:
+    """Remove invalid daily factor files (None.csv, null stems)."""
+    out_dir = get_factor_data_dir()
+    removed: list[str] = []
+    if not out_dir.is_dir():
+        return removed
+    bad = frozenset({"None", "none", "null", "NaT"})
+    for path in list(out_dir.iterdir()):
+        if path.suffix not in {".csv", ".parquet"}:
+            continue
+        if path.stem in bad or len(path.stem) != 10 or path.stem[4] != "-":
+            try:
+                path.unlink()
+                removed.append(path.name)
+            except OSError:
+                pass
+    return removed
+
+
 def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
     """Merge missing factors (repo_rate, FII, PE, momentum, sentiment proxies) into daily store."""
+    removed = purge_anomalous_factor_snapshots()
     nifty = load_nifty_history(days=days)
     if nifty.empty:
         return {"days_enriched": 0, "reason": "no_nifty_history"}
@@ -171,6 +210,7 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
 
     fii_5d = build_fii_net_5d_series(trading_dates, start, end)
     dii_5d = build_dii_net_5d_series(trading_dates, start, end)
+    inst_5d, absorption = build_institutional_joint_series(trading_dates, start, end)
     pe_series = build_nifty_pe_proxy_series(nifty)
     momentum = build_constituent_momentum_series(trading_dates, start=start, end=end)
     flow_frame = merge_flow_derivatives_frame(start, end)
@@ -201,6 +241,24 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
                     "factor": "dii_net_5d",
                     "value": float(dii_5d[day]),
                     "source": "backfill_dii_history",
+                }
+            )
+
+        if day in inst_5d.index and not pd.isna(inst_5d[day]):
+            rows.append(
+                {
+                    "factor": "institutional_net_5d",
+                    "value": float(inst_5d[day]),
+                    "source": "backfill_joint_flows",
+                }
+            )
+
+        if day in absorption.index and not pd.isna(absorption[day]):
+            rows.append(
+                {
+                    "factor": "dii_absorption_ratio",
+                    "value": float(absorption[day]),
+                    "source": "backfill_joint_flows",
                 }
             )
 
@@ -286,6 +344,7 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
         "days_enriched": days_enriched,
         "start": start,
         "end": end,
+        "removed_anomalous_files": removed,
         "fii_days": int(fii_5d.notna().sum()) if not fii_5d.empty else 0,
         "dii_days": int(dii_5d.notna().sum()) if not dii_5d.empty else 0,
         "pcr_days": int(flow_frame["nifty_pcr"].notna().sum()) if "nifty_pcr" in flow_frame.columns else 0,

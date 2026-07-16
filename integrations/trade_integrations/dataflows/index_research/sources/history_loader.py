@@ -64,30 +64,31 @@ def _append_calendar_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _append_delta_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    """Add horizon-aware change features (acceleration / path signals)."""
+def _append_institutional_joint_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Joint FII–DII features (literature: absorption ratio, post-2023 regime)."""
     if frame.empty:
         return frame
     out = frame.copy()
-    if "fii_net_5d" in out.columns:
-        out["fii_net_5d_change_5d"] = pd.to_numeric(out["fii_net_5d"], errors="coerce").diff(5)
-    if "dii_net_5d" in out.columns:
-        out["dii_net_5d_change_5d"] = pd.to_numeric(out["dii_net_5d"], errors="coerce").diff(5)
-    if "oil_brent" in out.columns:
-        brent = pd.to_numeric(out["oil_brent"], errors="coerce")
-        out["oil_brent_change_7d"] = (brent - brent.shift(7)) / brent.shift(7).replace(0, np.nan) * 100.0
-    if "india_vix" in out.columns:
-        out["india_vix_change_5d"] = pd.to_numeric(out["india_vix"], errors="coerce").diff(5)
+    fii = pd.to_numeric(out.get("fii_net_5d"), errors="coerce")
+    dii = pd.to_numeric(out.get("dii_net_5d"), errors="coerce")
+    if fii is not None and dii is not None:
+        out["institutional_net_5d"] = fii + dii
+        denom = fii.abs().clip(lower=50.0)
+        out["dii_absorption_ratio"] = np.where(
+            fii < 0,
+            dii / denom,
+            np.where(fii > 0, dii / denom, np.nan),
+        )
     return out
 
 
 def enrich_history_features(frame: pd.DataFrame) -> pd.DataFrame:
-    """Add technical + calendar + delta columns derived from Nifty close history."""
+    """Add technical + calendar + institutional joint columns."""
     if frame.empty:
         return frame
     enriched = enrich_nifty_technical_columns(frame)
     enriched = _append_calendar_columns(enriched)
-    return _append_delta_columns(enriched)
+    return _append_institutional_joint_columns(enriched)
 
 
 def load_aligned_factor_history(days: int = 365) -> pd.DataFrame:
