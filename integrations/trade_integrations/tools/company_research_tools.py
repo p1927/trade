@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from langchain_core.tools import tool
-
 from trade_integrations.context.hub import (
     is_cache_fresh,
     is_company_research_eligible,
@@ -39,7 +37,6 @@ def fetch_company_research_report(
     return format_research_report(doc)
 
 
-@tool
 def get_company_research(
     ticker: Annotated[str, "Equity ticker symbol, e.g. RELIANCE or AAPL"],
     lookahead_days: Annotated[
@@ -55,3 +52,11 @@ def get_company_research(
     health. Data is cached in the trade-stack hub for reuse across agents.
     """
     return fetch_company_research_report(ticker, lookahead_days=lookahead_days)
+
+
+try:
+    from langchain_core.tools import tool as _lc_tool
+
+    get_company_research = _lc_tool(get_company_research)
+except ImportError:
+    pass

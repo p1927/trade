@@ -13,9 +13,12 @@ Usage:
   trade <command> [subcommand] [options]
 
 Stack:
-  start [mode]          Start services (default: vibe)
-                        Modes: vibe | openalgo | cli | full
+  start [mode]          Start services (default: vibe, foreground)
+                        Modes: vibe | openalgo | cli | full | daemon
+  restart               Restart OpenAlgo + Vibe in background
+  stop                  Stop OpenAlgo + Vibe background services
   status                Check SearXNG, OpenAlgo, Vibe, agents readiness
+  status-vibe           Check OpenAlgo + Vibe ports only
   stop-searxng          Stop SearXNG Docker container
   logs-searxng          Follow SearXNG logs
 
@@ -41,6 +44,9 @@ Maintenance:
 
 Examples:
   trade start openalgo              # OpenAlgo only (for webhook setup)
+  trade start daemon                # OpenAlgo + Vibe in background
+  trade restart                     # restart background stack
+  trade stop                        # stop background stack
   trade tunnel quick                # expose OpenAlgo to the internet
   trade tunnel restart              # stop + fresh URL + verify it works
   trade webhooks tradingview        # show TradingView webhook URL + where to paste it
@@ -104,8 +110,9 @@ case "$cmd" in
       openalgo)         exec "$ROOT/start.sh" --openalgo-only "$@" ;;
       cli|agents)       exec "$ROOT/start.sh" --cli "$@" ;;
       full)             exec "$ROOT/start.sh" "$@" ;;
+      daemon)           exec "$ROOT/start.sh" --daemon --no-searxng "$@" ;;
       -h|--help|help)
-        echo "Usage: trade start [vibe|openalgo|cli|full]"
+        echo "Usage: trade start [vibe|openalgo|cli|full|daemon]"
         ;;
       *)
         echo "Unknown start mode: $mode (try: vibe, openalgo, cli, full)" >&2
@@ -116,6 +123,18 @@ case "$cmd" in
 
   status)
     exec "$ROOT/start.sh" --status --no-bootstrap "$@"
+    ;;
+
+  status-vibe)
+    exec "$ROOT/scripts/status_vibe_stack.sh" "$@"
+    ;;
+
+  restart)
+    exec "$ROOT/scripts/restart_vibe_stack.sh" "$@"
+    ;;
+
+  stop)
+    exec "$ROOT/scripts/stop_vibe_stack.sh" "$@"
     ;;
 
   stop-searxng)

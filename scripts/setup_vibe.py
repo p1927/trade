@@ -81,7 +81,11 @@ def verify_openalgo_mcp() -> tuple[bool, str]:
     probe = (
         "import sys; sys.path.insert(0, '.'); "
         "from openalgo import api, ta; "
-        "import pandas; import mcp"
+        "import pandas; import mcp; "
+        f"import os; os.environ['TRADE_INTEGRATIONS_SKIP_APPLY']='1'; "
+        f"sys.path.insert(0, '{ROOT / 'integrations'}'); "
+        "from trade_integrations.tools.options_research_tools import fetch_options_research_report; "
+        "from trade_integrations.dataflows.options_research.widget_payload import build_options_trade_widget"
     )
     import subprocess
 

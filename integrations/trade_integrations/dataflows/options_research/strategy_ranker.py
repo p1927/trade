@@ -169,34 +169,74 @@ def rank_strategies(
 
 
 def build_scenarios(events: list[dict[str, Any]], ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Map events to scenario hints using top strategy tags."""
-    top = ranked[0] if ranked else {}
-    top_name = top.get("name", "iron_condor")
-    scenarios = []
-    if not events:
+    """Map scenario archetypes to distinct ranked strategies."""
+    names = [r.get("name") for r in ranked if r.get("name")]
+    if not names:
+        return [
+            {
+                "name": "base_case",
+                "probability": 1.0,
+                "trigger": "No ranked strategies — refresh with live OpenAlgo chain",
+                "strategy_hint": "iron_condor",
+            }
+        ]
+
+    def _pick(predicate) -> str | None:
+        for name in names:
+            if predicate(name.lower()):
+                return name
+        return None
+
+    top = names[0]
+    bullish = _pick(lambda n: "bull" in n or ("call" in n and "spread" in n)) or top
+    bearish = _pick(lambda n: "bear" in n or ("put" in n and "spread" in n)) or names[min(1, len(names) - 1)]
+    high_vol = _pick(lambda n: "straddle" in n or "strangle" in n) or top
+    range_bound = _pick(lambda n: "condor" in n or "butterfly" in n) or names[-1]
+
+    archetypes: list[tuple[str, float, str, str]] = [
+        ("base_case", 0.35, "Agent-ranked default — matches recommended strategy", top),
+        ("bullish_breakout", 0.25, "Spot rallies toward upper expected range", bullish),
+        ("bearish_breakdown", 0.22, "Spot sells off toward lower expected range", bearish),
+        ("high_vol_event", 0.18, "Volatility expands (event / gap risk)", high_vol),
+    ]
+
+    meaningful_events = [
+        e
+        for e in events
+        if e.get("type") not in ("india_vix", "macro_watch", "fii_dii_flow")
+    ]
+    if meaningful_events and range_bound not in (top, bullish, bearish, high_vol):
+        archetypes.append(
+            (
+                f"event_{meaningful_events[0].get('type', 'calendar')}",
+                0.15,
+                meaningful_events[0].get("description") or meaningful_events[0].get("type", "Event"),
+                range_bound,
+            )
+        )
+
+    seen: set[str] = set()
+    scenarios: list[dict[str, Any]] = []
+    for name_key, prob, trigger, hint in archetypes:
+        if hint in seen or len(scenarios) >= 4:
+            continue
+        seen.add(hint)
+        scenarios.append(
+            {
+                "name": name_key,
+                "probability": prob,
+                "trigger": trigger,
+                "strategy_hint": hint,
+            }
+        )
+
+    if not scenarios:
         scenarios.append(
             {
                 "name": "base_case",
                 "probability": 0.55,
-                "trigger": "No major event in window",
-                "strategy_hint": top_name,
-            }
-        )
-        return scenarios
-
-    for i, event in enumerate(events[:5]):
-        vol_impact = event.get("impact_on_vol", "moderate")
-        hint = top_name
-        if vol_impact in ("elevated", "high"):
-            hint = "long_straddle" if any(r.get("name") == "long_straddle" for r in ranked) else top_name
-        elif vol_impact == "low":
-            hint = "iron_condor" if any(r.get("name") == "iron_condor" for r in ranked) else top_name
-        scenarios.append(
-            {
-                "name": f"scenario_{i + 1}_{event.get('type', 'event')}",
-                "probability": round(0.35 / max(1, len(events[:5])), 2),
-                "trigger": event.get("description") or event.get("type"),
-                "strategy_hint": hint,
+                "trigger": "Default research view",
+                "strategy_hint": top,
             }
         )
     return scenarios

@@ -31,6 +31,7 @@ START_CLI=0
 START_SEARXNG=1
 DO_BOOTSTRAP=1
 STATUS_ONLY=0
+DAEMON=0
 
 # Readiness flags (0/1)
 READY_SEARXNG=0
@@ -47,6 +48,7 @@ for arg in "$@"; do
     --no-searxng) START_SEARXNG=0 ;;
     --no-bootstrap) DO_BOOTSTRAP=0 ;;
     --status) STATUS_ONLY=1 ;;
+    --daemon) DAEMON=1 ;;
     -h|--help)
       cat <<'EOF'
 Usage: ./start.sh [options]
@@ -58,6 +60,7 @@ Usage: ./start.sh [options]
   --no-searxng      Do not start/check SearXNG Docker
   --no-bootstrap    Skip venv creation and pip install
   --status          Check readiness of all services and exit
+  --daemon          Start OpenAlgo + Vibe in background and exit
 
 Services:
   SearXNG         http://localhost:5555        (Docker, news search)
@@ -502,7 +505,7 @@ main() {
 
   if (( STATUS_ONLY )); then
     check_openalgo
-  elif (( START_OPENALGO )); then
+  elif (( START_OPENALGO && ! DAEMON )); then
     start_openalgo || true
   else
     check_openalgo
@@ -521,7 +524,7 @@ main() {
     exit 1
   fi
 
-  if (( ! READY_AGENTS )); then
+  if (( ! READY_AGENTS && ! (DAEMON && START_VIBE) )); then
     fail "TradingAgents is not ready — run without --no-bootstrap or:"
     fail "  pip install -e tradingagents/ && pip install -e ."
     exit 1
@@ -533,9 +536,25 @@ main() {
       fail "Vibe Trading is not ready — run: pip install -e vibetrading/"
       exit 1
     fi
+    if (( DAEMON )); then
+      trap - EXIT INT TERM
+      exec bash "$ROOT/scripts/start_vibe_stack.sh"
+    fi
     start_vibe_web
   elif (( START_CLI )); then
     start_tradingagents_cli
+  elif (( DAEMON && START_OPENALGO && ! START_VIBE )); then
+    trap - EXIT INT TERM
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/stack_lib.sh"
+    STACK_ROOT="$ROOT"
+    stack_load_env
+    stack_start_openalgo
+    echo ""
+    echo "Ready:"
+    echo "  OpenAlgo  http://127.0.0.1:$(stack_openalgo_port)"
+    echo ""
+    echo "Stop: ./scripts/stop_vibe_stack.sh"
   else
     log "Services running. Press Ctrl+C to stop OpenAlgo (SearXNG Docker keeps running)."
     wait

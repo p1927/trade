@@ -83,9 +83,14 @@ def run_agent_debate(
     _ensure_paths()
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+    from trade_integrations.bridge.hub_context import (
+        build_tradingagents_options_context,
+        infer_debate_asset_type,
+    )
     from trade_integrations.context.hub import save_agent_debate
 
     display_ticker = ticker.strip().upper()
+    resolved_asset = infer_debate_asset_type(display_ticker, asset_type)
     graph_ticker = to_tradingagents_ticker(display_ticker)
     analysis_date = trade_date or datetime.now().strftime("%Y-%m-%d")
 
@@ -100,7 +105,29 @@ def run_agent_debate(
         debug=False,
         config=config,
     )
-    final_state, rating = graph.propagate(graph_ticker, analysis_date, asset_type=asset_type)
+
+    hub_options_context = build_tradingagents_options_context(display_ticker, asset_type=resolved_asset)
+    if hub_options_context:
+        original_run_graph = graph._run_graph
+
+        def _run_graph_with_hub(company_name, trade_date_arg, asset_type_arg=resolved_asset):
+            original_create = graph.propagator.create_initial_state
+
+            def _create_with_hub(*args, **kwargs):
+                state = original_create(*args, **kwargs)
+                prev = state.get("past_context") or ""
+                state["past_context"] = f"{prev}{hub_options_context}".strip()
+                return state
+
+            graph.propagator.create_initial_state = _create_with_hub
+            try:
+                return original_run_graph(company_name, trade_date_arg, asset_type=asset_type_arg)
+            finally:
+                graph.propagator.create_initial_state = original_create
+
+        graph._run_graph = _run_graph_with_hub
+
+    final_state, rating = graph.propagate(graph_ticker, analysis_date, asset_type=resolved_asset)
 
     debate = final_state.get("investment_debate_state") or {}
     risk = final_state.get("risk_debate_state") or {}
@@ -110,7 +137,7 @@ def run_agent_debate(
         "as_of": datetime.now(timezone.utc).isoformat(),
         "trade_date": final_state.get("trade_date") or analysis_date,
         "rating": rating,
-        "asset_type": asset_type,
+        "asset_type": resolved_asset,
         "investment_debate": {
             "bull_summary": debate.get("bull_history"),
             "bear_summary": debate.get("bear_history"),

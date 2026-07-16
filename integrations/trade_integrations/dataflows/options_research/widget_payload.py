@@ -140,14 +140,56 @@ def _strategy_variants(
             if rec.get("legs")
             else []
         )
-        variants[name] = {
+        payload = {
             "recommended": rec,
             "payoff": _payoff_block(row.get("payoff")),
             "charges": _charges_block(row.get("charges")),
             "payoff_over_time": {"samples": _pnl_over_time_samples(row.get("payoff_over_time"))},
             "implementation_steps": steps,
         }
+        variants[name] = payload
+        from trade_integrations.bridge.hub_context import normalize_strategy_key
+
+        norm = normalize_strategy_key(name)
+        if norm and norm not in variants:
+            variants[norm] = payload
     return variants
+
+
+def plan_status_from_doc(doc: OptionsResearchDoc) -> str:
+    name = (doc.recommended or {}).get("name")
+    ranked = len(doc.ranked_strategies or [])
+    if name and ranked > 0:
+        return "ready"
+    if ranked > 0 or name:
+        return "partial"
+    return "incomplete"
+
+
+def _plan_warnings(doc: OptionsResearchDoc) -> list[str]:
+    warnings: list[str] = []
+    meta = doc.meta or {}
+    for err in meta.get("stage_errors") or []:
+        if err:
+            warnings.append(str(err))
+    ranked = len(doc.ranked_strategies or [])
+    rec_name = (doc.recommended or {}).get("name")
+    if not rec_name and ranked == 0:
+        view = (doc.prediction or {}).get("view") or "neutral"
+        hint = ""
+        if doc.scenarios:
+            hint = (doc.scenarios[0].get("strategy_hint") or "").replace("_", " ")
+        if hint:
+            warnings.append(
+                f"No ranked strategy yet — market view is {view.replace('_', ' ')}; "
+                f"scenario suggests {hint}. Refresh with live chain (refresh=true)."
+            )
+        else:
+            warnings.append(
+                "No ranked strategy or legs yet — refresh the plan with OpenAlgo running "
+                "(call with refresh=true)."
+            )
+    return warnings
 
 
 def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, Any]:
@@ -166,10 +208,14 @@ def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, An
     variants = _strategy_variants(ranked, options_exchange=options_exchange)
     agent_recommended = (rec.get("name") or (ranked[0].get("name") if ranked else "")) or ""
     spot = _resolve_doc_spot(doc)
+    plan_status = plan_status_from_doc(doc)
+    data_warnings = _plan_warnings(doc)
 
     return {
         "type": "trade_plan.widget",
         "widget_id": widget_id,
+        "plan_status": plan_status,
+        "data_warnings": data_warnings,
         "asset_type": "options",
         "underlying": doc.underlying,
         "instrument_type": doc.instrument_type,
@@ -227,7 +273,10 @@ def build_options_trade_widget(
     if not refresh:
         cached = load_options_research_json(ticker)
         if cached is not None:
-            return build_options_trade_widget_from_doc(cached)
+            if plan_status_from_doc(cached) == "incomplete":
+                refresh = True
+            else:
+                return build_options_trade_widget_from_doc(cached)
     doc = run_options_research(
         ticker,
         expiry_date=expiry_date,

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from langchain_core.tools import tool
-
 from trade_integrations.context.hub import (
     is_stock_cache_fresh,
     is_stock_research_eligible,
@@ -39,7 +37,6 @@ def fetch_stock_research_report(
     return format_stock_report(doc)
 
 
-@tool
 def get_stock_research(
     ticker: Annotated[str, "Equity ticker symbol, e.g. RELIANCE or TCS"],
     lookahead_days: Annotated[
@@ -50,8 +47,15 @@ def get_stock_research(
     """
     Retrieve a structured stock trade plan for an equity ticker.
 
-    Includes company context from the hub, ranked approaches (event play,
-    buy dip, momentum, hold cash), recommended action with entry/target/stop,
-    charges, and step-by-step execution payloads for CNC orders.
+    Includes directional view, events, ranked setups, and implementation steps.
+    Cached in the trade-stack hub for reuse across agents.
     """
     return fetch_stock_research_report(ticker, lookahead_days=lookahead_days)
+
+
+try:
+    from langchain_core.tools import tool as _lc_tool
+
+    get_stock_research = _lc_tool(get_stock_research)
+except ImportError:
+    pass
