@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from trade_integrations.context.hub import get_hub_dir
-from trade_integrations.dataflows.index_research.causal_attribution import _fetch_index_headlines
 from trade_integrations.dataflows.index_research.company_news_backfill import (
     _fetch_rss_headlines,
     _google_news_rss_url,
@@ -140,18 +139,6 @@ def collect_headlines_for_day(
         _add(row)
     if len(out) >= limit:
         return merge_raw_headlines(out[:limit])
-
-    for row in _fetch_index_headlines(day, limit=limit):
-        title = row.get("title") or ""
-        _add(
-            {
-                "title": title,
-                "summary": row.get("summary") or "",
-                "url": row.get("url") or "",
-                "source": row.get("source") or "google_news_rss",
-                "published_at": row.get("published") or f"{day}T09:00:00+00:00",
-            }
-        )
 
     after = day[:10]
     try:

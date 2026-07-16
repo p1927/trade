@@ -383,12 +383,16 @@ def run_walk_forward_backtest(
             continue
 
         factors_today = _row_factor_dict(row, feature_cols)
-        from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
+        from trade_integrations.dataflows.index_research.regime_gates import (
+            predict_macro_delta_gated,
+            resolve_regime_label,
+        )
         from trade_integrations.dataflows.index_research.scenarios import (
             build_index_scenarios,
             scenario_weighted_return_pct,
         )
 
+        close = float(row["close"])
         raw_macro = predict_macro_delta_gated(factors_today, horizon, artifact)
         scenario_anchor = None
         try:
@@ -399,6 +403,7 @@ def run_walk_forward_backtest(
         macro = shrink_macro_delta(raw_macro, scenario_anchor)
         predicted = macro  # macro-only backtest (no historical constituent research)
         day_str = str(row["date"])[:10]
+        regime_label = resolve_regime_label(factors_today)
         bottom_up = None
         hybrid_predicted = None
         if include_bottom_up:
@@ -418,11 +423,6 @@ def run_walk_forward_backtest(
                 hybrid_hits += 1
             hybrid_total += 1
 
-        try:
-            as_of = date.fromisoformat(day_str)
-        except ValueError:
-            as_of = date.today()
-
         close = float(row["close"])
         prev_close = float(frame.iloc[i - 1]["close"]) if i > 0 else close
         realized_1d_pct = (close - prev_close) / prev_close * 100.0 if prev_close else 0.0
@@ -439,6 +439,7 @@ def run_walk_forward_backtest(
                 "actual_forward_return_pct": round(float(actual), 3),
                 "error_pct": round(err, 3),
                 "direction_correct": pred_dir == actual_dir,
+                "regime_label": regime_label,
                 "macro_delta_pct": round(macro, 3),
                 "macro_raw_pct": round(raw_macro, 3),
                 "bottom_up_return_pct": round(bottom_up, 3) if bottom_up is not None else None,
@@ -446,10 +447,23 @@ def run_walk_forward_backtest(
                 if hybrid_predicted is not None
                 else None,
                 "factor_drivers": drivers,
-                "calendar_events": _calendar_events_for_date(as_of),
+                "calendar_events": _calendar_events_for_date(
+                    date.fromisoformat(day_str) if len(day_str) == 10 else date.today()
+                ),
                 "implied_level": round(close * (1.0 + predicted / 100.0), 2),
             }
         )
+
+    regime_buckets: dict[str, dict[str, int | float | None]] = {}
+    for label in ("high_fear", "trend_down", "range_bound"):
+        bucket = [r for r in eval_rows if r.get("regime_label") == label]
+        total = len(bucket)
+        hits = sum(1 for r in bucket if r.get("direction_correct"))
+        regime_buckets[label] = {
+            "eval_count": total,
+            "direction_hits": hits,
+            "direction_hit_rate": round(hits / total, 4) if total else None,
+        }
 
     trading_dates = frame["date"].astype(str).str[:10].tolist()
     from trade_integrations.dataflows.index_research.prediction_miss_analysis import (
@@ -500,9 +514,11 @@ def run_walk_forward_backtest(
         "metrics": {
             "mae_pct": round(mae, 4) if mae is not None else None,
             "direction_hit_rate": round(hit_rate, 4) if hit_rate is not None else None,
+            "direction_hit_rate_walk_forward": round(hit_rate, 4) if hit_rate is not None else None,
             "macro_only_direction_hit_rate": round(hit_rate, 4) if hit_rate is not None else None,
             "hybrid_direction_hit_rate": round(hybrid_hit_rate, 4) if hybrid_hit_rate is not None else None,
             "hybrid_eval_count": hybrid_total,
+            "regime_direction_hit_rates": regime_buckets,
             "in_sample_mae_pct": in_sample_artifact.mae if in_sample_artifact else None,
             "in_sample_r2": in_sample_artifact.r2_walk_forward if in_sample_artifact else None,
             "in_sample_direction_hit_rate": in_sample_artifact.direction_hit_rate_oos

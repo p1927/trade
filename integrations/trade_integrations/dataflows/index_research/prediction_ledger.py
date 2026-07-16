@@ -578,11 +578,25 @@ def compute_accuracy_metrics(*, window: int = 14) -> dict[str, Any]:
     recent = reconciled.tail(max(1, window))
     mae_14d, hit_14d = _metrics(recent)
 
+    walk_forward_hit = None
+    try:
+        from trade_integrations.dataflows.index_research.backtest_runner import load_backtest_report
+
+        backtest = load_backtest_report("NIFTY") or {}
+        metrics = backtest.get("metrics") or {}
+        walk_forward_hit = metrics.get("direction_hit_rate_walk_forward") or metrics.get(
+            "direction_hit_rate"
+        )
+    except Exception:
+        walk_forward_hit = None
+
     return {
         "sample_count": int(len(reconciled)),
         "mae_pct": mae_all,
         "mae_14d_pct": mae_14d,
-        "direction_hit_rate": hit_all,
+        "direction_hit_rate": walk_forward_hit if walk_forward_hit is not None else hit_all,
+        "direction_hit_rate_walk_forward": walk_forward_hit,
+        "direction_hit_rate_ledger": hit_all,
         "direction_hit_rate_14d": hit_14d,
         "window_days": window,
     }

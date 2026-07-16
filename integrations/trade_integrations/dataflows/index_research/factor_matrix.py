@@ -61,8 +61,13 @@ def _forward_return_pct(close: pd.Series, horizon_days: int) -> pd.Series:
     return (future - close) / close * 100.0
 
 
+_EXCLUDED_REDUNDANT: frozenset[str] = frozenset({"sector_breadth_mean_sentiment"})
+
+
 def _select_macro_columns(history_df: pd.DataFrame) -> list[str]:
-    present = [key for key in MACRO_FACTOR_KEYS if key in history_df.columns]
+    present = [
+        key for key in MACRO_FACTOR_KEYS if key in history_df.columns and key not in _EXCLUDED_REDUNDANT
+    ]
     if present:
         return present
     exclude = {"date", "close", "open", "high", "low", "volume"}

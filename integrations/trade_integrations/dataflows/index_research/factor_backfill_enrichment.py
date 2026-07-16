@@ -15,9 +15,12 @@ from trade_integrations.dataflows.index_research.factor_store import (
 )
 from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
 from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+    backfill_nse_fao_to_cache,
     build_rolling_sum_series,
     fetch_mrchartist_flow_frame,
+    flow_backfill_summary,
     merge_flow_derivatives_frame,
+    upsert_flow_cash_cache,
 )
 from trade_integrations.dataflows.index_research.sources.rbi_repo_schedule import repo_rate_on
 
@@ -208,12 +211,18 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
     start = trading_dates[0]
     end = trading_dates[-1]
 
+    fao_backfill = backfill_nse_fao_to_cache(trading_dates, sleep_s=0.25)
+    flow_frame = merge_flow_derivatives_frame(start, end)
+    if not flow_frame.empty:
+        cash_rows = flow_frame.to_dict("records")
+        upsert_flow_cash_cache(cash_rows)
+
     fii_5d = build_fii_net_5d_series(trading_dates, start, end)
     dii_5d = build_dii_net_5d_series(trading_dates, start, end)
     inst_5d, absorption = build_institutional_joint_series(trading_dates, start, end)
     pe_series = build_nifty_pe_proxy_series(nifty)
     momentum = build_constituent_momentum_series(trading_dates, start=start, end=end)
-    flow_frame = merge_flow_derivatives_frame(start, end)
+    flow_summary = flow_backfill_summary(days=days)
 
     days_enriched = 0
     for _, row in nifty.iterrows():
@@ -345,6 +354,8 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
         "start": start,
         "end": end,
         "removed_anomalous_files": removed,
+        "fao_backfill": fao_backfill,
+        "flow_summary": flow_summary,
         "fii_days": int(fii_5d.notna().sum()) if not fii_5d.empty else 0,
         "dii_days": int(dii_5d.notna().sum()) if not dii_5d.empty else 0,
         "pcr_days": int(flow_frame["nifty_pcr"].notna().sum()) if "nifty_pcr" in flow_frame.columns else 0,

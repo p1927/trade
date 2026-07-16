@@ -21,6 +21,7 @@ from trade_integrations.dataflows.index_research.constituent_momentum import (
 from trade_integrations.dataflows.index_research.explain import build_factor_explanation_bundle
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.macro_global import fetch_global_macro_snapshot
+from trade_integrations.dataflows.index_research.factor_store import upsert_daily_factors
 from trade_integrations.dataflows.index_research.models import ConstituentSignal, IndexResearchDoc, PredictionRecord
 from trade_integrations.dataflows.index_research.prediction_ledger import (
     append_prediction,
@@ -149,6 +150,29 @@ def run_index_light_refresh(
     macro_stage = fetch_global_macro_snapshot(constituent_sentiments=sentiments or None)
     macro_factors = dict(macro_stage.data.get("factors") or {})
     global_factors = list(macro_stage.data.get("factor_rows") or [])
+
+    try:
+        from datetime import date as _date
+
+        from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+            merge_flow_derivatives_frame,
+            upsert_flow_cash_cache,
+        )
+
+        today = _date.today().isoformat()
+        flow = merge_flow_derivatives_frame(today, today)
+        if not flow.empty:
+            upsert_flow_cash_cache(flow.to_dict("records"))
+        flow_rows = [
+            {"factor": str(row["factor"]), "value": float(row["value"]), "source": row.get("source")}
+            for row in global_factors
+            if row.get("factor") is not None and row.get("value") is not None
+        ]
+        if flow_rows:
+            upsert_daily_factors(today, flow_rows)
+    except Exception as exc:
+        logger.debug("light_refresh factor upsert skipped: %s", exc)
+
     momentum_rollup = rollup_constituent_momentum(signals)
     if momentum_rollup is not None:
         macro_factors["constituent_momentum_7d"] = momentum_rollup

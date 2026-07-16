@@ -5,10 +5,21 @@ from __future__ import annotations
 import logging
 import time
 from datetime import date, datetime, timedelta
+from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 
+from trade_integrations.context.hub import get_hub_dir
+
 logger = logging.getLogger(__name__)
+
+_FLOW_CACHE_FILENAME = "flow_cash_daily.parquet"
+_FAO_ARCHIVE_BASES = (
+    "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{date}.csv",
+    "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{date}_b.csv",
+    "https://archives.nseindia.com/content/nsccl/fao_participant_oi_{date}.csv",
+)
 
 _FII_LIVE_URL = "https://fii-diidata.mrchartist.com/api/data"
 _FII_HISTORY_URL = "https://fii-diidata.mrchartist.com/api/history-full"
@@ -239,13 +250,227 @@ def _row_dict(frame: pd.DataFrame, day: str) -> dict:
     return hits.iloc[-1].to_dict()
 
 
+def get_flow_cash_cache_path() -> Path:
+    """Persistent merged FII/DII cash + derivatives rows (real sources only)."""
+    return get_hub_dir() / "_data/index_factors" / _FLOW_CACHE_FILENAME
+
+
+def load_flow_cash_cache() -> pd.DataFrame:
+    """Load cached daily flow rows keyed by ``date``."""
+    path = get_flow_cash_cache_path()
+    csv_path = path.with_suffix(".csv")
+    if path.is_file():
+        try:
+            frame = pd.read_parquet(path)
+        except Exception:
+            frame = pd.read_csv(csv_path) if csv_path.is_file() else pd.DataFrame()
+    elif csv_path.is_file():
+        frame = pd.read_csv(csv_path)
+    else:
+        return pd.DataFrame()
+    if frame.empty or "date" not in frame.columns:
+        return pd.DataFrame()
+    out = frame.copy()
+    out["date"] = out["date"].astype(str).str[:10]
+    return out.sort_values("date").drop_duplicates("date", keep="last")
+
+
+def upsert_flow_cash_cache(rows: list[dict]) -> int:
+    """Merge new daily flow rows into the hub cache (by date, last wins)."""
+    if not rows:
+        return 0
+    existing = load_flow_cash_cache()
+    incoming = pd.DataFrame(rows)
+    incoming["date"] = incoming["date"].astype(str).str[:10]
+    if existing.empty:
+        merged = incoming
+    else:
+        keep = existing[~existing["date"].isin(incoming["date"])]
+        merged = pd.concat([keep, incoming], ignore_index=True)
+    merged = merged.sort_values("date").drop_duplicates("date", keep="last")
+    path = get_flow_cash_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        merged.to_parquet(path, index=False)
+    except ImportError:
+        merged.to_csv(path.with_suffix(".csv"), index=False)
+        return len(incoming)
+    merged.to_csv(path.with_suffix(".csv"), index=False)
+    return len(incoming)
+
+
+def _nse_session():
+    try:
+        import requests
+    except ImportError:
+        return None
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "*/*",
+            "Referer": "https://www.nseindia.com/reports/fii-dii",
+        }
+    )
+    try:
+        session.get("https://www.nseindia.com", timeout=15)
+    except Exception as exc:
+        logger.debug("NSE session bootstrap failed: %s", exc)
+        return None
+    return session
+
+
+def _parse_fao_participant_csv(csv_text: str) -> dict[str, dict[str, float]]:
+    """Parse NSE F&O participant OI CSV into FII/DII positioning dicts."""
+    if not csv_text or len(csv_text) < 80:
+        return {}
+    try:
+        frame = pd.read_csv(StringIO(csv_text), skipinitialspace=True)
+    except Exception as exc:
+        logger.debug("FAO CSV parse failed: %s", exc)
+        return {}
+
+    out: dict[str, dict[str, float]] = {}
+    for _, row in frame.iterrows():
+        client = str(row.get("Client Type") or row.get("Client") or "").strip().upper()
+        if not client:
+            continue
+        key = None
+        if "FII" in client or "FOREIGN" in client:
+            key = "FII"
+        elif "DII" in client or "MUTUAL" in client or "DOMESTIC" in client:
+            key = "DII"
+        if key is None:
+            continue
+
+        def _num(field: str) -> float:
+            raw = row.get(field)
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                return 0.0
+            try:
+                return float(str(raw).replace(",", ""))
+            except (TypeError, ValueError):
+                return 0.0
+
+        out[key] = {
+            "fii_idx_fut_long": _num("Future Index Long"),
+            "fii_idx_fut_short": _num("Future Index Short"),
+            "fii_idx_put_oi": _num("Option Index Put Short"),
+            "fii_idx_call_oi": _num("Option Index Call Short"),
+        }
+    return out
+
+
+def fetch_nse_fao_participant_oi_for_date(day: str) -> pd.DataFrame:
+    """Historical F&O participant OI for one session (NSE archives)."""
+    session = _nse_session()
+    if session is None:
+        return pd.DataFrame()
+    try:
+        parsed = datetime.strptime(day[:10], "%Y-%m-%d")
+    except ValueError:
+        return pd.DataFrame()
+    date_key = parsed.strftime("%d%m%Y")
+    csv_text = None
+    for template in _FAO_ARCHIVE_BASES:
+        url = template.format(date=date_key)
+        try:
+            response = session.get(url, timeout=15)
+            if response.status_code == 200 and len(response.content) > 100:
+                text = response.text
+                if "html" not in text[:80].lower():
+                    csv_text = text
+                    break
+        except Exception as exc:
+            logger.debug("FAO archive miss %s: %s", url, exc)
+    if not csv_text:
+        return pd.DataFrame()
+
+    parsed_rows = _parse_fao_participant_csv(csv_text)
+    if not parsed_rows:
+        return pd.DataFrame()
+
+    row: dict = {"date": day[:10], "source": "nse_fao_archive"}
+    fii = parsed_rows.get("FII") or {}
+    for key, val in fii.items():
+        row[key] = val
+    if row.get("fii_idx_fut_long") and row.get("fii_idx_fut_short"):
+        row["fii_fut_long_short_ratio"] = float(row["fii_idx_fut_long"]) / max(
+            float(row["fii_idx_fut_short"]), 1e-9
+        )
+    put_oi = row.get("fii_idx_put_oi")
+    call_oi = row.get("fii_idx_call_oi")
+    if put_oi and call_oi:
+        row["nifty_pcr"] = float(put_oi) / max(float(call_oi), 1e-9)
+    return pd.DataFrame([row])
+
+
+def fetch_nse_fao_history_frame(
+    trading_dates: list[str],
+    *,
+    sleep_s: float = 0.35,
+    max_days: int | None = None,
+) -> pd.DataFrame:
+    """Backfill F&O participant OI from NSE archives for trading dates."""
+    rows: list[dict] = []
+    targets = trading_dates if max_days is None else trading_dates[-max_days:]
+    for idx, day in enumerate(targets):
+        frame = fetch_nse_fao_participant_oi_for_date(day)
+        if not frame.empty:
+            rows.append(frame.iloc[0].to_dict())
+        if sleep_s > 0 and idx < len(targets) - 1:
+            time.sleep(sleep_s)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("date").drop_duplicates("date", keep="last")
+
+
+def flow_coverage_gaps_by_month(frame: pd.DataFrame) -> list[dict[str, int | str]]:
+    """Monthly gap report for ``fii_net`` / ``dii_net`` in a merged flow frame."""
+    if frame.empty or "date" not in frame.columns:
+        return []
+    work = frame.copy()
+    work["date"] = work["date"].astype(str).str[:10]
+    work["month"] = work["date"].str.slice(0, 7)
+    rows: list[dict[str, int | str]] = []
+    for month, group in work.groupby("month", sort=True):
+        total = len(group)
+        fii_days = int(group["fii_net"].notna().sum()) if "fii_net" in group.columns else 0
+        dii_days = int(group["dii_net"].notna().sum()) if "dii_net" in group.columns else 0
+        rows.append(
+            {
+                "month": str(month),
+                "trading_days": total,
+                "fii_net_days": fii_days,
+                "dii_net_days": dii_days,
+                "fii_gap_days": total - fii_days,
+                "dii_gap_days": total - dii_days,
+            }
+        )
+    return rows
+
+
+def flow_effective_start(frame: pd.DataFrame) -> str | None:
+    """First date with real FII or DII cash net in merged flow frame."""
+    if frame.empty:
+        return None
+    for col in ("fii_net", "dii_net"):
+        if col not in frame.columns:
+            continue
+        hits = frame[frame[col].notna()]
+        if not hits.empty:
+            return str(hits["date"].astype(str).iloc[0])[:10]
+    return None
+
+
 def merge_flow_derivatives_frame(start: str, end: str) -> pd.DataFrame:
-    """Merge Mr. Chartist history (full range) with NSE today + latest session."""
+    """Merge Mr. Chartist history, NSE today, flow cache, and optional FAO archives."""
     mr = fetch_mrchartist_flow_frame(include_seeded=False)
     latest = fetch_mrchartist_latest_session()
     nse = fetch_nselib_fii_dii_frame(start, end)
+    cache = load_flow_cash_cache()
 
-    frames = [f for f in (mr, latest, nse) if f is not None and not f.empty]
+    frames = [f for f in (cache, mr, latest, nse) if f is not None and not f.empty]
     if not frames:
         return pd.DataFrame()
 
@@ -300,6 +525,30 @@ def build_rolling_sum_series(
     return pd.Series(out)
 
 
+def backfill_nse_fao_to_cache(
+    trading_dates: list[str],
+    *,
+    sleep_s: float = 0.35,
+    max_fetch: int | None = 120,
+) -> dict[str, int | str]:
+    """Fetch missing F&O archive rows and upsert into flow cache."""
+    cache = load_flow_cash_cache()
+    cached_dates = set(cache["date"].astype(str).tolist()) if not cache.empty else set()
+    missing = [d for d in trading_dates if d not in cached_dates]
+    if max_fetch is not None and len(missing) > max_fetch:
+        missing = missing[-max_fetch:]
+    fetched = fetch_nse_fao_history_frame(missing, sleep_s=sleep_s)
+    if fetched.empty:
+        return {"status": "ok", "fetched": 0, "cached_total": len(cache)}
+    rows = fetched.to_dict("records")
+    upsert_flow_cash_cache(rows)
+    return {
+        "status": "ok",
+        "fetched": len(rows),
+        "cached_total": len(load_flow_cash_cache()),
+    }
+
+
 def flow_backfill_summary(*, days: int = 365) -> dict[str, int | str]:
     """Dry-run summary of merged flow coverage."""
     from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
@@ -309,18 +558,32 @@ def flow_backfill_summary(*, days: int = 365) -> dict[str, int | str]:
         return {"status": "error", "reason": "no_nifty_history"}
     start = str(nifty["date"].iloc[0])[:10]
     end = str(nifty["date"].iloc[-1])[:10]
+    trading_dates = nifty["date"].astype(str).str[:10].tolist()
     frame = merge_flow_derivatives_frame(start, end)
+    era_start = flow_effective_start(frame)
+    era_dates = [d for d in trading_dates if era_start is None or d >= era_start]
+    fii_days = int(frame["fii_net"].notna().sum()) if "fii_net" in frame.columns else 0
+    dii_days = int(frame["dii_net"].notna().sum()) if "dii_net" in frame.columns else 0
+    era_fii = fii_days
+    era_total = len(era_dates) or 1
     return {
         "status": "ok",
         "start": start,
         "end": end,
         "rows": len(frame),
-        "fii_net_days": int(frame["fii_net"].notna().sum()) if "fii_net" in frame.columns else 0,
-        "dii_net_days": int(frame["dii_net"].notna().sum()) if "dii_net" in frame.columns else 0,
+        "fii_net_days": fii_days,
+        "dii_net_days": dii_days,
         "pcr_days": int(frame["nifty_pcr"].notna().sum()) if "nifty_pcr" in frame.columns else 0,
         "fut_ratio_days": int(frame["fii_fut_long_short_ratio"].notna().sum())
         if "fii_fut_long_short_ratio" in frame.columns
         else 0,
-        "primary_source": "mrchartist_history_full",
-        "fii_cash_limit_note": "FII/DII cash capped at ~111 sessions (Mr. Chartist); NSE API is today-only.",
+        "flow_effective_start": era_start,
+        "flow_era_trading_days": len(era_dates),
+        "fii_net_era_coverage_pct": round(100.0 * era_fii / era_total, 1),
+        "monthly_gaps": flow_coverage_gaps_by_month(frame),
+        "primary_source": "mrchartist_history_full+nse_fao_archive+flow_cache",
+        "fii_cash_limit_note": (
+            "Pre-2026-01-14 cash absent from free APIs; NSE fiidiiTradeReact is today-only. "
+            "Coverage gate uses flow-era (first real cash row) not pre-source calendar days."
+        ),
     }

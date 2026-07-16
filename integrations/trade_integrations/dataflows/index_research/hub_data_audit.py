@@ -88,23 +88,33 @@ def _constituent_history_coverage(hub: Path, trading_days: list[str]) -> dict[st
     }
 
 
-def _factor_coverage_from_daily(start: str, end: str) -> list[dict[str, Any]]:
+def _factor_coverage_from_daily(start: str, end: str, *, flow_era_start: str | None = None) -> list[dict[str, Any]]:
     long_df = load_factor_history(start, end)
     if long_df.empty or "factor" not in long_df.columns:
         return []
 
     dates = sorted(long_df["date"].astype(str).str[:10].unique())
     day_count = max(1, len(dates))
+    era_dates = [d for d in dates if flow_era_start is None or d >= flow_era_start[:10]]
+    era_day_count = max(1, len(era_dates))
     rows: list[dict[str, Any]] = []
     for factor in sorted(long_df["factor"].astype(str).unique()):
         sub = long_df[long_df["factor"].astype(str) == factor]
         present_days = sub["date"].astype(str).str[:10].nunique()
+        era_present = (
+            sub[sub["date"].astype(str).str[:10].isin(era_dates)]["date"].astype(str).str[:10].nunique()
+            if era_dates
+            else present_days
+        )
         rows.append(
             {
                 "factor": factor,
                 "days_present": int(present_days),
                 "days_total": day_count,
                 "coverage_pct": round(100.0 * present_days / day_count, 1),
+                "flow_era_days_present": int(era_present),
+                "flow_era_days_total": era_day_count,
+                "flow_era_coverage_pct": round(100.0 * era_present / era_day_count, 1),
                 "in_macro_keys": factor in MACRO_FACTOR_KEYS,
             }
         )
@@ -138,7 +148,23 @@ def run_hub_data_audit(
     start = trading_dates[0] if trading_dates else ""
     end = trading_dates[-1] if trading_dates else ""
 
-    factor_coverage = _factor_coverage_from_daily(start, end) if start and end else []
+    flow_era_start = None
+    try:
+        from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+            flow_effective_start,
+            flow_backfill_summary,
+            merge_flow_derivatives_frame,
+        )
+
+        if start and end:
+            merged = merge_flow_derivatives_frame(start, end)
+            flow_era_start = flow_effective_start(merged)
+    except Exception:
+        flow_era_start = None
+
+    factor_coverage = (
+        _factor_coverage_from_daily(start, end, flow_era_start=flow_era_start) if start and end else []
+    )
     constituent_coverage = _constituent_history_coverage(hub, trading_dates)
 
     t0_t1_gaps: list[dict[str, Any]] = []
@@ -175,7 +201,13 @@ def run_hub_data_audit(
                     }
                 )
 
-    macro_gaps = [f for f in factor_coverage if f.get("in_macro_keys") and (f.get("coverage_pct") or 0) < 80]
+    macro_gaps = [
+        f
+        for f in factor_coverage
+        if f.get("in_macro_keys")
+        and (f.get("flow_era_coverage_pct") or f.get("coverage_pct") or 0) < 90
+        and f.get("factor") in {"fii_net_5d", "dii_net_5d", "nifty_pcr", "fii_fut_long_short_ratio"}
+    ]
 
     blocking = bool(t0_t1_gaps) or bool(_anomalous_snapshots())
 
@@ -187,6 +219,7 @@ def run_hub_data_audit(
         "horizon_days": horizon_days,
         "history_start": start,
         "history_end": end,
+        "flow_effective_start": flow_era_start,
         "trading_rows": len(trading_dates),
         "factor_coverage": factor_coverage,
         "macro_factor_gaps": macro_gaps,

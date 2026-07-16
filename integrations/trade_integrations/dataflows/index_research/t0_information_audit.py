@@ -77,8 +77,16 @@ def classify_t0_information(
     headlines_t0: list[dict[str, str]],
     factors_t0: dict[str, float],
     material_move: bool = True,
+    counterfactual_class: str | None = None,
 ) -> str:
     """Tag miss as unknowable_future_shock, knowable_missing_feature, or knowable_ignored."""
+    if counterfactual_class == "mapping_error_T0":
+        return "knowable_missing_feature"
+    if counterfactual_class == "drift_dominant":
+        return "knowable_ignored"
+    if counterfactual_class == "cap_artifact":
+        return "knowable_ignored"
+
     tags = _headline_tags(headlines_t0)
     has_oil_feature = "oil_brent" in factors_t0 or "oil_wti" in factors_t0
     has_flow_feature = "fii_net_5d" in factors_t0 or "dii_net_5d" in factors_t0
@@ -149,11 +157,14 @@ def audit_eval_row(
     predicted = float(eval_row.get("predicted_return_pct") or 0)
     material = abs(actual) >= 1.0 or abs(actual - predicted) >= 1.5
 
+    counterfactual_class = str(eval_row.get("counterfactual_class") or eval_row.get("miss_class") or "")
+
     tag = classify_t0_information(
         prediction_date=pred_day,
         headlines_t0=headlines_t0,
         factors_t0=factors_t0,
         material_move=material,
+        counterfactual_class=counterfactual_class or None,
     )
 
     return {
@@ -162,6 +173,7 @@ def audit_eval_row(
         "predicted_return_pct": round(predicted, 4),
         "actual_return_pct": round(actual, 4),
         "t0_information_tag": tag,
+        "counterfactual_class": counterfactual_class or None,
         "headline_tags_t0": sorted(_headline_tags(headlines_t0)),
         "headlines_t0_count": len(headlines_t0),
         "calendar_events_t0": calendar,
