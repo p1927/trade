@@ -27,6 +27,7 @@ Pre-computed research lives at:
 When the user asks about a stock:
 
 1. Read `latest.md` from the hub for that ticker (use file tools; hub root is allowlisted).
+   - **Earnings Signal** (Finverse beat %) and **Corp-Event Forecast** (ED-ALPHA) sections inform buy/sell and event-risk views.
 2. If missing or stale, note that the user can run `python scripts/run_company_research.py TICKER`.
 3. Use **OpenAlgo MCP** tools for live quotes, positions, and order placement.
 
@@ -59,4 +60,19 @@ For index or F&O stock options, use the **options-advisor** skill and hub path:
 {{TRADE_STACK_HUB_DIR}}/{UNDERLYING}/options_research/latest.json
 ```
 
+**Vibe automation (OpenAlgo MCP):** `get_options_browse` for in-chat chain tables; `get_options_trade_plan` to load or refresh the full plan.
+
 Regenerate: `python scripts/run_options_research.py NIFTY`
+Quick browse only: `python scripts/browse_options.py NIFTY`
+
+## Stock advisor
+
+For **equity** CNC/MIS trades, use the **stock-advisor** skill:
+
+```
+{{TRADE_STACK_HUB_DIR}}/{TICKER}/stock_research/latest.json
+```
+
+**Vibe automation (OpenAlgo MCP):** `get_stock_browse`; `get_stock_trade_plan`
+
+Regenerate: `python scripts/run_stock_research.py RELIANCE`

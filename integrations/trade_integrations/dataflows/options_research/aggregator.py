@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from .browse_summary import build_browse_summary
 from .candidate_generator import generate_candidates
 from .config import get_options_config
+from trade_integrations.dataflows.company_research.market import Market
 from .market import InstrumentType, resolve_options_instrument
 from .models import OptionsResearchDoc
 from .payoff_charges import build_implementation_steps
@@ -17,6 +18,7 @@ from .sources.analytics_qfin import fetch_analytics_qfin, simple_analytics_fallb
 from .sources.chain_openalgo import fetch_chain_stage
 from .sources.events_index import fetch_events_index
 from .sources.events_stock import fetch_events_stock
+from .sources.earnings_us import fetch_earnings_us_stage
 
 
 def _apply_stage(doc: OptionsResearchDoc, result: StageResult) -> None:
@@ -31,12 +33,26 @@ def _apply_stage(doc: OptionsResearchDoc, result: StageResult) -> None:
         doc.prediction.update(result.data)
     if result.stage == "analytics_history" and result.data:
         doc.prediction.setdefault("history", {}).update(result.data)
+    if result.stage == "earnings_us" and result.data and result.status == "ok":
+        doc.prediction.setdefault("earnings", {}).update(result.data)
 
 
-def _prediction_view(analytics: dict, events: list) -> str:
-    bias = analytics.get("bias")
-    if bias:
-        return str(bias)
+def _prediction_view(
+    analytics: dict,
+    events: list,
+    *,
+    prediction_signals: dict | None = None,
+) -> str:
+    signals = prediction_signals or {}
+    bias = signals.get("earnings_bias")
+    if bias == "bullish":
+        return "bullish_earnings"
+    if bias == "bearish":
+        return "bearish_earnings"
+    if signals.get("corp_event_score") is not None and float(signals["corp_event_score"]) >= 50:
+        return "corp_event_vol"
+    if analytics.get("bias"):
+        return str(analytics["bias"])
     iv_regime = analytics.get("iv_regime", "moderate")
     if events and any(e.get("impact_on_vol") in ("elevated", "high") for e in events):
         return "event_volatility"
@@ -94,8 +110,24 @@ def run_options_research(
     _apply_stage(doc, chain_result)
     doc.browse_summary = build_browse_summary(doc.chain_snapshot)
 
+    prediction_signals: dict = {}
     if instrument.instrument_type == InstrumentType.STOCK:
-        _apply_stage(doc, fetch_events_stock(instrument, lookahead_days=days))
+        events_result = fetch_events_stock(instrument, lookahead_days=days)
+        _apply_stage(doc, events_result)
+        prediction_signals = (events_result.data or {}).get("prediction_signals") or {}
+        if events_result.data:
+            if events_result.data.get("earnings_signal"):
+                doc.prediction.setdefault("earnings", {}).update(
+                    events_result.data["earnings_signal"]
+                )
+            if events_result.data.get("corp_events"):
+                doc.prediction.setdefault("corp_events", {}).update(
+                    events_result.data["corp_events"]
+                )
+            if prediction_signals:
+                doc.prediction.setdefault("signals", {}).update(prediction_signals)
+        if instrument.market == Market.US:
+            _apply_stage(doc, fetch_earnings_us_stage(instrument.input_ticker))
     else:
         _apply_stage(doc, fetch_events_index(lookahead_days=days))
 
@@ -103,8 +135,11 @@ def run_options_research(
     _apply_stage(doc, analytics_result)
     if analytics_result.status in ("skipped", "error"):
         reason = (analytics_result.data or {}).get("reason", "")
-        if "qfinindia" in reason.lower():
-            doc.prediction["analytics_hint"] = "pip install -e '.[options]' for qfinindia analytics"
+        errors = analytics_result.errors or []
+        if "qfinindia" in reason.lower() or any("qfinindia" in e.lower() for e in errors):
+            doc.prediction["analytics_hint"] = "pip install qfinindia (or fix numpy compat: trapz)"
+        elif analytics_result.status == "error":
+            doc.prediction["analytics_hint"] = f"qfinindia failed: {(errors or ['unknown'])[0][:80]}"
         fallback = simple_analytics_fallback(doc.chain_snapshot)
         doc.prediction.update(fallback)
 
@@ -141,6 +176,7 @@ def run_options_research(
         events=doc.events,
         spot=spot,
         broker_preset=config.broker_preset,
+        prediction_signals=prediction_signals,
     )
     doc.ranked_strategies = ranked
     doc.stages.append(
@@ -156,7 +192,11 @@ def run_options_research(
     doc.scenarios = build_scenarios(doc.events, ranked)
     doc.prediction.update(
         {
-            "view": _prediction_view(doc.prediction, doc.events),
+            "view": _prediction_view(
+                doc.prediction,
+                doc.events,
+                prediction_signals=prediction_signals,
+            ),
             "expected_move_pct": doc.prediction.get("expected_move_pct")
             or doc.prediction.get("expected_move"),
             "iv_regime": iv_regime,

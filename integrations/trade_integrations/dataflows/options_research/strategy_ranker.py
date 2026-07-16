@@ -21,7 +21,38 @@ def _tier_label(
     return "Avoid"
 
 
-def _event_fit(tags: list[str], events: list[dict[str, Any]], iv_regime: str) -> float:
+def _signal_fit(tags: list[str], signals: dict[str, Any]) -> float:
+    """Bonus from Finverse beat probability and ED-ALPHA corp-event score."""
+    if not signals:
+        return 0.0
+    bonus = 0.0
+    bias = signals.get("earnings_bias")
+    beat = signals.get("beat_probability")
+    if bias == "bullish" and "directional" in tags:
+        bonus += 0.12
+    if bias == "bearish" and "directional" in tags:
+        bonus += 0.08
+    if beat is not None and "event" in tags:
+        bonus += 0.08
+    corp_score = signals.get("corp_event_score")
+    corp_rank = signals.get("corp_event_rank")
+    if corp_score is not None and float(corp_score) >= 50:
+        if "event" in tags or "long_vol" in tags:
+            bonus += 0.1
+        if "short_vol" in tags and corp_rank is not None and int(corp_rank) <= 25:
+            bonus += 0.05
+    if signals.get("corp_event_status") == "no_data" and "event" in tags:
+        bonus += 0.03
+    return min(0.2, bonus)
+
+
+def _event_fit(
+    tags: list[str],
+    events: list[dict[str, Any]],
+    iv_regime: str,
+    *,
+    signals: dict[str, Any] | None = None,
+) -> float:
     if not events:
         return 0.5
     has_event = any(e.get("type") not in ("india_vix", "macro_watch", "fii_dii_flow") for e in events)
@@ -36,6 +67,12 @@ def _event_fit(tags: list[str], events: list[dict[str, Any]], iv_regime: str) ->
         score += 0.2
     if "range" in tags and iv_regime in ("moderate", "high"):
         score += 0.1
+    for event in events:
+        if event.get("type") == "earnings_signal" and "event" in tags:
+            score += 0.1
+        if event.get("type") == "corp_event_forecast" and "long_vol" in tags:
+            score += 0.08
+    score += _signal_fit(tags, signals or {})
     return min(1.0, score)
 
 
@@ -57,6 +94,7 @@ def rank_strategies(
     events: list[dict[str, Any]],
     spot: float,
     broker_preset: str = "zerodha",
+    prediction_signals: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Score and sort candidates; attach payoff metrics and tier labels."""
     atm_iv = analytics.get("atm_iv") or analytics.get("atm_vol")
@@ -85,7 +123,12 @@ def rank_strategies(
         pop = metrics.get("pop") or 0.5
         max_profit = metrics.get("max_profit")
         max_loss = metrics.get("max_loss")
-        event_fit = _event_fit(cand.get("tags") or [], events, iv_regime)
+        event_fit = _event_fit(
+            cand.get("tags") or [],
+            events,
+            iv_regime,
+            signals=prediction_signals,
+        )
         liquidity_ok = _liquidity_ok(legs)
         rr = 0.5
         if max_profit and max_loss and max_loss < 0:
@@ -117,6 +160,7 @@ def rank_strategies(
                 "net_max_profit": metrics.get("net_max_profit"),
                 "net_max_loss": metrics.get("net_max_loss"),
                 "pop_source": metrics.get("pop_source"),
+                "signal_fit": round(_signal_fit(cand.get("tags") or [], prediction_signals or {}), 3),
             }
         )
 

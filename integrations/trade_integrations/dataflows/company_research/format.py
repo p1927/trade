@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from .models import CompanyResearchDoc, StageResult
+from .signals_bridge import format_corp_events_section, format_earnings_signal_section
 
 
 def _stage_table(stages: list[StageResult]) -> str:
@@ -209,6 +210,12 @@ def format_research_report(doc: CompanyResearchDoc) -> str:
         "",
         "## Sentiment",
         _sentiment_section(doc.sentiment),
+        "",
+        "## Earnings Signal (US)",
+        format_earnings_signal_section(doc.earnings_signal),
+        "",
+        "## Corp-Event Forecast (ED-ALPHA)",
+        format_corp_events_section(doc.corp_events),
         "",
         "## Macro Context",
         _macro_section(doc.macro),

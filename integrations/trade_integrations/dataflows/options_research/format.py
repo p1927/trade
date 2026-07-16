@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 
 from trade_integrations.dataflows.company_research.models import StageResult
+from trade_integrations.dataflows.company_research.signals_bridge import (
+    format_corp_events_section,
+    format_earnings_signal_section,
+)
 
 from .models import OptionsResearchDoc
 
@@ -69,9 +73,33 @@ def format_options_report(doc: OptionsResearchDoc) -> str:
         f"- **Expected move %:** {pred.get('expected_move_pct', '—')}",
         f"- **Confidence (top score):** {pred.get('confidence', '—')}",
         "",
-        "## Browse (chain snapshot)",
-        "",
     ]
+    signals = pred.get("signals") or {}
+    if signals.get("earnings_bias") or signals.get("beat_probability") is not None:
+        parts.append(f"- **Earnings bias:** {signals.get('earnings_bias', '—')}")
+        if signals.get("beat_probability") is not None:
+            parts.append(
+                f"- **Beat probability:** {float(signals['beat_probability']) * 100:.1f}%"
+            )
+    if pred.get("corp_events"):
+        corp = pred["corp_events"]
+        parts.append(f"- **ED-ALPHA status:** {corp.get('status', '—')}")
+        if corp.get("total_score") is not None:
+            parts.append(f"- **Corp-event score:** {corp.get('total_score')}")
+    if signals.get("corp_event_score") is not None:
+        parts.append(f"- **Corp-event signal score:** {signals['corp_event_score']}")
+    parts.extend(
+        [
+            "",
+            "### Earnings signal (hub)",
+            format_earnings_signal_section(pred.get("earnings")),
+            "### Corp-event forecast (hub)",
+            format_corp_events_section(pred.get("corp_events")),
+            "",
+            "## Browse (chain snapshot)",
+            "",
+        ]
+    )
     browse = doc.browse_summary or {}
     if browse:
         parts.append(

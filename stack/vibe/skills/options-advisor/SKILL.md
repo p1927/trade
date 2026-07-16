@@ -26,15 +26,18 @@ When the user asks what to trade, which strategy, or how to execute before expir
 
 ### Step 0 — Browse what's available (always start here for "what can I trade?")
 
-1. Read `browse_summary` from `latest.json` (expiries, ATM, PCR, top strikes with LTP/OI).
-2. **Refresh live** with OpenAlgo MCP `get_option_chain(underlying, exchange, expiry, strike_count=10)`.
-3. Present a compact table: expiries, spot, ATM, top 5–8 strikes (CE/PE LTP + OI).
+1. Call OpenAlgo MCP **`get_options_browse`** (compact table) or read `browse_summary` from `latest.json`.
+2. For a full refreshed chain, use **`get_option_chain`** with `strike_count=10`.
+3. Present the `markdown` field from `get_options_browse` or build a table from `browse_summary`.
 4. If user only wanted to browse, stop after summarizing the chain.
 
 ### Step 1 — Load the plan
 
-1. Read `latest.json` (structured) or `latest.md` (summary) for the underlying.
-2. **Stock options** — also read `{UNDERLYING}/company_research/latest.md` for earnings/calendar context.
+1. Call OpenAlgo MCP **`get_options_trade_plan(ticker)`** (uses hub cache) or read `latest.json` directly.
+2. Set `refresh=true` on `get_options_trade_plan` when the user asks for fresh research or chain moved.
+3. **Stock options** — also read `{UNDERLYING}/company_research/latest.md` for earnings/calendar context.
+   - Check **Earnings Signal** and **Corp-Event Forecast** sections (Finverse + ED-ALPHA).
+   - Options `latest.md` **Prediction** section mirrors those signals for strategy ranking.
 
 ### Step 2 — Explain researched answer
 
@@ -75,18 +78,23 @@ python scripts/run_options_research.py NIFTY --expiry 30JUL25
 python scripts/run_options_research.py RELIANCE --days 14
 ```
 
-For stock options, warm company research first when missing:
+For stock options, warm company research first when missing (includes Finverse + ED-ALPHA for US):
 
 ```bash
 python scripts/run_company_research.py RELIANCE
+python scripts/run_company_research.py AAPL    # US: earnings_signal + corp_events in hub
 python scripts/run_options_research.py RELIANCE
 ```
+
+The options plan **reads hub signals** (`earnings_signal`, `corp_events`) into events and the strategy ranker — no need to re-fetch Finverse/ED-ALPHA during options run if company research is cached.
 
 ## MCP tools
 
 | Tool | Use |
 |------|-----|
-| `get_option_chain` | **Browse** — live expiries, strikes, OI, LTP |
+| `get_options_browse` | **Browse in chat** — compact chain table (expiries, ATM, top strikes) |
+| `get_options_trade_plan` | **Load/generate** full trade plan from hub (prediction, ranks, legs, charges) |
+| `get_option_chain` | Full live chain JSON when browse needs more strikes |
 | `get_strategy_payoff` | Expiry P&L curve, breakevens, PoP, net P&L |
 | `get_trade_charges` | Brokerage, STT, GST, stamp, exchange, net_debit_credit |
 | `calculate_margin` | Pre-trade margin check |
