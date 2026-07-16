@@ -138,6 +138,20 @@ def build_manifest(hub: Path | None = None) -> dict[str, Any]:
     except Exception:
         pass
 
+    try:
+        from trade_integrations.hub_capture.registry import build_capture_stats, load_registry
+        from trade_integrations.hub_capture.rollup import capture_coverage_stats
+
+        reg = load_registry(create=False)
+        manifest["capture"] = {
+            "registry_path": "_data/capture_registry.json",
+            "entities": reg.get("entities") or [],
+            "stats": build_capture_stats("NIFTY"),
+            "coverage": capture_coverage_stats("NIFTY"),
+        }
+    except Exception:
+        pass
+
     model_path = data / "index_factors" / "model" / "latest.json"
     if model_path.is_file():
         manifest["time_series"]["index_model"] = {

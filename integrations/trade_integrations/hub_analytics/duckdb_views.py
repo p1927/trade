@@ -22,6 +22,9 @@ HUB_VIEWS = (
     "derivatives_chain_daily",
     "news_verified",
     "news_impact_ledger",
+    "capture_derivatives",
+    "capture_flows",
+    "capture_vix",
 )
 
 _BUILTIN_QUERIES: dict[str, str] = {
@@ -85,6 +88,25 @@ _BUILTIN_QUERIES: dict[str, str] = {
         GROUP BY 1
         ORDER BY fills DESC
         LIMIT 25
+    """,
+    "capture_coverage": """
+        SELECT
+            'derivatives_chain' AS series,
+            COUNT(DISTINCT substr(captured_at, 1, 10)) AS days_captured,
+            COUNT(*) AS rows
+        FROM capture_derivatives
+        UNION ALL
+        SELECT
+            'flows' AS series,
+            COUNT(DISTINCT substr(captured_at, 1, 10)) AS days_captured,
+            COUNT(*) AS rows
+        FROM capture_flows
+        UNION ALL
+        SELECT
+            'vix' AS series,
+            COUNT(DISTINCT substr(captured_at, 1, 10)) AS days_captured,
+            COUNT(*) AS rows
+        FROM capture_vix
     """,
     "execution_outcome_join": """
         SELECT
@@ -166,6 +188,9 @@ def hub_data_paths() -> dict[str, Path]:
         "derivatives_chain_daily": data / "derivatives_chain" / "daily",
         "news_verified": data / "news_verified" / "records.parquet",
         "news_impact_ledger": data / "news_impact" / "ledger.parquet",
+        "capture_derivatives": data / "capture" / "nifty" / "derivatives_chain",
+        "capture_flows": data / "capture" / "nifty" / "flows",
+        "capture_vix": data / "capture" / "nifty" / "vix",
     }
 
 
@@ -184,8 +209,12 @@ def register_hub_views(con: duckdb.DuckDBPyConnection) -> list[str]:
         "news_impact_ledger": paths["news_impact_ledger"],
     }
     for view_name, path in single_views.items():
-        source = _read_fn(path)
-        con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM {source}")
+        resolved = _resolve_readable_path(path)
+        if resolved is None:
+            con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT NULL WHERE false")
+        else:
+            source = _read_fn(path)
+            con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM {source}")
         registered.append(view_name)
 
     daily_dir = paths["index_factors_daily"]
@@ -196,6 +225,9 @@ def register_hub_views(con: duckdb.DuckDBPyConnection) -> list[str]:
         ("ticks_daily", "ticks_daily"),
         ("news_daily", "news_daily"),
         ("derivatives_chain_daily", "derivatives_chain_daily"),
+        ("capture_derivatives", "capture_derivatives"),
+        ("capture_flows", "capture_flows"),
+        ("capture_vix", "capture_vix"),
     ):
         _register_daily_glob_view(con, view_name, paths[key])
         registered.append(view_name)

@@ -22,3 +22,5 @@ class TestAutonomousTurns:
         prompt = build_full_reasoning_prompt(agent=agent, turn_kind="research")
         assert "do not ask the user questions" in prompt.lower()
         assert "record_autonomous_decision" in prompt
+        assert "Decision: ENTER" in prompt
+        assert "handoff cycle" in prompt

@@ -196,6 +196,20 @@ def fetch_chain_stage(
             )
 
     status = "ok" if data.get("chain") else "partial"
+    if status in {"ok", "partial"} and data.get("chain"):
+        try:
+            from trade_integrations.hub_capture.writers import record_chain_snapshot
+
+            symbol = str(data.get("underlying") or instrument.underlying_symbol).upper()
+            record_chain_snapshot(
+                symbol,
+                data,
+                source=str(data.get("source") or vendor),
+                vendor=vendor,
+                captured_at=now.isoformat(),
+            )
+        except Exception:
+            logger.debug("hub capture chain snapshot skipped", exc_info=True)
     return StageResult(
         stage="chain",
         status=status,

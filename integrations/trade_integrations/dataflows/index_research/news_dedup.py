@@ -46,23 +46,38 @@ def _pick_best_published(a: str, b: str) -> str:
     return b or a
 
 
+def _sources_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = row.get("sources")
+    if isinstance(existing, list) and existing:
+        return [_source_entry({**row, **src}) if isinstance(src, dict) else _source_entry(row) for src in existing]
+    return [_source_entry(row)]
+
+
 def merge_raw_headlines(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge duplicate stories across sources into canonical rows with sources[]."""
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
+    title_to_key: dict[str, str] = {}
 
     for row in rows:
         title = str(row.get("title") or "").strip()
         if not title:
             continue
         url = str(row.get("url") or "")
-        key = canonical_story_id(title, url)
+        preset_id = str(row.get("canonical_story_id") or "").strip()
+        key = preset_id or canonical_story_id(title, url)
         if not key:
             key = f"title:{normalize_title(title)}"
         if not key:
             continue
 
-        src = _source_entry(row)
+        title_norm = normalize_title(title)
+        if title_norm and title_norm in title_to_key:
+            key = title_to_key[title_norm]
+        elif title_norm:
+            title_to_key[title_norm] = key
+
+        src_entries = _sources_from_row(row)
         if key not in merged:
             order.append(key)
             merged[key] = {
@@ -71,9 +86,9 @@ def merge_raw_headlines(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "title": title,
                 "summary": str(row.get("summary") or ""),
                 "url": url,
-                "source": src["vendor"],
+                "source": src_entries[0]["vendor"],
                 "published_at": str(row.get("published_at") or ""),
-                "sources": [src],
+                "sources": list(src_entries),
                 "fingerprint": row.get("fingerprint"),
             }
             continue
@@ -86,8 +101,9 @@ def merge_raw_headlines(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(row.get("published_at") or ""),
         )
         sources: list[dict[str, Any]] = list(existing.get("sources") or [])
-        if not any(s.get("url") == src["url"] and s.get("vendor") == src["vendor"] for s in sources):
-            sources.append(src)
+        for src in src_entries:
+            if not any(s.get("url") == src["url"] and s.get("vendor") == src["vendor"] for s in sources):
+                sources.append(src)
         existing["sources"] = sources
 
     return [merged[k] for k in order]

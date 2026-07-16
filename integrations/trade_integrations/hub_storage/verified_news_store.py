@@ -44,6 +44,18 @@ def impact_ledger_path() -> Path:
     return get_hub_dir() / _IMPACT_LEDGER_REL
 
 
+def ensure_hub_storage() -> None:
+    """Create empty parquet ledgers when missing so DuckDB views and verify can register."""
+    records = verified_records_path()
+    if not records.is_file():
+        records.parent.mkdir(parents=True, exist_ok=True)
+        write_dataframe(pd.DataFrame(columns=list(_RECORD_COLUMNS)), records)
+    ledger = impact_ledger_path()
+    if not ledger.is_file():
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        write_dataframe(pd.DataFrame(columns=["canonical_story_id", "updated_at"]), ledger)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

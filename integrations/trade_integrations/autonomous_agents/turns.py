@@ -15,11 +15,21 @@ from trade_integrations.execution.prompt_fragments import (
 )
 
 _RUNNING_AGENT_FOOTER = """
+## Output format (mandatory — trader-facing)
+Respond with this structure only (no audit IDs, no "next-turn expectation", no implementation notes):
+
+## Decision: ENTER | HOLD | SKIP | EXIT | REVISE (confidence N% — below/above gate)
+**View:** direction · spot · VIX/regime (cite live tool or hub research)
+**Strategy considered:** name (scorer EV if applicable) — chosen or deferred because [reason]
+**Watch:** active rules — material alerts since last turn or "none"
+**Next action:** what would trigger ENTER or REVISE
+
 ## Output rules (mandatory)
 - Decide autonomously on this turn — **do not ask the user questions** or offer optional follow-ups.
-- Call `record_autonomous_decision` with ENTER | REVISE | EXIT | HOLD | SKIP and confidence 0–100.
+- Call `record_autonomous_decision` with ENTER | REVISE | EXIT | HOLD | SKIP plus `confidence`, `direction`, and `strategy` when known.
 - If below the confidence threshold, record HOLD or SKIP with rationale — do not prompt for permission.
 - Use hub research and live tools; cite prediction range and provenance when recommending a strategy.
+- **Never** mention: handoff cycle, cached context, synthetic alert, audit pa_, verification reads, idempotent reads.
 """
 
 
@@ -113,7 +123,8 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
             "`complete`, proceed to `get_options_trade_plan` — do not retry because individual "
             "stage rows show `complete: false`.\n"
             "3. Draft initial thesis (direction, strategy, confidence 0–100, rationale).\n"
-            "4. Call `record_autonomous_decision` (HOLD/SKIP if below confidence gate) and **stop** — "
+            "4. Call `record_autonomous_decision` with confidence, direction, strategy "
+            "(HOLD/SKIP if below confidence gate) and **stop** — "
             "do not loop on status reads or memory recall.\n"
         )
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from trade_integrations.dataflows.index_research.news_enrichment import (
     build_content_summary,
     build_structured_summary,
@@ -14,6 +16,16 @@ from trade_integrations.dataflows.index_research.news_verification import (
     is_approved_status,
     verify_enriched_news,
 )
+
+
+@pytest.fixture
+def hub_tmp(tmp_path, monkeypatch):
+    from trade_integrations.hub_storage import verified_news_store as store
+
+    hub = tmp_path / "hub"
+    hub.mkdir()
+    monkeypatch.setattr(store, "get_hub_dir", lambda: hub)
+    return hub
 
 
 def test_de_clickbait_strips_prefix():
@@ -80,3 +92,91 @@ def test_verify_enriched_news_returns_status(monkeypatch):
     )
     verification = verify_enriched_news(item, publish_day="2026-02-17")
     assert verification.status in {"approved", "partial", "rejected", "pending"}
+
+
+def test_merge_raw_headlines_dedupes_sources():
+    from trade_integrations.dataflows.index_research.news_dedup import merge_raw_headlines
+
+    merged = merge_raw_headlines(
+        [
+            {
+                "title": "FII selling weighs on Nifty",
+                "summary": "Short headline only.",
+                "url": "https://news.example.com/1",
+                "source": "rss",
+                "published_at": "2026-02-17",
+            },
+            {
+                "title": "FII selling weighs on Nifty",
+                "summary": "Foreign investors sold Rs 3,000 crore over the week according to NSDL data.",
+                "url": "https://other.example.com/2",
+                "source": "aggregator",
+                "published_at": "2026-02-17",
+            },
+        ]
+    )
+    assert len(merged) == 1
+    assert len(merged[0]["sources"]) == 2
+    assert "3,000 crore" in merged[0]["summary"]
+
+
+def test_ingest_cache_hit_skips_reverify(hub_tmp, monkeypatch):
+    from trade_integrations.dataflows.index_research import news_impact_engine as engine
+    from trade_integrations.hub_storage import verified_news_store as store
+
+    monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
+    calls = {"verify": 0}
+    original = engine.verify_enriched_news
+
+    def counting_verify(*args, **kwargs):
+        calls["verify"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "verify_enriched_news", counting_verify)
+    monkeypatch.setattr(
+        engine,
+        "collect_headlines_for_day",
+        lambda *a, **k: [
+            {
+                "canonical_story_id": "title:cached story",
+                "id": "title:cached story",
+                "title": "Cached story",
+                "summary": "FII sold heavily.",
+                "sources": [{"vendor": "rss", "url": "", "publisher": "rss"}],
+                "published_at": "2026-07-16",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        engine,
+        "load_aligned_factor_history",
+        lambda **_: __import__("pandas").DataFrame(
+            {
+                "date": ["2026-07-16"],
+                "close": [25000.0],
+                "fii_net_5d": [-1000.0],
+            }
+        ),
+    )
+
+    store.upsert_verified_record(
+        {
+            "canonical_story_id": "title:cached story",
+            "title": "Cached story",
+            "content_summary": "FII sold heavily.",
+            "sources": [{"vendor": "rss", "url": "", "publisher": "rss"}],
+            "published_at": "2026-07-16",
+            "verification_status": "partial",
+            "verification": {"status": "partial"},
+            "verification_data_as_of": "2026-07-16",
+        }
+    )
+
+    stats1 = engine.ingest_headlines_for_day(day="2026-07-16", headline_limit=5)
+    assert stats1["cache_hits"] == 1
+    assert stats1["verified"] == 0
+    assert calls["verify"] == 0
+
+    stats2 = engine.ingest_headlines_for_day(day="2026-07-16", headline_limit=5)
+    assert stats2["cache_hits"] == 1
+    assert calls["verify"] == 0

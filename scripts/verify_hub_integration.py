@@ -67,6 +67,12 @@ def main() -> int:
             results.append(_check(f"import:{mod.split('.')[-1]}", False, str(exc)))
 
     data = hub / "_data"
+    try:
+        from trade_integrations.hub_storage.verified_news_store import ensure_hub_storage
+
+        ensure_hub_storage()
+    except Exception:
+        pass
     paths = {
         "executions_json": data / "executions" / "ledger.json",
         "executions_parquet": data / "trades" / "executions.parquet",

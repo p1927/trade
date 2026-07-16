@@ -377,21 +377,76 @@ Only `verification.status in (approved, partial)` items appear in:
 
 ### Task E.1 — Backfill script
 
-**Create:** `scripts/backfill_news_impact.py --days 365 --prioritize-miss-dates`
+**Create:** `scripts/backfill_verified_news.py --days 365 --prioritize-miss-dates`
 
-- Seed ledger from `_data/news/daily/` + miss analysis dates
-- Run reconcile for matured rows only
+- Seed hub `records.parquet` from `_data/news/daily/` + miss analysis dates (cache-first)
+- Run `scripts/reconcile_news_impact.py` for matured rows only
+
+**Supersedes:** thin `backfill_news_impact.py` ledger-only path — hub SSOT is authoritative.
 
 **Acceptance:** Feb–Apr 2026 miss cluster shows non-zero headline cards with predicted vs actual.
+
+---
+
+## Phase H — Hub SSOT (verified news repository)
+
+**Status:** Shipped (2026-07-16)
+
+**Goal:** Make `reports/hub/_data/news_verified/records.parquet` the single source of truth for verified+summarized news. UI snapshot (`news_impact_latest.json`) is a derived materialized view — not re-verified on every read.
+
+### Hub data model
+
+| Store | Path | Purpose |
+|-------|------|---------|
+| Verified records | `_data/news_verified/records.parquet` | One row per canonical story (`canonical_story_id`) |
+| Impact ledger | `_data/news_impact/ledger.parquet` | Predicted vs actual reconcile events |
+| UI snapshot | `NIFTY/index_research/news_impact_latest.json` | Derived view for Predictions tab |
+
+**Record columns:** `canonical_story_id`, `title`, `content_summary`, `structured_summary`, `sources[]`, `verification_status`, `verification`, `verification_data_as_of`, `predicted_impact`, `actual_impact`, `maturity_date`, audit timestamps.
+
+### Cache-first pipeline
+
+```
+collect → merge_raw_headlines (cross-source dedup)
+  → lookup canonical_story_id in hub
+  → cache hit: reuse stored verification
+  → cache miss: enrich → verify → predict → upsert_verified_record
+→ build_snapshot_from_hub → news_impact_latest.json
+```
+
+**Re-verify only when:** new source merged, `verification_data_as_of` stale, `pending` status, or `--force-reverify`.
+
+### Tasks (implemented)
+
+| Task | Module / script |
+|------|-----------------|
+| Hub store | `hub_storage/verified_news_store.py` |
+| Cross-source dedup | `index_research/news_dedup.py` + `news_collect.py` |
+| Cache-first engine | `news_impact_engine.py` (`needs_reverify`, `ingest_headlines_for_day`) |
+| Maturity reconcile | `scripts/reconcile_news_impact.py` + evening `calibration_orchestrator` |
+| Backfill | `scripts/backfill_verified_news.py` |
+| Hub inventory | `manifest.py`, `duckdb_views.py`, `verify_hub_integration.py` |
+| API + UI | `GET /index-prediction/news-impact?refresh=` + `NewsImpactPanel` sources/rejected toggle |
+| Tests | `tests/test_verified_news_store.py`, extended `tests/test_news_impact_engine.py` |
+
+### Acceptance
+
+- Same story from 2+ sources → one hub row, `sources.length >= 2`, longest summary kept
+- Second pipeline run on unchanged day → zero new verification calls (cache hit)
+- Rejected stories persisted with `verification_status=rejected` (queryable, hidden in UI by default)
+- Matured stories have `actual_impact.nifty_points` after reconcile
+- `manifest.json` lists `news_verified_records` ledger
 
 ---
 
 ## Validation
 
 ```bash
-python -m pytest tests/test_news_impact_engine.py tests/test_t0_information_audit.py -q
-python scripts/backfill_news_impact.py --days 90 --prioritize-miss-dates
-python scripts/run_index_research.py --symbol NIFTY --horizon-days 14
+python -m pytest tests/test_news_impact_engine.py tests/test_verified_news_store.py -q
+python scripts/backfill_verified_news.py --days 90 --prioritize-miss-dates
+python scripts/reconcile_news_impact.py
+python scripts/hub_inventory.py --write
+python scripts/run_index_research.py --symbol NIFTY  # second run: verify count should not increase
 # UI: /prediction → News → Nifty impact section
 ```
 
@@ -420,6 +475,8 @@ flowchart LR
   C --> D[Phase D UI]
   B4[Task B4 Debate] --> B
   B --> E
+  H[Phase H Hub SSOT] --> E
+  H --> C
 ```
 
 ---
@@ -444,5 +501,6 @@ flowchart LR
 | `aggregator.py`, `debate_synthesis.py` | B |
 | `trade_routes.py`, `api.ts` | C |
 | `NewsImpactPanel.tsx`, `Prediction.tsx` | D |
-| `scripts/backfill_news_impact.py`, `scripts/reconcile_news_impact.py` | B, E |
-| `tests/test_news_impact_engine.py` | B |
+| `scripts/backfill_verified_news.py`, `scripts/reconcile_news_impact.py` | E, H |
+| `hub_storage/verified_news_store.py`, `index_research/news_dedup.py` | H |
+| `tests/test_verified_news_store.py` | H |
