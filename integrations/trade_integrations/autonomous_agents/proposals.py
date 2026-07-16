@@ -22,6 +22,7 @@ from trade_integrations.auto_paper.mandate_config import (
     MandateConfig,
     resolve_mandate_config,
 )
+from trade_integrations.autonomous_agents.runtime_status import build_stack_health
 from trade_integrations.autonomous_agents.store import (
     delete_proposal,
     get_agent,
@@ -32,6 +33,7 @@ from trade_integrations.autonomous_agents.store import (
     save_agent,
     save_proposal,
 )
+from trade_integrations.execution.profile import resolve_profile
 
 
 def _normalize_symbols(raw: Any) -> list[str]:
@@ -107,12 +109,31 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     proposal_id = str(kwargs.get("proposal_id") or new_proposal_id())
     mandate_cfg = _build_mandate_config(draft, mandate_text=str(kwargs.get("mandate") or draft.get("mandate") or ""))
 
+    primary_symbol = draft["symbols"][0] if draft["symbols"] else "NIFTY"
+    exec_market = symbol_execution_market(primary_symbol)
+    profile = resolve_profile(
+        agent={
+            "symbols": draft["symbols"],
+            "execution_market": exec_market,
+            "constraints": {
+                "mode": draft["mode"],
+                "budget_inr": draft["budget_inr"],
+                "max_daily_loss_inr": draft["max_daily_loss_inr"],
+            },
+            "mandate_config": mandate_cfg.to_dict(),
+            "mandate": draft["mandate"],
+        },
+    )
+
     proposal: dict[str, Any] = {
         "type": "autonomous_agent.proposal",
         "proposal_id": proposal_id,
         "status": "ready" if not missing else "incomplete",
         "missing_fields": missing,
         "symbols": draft["symbols"],
+        "execution_market": exec_market,
+        "execution_backend": profile.backend,
+        "stack_health": build_stack_health(),
         "name": draft["name"],
         "mandate": draft["mandate"],
         "constraints": {
@@ -171,6 +192,14 @@ def commit_autonomous_agent(
         raise ValueError(f"proposal not found: {proposal_id}")
 
     if proposal.get("committed_agent_id"):
+        existing = get_agent(str(proposal["committed_agent_id"]))
+        if existing:
+            return {
+                "status": "ok",
+                "agent": existing,
+                "vibe_session_id": existing.get("vibe_session_id"),
+                "already_committed": True,
+            }
         raise ValueError("proposal already committed")
 
     expires_at = int(proposal.get("expires_at_ms") or 0)
@@ -189,7 +218,6 @@ def commit_autonomous_agent(
     name = str(proposal.get("name") or "Autonomous agent")
     primary_symbol = symbols[0] if symbols else "NIFTY"
     exec_market = symbol_execution_market(primary_symbol)
-    from trade_integrations.execution.profile import resolve_profile
 
     profile = resolve_profile(
         agent={
