@@ -10,6 +10,7 @@ from trade_integrations.dataflows.options_research.models import OptionsResearch
 from trade_integrations.dataflows.options_research.widget_payload import (
     build_options_trade_widget_from_doc,
 )
+from trade_integrations.monitor.config import get_monitor_config
 
 
 def _sample_doc() -> OptionsResearchDoc:
@@ -164,3 +165,31 @@ class TestWidgetPayload:
         doc.chain_snapshot = {"underlying_ltp": 24650.5}
         widget = build_options_trade_widget_from_doc(doc)
         assert widget["spot"] == 24650.5
+
+    def test_staleness_block_when_monitor_enabled(self, monkeypatch):
+        monkeypatch.setenv("OPTIONS_REALTIME_MONITOR_ENABLED", "true")
+        cfg = get_monitor_config()
+        plan_spot = 24500.0
+        live_spot = plan_spot * (1 + (cfg.spot_drift_pct + 0.5) / 100)
+
+        monkeypatch.setattr(
+            "trade_integrations.monitor.service.fetch_underlying_ltp",
+            lambda _ticker: live_spot,
+        )
+
+        widget = build_options_trade_widget_from_doc(_sample_doc())
+
+        assert widget["staleness"]["status"] == "stale"
+        assert "spot_drift" in widget["staleness"]["reasons"]
+        assert widget["staleness"]["spot_drift_pct"] is not None
+        assert widget["live_context"]["spot"] == live_spot
+        assert widget["live_context"]["plan_spot"] == plan_spot
+        assert widget["live_context"]["fetched_at"]
+
+    def test_staleness_monitor_off_when_disabled(self, monkeypatch):
+        monkeypatch.setenv("OPTIONS_REALTIME_MONITOR_ENABLED", "false")
+
+        widget = build_options_trade_widget_from_doc(_sample_doc())
+
+        assert widget["staleness"]["status"] == "monitor_off"
+        assert "live_context" not in widget

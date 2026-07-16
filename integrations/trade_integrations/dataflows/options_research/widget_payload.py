@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from trade_integrations.context.hub import load_options_research_json
@@ -13,6 +14,7 @@ from trade_integrations.dataflows.company_research.signals_bridge import (
 from trade_integrations.dataflows.options_research.aggregator import run_options_research
 from trade_integrations.dataflows.options_research.models import OptionsResearchDoc
 from trade_integrations.dataflows.options_research.payoff_charges import build_implementation_steps
+from trade_integrations.monitor.service import MonitorService
 
 
 def _sample_spot(row: dict[str, Any]) -> float | None:
@@ -192,6 +194,29 @@ def _plan_warnings(doc: OptionsResearchDoc) -> list[str]:
     return warnings
 
 
+def _attach_monitor_context(payload: dict[str, Any], doc: OptionsResearchDoc) -> None:
+    """Attach staleness and live spot context when the realtime monitor is enabled."""
+    if not MonitorService.is_enabled():
+        payload["staleness"] = {
+            "status": "monitor_off",
+            "reasons": [],
+            "spot_drift_pct": None,
+        }
+        return
+
+    report = MonitorService().evaluate_doc(doc)
+    payload["staleness"] = {
+        "status": report.status,
+        "reasons": report.reasons,
+        "spot_drift_pct": report.spot_drift_pct,
+    }
+    payload["live_context"] = {
+        "spot": report.live_spot,
+        "plan_spot": report.plan_spot,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, Any]:
     """Build Vibe ``trade_plan.widget`` payload from an options research doc."""
     pred = doc.prediction or {}
@@ -211,7 +236,7 @@ def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, An
     plan_status = plan_status_from_doc(doc)
     data_warnings = _plan_warnings(doc)
 
-    return {
+    payload: dict[str, Any] = {
         "type": "trade_plan.widget",
         "widget_id": widget_id,
         "plan_status": plan_status,
@@ -260,6 +285,8 @@ def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, An
         "meta": dict(doc.meta or {}),
         "browse_summary": doc.browse_summary or {},
     }
+    _attach_monitor_context(payload, doc)
+    return payload
 
 
 def build_options_trade_widget(
