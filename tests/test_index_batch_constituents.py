@@ -157,6 +157,54 @@ def test_batch_runs_research_when_stale(monkeypatch):
 
 
 @pytest.mark.unit
+def test_batch_default_max_workers(monkeypatch):
+    monkeypatch.delenv("INDEX_RESEARCH_MAX_WORKERS", raising=False)
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.sources.batch_constituents.load_nifty50_constituents",
+        lambda: _mock_constituents(),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.sources.batch_constituents.is_cache_fresh",
+        lambda _sym: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.sources.batch_constituents.load_company_research_json",
+        lambda sym: _company_doc(sym),
+    )
+
+    reliance_future = MagicMock()
+    reliance_future.result.return_value = _company_doc("RELIANCE")
+    tcs_future = MagicMock()
+    tcs_future.result.return_value = _company_doc("TCS")
+
+    def fake_submit(_fn, symbol, **_kwargs):
+        return reliance_future if symbol == "RELIANCE" else tcs_future
+
+    mock_executor = MagicMock()
+    mock_executor.submit.side_effect = fake_submit
+    mock_executor.__enter__.return_value = mock_executor
+    mock_executor.__exit__.return_value = False
+
+    executor_ctor = MagicMock(return_value=mock_executor)
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.sources.batch_constituents.ThreadPoolExecutor",
+        executor_ctor,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.sources.batch_constituents.as_completed",
+        lambda futures: futures.keys(),
+    )
+
+    from trade_integrations.dataflows.index_research.sources.batch_constituents import (
+        batch_constituent_research,
+    )
+
+    batch_constituent_research(lookahead_days=14)
+
+    executor_ctor.assert_called_once_with(max_workers=4)
+
+
+@pytest.mark.unit
 def test_hub_index_research_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
     now = datetime.now(timezone.utc)
