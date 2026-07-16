@@ -14,12 +14,7 @@ sys.path.insert(0, str(ROOT / "tradingagents"))
 
 import trade_integrations  # noqa: F401
 
-from trade_integrations.context.hub import load_index_research_json, save_index_research
-from trade_integrations.dataflows.index_research.calibrator import retrain, should_retrain
-from trade_integrations.dataflows.index_research.prediction_ledger import (
-    compute_accuracy_metrics,
-    reconcile_predictions,
-)
+from trade_integrations.dataflows.index_research.calibration_runner import run_calibration
 
 
 def main() -> int:
@@ -39,26 +34,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    reconciled = reconcile_predictions()
-    accuracy = compute_accuracy_metrics()
-    retrained = False
-    artifact = None
-
-    if not args.skip_retrain and should_retrain(accuracy.get("mae_14d_pct")):
-        artifact = retrain(horizon_days=args.horizon_days)
-        retrained = artifact is not None
-
-    doc = load_index_research_json("NIFTY")
-    if doc is not None:
-        doc.accuracy = {**accuracy, "retrained": retrained}
-        save_index_research(doc)
-
-    summary = {
-        "reconciled_rows": reconciled,
-        "accuracy": accuracy,
-        "retrained": retrained,
-        "model_mae": artifact.mae if artifact else None,
-    }
+    summary = run_calibration(
+        horizon_days=args.horizon_days,
+        skip_retrain=args.skip_retrain,
+    )
     print(json.dumps(summary, indent=2, default=str))
     return 0
 
