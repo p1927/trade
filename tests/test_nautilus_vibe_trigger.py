@@ -93,6 +93,38 @@ def test_dispatch_watch_alert_sync_success(mock_client_factory, mock_save, mock_
     result = dispatch_watch_alert_sync("aa_test", alert)
     assert result["status"] == "dispatched"
     assert mock_save.called
+    # streaming must stay True until session service finalizes the turn
+    last_saved = mock_save.call_args_list[-1][0][0]
+    assert last_saved.get("streaming") is True
+
+
+@patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
+@patch("nautilus_openalgo_bridge.vibe_trigger.save_agent")
+@patch("nautilus_openalgo_bridge.vibe_trigger.make_vibe_message_client")
+def test_dispatch_watch_alert_sync_error_clears_streaming(mock_client_factory, mock_save, mock_get_agent):
+    agent = {
+        "id": "aa_test",
+        "status": "running",
+        "vibe_session_id": "sess123",
+        "streaming": False,
+    }
+    mock_get_agent.side_effect = lambda _id: dict(agent)
+
+    async def _caller(session_id: str, content: str) -> dict:
+        raise RuntimeError("Vibe API 500")
+
+    mock_client_factory.return_value = _caller
+
+    alert = WatchAlert(
+        signal=BridgeSignal.REVIEW_NEEDED,
+        rule=None,
+        symbol="NIFTY",
+        message="move",
+    )
+    result = dispatch_watch_alert_sync("aa_test", alert)
+    assert result["status"] == "error"
+    last_saved = mock_save.call_args_list[-1][0][0]
+    assert last_saved.get("streaming") is False
 
 
 @patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")

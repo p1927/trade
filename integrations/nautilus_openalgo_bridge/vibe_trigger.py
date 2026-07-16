@@ -173,11 +173,10 @@ async def dispatch_watch_alert(
         return {"status": "dispatched", "session_id": session_id, "result": result}
     except RuntimeError as exc:
         logger.warning("Vibe dispatch failed for %s: %s", agent_id, exc)
-        return {"status": "error", "error": str(exc)}
-    finally:
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
+        return {"status": "error", "error": str(exc)}
 
 
 def dispatch_watch_alert_sync(

@@ -225,22 +225,27 @@ def verified_ledger_path() -> Path:
 
 
 def append_verified_ledger(rows: list[dict[str, Any]]) -> Path | None:
+    """Legacy thin ledger — delegates full records to verified_news_store."""
     if not rows:
         return None
-    path = verified_ledger_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    new_frame = pd.DataFrame(rows)
-    if path.is_file():
-        try:
-            existing = pd.read_parquet(path)
-            combined = pd.concat([existing, new_frame], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["id"], keep="last")
-        except Exception:
-            combined = new_frame
-    else:
-        combined = new_frame
-    combined.to_parquet(path, index=False)
-    return path
+    from trade_integrations.hub_storage.verified_news_store import upsert_verified_record
+
+    for row in rows:
+        story_id = str(row.get("canonical_story_id") or row.get("id") or "").strip()
+        if not story_id:
+            continue
+        upsert_verified_record(
+            {
+                "canonical_story_id": story_id,
+                "ticker": row.get("ticker") or "NIFTY",
+                "title": row.get("title") or "",
+                "published_at": row.get("published_at"),
+                "verification_status": row.get("verification_status") or "pending",
+                "predicted_impact": {"return_pct": row.get("predicted_return_pct")},
+                "verification_data_as_of": (row.get("published_at") or "")[:10],
+            }
+        )
+    return verified_ledger_path()
 
 
 def load_verified_ledger(*, limit: int = 200) -> list[dict[str, Any]]:
