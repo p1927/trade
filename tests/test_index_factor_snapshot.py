@@ -1,4 +1,4 @@
-"""Unit tests for the daily index factor snapshot script."""
+"""Unit tests for the daily index factor snapshot."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from trade_integrations.dataflows.index_research.models import ConstituentSignal
+from trade_integrations.dataflows.index_research.snapshot import (
+    build_constituent_aggregate_rows,
+    run_snapshot,
+)
 
 
 def _mock_signals() -> list[ConstituentSignal]:
@@ -38,8 +42,6 @@ def _mock_signals() -> list[ConstituentSignal]:
 
 @pytest.mark.unit
 def test_build_constituent_aggregate_rows():
-    from scripts.run_index_factor_snapshot import build_constituent_aggregate_rows
-
     rows = build_constituent_aggregate_rows(_mock_signals())
     by_factor = {row["factor"]: row for row in rows}
 
@@ -60,30 +62,23 @@ def test_snapshot_script_writes_daily_file(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.batch_constituent_research",
+        "trade_integrations.dataflows.index_research.snapshot.batch_constituent_research",
         batch_mock,
     )
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.collect_global_factor_rows",
+        "trade_integrations.dataflows.index_research.snapshot.collect_global_factor_rows",
         collect_mock,
     )
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.save_daily_factors",
+        "trade_integrations.dataflows.index_research.snapshot.save_daily_factors",
         save_mock,
     )
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.get_factor_data_dir",
+        "trade_integrations.dataflows.index_research.snapshot.get_factor_data_dir",
         lambda: MagicMock(__truediv__=lambda _self, name: f"/tmp/index_factors/daily/{name}"),
     )
 
-    from scripts.run_index_factor_snapshot import main
-
-    monkeypatch.setattr(
-        "sys.argv",
-        ["run_index_factor_snapshot.py", "--date", "2026-07-16"],
-    )
-
-    assert main() == 0
+    summary = run_snapshot(snapshot_date="2026-07-16", skip_constituents=False)
 
     batch_mock.assert_called_once_with(refresh=False)
     collect_mock.assert_called_once_with(constituent_sentiments=[0.2, 0.6, 0.4])
@@ -96,10 +91,11 @@ def test_snapshot_script_writes_daily_file(monkeypatch):
     assert "index_sentiment" in factors
     assert "sector_breadth_mean_sentiment" in factors
     assert "earnings_events_14d_count" in factors
+    assert summary["factor_count"] == len(saved_rows)
 
 
 @pytest.mark.unit
-def test_snapshot_skip_constituents(monkeypatch, capsys):
+def test_snapshot_skip_constituents(monkeypatch):
     save_mock = MagicMock()
     batch_mock = MagicMock()
     collect_mock = MagicMock(
@@ -107,37 +103,29 @@ def test_snapshot_skip_constituents(monkeypatch, capsys):
     )
 
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.batch_constituent_research",
+        "trade_integrations.dataflows.index_research.snapshot.batch_constituent_research",
         batch_mock,
     )
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.collect_global_factor_rows",
+        "trade_integrations.dataflows.index_research.snapshot.collect_global_factor_rows",
         collect_mock,
     )
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.save_daily_factors",
+        "trade_integrations.dataflows.index_research.snapshot.save_daily_factors",
         save_mock,
     )
     monkeypatch.setattr(
-        "scripts.run_index_factor_snapshot.get_factor_data_dir",
+        "trade_integrations.dataflows.index_research.snapshot.get_factor_data_dir",
         lambda: MagicMock(__truediv__=lambda _self, name: f"/tmp/index_factors/daily/{name}"),
     )
 
-    from scripts.run_index_factor_snapshot import main
+    summary = run_snapshot(snapshot_date="2026-07-16", skip_constituents=True)
 
-    monkeypatch.setattr(
-        "sys.argv",
-        ["run_index_factor_snapshot.py", "--date", "2026-07-16", "--skip-constituents"],
-    )
-
-    assert main() == 0
     batch_mock.assert_not_called()
     collect_mock.assert_called_once_with(constituent_sentiments=None)
     save_mock.assert_called_once_with(
         "2026-07-16",
         [{"factor": "oil_brent", "value": 80.0, "source": "yfinance"}],
     )
-
-    summary = json.loads(capsys.readouterr().out)
     assert summary["skip_constituents"] is True
     assert summary["constituent_count"] == 0
