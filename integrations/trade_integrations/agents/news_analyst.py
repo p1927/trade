@@ -12,6 +12,7 @@ from tradingagents.agents.utils.agent_utils import (
 )
 from trade_integrations.tools.company_research_tools import get_company_research
 from trade_integrations.tools.options_research_tools import get_options_research
+from trade_integrations.tools.stock_research_tools import get_stock_research
 
 
 def create_news_analyst(llm):
@@ -28,6 +29,7 @@ def create_news_analyst(llm):
             get_prediction_markets,
             get_company_research,
             get_options_research,
+            get_stock_research,
         ]
 
         system_message = (
@@ -44,10 +46,14 @@ def create_news_analyst(llm):
             f"get_company_research(ticker, lookahead_days) for a structured dossier with company identity, "
             f"upcoming earnings/board meetings, and live Indian market context when configured, and "
             f"get_options_research(ticker, expiry_date, lookahead_days) for F&O trade plans on NIFTY, "
-            f"BANKNIFTY, or stock underlyings (ranked strategies, payoff, charges). "
-            f"For individual stocks, call get_company_research early to anchor event risk and identity. "
-            f"For index or options-focused runs (NIFTY, BANKNIFTY, or F&O on a stock), call "
-            f"get_options_research to load the latest trade plan from the hub. "
+            f"BANKNIFTY, or stock underlyings (ranked strategies, payoff, charges), and "
+            f"get_stock_research(ticker, lookahead_days) for equity trade plans (ranked BUY/HOLD "
+            f"approaches, entry/target/stop, CNC execution steps). "
+            f"For individual stocks, call get_company_research early to anchor event risk and identity, "
+            f"then get_stock_research for the actionable equity plan (or get_options_research if the "
+            f"run is options-focused on that name). "
+            f"For index or options-focused runs (NIFTY, BANKNIFTY), call "
+            f"get_options_research to load the latest F&O trade plan from the hub. "
             f"Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()

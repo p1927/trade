@@ -218,44 +218,17 @@ def calculate_charges(
     broker_preset: str = "zerodha",
 ) -> dict[str, Any]:
     """Per-leg and total charges for options entry."""
-    per_leg: list[dict[str, Any]] = []
-    totals = {
-        "brokerage": 0.0,
-        "stt": 0.0,
-        "exchange": 0.0,
-        "gst": 0.0,
-        "stamp": 0.0,
-        "sebi": 0.0,
-        "total_charges": 0.0,
-    }
-
-    for leg in legs:
-        price = float(leg.get("price") or 0)
-        qty = _leg_qty(leg)
-        turnover = price * qty
-        side = leg.get("side", "BUY")
-        leg_charges = _finworth_leg_charges(turnover, side)
-        per_leg.append({"symbol": leg.get("symbol"), "side": side, **leg_charges})
-        for k in totals:
-            if k in leg_charges:
-                totals[k] += leg_charges[k]
-
-    totals["total_charges"] = round(
-        totals["brokerage"] + totals["stt"] + totals["exchange"] + totals["gst"]
-        + totals["stamp"] + totals["sebi"],
-        2,
+    from trade_integrations.dataflows.broker_charges import (
+        calculate_charges_for_legs,
+        normalize_broker_id,
     )
-    for k in totals:
-        totals[k] = round(totals[k], 2)
 
-    net_debit_credit = compute_net_debit_credit(legs)
-    return {
-        "per_leg": per_leg,
-        "total": totals,
-        "broker_preset": broker_preset,
-        "net_debit_credit": net_debit_credit,
-        "charge_source": per_leg[0].get("source", "fallback") if per_leg else "fallback",
-    }
+    broker_id = normalize_broker_id(broker_preset)
+    result = calculate_charges_for_legs(legs, broker=broker_id)
+    # Preserve net_debit_credit from leg premiums if not set
+    if result.get("net_debit_credit") is None:
+        result["net_debit_credit"] = compute_net_debit_credit(legs)
+    return result
 
 
 def calculate_exit_charges(
@@ -306,14 +279,13 @@ def calculate_charges_with_exit(
     broker_preset: str = "zerodha",
 ) -> dict[str, Any]:
     """Entry + estimated exit charges and round-trip total."""
-    entry = calculate_charges(legs, broker_preset=broker_preset)
-    exit_ch = calculate_exit_charges(legs, spot=spot)
-    exit_total = float((exit_ch.get("total") or {}).get("total_charges") or 0)
-    entry_total = float((entry.get("total") or {}).get("total_charges") or 0)
-    entry["exit"] = exit_ch
-    entry["exit_charges"] = exit_total
-    entry["round_trip_charges"] = round(entry_total + exit_total, 2)
-    return entry
+    from trade_integrations.dataflows.broker_charges import (
+        calculate_charges_with_exit_for_legs,
+        normalize_broker_id,
+    )
+
+    broker_id = normalize_broker_id(broker_preset)
+    return calculate_charges_with_exit_for_legs(legs, spot=spot, broker=broker_id)
 
 
 def _leg_pnl_at_dte(leg: dict[str, Any], underlying: float, time_fraction: float) -> float:

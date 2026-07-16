@@ -143,3 +143,24 @@ class TestWidgetPayload:
         pred = widget["prediction"]
         assert "70.0%" in pred["earnings_summary"]
         assert pred["view"] == "bullish"
+
+    def test_payoff_samples_map_underlying_field(self):
+        doc = _sample_doc()
+        doc.payoff = {
+            "samples": [
+                {"underlying": 24000, "pnl": -4500},
+                {"underlying": 24500, "pnl": 0},
+                {"underlying": 25000, "pnl": 12000},
+            ]
+        }
+        widget = build_options_trade_widget_from_doc(doc)
+        spots = [s["spot"] for s in widget["payoff"]["samples"]]
+        assert spots == [24000.0, 24500.0, 25000.0]
+        assert all(s["pnl"] is not None for s in widget["payoff"]["samples"])
+
+    def test_spot_falls_back_to_chain_snapshot(self):
+        doc = _sample_doc()
+        doc.spot = None
+        doc.chain_snapshot = {"underlying_ltp": 24650.5}
+        widget = build_options_trade_widget_from_doc(doc)
+        assert widget["spot"] == 24650.5

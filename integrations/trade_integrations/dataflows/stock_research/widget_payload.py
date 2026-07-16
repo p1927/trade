@@ -18,12 +18,12 @@ def _payoff_samples(payoff: dict[str, Any] | None) -> list[dict[str, Any]]:
         return []
     return [
         {
-            "spot": row.get("spot") or row.get("price") or row.get("x"),
+            "spot": row.get("spot") or row.get("underlying") or row.get("price") or row.get("x"),
             "pnl": row.get("pnl") or row.get("y"),
             "net_pnl": row.get("net_pnl"),
         }
         for row in samples
-        if isinstance(row, dict)
+        if isinstance(row, dict) and (row.get("spot") or row.get("underlying") or row.get("price") or row.get("x")) is not None
     ]
 
 

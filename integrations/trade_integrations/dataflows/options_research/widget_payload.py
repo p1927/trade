@@ -15,20 +15,59 @@ from trade_integrations.dataflows.options_research.models import OptionsResearch
 from trade_integrations.dataflows.options_research.payoff_charges import build_implementation_steps
 
 
+def _sample_spot(row: dict[str, Any]) -> float | None:
+    """Map payoff sample x-axis from pipeline field names."""
+    for key in ("spot", "underlying", "x", "price"):
+        val = row.get(key)
+        if val is None:
+            continue
+        try:
+            f = float(val)
+            if f > 0:
+                return f
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _resolve_doc_spot(doc: OptionsResearchDoc) -> float | None:
+    for val in (
+        doc.spot,
+        doc.chain_snapshot.get("underlying_ltp"),
+        doc.browse_summary.get("spot"),
+    ):
+        if val is None:
+            continue
+        try:
+            f = float(val)
+            if f > 0:
+                return f
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _payoff_samples(payoff: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not payoff:
         return []
     samples = payoff.get("samples") or payoff.get("curve") or []
     if isinstance(samples, list):
-        return [
-            {
-                "spot": row.get("spot") or row.get("x"),
-                "pnl": row.get("pnl") or row.get("y"),
-                "net_pnl": row.get("net_pnl"),
-            }
-            for row in samples
-            if isinstance(row, dict)
-        ]
+        out: list[dict[str, Any]] = []
+        for row in samples:
+            if not isinstance(row, dict):
+                continue
+            spot = _sample_spot(row)
+            pnl = row.get("pnl") if row.get("pnl") is not None else row.get("y")
+            if spot is None or pnl is None:
+                continue
+            out.append(
+                {
+                    "spot": spot,
+                    "pnl": pnl,
+                    "net_pnl": row.get("net_pnl"),
+                }
+            )
+        return out
     return []
 
 
@@ -126,6 +165,7 @@ def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, An
     ranked = doc.ranked_strategies or []
     variants = _strategy_variants(ranked, options_exchange=options_exchange)
     agent_recommended = (rec.get("name") or (ranked[0].get("name") if ranked else "")) or ""
+    spot = _resolve_doc_spot(doc)
 
     return {
         "type": "trade_plan.widget",
@@ -136,7 +176,7 @@ def build_options_trade_widget_from_doc(doc: OptionsResearchDoc) -> dict[str, An
         "market": doc.market,
         "as_of": doc.as_of.isoformat(),
         "expiry": doc.expiry,
-        "spot": doc.spot,
+        "spot": spot,
         "prediction": {
             "view": pred.get("view"),
             "iv_regime": pred.get("iv_regime"),

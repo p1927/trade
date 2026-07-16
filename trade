@@ -21,6 +21,7 @@ Stack:
 
 Tunnel (webhook exposure):
   tunnel quick          Start trycloudflare.com tunnel (dev/testing)
+  tunnel restart        Stop and restart quick tunnel; print working URL
   tunnel named          Start persistent Cloudflare named tunnel
   tunnel stop           Stop active tunnel
   tunnel status         Show tunnel + HOST_SERVER state
@@ -41,6 +42,7 @@ Maintenance:
 Examples:
   trade start openalgo              # OpenAlgo only (for webhook setup)
   trade tunnel quick                # expose OpenAlgo to the internet
+  trade tunnel restart              # stop + fresh URL + verify it works
   trade webhooks tradingview        # show TradingView webhook URL + where to paste it
   trade status                      # is everything up?
   trade research RELIANCE
@@ -128,8 +130,9 @@ case "$cmd" in
     sub="${1:-}"
     shift || true
     case "$sub" in
-      quick)   exec "$ROOT/exposure/start.sh" quick "$@" ;;
-      named)   exec "$ROOT/exposure/start.sh" named "$@" ;;
+      quick)    exec "$ROOT/exposure/start.sh" quick "$@" ;;
+      restart)  exec "$ROOT/exposure/start.sh" restart "$@" ;;
+      named)    exec "$ROOT/exposure/start.sh" named "$@" ;;
       stop)    exec "$ROOT/exposure/start.sh" stop "$@" ;;
       status)  exec "$ROOT/exposure/start.sh" status "$@" ;;
       sync)    exec "$ROOT/exposure/start.sh" sync "$@" ;;
@@ -142,7 +145,7 @@ case "$cmd" in
         exec "$ROOT/exposure/start.sh" --help
         ;;
       *)
-        echo "Unknown tunnel command: $sub (try: quick, named, stop, status, sync, urls)" >&2
+        echo "Unknown tunnel command: $sub (try: quick, restart, named, stop, status, sync, urls)" >&2
         exit 1
         ;;
     esac

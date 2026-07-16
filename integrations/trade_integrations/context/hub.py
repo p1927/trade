@@ -19,6 +19,7 @@ _CACHE_MINUTES_ENV = "TRADINGAGENTS_RESEARCH_CACHE_MINUTES"
 _PREFETCH_ENV = "TRADINGAGENTS_RESEARCH_PREFETCH"
 _OPTIONS_CACHE_MINUTES_ENV = "TRADINGAGENTS_OPTIONS_CACHE_MINUTES"
 _OPTIONS_PREFETCH_ENV = "TRADINGAGENTS_OPTIONS_PREFETCH"
+_STOCK_PREFETCH_ENV = "TRADINGAGENTS_STOCK_PREFETCH"
 
 
 def get_hub_dir() -> Path:
@@ -344,3 +345,38 @@ def load_stock_research_json(ticker: str):
         implementation_steps=list(payload.get("implementation_steps") or []),
         stages=stages,
     )
+
+
+def load_stock_research_markdown(ticker: str) -> str | None:
+    """Load cached stock trade plan markdown when present."""
+    path = _stock_research_dir(ticker) / "latest.md"
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def is_stock_prefetch_enabled() -> bool:
+    raw = os.getenv(_STOCK_PREFETCH_ENV, "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def is_stock_cache_fresh(ticker: str) -> bool:
+    """Return True when cached stock plan is younger than company research TTL."""
+    return is_cache_fresh(ticker)
+
+
+def is_stock_research_eligible(ticker: str) -> bool:
+    """Stock trade plans apply to the same equity tickers as company research."""
+    return is_company_research_eligible(ticker, asset_type="stock")
+
+
+def prefetch_stock_research(ticker: str) -> bool:
+    """Warm the hub cache for stock trade plans when enabled."""
+    if not is_stock_prefetch_enabled():
+        return False
+    if not is_stock_research_eligible(ticker):
+        return False
+    from trade_integrations.tools.stock_research_tools import fetch_stock_research_report
+
+    fetch_stock_research_report(ticker)
+    return True

@@ -16,6 +16,7 @@ can deliver webhook alerts.
 
 Commands:
   quick                 Ephemeral trycloudflare.com tunnel (good for dev)
+  restart               Stop and start quick tunnel; print verified URL
   named                 Persistent tunnel on your Cloudflare domain
   stop                  Stop active tunnel
   status                Show tunnel and HOST_SERVER state
@@ -42,6 +43,9 @@ shift || true
 case "$cmd" in
   quick)
     exec "$ROOT/cloudflare/quick-tunnel.sh" "$@"
+    ;;
+  restart)
+    exec "$ROOT/cloudflare/restart-tunnel.sh" "$@"
     ;;
   named)
     exec "$ROOT/cloudflare/named/start.sh" "$@"

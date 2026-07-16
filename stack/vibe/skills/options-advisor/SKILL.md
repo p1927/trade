@@ -55,12 +55,13 @@ When the user asks what to trade, which strategy to pick, or wants scenarios wit
 1. Call OpenAlgo MCP **`get_options_trade_widget(ticker)`** (not just markdown).
 2. The tool persists a `trade_plan.widget` payload; Vibe chat renders it as a card with:
    - scenario tiles (agent assumptions + probability)
-   - mini payoff chart (gross + net)
+   - **interactive payoff chart** with adjustable strike sliders (OpenAlgo Strategy Builder component)
    - full charges (per-leg brokerage, STT, GST, round-trip)
    - recommended legs and alternatives
    - **Execute in OpenAlgo** button (user must confirm)
-3. Summarize in chat: why the **recommended** tier wins vs alternatives; mention earnings/corp-event signals when present.
-4. Use `refresh=true` when chain moved or user asks for fresh research.
+3. User may **drag strike sliders** in the widget, then type a follow-up (e.g. “what do you think?”). Their next chat message includes a hidden `[trade_widget_context]` block with **original vs adjusted legs** — compare your proposal to their edits and answer their question.
+4. Summarize in chat: why the **recommended** tier wins vs alternatives; mention earnings/corp-event signals when present.
+5. Use `refresh=true` when chain moved or user asks for fresh research.
 
 Do **not** only paste markdown when a widget would help — call `get_options_trade_widget` so the user can choose and execute.
 
@@ -88,7 +89,15 @@ With **`OPENALGO_PAPER_MODE=true`** (default in `setup_vibe.py`), executes route
 
 Never place live orders without clear user approval in chat.
 
-## Regenerate plan
+## User-adjusted legs in chat
+
+When the user message contains `[trade_widget_context] ... [/trade_widget_context]`:
+
+1. Read `original_legs` (your proposal) vs `user_adjusted_legs` (their widget edits) and `leg_changes`.
+2. Compare risk/reward: max profit/loss, breakevens, net debit, POP if you can estimate.
+3. Answer their natural-language question (e.g. “is this too wide?”, “what if spot drops?”) in light of **both** your original pick and their modification.
+4. Suggest keeping, tightening, or reverting specific strikes — do not ignore the context block.
+
 
 From the trade repo root:
 

@@ -1,0 +1,51 @@
+{
+  "version": "2026-07",
+  "notes": "Indian F&O statutory rates are exchange/government mandated (same across brokers). Broker-specific flat brokerage from published pricing pages.",
+  "sources": {
+    "groww": "https://groww.in/pricing — ₹20 flat per executed F&O order",
+    "indmoney": "https://www.indmoney.com/futures-and-options — ₹20 per executed order; https://knowyourbrokerage.in/indmoney/charges",
+    "zerodha": "https://zerodha.com/charges — ₹20 flat per executed F&O order",
+    "nse_options_statutory": "NSE circular / broker disclosure tables (STT Budget 2026 options sell 0.15% on premium)"
+  },
+  "statutory": {
+    "nse_options": {
+      "stt_sell_rate": 0.0015,
+      "stt_sell_note": "0.15% on premium turnover (sell side only), Budget 2026",
+      "exchange_rate": 0.0003503,
+      "exchange_note": "0.03503% of premium turnover (NSE options)",
+      "stamp_buy_rate": 0.00003,
+      "stamp_note": "0.003% on buy-side premium turnover",
+      "sebi_per_crore": 10,
+      "gst_rate": 0.18,
+      "gst_base": "brokerage + exchange + sebi (not STT/stamp)"
+    },
+    "nse_futures": {
+      "stt_sell_rate": 0.0005,
+      "exchange_rate": 0.0000173,
+      "stamp_buy_rate": 0.00002,
+      "sebi_per_crore": 10,
+      "gst_rate": 0.18
+    }
+  },
+  "brokers": {
+    "groww": {
+      "display_name": "Groww",
+      "fno_options_brokerage_inr": 20,
+      "fno_futures_brokerage_inr": 20,
+      "pricing_url": "https://groww.in/pricing"
+    },
+    "indmoney": {
+      "display_name": "INDmoney",
+      "fno_options_brokerage_inr": 20,
+      "fno_futures_brokerage_inr": 20,
+      "pricing_url": "https://www.indmoney.com/futures-and-options"
+    },
+    "zerodha": {
+      "display_name": "Zerodha",
+      "fno_options_brokerage_inr": 20,
+      "fno_futures_brokerage_inr": 20,
+      "pricing_url": "https://zerodha.com/charges"
+    }
+  },
+  "default_broker": "indmoney"
+}

@@ -60,13 +60,10 @@ stop_recorded_pids
 : >"$LOG_FILE"
 
 exposure_log "Starting quick tunnel -> $local_url"
-# Detach from parent shell (macOS has no setsid; trap HUP keeps tunnel alive after script exits)
-(
-  trap '' HUP
-  export TUNNEL_TRANSPORT_PROTOCOL="${TUNNEL_TRANSPORT_PROTOCOL:-http2}"
-  exec cloudflared tunnel --url "$local_url" >>"$LOG_FILE" 2>&1
-) </dev/null >/dev/null 2>&1 &
+TUNNEL_TRANSPORT_PROTOCOL="${TUNNEL_TRANSPORT_PROTOCOL:-http2}" \
+  nohup cloudflared tunnel --url "$local_url" >>"$LOG_FILE" 2>&1 &
 tunnel_pid=$!
+disown "$tunnel_pid" 2>/dev/null || true
 record_pid "cloudflare-quick" "$tunnel_pid"
 
 public_url="$(wait_for_tunnel_url "$LOG_FILE" 90 || true)"
@@ -84,10 +81,19 @@ if (( SYNC_HOST )); then
   update_host_server "$public_url"
 fi
 
-echo ""
-echo "Platform setup pages in OpenAlgo:"
-echo "  TradingView  -> /tradingview"
-echo "  GoCharting   -> /gocharting"
-echo "  Chartink     -> /chartink"
-echo ""
-echo "Stop tunnel: ./exposure/cloudflare/stop.sh"
+exposure_log "Waiting for tunnel to accept traffic..."
+if wait_for_tunnel_ready "$public_url" "$LOG_FILE" 90; then
+  exposure_ok "Tunnel reachable"
+elif [[ "${REQUIRE_READY:-0}" == "1" ]]; then
+  exposure_fail "Tunnel URL not reachable: $public_url"
+  echo "  Check log: $LOG_FILE" >&2
+  kill "$tunnel_pid" 2>/dev/null || true
+  exit 1
+else
+  exposure_warn "Tunnel URL not responding yet: $public_url"
+  echo "  cloudflared may still be connecting — check: $LOG_FILE" >&2
+fi
+
+print_tunnel_urls "$public_url"
+echo "Stop tunnel:    ./exposure/cloudflare/stop.sh"
+echo "Restart tunnel: ./exposure/cloudflare/restart-tunnel.sh"
