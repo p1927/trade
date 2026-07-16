@@ -97,7 +97,12 @@ cleanup() {
   fi
 }
 
-trap cleanup EXIT INT TERM
+# Disabled for --status / --daemon: those modes must not kill background services on exit.
+if (( STATUS_ONLY || DAEMON )); then
+  trap - EXIT INT TERM
+else
+  trap cleanup EXIT INT TERM
+fi
 
 load_env() {
   if [[ -f "$ROOT/.env" ]]; then
@@ -347,6 +352,16 @@ check_vibe_ready() {
   fi
 }
 
+probe_vibe_http() {
+  local api="${VIBE_BACKEND_PORT:-8899}"
+  local ui="${VIBE_FRONTEND_PORT:-5899}"
+  http_ok "http://127.0.0.1:${api}/" && http_ok "http://127.0.0.1:${ui}/"
+}
+
+daemon_vibe_running() {
+  probe_vibe_http
+}
+
 check_openalgo_mcp() {
   if [[ ! -x "$ROOT/scripts/run_openalgo_mcp.sh" ]]; then
     return 1
@@ -385,10 +400,15 @@ print_status() {
     fail "TradingAgents  not installed"
   fi
 
-  if (( READY_VIBE )); then
+  if probe_vibe_http; then
     local vibe_ui="${VIBE_FRONTEND_PORT:-5899}"
     local vibe_api="${VIBE_BACKEND_PORT:-8899}"
-    ok "Vibe Trading   Web UI http://localhost:${vibe_ui}  (API :${vibe_api})"
+    ok "Vibe Trading   Web UI http://localhost:${vibe_ui}  (API :${vibe_api}) — running"
+  elif (( READY_VIBE )); then
+    local vibe_ui="${VIBE_FRONTEND_PORT:-5899}"
+    local vibe_api="${VIBE_BACKEND_PORT:-8899}"
+    fail "Vibe Trading   installed but not running — use: trade start daemon"
+    warn "               (Web UI :${vibe_ui}, API :${vibe_api})"
   elif (( START_VIBE )); then
     fail "Vibe Trading   not ready (pip install -e vibetrading/ && ./scripts/ensure_vibe_frontend.sh)"
   fi
@@ -474,11 +494,21 @@ start_vibe_web() {
     return 1
   fi
 
+  if daemon_vibe_running; then
+    warn "Vibe stack already running on ports ${backend_port}/${frontend_port}"
+    warn "Open http://localhost:${frontend_port} — use 'trade restart' to restart background services"
+    exit 0
+  fi
+
   log "Launching Vibe Trading Web UI ..."
   log "  Chat UI:  http://localhost:${frontend_port}"
   log "  API:      http://localhost:${backend_port}"
   log "  OpenAlgo MCP is wired via ~/.vibe-trading/agent.json"
+  log "  Tip: for a persistent background stack use: trade start daemon"
   cd "$ROOT"
+  # OpenAlgo was started above; do not leave .stack.pids behind for `trade status` to kill later.
+  trap - EXIT INT TERM
+  rm -f "$PID_FILE"
   exec "$vibe_bin" dev \
     --port "$backend_port" \
     --frontend-port "$frontend_port" \
@@ -518,7 +548,11 @@ main() {
   print_status
 
   if (( STATUS_ONLY )); then
-    if (( READY_SEARXNG && READY_OPENALGO && READY_AGENTS && ( ! START_VIBE || READY_VIBE ) )); then
+    local vibe_ok=1
+    if (( START_VIBE )) && ! probe_vibe_http; then
+      vibe_ok=0
+    fi
+    if (( READY_SEARXNG && READY_OPENALGO && READY_AGENTS && ( ! START_VIBE || vibe_ok ) )); then
       exit 0
     fi
     exit 1

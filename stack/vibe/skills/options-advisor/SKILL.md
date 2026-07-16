@@ -119,6 +119,25 @@ With **`OPENALGO_PAPER_MODE=true`** (default in `setup_vibe.py`), executes route
 
 Never place live orders without clear user approval in chat.
 
+## Active intraday paper trading (autonomous)
+
+When the user starts autonomous paper trading, you are the sole trader until session close.
+
+- **Goal:** maximize **risk-adjusted** paper profit by session close.
+- **User is not in the loop** — no confirmation per order; `execute_auto_paper_basket` allowed.
+- **You decide research depth** each scheduler turn: light check, targeted refresh, or full research — based on market feedback, P&L delta, alerts, and lifecycle (see turn prompt `research_depth_hint`).
+- **Always** `record_auto_paper_decision` (ENTER/EXIT/HOLD/SKIP).
+- **Tools:** all options-advisor MCP tools + auto-paper tools (`start/stop_auto_paper_trading`, `get_auto_paper_market_feedback`, `get_auto_paper_status`, `execute_auto_paper_basket`, `record_auto_paper_decision`).
+- Near close: evaluate day P&L vs goal; flatten or hold as you judge best.
+
+Start: `start_auto_paper_trading(ticker, budget_inr=..., goal=...)`.
+
+**Stop (removes paper cron jobs):** `stop_auto_paper_trading` — agent or user. Also `POST /trade/auto-paper/stop` or `DELETE /scheduled-runs/auto-paper-agent-turn`.
+
+Options hub-refresh jobs (`options-plan-refresh`) are separate — only run if `OPTIONS_MONITOR_ENABLE_SCHEDULER=1` in `vibetrading/agent/.env`.
+
+**Never** live mode.
+
 ## Position review (open executed plans)
 
 When the user asks about an **open trade**, **position P&L**, whether the thesis still holds, or a **`thesis.broken`** / superseding widget event:
@@ -176,6 +195,12 @@ The options plan **reads hub signals** (`earnings_signal`, `corp_events`) into e
 | `place_basket_order` | Multi-leg execution after confirm |
 | `get_plan_position_status` | **Open position review** — ledger + matched positions + thesis-break (monitor-gated) |
 | `run_tradingagents_analysis` | **Multi-agent debate** on finalize — bull/bear/risk, saved to hub |
+| `start_auto_paper_trading` | **Start active intraday paper session** (agent-driven) |
+| `stop_auto_paper_trading` | Stop paper session |
+| `get_auto_paper_market_feedback` | **Every turn** — market changes, alerts, deltas |
+| `get_auto_paper_status` | Session P&L, positions, funds, decisions |
+| `execute_auto_paper_basket` | Enter paper trade from widget after research |
+| `record_auto_paper_decision` | Log ENTER/EXIT/HOLD/SKIP each turn |
 
 ## Research side panel
 

@@ -90,18 +90,30 @@ stack_sync_pidfile_from_port() {
   fi
 }
 
+stack_service_up() {
+  local port="$1"
+  stack_http_ok "http://127.0.0.1:${port}/"
+}
+
 # Start a detached process; writes the child PID to pidfile.
 stack_launch_detached() {
   local pidfile="$1" logfile="$2" workdir="$3"
   shift 3
+  local expect_port="${STACK_LAUNCH_EXPECT_PORT:-}"
 
   mkdir -p "$(dirname "$pidfile")" "$(dirname "$logfile")"
 
   local existing
   existing="$(stack_read_pid "$pidfile")"
   if stack_pid_alive "$existing"; then
-    echo "[stack] already running (pid $existing)"
-    return 0
+    if [[ -z "$expect_port" ]] || stack_service_up "$expect_port"; then
+      echo "[stack] already running (pid $existing)"
+      return 0
+    fi
+    echo "[stack] pid $existing alive but :${expect_port} down — replacing ..."
+    kill "$existing" 2>/dev/null || true
+    sleep 0.5
+    stack_pid_alive "$existing" && kill -9 "$existing" 2>/dev/null || true
   fi
 
   : >>"$logfile"
@@ -119,10 +131,18 @@ stack_launch_detached() {
   if stack_pid_alive "$existing"; then
     return 0
   fi
+  if [[ -n "$expect_port" ]]; then
+    local listener
+    listener="$(stack_port_listener_pid "$expect_port")"
+    if [[ -n "$listener" ]]; then
+      echo "$listener" >"$pidfile"
+      return 0
+    fi
+  fi
 
-  # uv run / vite may fork; parent exits while the listener keeps running.
-  # Caller validates with stack_wait_for_url + stack_sync_pidfile_from_port.
-  return 0
+  echo "[stack] failed to start in $workdir: $*" >&2
+  tail -8 "$logfile" 2>/dev/null >&2 || true
+  return 1
 }
 
 stack_stop_pidfile() {
@@ -144,8 +164,8 @@ stack_stop_pidfile() {
   fi
   rm -f "$pidfile"
 
-  # Only pattern-kill when pidfile was stale but matching processes remain.
-  if [[ -n "$pkill_pattern" && "$stopped" -eq 0 ]]; then
+  # Also stop stray listeners when pidfile was stale or parent forked.
+  if [[ -n "$pkill_pattern" ]]; then
     if pgrep -f "$pkill_pattern" >/dev/null 2>&1; then
       echo "[stack] stopping stray $name processes ..."
       pkill -f "$pkill_pattern" 2>/dev/null || true
@@ -200,6 +220,7 @@ stack_start_openalgo() {
   stack_kill_port 8765
 
   echo "[stack] starting OpenAlgo on :$port ..."
+  STACK_LAUNCH_EXPECT_PORT="$port"
   if [[ -x "$root/openalgo/.venv/bin/python" ]]; then
     stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" \
       "$root/openalgo/.venv/bin/python" app.py
@@ -208,6 +229,7 @@ stack_start_openalgo() {
     # shellcheck disable=SC2086
     stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" bash -lc "exec $runner"
   fi
+  unset STACK_LAUNCH_EXPECT_PORT
   stack_wait_for_url "OpenAlgo" "$base/" 90
   stack_sync_pidfile_from_port "$pidfile" "$port"
 }
@@ -224,6 +246,7 @@ stack_start_vibe_api() {
   agent_dir="$root/vibetrading/agent"
 
   if stack_http_ok "$base/"; then
+    stack_sync_pidfile_from_port "$pidfile" "$port"
     echo "[stack] Vibe API already up at $base"
     return 0
   fi
@@ -236,9 +259,11 @@ stack_start_vibe_api() {
   fi
 
   echo "[stack] starting Vibe API on :$port ..."
+  STACK_LAUNCH_EXPECT_PORT="$port"
   stack_launch_detached \
     "$pidfile" "$logfile" "$agent_dir" \
     "$py" -m cli._legacy serve --port "$port"
+  unset STACK_LAUNCH_EXPECT_PORT
   stack_wait_for_url "Vibe API" "$base/" 60
   stack_sync_pidfile_from_port "$pidfile" "$port"
 }
@@ -254,6 +279,7 @@ stack_start_vibe_ui() {
   url="http://127.0.0.1:$port"
 
   if stack_http_ok "$url/"; then
+    stack_sync_pidfile_from_port "$pidfile" "$port"
     echo "[stack] Vibe UI already up at $url"
     return 0
   fi
@@ -270,9 +296,11 @@ stack_start_vibe_ui() {
   fi
 
   echo "[stack] starting Vibe UI (Vite) on :$port ..."
+  STACK_LAUNCH_EXPECT_PORT="$port"
   stack_launch_detached \
     "$pidfile" "$logfile" "$frontend" \
     "$frontend/node_modules/.bin/vite" --port "$port" --host 127.0.0.1
+  unset STACK_LAUNCH_EXPECT_PORT
   stack_wait_for_url "Vibe UI" "$url/" 60
   stack_sync_pidfile_from_port "$pidfile" "$port"
 }
@@ -314,9 +342,7 @@ stack_stop_vibe_stack() {
 }
 
 stack_start_vibe_stack() {
-  stack_start_openalgo
-  stack_start_vibe_api
-  stack_start_vibe_ui
+  stack_ensure_vibe_stack
 }
 
 # Start only services that are down (no full stop — avoids killing healthy processes).
@@ -363,22 +389,24 @@ stack_status_vibe_stack() {
     port="${svc#*:}"; port="${port%%:*}"
     pidfile="${svc##*:}"
     pid="$(stack_read_pid "$pidfile")"
-    http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 3 "http://127.0.0.1:${port}/" 2>/dev/null || echo "---")"
+    http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 5 "http://127.0.0.1:${port}/" 2>/dev/null || true)"
+    if [[ -z "$http_code" ]]; then
+      http_code="000"
+    fi
     local listener
     listener="$(stack_port_listener_pid "$port")"
     if [[ -n "$listener" ]] && kill -0 "$listener" 2>/dev/null; then
       alive="alive"
-      if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-        pid="$listener"
-      fi
+      pid="$listener"
+      stack_sync_pidfile_from_port "$pidfile" "$port"
     elif stack_pid_alive "$pid"; then
       alive="alive"
     fi
 
     if [[ "$http_code" == "200" ]]; then
       echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid:-?} ($alive)"
-    elif stack_pid_alive "$pid"; then
-      echo "  ⚠ $name  :$port  HTTP $http_code  pid=${pid:-?} (alive, not ready)"
+    elif [[ -n "$listener" ]] && stack_pid_alive "$listener"; then
+      echo "  ⚠ $name  :$port  HTTP $http_code  pid=${listener} (alive, not ready)"
       ok=0
     else
       echo "  ✗ $name  :$port  HTTP $http_code  pid=${pid:-none} ($alive)"
@@ -388,7 +416,8 @@ stack_status_vibe_stack() {
 
   echo "══════════════════════════════════════════════════════════"
   if (( ok )); then return 0; fi
-  echo "  Restart: ./scripts/restart_vibe_stack.sh  (or: trade restart)"
+  echo "  Fix: trade restart   (starts only what's down)"
+  echo "  Full reset: trade restart --force"
   echo "══════════════════════════════════════════════════════════"
   return 1
 }
