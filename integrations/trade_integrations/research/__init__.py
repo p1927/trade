@@ -9,7 +9,7 @@ from trade_integrations.research.registry import (
     get_contract,
     resolve_kind_for_ticker,
 )
-from trade_integrations.research.orchestrator import ResearchResult, ensure_research_complete
+from trade_integrations.research.orchestrator import ResearchResult, ensure_research_complete, get_research_status
 
 __all__ = [
     "ResearchKind",
@@ -20,5 +20,6 @@ __all__ = [
     "eligible_kinds_for_ticker",
     "ensure_research_complete",
     "get_contract",
+    "get_research_status",
     "resolve_kind_for_ticker",
 ]

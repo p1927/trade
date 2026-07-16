@@ -143,7 +143,11 @@ def build_stock_trade_widget_from_doc(
         "market": doc.market,
         "as_of": doc.as_of.isoformat(),
         "spot": doc.spot,
-        "plan_status": "ready",
+        "plan_status": (
+            "ready"
+            if (doc.recommended and doc.payoff and doc.charges and (doc.prediction or {}).get("provenance"))
+            else "partial"
+        ),
         "prediction": doc.prediction or {},
         "events": doc.events[:12],
         "scenarios": doc.scenarios[:6],

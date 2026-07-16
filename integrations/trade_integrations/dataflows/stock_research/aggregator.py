@@ -147,6 +147,12 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
         exit_charges = float(doc.charges.get("exit_charges") or 0)
         target_px = top.get("target") or merged_prediction.get("target")
         stop_px = top.get("stop") or merged_prediction.get("stop")
+        if str(top.get("action", "BUY")).upper() == "BUY" and spot > 0:
+            rng = merged_prediction.get("range") or {}
+            if target_px is None or float(target_px) <= spot:
+                target_px = rng.get("high") or top.get("target")
+            if stop_px is None or float(stop_px) >= spot:
+                stop_px = rng.get("low") or top.get("stop")
         doc.payoff = build_stock_payoff(
             spot,
             int(top.get("quantity", 1)),

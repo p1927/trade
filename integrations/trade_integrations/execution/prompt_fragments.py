@@ -44,11 +44,12 @@ Note: US options pipeline is limited — prefer equity until full US options sup
 Do **not** use `get_auto_paper_market_feedback` for watch alerts — Nautilus bridge owns watch for India agents.""",
     "in_equity_paper": """## Required flow (India equity — Nautilus watch → OpenAlgo execution)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
-2. `get_stock_trade_widget` / `get_stock_trade_plan` for NSE equity
-3. Refine thesis; state confidence 0–100
-4. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — bridge → OpenAlgo only
-5. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})`
-6. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP""",
+2. `get_research_status(ticker, asset_type="stock")` — verify stages complete; if debate_pending, wait or run `run_tradingagents_analysis`
+3. `get_stock_trade_widget` / `get_stock_trade_plan` for NSE equity — cite prediction range and provenance in chat
+4. Refine thesis; state confidence 0–100
+5. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — bridge → OpenAlgo only
+6. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})`
+7. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP""",
     "in_options_live": """## Required flow (live)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. Hub research + `get_options_trade_widget`; ensure OpenAlgo analyzer is OFF for live broker path

@@ -279,7 +279,7 @@ def categorize_miss(
                     supporting += 1
             if supporting >= 2:
                 return "regime_flip"
-            return "missing_bottom_up" if scope == "macro_only" else "regime_flip"
+            return "missing_bottom_up"
 
     pred_sign = predicted_return_pct >= 0
     actual_sign = actual_return_pct >= 0

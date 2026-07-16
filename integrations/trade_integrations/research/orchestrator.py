@@ -245,3 +245,47 @@ def ensure_research_complete(
         missing=missing,
         debate_pending=debate_pending,
     )
+
+
+def get_research_status(
+    ticker: str,
+    *,
+    kind: ResearchKind | str | None = None,
+) -> dict[str, Any]:
+    """Expose stage checklist for agent/UI without building a widget."""
+    from trade_integrations.research.registry import resolve_kind_for_ticker
+
+    if kind is not None:
+        resolved = ResearchKind(kind) if isinstance(kind, str) else kind
+    else:
+        resolved = resolve_kind_for_ticker(ticker)
+    if resolved is None:
+        return {"ticker": ticker, "status": "ineligible", "kinds": []}
+
+    contract = get_contract(resolved)
+    sym = ticker.strip().upper().replace(".NS", "").replace(".BO", "")
+    result = ensure_research_complete(
+        sym,
+        kind=resolved,
+        refresh=False,
+        require_debate=False,
+    )
+    stages = [
+        {
+            "id": s.id,
+            "required": s.required,
+            "producer": s.producer,
+            "complete": s.id in result.stages_run
+            or (s.id == "agent_debate" and not result.debate_pending),
+        }
+        for s in contract.stages
+    ]
+    return {
+        "ticker": sym,
+        "kind": resolved.value,
+        "status": result.status,
+        "stages": stages,
+        "missing_fields": result.missing,
+        "debate_pending": result.debate_pending,
+        "error": result.error,
+    }

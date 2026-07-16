@@ -46,12 +46,33 @@ def _index_presentable(widget: dict[str, Any]) -> bool:
     )
 
 
+def _finite(val: Any) -> bool:
+    try:
+        return val is not None and float(val) == float(val)
+    except (TypeError, ValueError):
+        return False
+
+
 def _stock_presentable(widget: dict[str, Any]) -> bool:
     if widget.get("plan_status") != "ready":
         return False
-    steps = widget.get("implementation_steps") or []
     rec = widget.get("recommended") or {}
-    return bool(steps or rec.get("action") or rec.get("side"))
+    pred = widget.get("prediction") or {}
+    rng = pred.get("range") or {}
+    charges = widget.get("charges") or {}
+    if not _finite(rng.get("low")) or not _finite(rng.get("high")):
+        return False
+    if not pred.get("provenance"):
+        return False
+    if not _finite(rec.get("max_profit")) and not _finite(rec.get("net_max_profit")):
+        return False
+    if not _finite(rec.get("max_loss")) and not _finite(rec.get("net_max_loss")):
+        return False
+    if not _finite(charges.get("round_trip_charges")):
+        return False
+    if not (charges.get("per_leg") or []):
+        return False
+    return bool(rec.get("action") or rec.get("legs"))
 
 
 def is_widget_presentable(widget: dict[str, Any], intent: str) -> bool:

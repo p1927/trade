@@ -173,3 +173,26 @@ def merge_stock_prediction(
             "expected_return_pct": d_ret,
         },
     }
+
+
+def merge_index_prediction(
+    debate: dict[str, Any] | None,
+    index_doc_prediction: dict[str, Any],
+) -> dict[str, Any]:
+    """Reconcile index predictor with debate direction when debate present."""
+    d = debate or {}
+    base = dict(index_doc_prediction or {})
+    if not d:
+        return base
+    if d.get("view"):
+        base["view"] = d["view"]
+    prov = dict(base.get("provenance") or {})
+    prov["direction"] = "debate"
+    prov["debate_as_of"] = d.get("debate_as_of")
+    base["provenance"] = prov
+    if d.get("direction_confidence") is not None:
+        base["confidence"] = min(
+            float(base.get("confidence") or 1.0),
+            float(d["direction_confidence"]),
+        )
+    return base
