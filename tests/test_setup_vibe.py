@@ -30,9 +30,10 @@ class TestSetupVibe:
         payload = render_agent_json()
         assert "openalgo" in payload["mcpServers"]
         server = payload["mcpServers"]["openalgo"]
-        assert server["args"][1] == "test-key-123"
-        assert server["args"][2] == "http://127.0.0.1:5001"
-        assert str(openalgo_mcp) in server["args"][0] or openalgo_mcp.name in server["args"][0]
+        assert server["args"][0] == "test-key-123"
+        assert server["args"][1] == "http://127.0.0.1:5001"
+        wrapper = root / "scripts" / "run_openalgo_mcp.sh"
+        assert server["command"] == str(wrapper.resolve())
 
     def test_sync_writes_agent_json(self, monkeypatch, tmp_path):
         root = Path(__file__).resolve().parents[1]

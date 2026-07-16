@@ -43,3 +43,36 @@ def build_browse_summary(chain_snapshot: dict[str, Any]) -> dict[str, Any]:
         "source": chain_snapshot.get("source"),
         "top_strikes": top_strikes,
     }
+
+
+def format_browse_markdown(summary: dict[str, Any]) -> str:
+    """Agent-facing markdown table for in-chat options browse."""
+    if not summary:
+        return "_No options chain data available._"
+    lines = [
+        f"## Options browse — {summary.get('underlying') or '—'}",
+        "",
+        f"- **Spot:** {summary.get('spot', '—')} | **ATM:** {summary.get('atm_strike', '—')} | "
+        f"**PCR:** {summary.get('pcr', '—')} | **Expiry:** {summary.get('expiry', '—')}",
+    ]
+    expiries = summary.get("expiries") or []
+    if expiries:
+        lines.append(f"- **Expiries:** {', '.join(str(e) for e in expiries[:6])}")
+    top = summary.get("top_strikes") or []
+    if top:
+        lines.extend(
+            [
+                "",
+                "| Strike | CE LTP | PE LTP | CE OI | PE OI | CE IV | PE IV |",
+                "|--------|--------|--------|-------|-------|-------|-------|",
+            ]
+        )
+        for row in top[:8]:
+            lines.append(
+                f"| {row.get('strike', '—')} | {row.get('ce_ltp', '—')} | {row.get('pe_ltp', '—')} | "
+                f"{row.get('ce_oi', '—')} | {row.get('pe_oi', '—')} | "
+                f"{row.get('ce_iv', '—')} | {row.get('pe_iv', '—')} |"
+            )
+    else:
+        lines.append("\n_No strikes in browse window._")
+    return "\n".join(lines)

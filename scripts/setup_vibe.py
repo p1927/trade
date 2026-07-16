@@ -61,17 +61,41 @@ def hub_dir() -> Path:
     return (ROOT / "reports" / "hub").resolve()
 
 
-def resolve_openalgo_mcp_python() -> Path:
-    """Prefer the trade stack venv; fall back to openalgo's venv or current interpreter."""
-    openalgo_dir = ROOT / "openalgo"
-    candidates = [
-        ROOT / ".venv" / "bin" / "python",
-        openalgo_dir / ".venv" / "bin" / "python",
-    ]
-    for path in candidates:
-        if path.is_file():
-            return path.resolve()
-    return Path(sys.executable).resolve()
+def openalgo_mcp_wrapper() -> Path:
+    """Return the stdio wrapper that launches mcpserver from openalgo/.venv."""
+    return (ROOT / "scripts" / "run_openalgo_mcp.sh").resolve()
+
+
+def verify_openalgo_mcp() -> tuple[bool, str]:
+    """Check that OpenAlgo MCP can import its SDK from openalgo/.venv."""
+    wrapper = openalgo_mcp_wrapper()
+    if not wrapper.is_file():
+        return False, f"Missing {wrapper.relative_to(ROOT)}"
+    py = ROOT / "openalgo" / ".venv" / "bin" / "python"
+    if not py.is_file():
+        return (
+            False,
+            "Missing openalgo/.venv — run: cd openalgo && python3 -m venv .venv "
+            "&& .venv/bin/pip install -r requirements.txt",
+        )
+    probe = (
+        "import sys; sys.path.insert(0, '.'); "
+        "from openalgo import api, ta; "
+        "import pandas; import mcp"
+    )
+    import subprocess
+
+    result = subprocess.run(
+        [str(py), "-c", probe],
+        cwd=ROOT / "openalgo",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "import failed").strip().splitlines()[-1]
+        return False, f"OpenAlgo MCP import check failed: {detail}"
+    return True, "ok"
 
 
 def _redact_agent_json(payload: dict) -> dict:
@@ -96,8 +120,7 @@ def render_agent_json() -> dict:
         )
     template = TEMPLATE.read_text(encoding="utf-8")
     rendered = (
-        template.replace("{{OPENALGO_MCP_PYTHON}}", str(resolve_openalgo_mcp_python()))
-        .replace("{{OPENALGO_MCP_SERVER}}", str((ROOT / "openalgo" / "mcp" / "mcpserver.py").resolve()))
+        template.replace("{{OPENALGO_MCP_WRAPPER}}", str(openalgo_mcp_wrapper()))
         .replace("{{OPENALGO_API_KEY}}", api_key or "REPLACE_ME")
         .replace("{{OPENALGO_HOST}}", host)
     )
@@ -194,6 +217,12 @@ def sync_vibe_env(dry_run: bool = False, force: bool = False) -> Path | None:
     lines.append(f"VIBE_TRADING_ALLOWED_FILE_ROOTS={','.join(allowed)}")
     lines.append(f"TRADE_STACK_HUB_DIR={hub}")
 
+    openalgo_host = (os.getenv("OPENALGO_HOST") or "http://127.0.0.1:5001").rstrip("/")
+    openalgo_key = os.getenv("OPENALGO_API_KEY", "").strip()
+    lines.append(f"OPENALGO_HOST={openalgo_host}")
+    if openalgo_key:
+        lines.append(f"OPENALGO_API_KEY={openalgo_key}")
+
     if dry_run:
         print("\n".join(lines))
         return target
@@ -207,9 +236,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Configure Vibe Trading for the trade stack")
     parser.add_argument("--dry-run", action="store_true", help="Print config without writing")
     parser.add_argument("--force-env", action="store_true", help="Overwrite ~/.vibe-trading/.env")
+    parser.add_argument("--verify", action="store_true", help="Verify OpenAlgo MCP imports and exit")
     args = parser.parse_args()
 
     _load_trade_env()
+
+    if args.verify:
+        ok, message = verify_openalgo_mcp()
+        if ok:
+            print("OpenAlgo MCP: ok")
+            return 0
+        print(f"OpenAlgo MCP: {message}", file=sys.stderr)
+        return 1
 
     agent_path = sync_agent_json(dry_run=args.dry_run)
     skill_paths = sync_skills(dry_run=args.dry_run)
@@ -225,6 +263,12 @@ def main() -> int:
         print(f"Wrote {env_path}")
     else:
         print(f"Kept existing {vibe_home() / '.env'} (use --force-env to replace)")
+
+    ok, message = verify_openalgo_mcp()
+    if ok:
+        print("OpenAlgo MCP: ok")
+    else:
+        print(f"Warning: OpenAlgo MCP not ready — {message}", file=sys.stderr)
     return 0
 
 

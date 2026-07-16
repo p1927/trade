@@ -47,6 +47,10 @@ def fetch_analytics_qfin(chain_snapshot: dict[str, Any]) -> StageResult:
     """Compute expected move, skew, and tail metrics via qfinindia when available."""
     now = _stage_now()
     try:
+        import numpy as np
+
+        if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
+            np.trapz = np.trapezoid  # numpy 2.x compat for qfinindia
         from qfinindia import Analytics, OptionChain
     except ImportError:
         return StageResult(

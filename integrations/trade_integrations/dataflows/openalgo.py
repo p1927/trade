@@ -149,6 +149,22 @@ def _fetch_live_quote(oa_symbol: str, exchange: str) -> dict | None:
         return None
 
 
+def fetch_openalgo_quote(symbol: str) -> dict | None:
+    """Fetch a single live quote for an equity or index symbol."""
+    oa_symbol, exchange = resolve_openalgo_symbol(symbol)
+    data = _fetch_live_quote(oa_symbol, exchange)
+    if not data:
+        return None
+    return {
+        "ltp": data.get("ltp") or data.get("last_price"),
+        "volume": data.get("volume"),
+        "change_pct": data.get("change_percent") or data.get("change_pct"),
+        "high_52w": data.get("high_52w"),
+        "low_52w": data.get("low_52w"),
+        "source": "openalgo",
+    }
+
+
 def normalize_openalgo_expiry(expiry: str) -> str:
     """Convert OpenAlgo expiry (DD-MMM-YY or DDMMMYY) to DDMMMYY for optionchain."""
     raw = expiry.strip().upper().replace("-", "")

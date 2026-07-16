@@ -336,8 +336,22 @@ check_openalgo() {
 
 check_vibe_ready() {
   if [[ -d "$VIBE_DIR" ]] && [[ -x "$ROOT/.venv/bin/vibe-trading" ]]; then
-    READY_VIBE=1
+    local frontend
+    frontend="$(vibe_frontend_dir)"
+    if [[ -f "$frontend/package.json" && -x "$frontend/node_modules/.bin/vite" ]]; then
+      READY_VIBE=1
+    fi
   fi
+}
+
+check_openalgo_mcp() {
+  if [[ ! -x "$ROOT/scripts/run_openalgo_mcp.sh" ]]; then
+    return 1
+  fi
+  if [[ ! -x "$OPENALGO_DIR/.venv/bin/python" ]]; then
+    return 1
+  fi
+  (cd "$OPENALGO_DIR" && "$OPENALGO_DIR/.venv/bin/python" -c "from openalgo import api" >/dev/null 2>&1)
 }
 
 print_status() {
@@ -373,11 +387,17 @@ print_status() {
     local vibe_api="${VIBE_BACKEND_PORT:-8899}"
     ok "Vibe Trading   Web UI http://localhost:${vibe_ui}  (API :${vibe_api})"
   elif (( START_VIBE )); then
-    fail "Vibe Trading   not installed (pip install -e vibetrading/)"
+    fail "Vibe Trading   not ready (pip install -e vibetrading/ && ./scripts/ensure_vibe_frontend.sh)"
   fi
 
   if [[ -n "${OPENALGO_API_KEY:-}" ]]; then
     ok "OpenAlgo API   key configured (live Indian data enabled)"
+    if check_openalgo_mcp; then
+      ok "OpenAlgo MCP   wired for Vibe agent (options chain, orders)"
+    else
+      warn "OpenAlgo MCP   not ready — run: cd openalgo && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+      warn "               then: python scripts/setup_vibe.py"
+    fi
   else
     warn "OpenAlgo API   OPENALGO_API_KEY not set — prices fall back to yfinance"
   fi

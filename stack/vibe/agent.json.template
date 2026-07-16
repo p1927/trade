@@ -1,9 +1,8 @@
 {
   "mcpServers": {
     "openalgo": {
-      "command": "{{OPENALGO_MCP_PYTHON}}",
+      "command": "{{OPENALGO_MCP_WRAPPER}}",
       "args": [
-        "{{OPENALGO_MCP_SERVER}}",
         "{{OPENALGO_API_KEY}}",
         "{{OPENALGO_HOST}}"
       ],

@@ -60,10 +60,13 @@ stop_recorded_pids
 : >"$LOG_FILE"
 
 exposure_log "Starting quick tunnel -> $local_url"
-TUNNEL_TRANSPORT_PROTOCOL="${TUNNEL_TRANSPORT_PROTOCOL:-http2}" \
-  nohup cloudflared tunnel --url "$local_url" >>"$LOG_FILE" 2>&1 &
+# Detach from parent shell (macOS has no setsid; trap HUP keeps tunnel alive after script exits)
+(
+  trap '' HUP
+  export TUNNEL_TRANSPORT_PROTOCOL="${TUNNEL_TRANSPORT_PROTOCOL:-http2}"
+  exec cloudflared tunnel --url "$local_url" >>"$LOG_FILE" 2>&1
+) </dev/null >/dev/null 2>&1 &
 tunnel_pid=$!
-disown "$tunnel_pid" 2>/dev/null || true
 record_pid "cloudflare-quick" "$tunnel_pid"
 
 public_url="$(wait_for_tunnel_url "$LOG_FILE" 90 || true)"

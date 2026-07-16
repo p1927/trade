@@ -279,3 +279,68 @@ def prefetch_options_research(ticker: str) -> bool:
 
     fetch_options_research_report(ticker)
     return True
+
+
+def _stock_research_dir(ticker: str) -> Path:
+    return get_hub_dir() / _ticker_key(ticker) / "stock_research"
+
+
+def save_stock_research(doc) -> Path:
+    """Write latest stock trade plan under the shared hub."""
+    from dataclasses import asdict
+
+    from trade_integrations.dataflows.stock_research.format import format_stock_report
+
+    out_dir = _stock_research_dir(doc.ticker)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "latest.md").write_text(format_stock_report(doc), encoding="utf-8")
+    payload = asdict(doc)
+    payload["as_of"] = doc.as_of.isoformat()
+    payload["stages"] = [
+        {**asdict(stage), "fetched_at": stage.fetched_at.isoformat()} for stage in doc.stages
+    ]
+    json_path = out_dir / "latest.json"
+    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return json_path
+
+
+def load_stock_research_json(ticker: str):
+    """Load cached stock trade plan JSON when present."""
+    from trade_integrations.dataflows.stock_research.models import StockResearchDoc
+
+    path = _stock_research_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    from trade_integrations.dataflows.company_research.models import StageResult
+
+    stages = [
+        StageResult(
+            stage=s["stage"],
+            status=s["status"],
+            vendor=s["vendor"],
+            fetched_at=datetime.fromisoformat(s["fetched_at"]),
+            data=s.get("data") or {},
+            errors=list(s.get("errors") or []),
+        )
+        for s in payload.get("stages") or []
+    ]
+    return StockResearchDoc(
+        ticker=payload["ticker"],
+        as_of=datetime.fromisoformat(payload["as_of"]),
+        lookahead_days=int(payload.get("lookahead_days") or 14),
+        market=payload.get("market", "IN"),
+        spot=payload.get("spot"),
+        meta=dict(payload.get("meta") or {}),
+        browse_summary=dict(payload.get("browse_summary") or {}),
+        prediction=dict(payload.get("prediction") or {}),
+        events=list(payload.get("events") or []),
+        scenarios=list(payload.get("scenarios") or []),
+        ranked_strategies=list(payload.get("ranked_strategies") or []),
+        recommended=dict(payload.get("recommended") or {}),
+        payoff=dict(payload.get("payoff") or {}),
+        payoff_over_time=dict(payload.get("payoff_over_time") or {}),
+        charges=dict(payload.get("charges") or {}),
+        implementation_steps=list(payload.get("implementation_steps") or []),
+        stages=stages,
+    )

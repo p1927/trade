@@ -48,6 +48,22 @@ From the JSON, explain:
 - `recommended` (legs, rationale, gross + **net** payoff, charges, `net_debit_credit`)
 - `payoff_over_time.samples` — P&L at different days-to-expiry (theta decay at current spot)
 
+### Step 2b — Show interactive trade widget (preferred for strategy questions)
+
+When the user asks what to trade, which strategy to pick, or wants scenarios with payoff/charges:
+
+1. Call OpenAlgo MCP **`get_options_trade_widget(ticker)`** (not just markdown).
+2. The tool persists a `trade_plan.widget` payload; Vibe chat renders it as a card with:
+   - scenario tiles (agent assumptions + probability)
+   - mini payoff chart (gross + net)
+   - full charges (per-leg brokerage, STT, GST, round-trip)
+   - recommended legs and alternatives
+   - **Execute in OpenAlgo** button (user must confirm)
+3. Summarize in chat: why the **recommended** tier wins vs alternatives; mention earnings/corp-event signals when present.
+4. Use `refresh=true` when chain moved or user asks for fresh research.
+
+Do **not** only paste markdown when a widget would help — call `get_options_trade_widget` so the user can choose and execute.
+
 ### Step 3 — Validate live
 
 - `get_strategy_payoff` and `get_trade_charges` on recommended legs
@@ -62,7 +78,9 @@ Link Strategy Builder (user must be logged into OpenAlgo):
 
 ### Step 5 — Execute only after explicit user confirmation
 
-Follow `implementation_steps` in order:
+**Preferred:** user clicks **Execute in OpenAlgo** on the trade widget (Vibe proxies `POST /trade/execute-basket`).
+
+**Fallback:** follow `implementation_steps` in order:
 - Step 2: `calculate_margin` with step payload
 - Step 4: `place_basket_order` with step payload (BUY legs first if splitting manually)
 
@@ -94,6 +112,7 @@ The options plan **reads hub signals** (`earnings_signal`, `corp_events`) into e
 |------|-----|
 | `get_options_browse` | **Browse in chat** — compact chain table (expiries, ATM, top strikes) |
 | `get_options_trade_plan` | **Load/generate** full trade plan from hub (prediction, ranks, legs, charges) |
+| `get_options_trade_widget` | **Vibe chat widget** — scenarios, payoff samples, charges, execute steps |
 | `get_option_chain` | Full live chain JSON when browse needs more strikes |
 | `get_strategy_payoff` | Expiry P&L curve, breakevens, PoP, net P&L |
 | `get_trade_charges` | Brokerage, STT, GST, stamp, exchange, net_debit_credit |
