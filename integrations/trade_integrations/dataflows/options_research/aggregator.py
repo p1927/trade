@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from .browse_summary import build_browse_summary
 from .candidate_generator import generate_candidates
 from .config import get_options_config
 from .market import InstrumentType, resolve_options_instrument
@@ -91,6 +92,7 @@ def run_options_research(
         strike_count=config.strike_count,
     )
     _apply_stage(doc, chain_result)
+    doc.browse_summary = build_browse_summary(doc.chain_snapshot)
 
     if instrument.instrument_type == InstrumentType.STOCK:
         _apply_stage(doc, fetch_events_stock(instrument, lookahead_days=days))
@@ -100,6 +102,9 @@ def run_options_research(
     analytics_result = fetch_analytics_qfin(doc.chain_snapshot)
     _apply_stage(doc, analytics_result)
     if analytics_result.status in ("skipped", "error"):
+        reason = (analytics_result.data or {}).get("reason", "")
+        if "qfinindia" in reason.lower():
+            doc.prediction["analytics_hint"] = "pip install -e '.[options]' for qfinindia analytics"
         fallback = simple_analytics_fallback(doc.chain_snapshot)
         doc.prediction.update(fallback)
 
@@ -177,13 +182,19 @@ def run_options_research(
             "breakevens": top.get("breakevens"),
         }
         doc.payoff = top.get("payoff") or {}
+        doc.payoff_over_time = top.get("payoff_over_time") or {}
         doc.charges = top.get("charges") or {}
         doc.implementation_steps = build_implementation_steps(
             doc.recommended,
             options_exchange=instrument.options_exchange,
         )
-        doc.meta["strategy_builder_url"] = (
-            f"http://127.0.0.1:5000/strategybuilder?plan={instrument.display_symbol}"
+        sym = instrument.display_symbol
+        doc.meta["strategy_builder_url"] = f"http://127.0.0.1:5000/strategybuilder?plan={sym}"
+        doc.meta["strategy_builder_pnl_url"] = (
+            f"http://127.0.0.1:5000/strategybuilder?plan={sym}&tab=pnl"
+        )
+        doc.meta["strategy_builder_execute_url"] = (
+            f"http://127.0.0.1:5000/strategybuilder?plan={sym}&execute=1"
         )
 
     doc.stages.append(

@@ -110,6 +110,7 @@ def rank_strategies(
                 "max_loss": max_loss,
                 "breakevens": metrics.get("breakevens"),
                 "payoff": metrics.get("payoff"),
+                "payoff_over_time": metrics.get("payoff_over_time"),
                 "charges": metrics.get("charges"),
                 "event_fit": round(event_fit, 3),
                 "net_debit_credit": metrics.get("net_debit_credit"),

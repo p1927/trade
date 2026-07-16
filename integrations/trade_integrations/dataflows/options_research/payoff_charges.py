@@ -258,6 +258,104 @@ def calculate_charges(
     }
 
 
+def calculate_exit_charges(
+    legs: list[dict[str, Any]],
+    *,
+    spot: float,
+) -> dict[str, Any]:
+    """STT/exchange on short legs at expiry (intrinsic assignment)."""
+    per_leg: list[dict[str, Any]] = []
+    totals = {
+        "brokerage": 0.0,
+        "stt": 0.0,
+        "exchange": 0.0,
+        "gst": 0.0,
+        "stamp": 0.0,
+        "sebi": 0.0,
+        "total_charges": 0.0,
+    }
+    for leg in legs:
+        if leg.get("side") != "SELL":
+            continue
+        strike = float(leg.get("strike") or 0)
+        qty = _leg_qty(leg)
+        opt = leg.get("option_type", "CE")
+        intrinsic = (
+            max(0.0, spot - strike) if opt == "CE" else max(0.0, strike - spot)
+        )
+        turnover = intrinsic * qty
+        if turnover <= 0:
+            continue
+        leg_charges = _finworth_leg_charges(turnover, "SELL")
+        per_leg.append({"symbol": leg.get("symbol"), "side": "SELL", **leg_charges})
+        for k in totals:
+            if k in leg_charges:
+                totals[k] += leg_charges[k]
+    totals["total_charges"] = round(
+        totals["brokerage"] + totals["stt"] + totals["exchange"] + totals["gst"]
+        + totals["stamp"] + totals["sebi"],
+        2,
+    )
+    return {"per_leg": per_leg, "total": totals}
+
+
+def calculate_charges_with_exit(
+    legs: list[dict[str, Any]],
+    *,
+    spot: float,
+    broker_preset: str = "zerodha",
+) -> dict[str, Any]:
+    """Entry + estimated exit charges and round-trip total."""
+    entry = calculate_charges(legs, broker_preset=broker_preset)
+    exit_ch = calculate_exit_charges(legs, spot=spot)
+    exit_total = float((exit_ch.get("total") or {}).get("total_charges") or 0)
+    entry_total = float((entry.get("total") or {}).get("total_charges") or 0)
+    entry["exit"] = exit_ch
+    entry["exit_charges"] = exit_total
+    entry["round_trip_charges"] = round(entry_total + exit_total, 2)
+    return entry
+
+
+def _leg_pnl_at_dte(leg: dict[str, Any], underlying: float, time_fraction: float) -> float:
+    """Mark-to-market P&L with extrinsic decay (sqrt time)."""
+    side_mult = 1 if leg.get("side") == "BUY" else -1
+    qty = _leg_qty(leg)
+    premium = float(leg.get("price") or 0)
+    strike = float(leg.get("strike") or 0)
+    opt = leg.get("option_type", "CE")
+    intrinsic = max(0.0, underlying - strike) if opt == "CE" else max(0.0, strike - underlying)
+    extrinsic = max(0.0, premium - intrinsic)
+    decayed = extrinsic * math.sqrt(max(0.0, min(1.0, time_fraction)))
+    mark = intrinsic + decayed
+    return side_mult * qty * (mark - premium)
+
+
+def compute_payoff_over_time(
+    legs: list[dict[str, Any]],
+    spot: float,
+    *,
+    expiry: str | None = None,
+    points: int = 6,
+) -> dict[str, Any]:
+    """P&L curve over days-to-expiry at current spot (theta decay model)."""
+    if spot <= 0 or not legs:
+        return {"samples": [], "total_days": 0}
+
+    target = _parse_expiry_date(expiry)
+    total_days = max(1, (target - date.today()).days) if target else 7
+    samples: list[dict[str, Any]] = []
+    for i in range(points):
+        dte = int(round(total_days * (1 - i / max(1, points - 1)))) if points > 1 else 0
+        time_frac = dte / total_days if total_days else 0
+        pnl = sum(_leg_pnl_at_dte(leg, spot, time_frac) for leg in legs)
+        samples.append({"days_to_expiry": dte, "pnl": round(pnl, 2)})
+
+    entry_charges = float((calculate_charges(legs).get("total") or {}).get("total_charges") or 0)
+    for s in samples:
+        s["net_pnl"] = round(s["pnl"] - entry_charges, 2)
+    return {"samples": samples, "total_days": total_days, "spot": spot}
+
+
 def attach_net_pnl(
     payoff: dict[str, Any],
     charges: dict[str, Any],
@@ -287,8 +385,9 @@ def estimate_strategy_metrics(
     iv: float | None = None,
 ) -> dict[str, Any]:
     payoff = compute_payoff(legs, spot)
-    charges = calculate_charges(legs, broker_preset=broker_preset)
+    charges = calculate_charges_with_exit(legs, spot=spot, broker_preset=broker_preset)
     attach_net_pnl(payoff, charges)
+    payoff_over_time = compute_payoff_over_time(legs, spot, expiry=expiry)
 
     pop = _optionlab_pop(legs, spot=spot, expiry=expiry, iv=iv)
     pop_source = "optionlab" if pop is not None else "sample_ratio"
@@ -297,6 +396,7 @@ def estimate_strategy_metrics(
 
     return {
         "payoff": payoff,
+        "payoff_over_time": payoff_over_time,
         "charges": charges,
         "pop": pop,
         "pop_source": pop_source,
@@ -306,6 +406,7 @@ def estimate_strategy_metrics(
         "net_max_loss": payoff.get("net_max_loss"),
         "breakevens": payoff.get("breakevens"),
         "net_debit_credit": charges.get("net_debit_credit"),
+        "round_trip_charges": charges.get("round_trip_charges"),
     }
 
 

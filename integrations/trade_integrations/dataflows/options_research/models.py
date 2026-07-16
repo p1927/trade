@@ -30,6 +30,8 @@ class OptionsResearchDoc:
     ranked_strategies: list[dict[str, Any]] = field(default_factory=list)
     recommended: dict[str, Any] = field(default_factory=dict)
     payoff: dict[str, Any] = field(default_factory=dict)
+    payoff_over_time: dict[str, Any] = field(default_factory=dict)
+    browse_summary: dict[str, Any] = field(default_factory=dict)
     charges: dict[str, Any] = field(default_factory=dict)
     implementation_steps: list[dict[str, Any]] = field(default_factory=list)
     stages: list[StageResult] = field(default_factory=list)

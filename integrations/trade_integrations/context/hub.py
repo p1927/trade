@@ -207,6 +207,8 @@ def _options_doc_from_json(payload: dict) -> OptionsResearchDoc:
         ranked_strategies=list(payload.get("ranked_strategies") or []),
         recommended=dict(payload.get("recommended") or {}),
         payoff=dict(payload.get("payoff") or {}),
+        payoff_over_time=dict(payload.get("payoff_over_time") or {}),
+        browse_summary=dict(payload.get("browse_summary") or {}),
         charges=dict(payload.get("charges") or {}),
         implementation_steps=list(payload.get("implementation_steps") or []),
         stages=stages,
