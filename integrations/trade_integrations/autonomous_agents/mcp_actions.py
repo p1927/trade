@@ -70,6 +70,57 @@ def mcp_get_proposal(proposal_id: str) -> dict[str, Any]:
     return {"status": "ok", "proposal": proposal}
 
 
+def _normalize_confidence(value: int | float | str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, min(100, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_thesis_from_decision(
+    agent: dict[str, Any],
+    *,
+    decision: str,
+    rationale: str,
+    confidence: int | None = None,
+    direction: str | None = None,
+    strategy: str | None = None,
+) -> None:
+    from datetime import datetime, timezone
+
+    thesis = dict(agent.get("thesis") or {})
+    thesis["decision"] = str(decision).strip().upper()
+    thesis["rationale"] = rationale.strip()
+    thesis["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if confidence is not None:
+        thesis["confidence"] = confidence
+    if direction:
+        thesis["direction"] = direction.strip()
+    if strategy:
+        thesis["strategy"] = strategy.strip()
+    agent["thesis"] = thesis
+
+
+def _attach_decision_metadata(
+    entry: dict[str, Any] | None,
+    *,
+    confidence: int | None,
+    direction: str | None,
+    strategy: str | None,
+) -> dict[str, Any] | None:
+    if not entry:
+        return entry
+    if confidence is not None:
+        entry["confidence"] = confidence
+    if direction:
+        entry["direction"] = direction.strip()
+    if strategy:
+        entry["strategy"] = strategy.strip()
+    return entry
+
+
 def mcp_record_decision(
     *,
     agent_id: str,
@@ -77,6 +128,9 @@ def mcp_record_decision(
     rationale: str,
     ticker: str | None = None,
     actions_taken: list[str] | None = None,
+    confidence: int | None = None,
+    direction: str | None = None,
+    strategy: str | None = None,
 ) -> dict[str, Any]:
     from datetime import datetime, timezone
 
@@ -84,6 +138,7 @@ def mcp_record_decision(
     if not agent:
         return {"status": "error", "error": f"agent not found: {agent_id}"}
 
+    norm_confidence = _normalize_confidence(confidence)
     profile = resolve_profile(agent=agent)
     if not profile.uses_openalgo_auto_paper:
         entry = {
@@ -94,7 +149,21 @@ def mcp_record_decision(
             "actions_taken": actions_taken or [],
             "execution_market": profile.market,
         }
+        _attach_decision_metadata(
+            entry,
+            confidence=norm_confidence,
+            direction=direction,
+            strategy=strategy,
+        )
         agent["last_decision"] = entry
+        _merge_thesis_from_decision(
+            agent,
+            decision=decision,
+            rationale=rationale,
+            confidence=norm_confidence,
+            direction=direction,
+            strategy=strategy,
+        )
         if entry["decision"] in {"REVISE", "ADJUST"}:
             agent["last_revision_at"] = entry["at"]
         save_agent(agent)
@@ -102,6 +171,7 @@ def mcp_record_decision(
             "status": "ok",
             "agent_id": agent_id,
             "decision": entry,
+            "thesis": agent.get("thesis"),
             "paper_note": f"{profile.market} agent — decision stored on agent record (not OpenAlgo session).",
         }
 
@@ -110,12 +180,30 @@ def mcp_record_decision(
         rationale=rationale,
         ticker=ticker,
         actions_taken=actions_taken,
+        confidence=norm_confidence,
+        direction=direction,
+        strategy=strategy,
     )
     agent = get_agent(agent_id) or agent
-    agent["last_decision"] = result.get("decision")
+    last = dict(result.get("decision") or {})
+    _attach_decision_metadata(
+        last,
+        confidence=norm_confidence,
+        direction=direction,
+        strategy=strategy,
+    )
+    agent["last_decision"] = last
+    _merge_thesis_from_decision(
+        agent,
+        decision=decision,
+        rationale=rationale,
+        confidence=norm_confidence,
+        direction=direction,
+        strategy=strategy,
+    )
     decision_upper = str(decision).upper()
     if decision_upper in {"REVISE", "ADJUST"}:
-        agent["last_revision_at"] = (result.get("decision") or {}).get("at")
+        agent["last_revision_at"] = last.get("at")
     if decision_upper == "EXIT":
         from nautilus_openalgo_bridge.handoff import clear_agent_position_state
 
@@ -128,7 +216,12 @@ def mcp_record_decision(
         except Exception:
             pass
     save_agent(agent)
-    return {"status": "ok", "agent_id": agent_id, **result}
+    return {
+        "status": "ok",
+        "agent_id": agent_id,
+        **{k: v for k, v in result.items() if k != "status"},
+        "thesis": agent.get("thesis"),
+    }
 
 
 def mcp_set_watch_spec(agent_id: str, watch_spec: dict[str, Any]) -> dict[str, Any]:

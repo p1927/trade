@@ -14,6 +14,7 @@ from trade_integrations.dataflows.index_research.company_news_backfill import (
     _google_news_rss_url,
 )
 from trade_integrations.monitor.news_watcher import headline_fingerprint
+from trade_integrations.dataflows.index_research.news_dedup import merge_raw_headlines
 
 _NEWS_DAILY = Path("_data") / "news" / "daily"
 
@@ -133,12 +134,12 @@ def collect_headlines_for_day(
     for row in _load_archive_headlines(day, symbol=ticker, limit=limit):
         _add(row)
     if len(out) >= limit:
-        return out[:limit]
+        return merge_raw_headlines(out[:limit])
 
     for row in _fetch_aggregator_headlines(ticker, day, limit=limit):
         _add(row)
     if len(out) >= limit:
-        return out[:limit]
+        return merge_raw_headlines(out[:limit])
 
     for row in _fetch_index_headlines(day, limit=limit):
         title = row.get("title") or ""
@@ -171,7 +172,7 @@ def collect_headlines_for_day(
         if len(out) >= limit:
             break
 
-    return out[:limit]
+    return merge_raw_headlines(out[:limit])
 
 
 def collect_headlines_for_window(
@@ -193,4 +194,4 @@ def collect_headlines_for_window(
     while day <= end_d and len(rows) < max_total:
         rows.extend(collect_headlines_for_day(day.isoformat(), ticker=ticker, limit=limit_per_day))
         day += timedelta(days=1)
-    return rows[:max_total]
+    return merge_raw_headlines(rows[:max_total])

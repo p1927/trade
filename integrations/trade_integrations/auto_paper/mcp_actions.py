@@ -442,6 +442,9 @@ def record_decision(
     rationale: str,
     ticker: str | None = None,
     actions_taken: list[str] | None = None,
+    confidence: int | None = None,
+    direction: str | None = None,
+    strategy: str | None = None,
 ) -> dict[str, Any]:
     session = load_session()
     raw_decision = decision.strip().upper()
@@ -455,6 +458,15 @@ def record_decision(
         "ticker": (ticker or session.get("primary_ticker") or "").strip().upper() or None,
         "actions_taken": actions_taken or [],
     }
+    if confidence is not None:
+        try:
+            entry["confidence"] = max(0, min(100, int(confidence)))
+        except (TypeError, ValueError):
+            pass
+    if direction:
+        entry["direction"] = direction.strip()
+    if strategy:
+        entry["strategy"] = strategy.strip()
     decisions = list(session.get("decisions") or [])
     decisions.append(entry)
     session["decisions"] = decisions[-100:]
