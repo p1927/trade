@@ -11,6 +11,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_prediction_markets,
 )
 from trade_integrations.tools.company_research_tools import get_company_research
+from trade_integrations.tools.options_research_tools import get_options_research
 
 
 def create_news_analyst(llm):
@@ -26,6 +27,7 @@ def create_news_analyst(llm):
             get_macro_indicators,
             get_prediction_markets,
             get_company_research,
+            get_options_research,
         ]
 
         system_message = (
@@ -38,10 +40,14 @@ def create_news_analyst(llm):
             f"actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', "
             f"'10y_treasury', 'yield_curve'), "
             f"get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking "
-            f"events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events), and "
+            f"events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events), "
             f"get_company_research(ticker, lookahead_days) for a structured dossier with company identity, "
-            f"upcoming earnings/board meetings, and live Indian market context when configured. "
+            f"upcoming earnings/board meetings, and live Indian market context when configured, and "
+            f"get_options_research(ticker, expiry_date, lookahead_days) for F&O trade plans on NIFTY, "
+            f"BANKNIFTY, or stock underlyings (ranked strategies, payoff, charges). "
             f"For individual stocks, call get_company_research early to anchor event risk and identity. "
+            f"For index or options-focused runs (NIFTY, BANKNIFTY, or F&O on a stock), call "
+            f"get_options_research to load the latest trade plan from the hub. "
             f"Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()

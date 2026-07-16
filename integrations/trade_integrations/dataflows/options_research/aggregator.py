@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 from .browse_summary import build_browse_summary
@@ -19,6 +20,11 @@ from .sources.chain_openalgo import fetch_chain_stage
 from .sources.events_index import fetch_events_index
 from .sources.events_stock import fetch_events_stock
 from .sources.earnings_us import fetch_earnings_us_stage
+
+
+def _strategy_builder_base() -> str:
+    host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
+    return f"{host}/strategybuilder"
 
 
 def _apply_stage(doc: OptionsResearchDoc, result: StageResult) -> None:
@@ -229,13 +235,10 @@ def run_options_research(
             options_exchange=instrument.options_exchange,
         )
         sym = instrument.display_symbol
-        doc.meta["strategy_builder_url"] = f"http://127.0.0.1:5000/strategybuilder?plan={sym}"
-        doc.meta["strategy_builder_pnl_url"] = (
-            f"http://127.0.0.1:5000/strategybuilder?plan={sym}&tab=pnl"
-        )
-        doc.meta["strategy_builder_execute_url"] = (
-            f"http://127.0.0.1:5000/strategybuilder?plan={sym}&execute=1"
-        )
+        sb = _strategy_builder_base()
+        doc.meta["strategy_builder_url"] = f"{sb}?plan={sym}"
+        doc.meta["strategy_builder_pnl_url"] = f"{sb}?plan={sym}&tab=pnl"
+        doc.meta["strategy_builder_execute_url"] = f"{sb}?plan={sym}&execute=1"
 
     doc.stages.append(
         StageResult(

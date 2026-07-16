@@ -175,6 +175,8 @@ def format_options_report(doc: OptionsResearchDoc) -> str:
                     f"- DTE {s.get('days_to_expiry')}: gross ₹{s.get('pnl')} "
                     f"net ₹{s.get('net_pnl')}"
                 )
+        if doc.meta.get("strategy_builder_url"):
+            parts.append(f"\n**Strategy Builder:** {doc.meta['strategy_builder_url']}")
         if doc.meta.get("strategy_builder_pnl_url"):
             parts.append(f"\n**Live P&L tab:** {doc.meta['strategy_builder_pnl_url']}")
         if doc.meta.get("strategy_builder_execute_url"):

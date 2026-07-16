@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -53,6 +54,15 @@ class TestTradingGraphPatch:
         nodes = TradingAgentsGraph._create_tool_nodes(None)
         news_tools = set(nodes["news"].tools_by_name)
         assert "get_company_research" in news_tools
+        assert "get_options_research" in news_tools
+
+    def test_news_analyst_module_wires_options_tool(self):
+        import trade_integrations.agents.news_analyst as news_mod
+
+        assert news_mod.get_options_research is not None
+        src = Path(news_mod.__file__).read_text(encoding="utf-8")
+        assert "get_options_research" in src
+        assert "get_options_research(ticker" in src
 
 
 @pytest.mark.unit
