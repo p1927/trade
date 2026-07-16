@@ -68,6 +68,15 @@ def _check_doc(label: str, doc) -> bool:
     print(f"stages={[s.stage + ':' + s.status for s in doc.stages]}")
     print(f"prediction_view={doc.prediction.get('view')}")
     print(f"scenarios={len(doc.scenarios)}")
+    contributors = (doc.factor_explanation or {}).get("contributors") or []
+    if contributors:
+        print(f"factor_explain={doc.factor_explanation.get('method')} contributors={len(contributors)}")
+        for row in contributors[:3]:
+            print(
+                f"  - {row.get('label')}: {row.get('contribution_pct')}% macro "
+                f"({row.get('share_of_macro', 0):.0%} of macro)"
+            )
+    print(f"sensitivity_curves={len(doc.factor_sensitivity or [])} event_curves={len(doc.event_impact_curves or [])}")
     if not doc.prediction:
         print("WARN: empty prediction")
         ok = False

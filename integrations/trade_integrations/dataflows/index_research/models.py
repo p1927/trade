@@ -74,4 +74,7 @@ class IndexResearchDoc:
     sector_breadth: dict[str, Any] = field(default_factory=dict)
     scenarios: list[dict[str, Any]] = field(default_factory=list)
     accuracy: dict[str, Any] = field(default_factory=dict)
+    factor_explanation: dict[str, Any] = field(default_factory=dict)
+    factor_sensitivity: list[dict[str, Any]] = field(default_factory=list)
+    event_impact_curves: list[dict[str, Any]] = field(default_factory=list)
     stages: list[StageResult] = field(default_factory=list)

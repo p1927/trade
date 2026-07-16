@@ -76,6 +76,19 @@ def test_run_index_research_orchestration(monkeypatch):
         "trade_integrations.dataflows.index_research.aggregator.compute_accuracy_metrics",
         lambda **kwargs: {"sample_count": 3, "mae_14d_pct": 1.2},
     )
+    from trade_integrations.dataflows.index_research.predictor import ModelArtifact
+
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 0.04, "oil_brent": -0.02, "india_vix": -0.01},
+        intercept=0.05,
+        feature_names=["usd_inr", "oil_brent", "india_vix"],
+        poly_degree=1,
+        mae=1.2,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.explain.load_stored_model_artifact",
+        lambda: artifact,
+    )
 
     from trade_integrations.dataflows.index_research.aggregator import run_index_research
 
@@ -92,6 +105,8 @@ def test_run_index_research_orchestration(monkeypatch):
     assert doc.scenarios
     assert doc.regime.get("label")
     assert doc.accuracy["sample_count"] == 3
+    assert doc.factor_explanation.get("contributors")
+    assert doc.factor_sensitivity
     append_mock.assert_called_once()
 
 

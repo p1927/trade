@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
+from typing import Any
 
 from trade_integrations.dataflows.company_research.models import StageResult
 from trade_integrations.dataflows.index_research.attribution import (
     attribute_constituents,
     rollup_attribution,
 )
+from trade_integrations.dataflows.index_research.explain import build_factor_explanation_bundle
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.macro_global import fetch_global_macro_snapshot
 from trade_integrations.dataflows.index_research.models import ConstituentSignal, IndexResearchDoc, PredictionRecord
@@ -148,6 +150,19 @@ def run_index_research(
         horizon_days=horizon.days,
     ) if spot > 0 else []
 
+    factor_bundle: dict[str, Any] = {}
+    if spot > 0 and prediction:
+        factor_bundle = build_factor_explanation_bundle(
+            macro_factors,
+            scenarios,
+            horizon=horizon,
+            spot=spot,
+            bottom_up_return_pct=float(prediction.get("bottom_up_return_pct") or 0.0),
+        )
+        prediction["factor_contributors"] = factor_bundle.get("factor_explanation", {}).get(
+            "contributors", []
+        )
+
     accuracy = compute_accuracy_metrics()
 
     if spot > 0 and prediction:
@@ -187,5 +202,8 @@ def run_index_research(
         sector_breadth=_sector_breadth(signals),
         scenarios=scenarios,
         accuracy=accuracy,
+        factor_explanation=factor_bundle.get("factor_explanation") or {},
+        factor_sensitivity=factor_bundle.get("factor_sensitivity") or [],
+        event_impact_curves=factor_bundle.get("event_impact_curves") or [],
         stages=stages,
     )

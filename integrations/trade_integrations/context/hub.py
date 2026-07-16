@@ -470,6 +470,9 @@ def _index_doc_from_json(payload: dict):
         sector_breadth=dict(payload.get("sector_breadth") or {}),
         scenarios=list(payload.get("scenarios") or []),
         accuracy=dict(payload.get("accuracy") or {}),
+        factor_explanation=dict(payload.get("factor_explanation") or {}),
+        factor_sensitivity=list(payload.get("factor_sensitivity") or []),
+        event_impact_curves=list(payload.get("event_impact_curves") or []),
         stages=stages,
     )
 

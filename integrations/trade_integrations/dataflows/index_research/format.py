@@ -48,6 +48,44 @@ def format_index_report(doc: IndexResearchDoc) -> str:
             contribution = driver.get("contribution_to_index_pct")
             parts.append(f"- **{symbol}:** {_fmt_pct(contribution)}")
 
+    factor_explanation = doc.factor_explanation or {}
+    contributors = factor_explanation.get("contributors") or []
+    if contributors:
+        parts.extend(
+            [
+                "",
+                "## Factor contributions (macro equation)",
+                "",
+                f"- **Method:** {factor_explanation.get('method', 'marginal')}",
+                f"- **Macro delta:** {_fmt_pct(factor_explanation.get('macro_delta_pct'))}",
+                "",
+            ]
+        )
+        for row in contributors[:8]:
+            label = row.get("label") or row.get("factor")
+            contrib = row.get("contribution_pct")
+            share = row.get("share_of_macro")
+            pts = row.get("contribution_index_pts")
+            share_text = f"{share:.0%}" if isinstance(share, (int, float)) else "n/a"
+            parts.append(
+                f"- **{label}:** {_fmt_pct(contrib)} of macro "
+                f"({share_text} of macro block, ~{pts} index pts)"
+            )
+
+    if doc.event_impact_curves:
+        parts.extend(["", "## Event → index impact", ""])
+        for curve in doc.event_impact_curves[:5]:
+            event = curve.get("event", "event")
+            outcome = curve.get("outcome", "")
+            level = curve.get("index_level")
+            ret = curve.get("return_pct")
+            prob = curve.get("probability")
+            prob_text = f"{prob:.0%}" if isinstance(prob, (int, float)) else "n/a"
+            parts.append(
+                f"- **{event} / {outcome}:** index ~{_fmt_price(level)} "
+                f"({_fmt_pct(ret)}, p={prob_text})"
+            )
+
     regime = doc.regime or {}
     if regime:
         parts.extend(
