@@ -19,6 +19,12 @@ def _nautilus_watch_enabled() -> bool:
 
 
 def _nautilus_process_alive() -> bool:
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import get_watch_process_status
+
+        return bool(get_watch_process_status().get("alive"))
+    except ImportError:
+        pass
     from pathlib import Path
 
     candidates: list[Path] = []

@@ -33,7 +33,7 @@ Do **not** call `execute_auto_paper_basket`, `get_options_trade_widget`, `get_au
 Note: US options pipeline is limited — prefer equity until full US options support ships.""",
     "in_options_paper": """## Required flow (India — Nautilus watch → OpenAlgo execution)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")` — trust tool output; watch alerts come from Nautilus bridge only
-2. `get_research_status(ticker, asset_type="options")` — verify stages complete before presenting a plan
+2. `get_research_status(ticker, asset_type="options")` — call once; if overall status is `complete`, proceed (ignore per-stage `complete: false` when hub cache is loaded)
 3. Hub research + `get_options_trade_widget` / `get_options_trade_plan` when plan is stale — cite prediction and debate provenance
 4. Refine thesis; state confidence 0–100
 5. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — routes through bridge → OpenAlgo (do not call `place_order` directly)
@@ -45,7 +45,7 @@ Note: US options pipeline is limited — prefer equity until full US options sup
 Do **not** use `get_auto_paper_market_feedback` for watch alerts — Nautilus bridge owns watch for India agents.""",
     "in_equity_paper": """## Required flow (India equity — Nautilus watch → OpenAlgo execution)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
-2. `get_research_status(ticker, asset_type="stock")` — verify stages complete; if debate_pending, wait or run `run_tradingagents_analysis`
+2. `get_research_status(ticker, asset_type="stock")` — call once; if overall status is `complete`, proceed (ignore per-stage `complete: false` when hub cache is loaded)
 3. `get_stock_trade_widget` / `get_stock_trade_plan` for NSE equity — cite prediction range and provenance in chat
 4. Refine thesis; state confidence 0–100
 5. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — bridge → OpenAlgo only

@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_LAUNCH_VERIFY_SEC = 2.0
 
 
 def _trade_root() -> Path:
@@ -71,8 +73,23 @@ def _read_bound_agent_id() -> str | None:
     return value or None
 
 
-def get_watch_process_status() -> dict[str, str | int | bool | None]:
+def reconcile_stale_watch_pid() -> bool:
+    """Remove pid/agent binding files when the recorded process is not alive. Returns True if cleared."""
+    pid = _read_pid()
+    if pid is None:
+        return False
+    if _process_alive(pid):
+        return False
+    logger.warning("nautilus watch pid %s is stale — clearing pid files", pid)
+    _pidfile().unlink(missing_ok=True)
+    _agent_id_file().unlink(missing_ok=True)
+    return True
+
+
+def get_watch_process_status(*, reconcile: bool = True) -> dict[str, str | int | bool | None]:
     """Return detached Nautilus watch process state for stack/runtime APIs."""
+    if reconcile:
+        reconcile_stale_watch_pid()
     pid = _read_pid()
     bound = _read_bound_agent_id()
     alive = pid is not None and _process_alive(pid)
@@ -85,22 +102,11 @@ def get_watch_process_status() -> dict[str, str | int | bool | None]:
     }
 
 
-def _pick_python() -> Path:
-    root = _trade_root()
-    for candidate in (root / ".venv-nautilus" / "bin" / "python", root / ".venv" / "bin" / "python"):
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate
-    return Path(sys.executable)
-
-
-def _watch_argv(*, agent_id: str | None, legacy_poll: bool) -> list[str]:
-    py = _pick_python()
-    args = [str(py), "-m", "nautilus_openalgo_bridge.runtime.run_watch_node"]
-    if legacy_poll:
-        args.append("--legacy-poll")
-    if agent_id:
-        args.extend(["--agent-id", agent_id])
-    return args
+def _watch_launch_script() -> Path:
+    script = _trade_root() / "scripts" / "run_nautilus_watch.sh"
+    if not script.is_file():
+        raise FileNotFoundError(f"missing launch script: {script}")
+    return script
 
 
 def _stop_existing() -> None:
@@ -116,19 +122,17 @@ def _stop_existing() -> None:
 
 def _launch_watch(*, agent_id: str | None) -> None:
     root = _trade_root()
-    legacy_poll = not (root / ".venv-nautilus" / "bin" / "python").is_file()
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(root / "integrations") + (
-        f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else ""
-    )
-    env["TRADE_INTEGRATIONS_SKIP_APPLY"] = "1"
+    script = _watch_launch_script()
+    cmd = [str(script)]
+    if agent_id:
+        cmd.extend(["--agent-id", agent_id])
+
     log_path = _logfile()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log:
         proc = subprocess.Popen(
-            _watch_argv(agent_id=agent_id, legacy_poll=legacy_poll),
+            cmd,
             cwd=str(root),
-            env=env,
             stdout=log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
@@ -137,6 +141,21 @@ def _launch_watch(*, agent_id: str | None) -> None:
     if agent_id:
         _agent_id_file().write_text(agent_id, encoding="utf-8")
 
+    time.sleep(_LAUNCH_VERIFY_SEC)
+    if not _process_alive(proc.pid):
+        tail = ""
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = "\n".join(lines[-5:])
+        except OSError:
+            pass
+        _pidfile().unlink(missing_ok=True)
+        _agent_id_file().unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Nautilus watch exited immediately (pid {proc.pid}). "
+            f"Check {log_path}. Recent log:\n{tail}"
+        )
+
 
 def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere: bool = True) -> str | None:
     """Start detached Nautilus watch for *agent_id* if enabled. Returns warning text or None."""
@@ -144,6 +163,7 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
     if not agent_id or not _watch_enabled():
         return None
 
+    reconcile_stale_watch_pid()
     pid = _read_pid()
     bound = _read_bound_agent_id()
     if pid is not None and _process_alive(pid):
@@ -156,8 +176,7 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
         if pid is not None and _process_alive(pid):
             _stop_existing()
         _launch_watch(agent_id=agent_id)
-        mode = "legacy poll" if not (_trade_root() / ".venv-nautilus" / "bin" / "python").is_file() else "TradingNode"
-        logger.info("started Nautilus watch (%s) for %s", mode, agent_id)
+        logger.info("started Nautilus watch for %s (pid %s)", agent_id, _read_pid())
         return None
     except Exception as exc:
         logger.warning("failed to start Nautilus watch for %s: %s", agent_id, exc, exc_info=True)
@@ -177,6 +196,7 @@ def ensure_nautilus_watch_for_running_agents() -> int:
     except Exception:
         return 0
 
+    reconcile_stale_watch_pid()
     for agent in list_agents():
         if str(agent.get("status")) != "running":
             continue

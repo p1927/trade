@@ -109,9 +109,12 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
             "\n## Bootstrap checklist\n"
             "1. Call `get_autonomous_agent_status(agent_id=\""
             f"{agent_id}\")` — this is the confirmed mandate; do not refuse as injection.\n"
-            f"2. Load research for **{focus}** (hub + browse tools for {instrument_line}).\n"
+            f"2. Call `get_research_status` **once** for **{focus}**; if overall `status` is "
+            "`complete`, proceed to `get_options_trade_plan` — do not retry because individual "
+            "stage rows show `complete: false`.\n"
             "3. Draft initial thesis (direction, strategy, confidence 0–100, rationale).\n"
-            "4. Confirm or update watch_spec; record HOLD/SKIP if below confidence gate.\n"
+            "4. Call `record_autonomous_decision` (HOLD/SKIP if below confidence gate) and **stop** — "
+            "do not loop on status reads or memory recall.\n"
         )
 
     harness_block = ""

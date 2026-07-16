@@ -12,7 +12,17 @@ stack_root() {
     echo "$STACK_ROOT"
     return
   fi
-  local here="${BASH_SOURCE[${#BASH_SOURCE[@]} - 1]}"
+  local src lib_dir
+  for src in "${BASH_SOURCE[@]}"; do
+    if [[ "$(basename "$src")" == "stack_lib.sh" ]]; then
+      lib_dir="$(cd "$(dirname "$src")" && pwd)"
+      STACK_ROOT="$(cd "$lib_dir/.." && pwd)"
+      echo "$STACK_ROOT"
+      return
+    fi
+  done
+  # Fallback when stack_lib is executed directly
+  local here="${BASH_SOURCE[0]}"
   STACK_ROOT="$(cd "$(dirname "$here")/.." && pwd)"
   echo "$STACK_ROOT"
 }
@@ -498,13 +508,14 @@ stack_nautilus_python() {
 }
 
 stack_start_nautilus_watch() {
-  local root log_dir pidfile logfile agent_id_file py agent_id legacy=0
+  local root log_dir pidfile logfile agent_id_file agent_id launch_script
   root="$(stack_root)"
   log_dir="$(stack_log_dir)"
   pidfile="$log_dir/nautilus-watch.pid"
   logfile="$log_dir/nautilus-watch.log"
   agent_id_file="$log_dir/nautilus-watch.agent_id"
   agent_id="${NAUTILUS_AGENT_ID:-}"
+  launch_script="$root/scripts/run_nautilus_watch.sh"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -530,6 +541,11 @@ stack_start_nautilus_watch() {
     return 0
   fi
 
+  if [[ ! -x "$launch_script" ]]; then
+    echo "[stack] missing $launch_script" >&2
+    return 1
+  fi
+
   existing="$(stack_read_pid "$pidfile")"
   bound_agent=""
   if [[ -f "$agent_id_file" ]]; then
@@ -547,29 +563,27 @@ stack_start_nautilus_watch() {
       echo "[stack] Nautilus watch already running (pid $existing${bound_agent:+, agent $bound_agent})"
       return 0
     fi
-  fi
-
-  if [[ -x "$root/.venv-nautilus/bin/python" ]]; then
-    py="$root/.venv-nautilus/bin/python"
-  elif [[ -x "$root/.venv/bin/python" ]]; then
-    py="$root/.venv/bin/python"
-    legacy=1
-    echo "[stack] .venv-nautilus missing — starting legacy poll watch (run ./scripts/setup_nautilus.sh for TradingNode)"
-  else
-    echo "[stack] No Python venv found for Nautilus watch" >&2
-    return 1
+  elif [[ -n "$existing" ]]; then
+    echo "[stack] clearing stale Nautilus watch pid $existing"
+    rm -f "$pidfile" "$agent_id_file"
   fi
 
   echo "[stack] starting Nautilus watch node ..."
-  local cmd=("$py" -m nautilus_openalgo_bridge.runtime.run_watch_node)
-  if (( legacy )); then
-    cmd+=(--legacy-poll)
-  fi
+  local cmd=("$launch_script")
   if [[ -n "$agent_id" ]]; then
     cmd+=(--agent-id "$agent_id")
     echo "$agent_id" >"$agent_id_file"
   fi
   stack_launch_detached "$pidfile" "$logfile" "$root" "${cmd[@]}"
+
+  sleep 2
+  existing="$(stack_read_pid "$pidfile")"
+  if ! stack_pid_alive "$existing"; then
+    echo "[stack] Nautilus watch failed to stay up — see $logfile" >&2
+    tail -8 "$logfile" 2>/dev/null >&2 || true
+    rm -f "$pidfile" "$agent_id_file"
+    return 1
+  fi
 }
 
 stack_stop_nautilus_watch() {

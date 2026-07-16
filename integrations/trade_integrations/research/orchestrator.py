@@ -46,15 +46,20 @@ def _doc_to_check_dict(doc: Any) -> dict[str, Any]:
 
 def _missing_required_fields(doc: Any, required: tuple[str, ...]) -> list[str]:
     data = _doc_to_check_dict(doc)
+    rec = data.get("recommended") or {}
+    is_hold = str(rec.get("action") or "").upper() == "HOLD" or rec.get("name") == "hold_cash"
     missing: list[str] = []
     for path in required:
         val = _nested_get(data, path)
         if val is None:
             missing.append(path)
-        elif isinstance(val, float) and path.endswith(("max_profit", "max_loss")) and val == 0:
-            # zero max profit/loss treated as missing for stock gate
-            if "max_profit" in path or "max_loss" in path:
-                missing.append(path)
+        elif (
+            isinstance(val, float)
+            and path.endswith(("max_profit", "max_loss"))
+            and val == 0
+            and not is_hold
+        ):
+            missing.append(path)
     return missing
 
 
@@ -247,6 +252,27 @@ def ensure_research_complete(
     )
 
 
+def _stage_is_complete(stage: Any, result: ResearchResult, contract: Any) -> bool:
+    """Map orchestrator stages_run tokens to UI/agent stage ids."""
+    if stage.id in result.stages_run:
+        return True
+    if stage.id == "agent_debate" and not result.debate_pending:
+        return True
+    if result.status == "complete":
+        return not (stage.id == "agent_debate" and result.debate_pending)
+    hub = getattr(stage, "hub_subdir", None)
+    if hub:
+        if f"{hub}:cache" in result.stages_run or f"{hub}:run" in result.stages_run:
+            return True
+    if stage.id == "company_research":
+        batch_token = f"{contract.hub_subdir}:cache"
+        if batch_token in result.stages_run or f"{contract.hub_subdir}:run" in result.stages_run:
+            return True
+    if stage.producer in ("synthesis", "live_quote") and result.status in ("complete", "partial"):
+        return not result.missing
+    return False
+
+
 def get_research_status(
     ticker: str,
     *,
@@ -275,8 +301,7 @@ def get_research_status(
             "id": s.id,
             "required": s.required,
             "producer": s.producer,
-            "complete": s.id in result.stages_run
-            or (s.id == "agent_debate" and not result.debate_pending),
+            "complete": _stage_is_complete(s, result, contract),
         }
         for s in contract.stages
     ]

@@ -114,6 +114,7 @@ case "$cmd" in
       daemon)           exec "$ROOT/start.sh" --daemon --no-searxng "$@" ;;
       nautilus-watch)
         # shellcheck disable=SC1091
+        STACK_ROOT="$ROOT"
         source "$ROOT/scripts/stack_lib.sh"
         stack_load_env
         stack_start_nautilus_watch "$@"
