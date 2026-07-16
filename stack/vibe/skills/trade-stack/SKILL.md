@@ -30,6 +30,8 @@ The shared hub at `{{TRADE_STACK_HUB_DIR}}` is the **single store** for research
 
 **What lives where:** `latest.json` = live working copy (TTL refresh). Hub parquet/json history = training + replay. TimescaleDB = hot sub-minute ticks during watch only (optional; `TIMESCALE_ENABLED=true`).
 
+**Selective capture (NIFTY v1):** Prediction page **Data capture** panel toggles `reports/hub/_data/capture_registry.json`. When enabled, OpenAlgo chain snapshots land in `_data/capture/nifty/derivatives_chain/` (intraday job + research hooks). Tier A factors (PCR, FII/DII, participant OI, India VIX) are captured; Tier B (yfinance/FRED macro) stays scalar-only in `_data/index_factors/daily/`; Tier C (ticks) uses Timescale when capture is on. Evening calibration rolls capture → factor parquet. SQL: `python scripts/hub_query.py --builtin capture_coverage`.
+
 ## Shared context hub
 
 Pre-computed research lives at:
