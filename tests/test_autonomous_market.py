@@ -11,7 +11,14 @@ from trade_integrations.autonomous_agents.market import (
 
 def test_symbol_execution_market() -> None:
     assert symbol_execution_market("NIFTY") == "IN"
+    assert symbol_execution_market("NIFTYBEES") == "IN"
     assert symbol_execution_market("SPY") == "US"
+
+
+def test_unknown_symbol_defaults_india() -> None:
+    from trade_integrations.dataflows.company_research.market import detect_market, Market
+
+    assert detect_market("UNKNOWN_SYMBOL_XYZ") == Market.IN
 
 
 def test_agent_execution_market_from_symbols() -> None:

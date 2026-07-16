@@ -38,7 +38,11 @@ def test_index_context_includes_factors_and_widget_mandate():
         ],
         "accuracy": {"direction_hit_rate": 0.62},
     }
-    context = format_research_context_for_agent(None, index_artifact=index_artifact)
+    context = format_research_context_for_agent(
+        None,
+        index_artifact=index_artifact,
+        widget_intent="index_outlook",
+    )
 
     assert "[index_research_context]" in context
     assert "index_prediction: view=bullish" in context

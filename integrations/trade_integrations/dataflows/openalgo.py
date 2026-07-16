@@ -61,6 +61,9 @@ def resolve_openalgo_symbol(symbol: str) -> tuple[str, str]:
 
 
 def _openalgo_settings() -> tuple[str, str]:
+    from trade_integrations.env import load_trade_env
+
+    load_trade_env()
     config = get_config()
     host = (config.get("openalgo_host") or os.getenv("OPENALGO_HOST") or "http://127.0.0.1:5001").rstrip("/")
     api_key = config.get("openalgo_api_key") or os.getenv("OPENALGO_API_KEY") or ""

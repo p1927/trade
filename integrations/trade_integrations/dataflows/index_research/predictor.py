@@ -118,8 +118,20 @@ def _scale_features(
     mean_arr = np.asarray(means, dtype=float)
     std_arr = np.asarray(stds, dtype=float)
     if mean_arr.size == 0 or std_arr.size == 0:
-        return X
-    return (X - mean_arr) / std_arr
+        return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    safe_stds = np.where(std_arr < 1e-9, 1.0, std_arr)
+    scaled = (X - mean_arr) / safe_stds
+    return np.nan_to_num(scaled, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _finite_float(raw: Any, default: float = 0.0) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if not np.isfinite(value):
+        return default
+    return value
 
 
 def _macro_trust_weight(mae: float) -> float:
@@ -140,7 +152,8 @@ def _expand_poly(raw: np.ndarray, feature_names: list[str], poly_degree: int) ->
     )
     template = np.vstack([np.zeros(len(feature_names)), np.ones(len(feature_names))])
     poly.fit(template)
-    expanded = poly.transform(raw)
+    sanitized = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+    expanded = poly.transform(sanitized)
     names = [str(name) for name in poly.get_feature_names_out(feature_names)]
     return expanded, names
 
@@ -159,10 +172,7 @@ def _predict_macro_delta(
         if raw is None or isinstance(raw, (dict, list, tuple, set)):
             values.append(0.0)
             continue
-        try:
-            values.append(float(raw))
-        except (TypeError, ValueError):
-            values.append(0.0)
+        values.append(_finite_float(raw, 0.0))
     raw = np.array(values, dtype=float).reshape(1, -1)
     if artifact.feature_means and artifact.feature_stds:
         raw = _scale_features(raw, artifact.feature_means, artifact.feature_stds)

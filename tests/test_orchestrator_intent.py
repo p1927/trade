@@ -17,6 +17,7 @@ def test_extract_nifty_intraday_budget() -> None:
     assert kwargs["symbols"] == ["NIFTY"]
     assert kwargs["budget_inr"] == 50_000
     assert kwargs["max_daily_loss_inr"] == 5_000
+    assert kwargs.get("execution_market") == "IN"
     assert "intraday" in kwargs["mandate"].lower()
 
 
@@ -31,6 +32,7 @@ def test_extract_us_symbol() -> None:
     assert kwargs is not None
     assert kwargs["symbols"] == ["NVDA"]
     assert kwargs["budget_inr"] == 10_000
+    assert kwargs.get("execution_market") == "US"
 
 
 def test_skips_pure_clarifying_turn() -> None:

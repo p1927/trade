@@ -23,6 +23,7 @@ from trade_integrations.dataflows.index_research.macro_global import fetch_globa
 from trade_integrations.dataflows.index_research.models import ConstituentSignal, IndexResearchDoc, PredictionRecord
 from trade_integrations.dataflows.index_research.prediction_ledger import (
     append_prediction,
+    build_prediction_metadata,
     compute_accuracy_metrics,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
@@ -309,13 +310,15 @@ def run_index_research(
                 expected_return_pct=expected,
                 range_low=float(range_block.get("low") or spot),
                 range_high=float(range_block.get("high") or spot),
-                metadata={
-                    "ticker": sym,
-                    "horizon_name": horizon.name,
-                    "bottom_up_return_pct": float(prediction.get("bottom_up_return_pct") or 0.0),
-                    "macro_delta_pct": float(prediction.get("macro_delta_pct") or 0.0),
-                    "refresh": "full",
-                },
+                metadata=build_prediction_metadata(
+                    ticker=sym,
+                    horizon_name=horizon.name,
+                    refresh="full",
+                    prediction=prediction,
+                    global_factors=global_factors,
+                    regime=regime,
+                    scenarios=scenarios,
+                ),
             )
         )
         log.info("ledger", "Appended forecast to prediction ledger")

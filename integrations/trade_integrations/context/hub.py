@@ -16,6 +16,7 @@ from trade_integrations.dataflows.options_research.models import OptionsResearch
 from trade_integrations.dataflows.options_research.format import format_options_report
 
 _HUB_ENV = "TRADE_STACK_HUB_DIR"
+_ROOT_ENV = "TRADE_STACK_ROOT"
 _CACHE_MINUTES_ENV = "TRADINGAGENTS_RESEARCH_CACHE_MINUTES"
 _PREFETCH_ENV = "TRADINGAGENTS_RESEARCH_PREFETCH"
 _OPTIONS_CACHE_MINUTES_ENV = "TRADINGAGENTS_OPTIONS_CACHE_MINUTES"
@@ -24,13 +25,22 @@ _STOCK_PREFETCH_ENV = "TRADINGAGENTS_STOCK_PREFETCH"
 _INDEX_PREFETCH_ENV = "TRADINGAGENTS_INDEX_PREFETCH"
 
 
+def _trade_stack_root() -> Path:
+    """Repo root for resolving relative hub paths (cwd-independent)."""
+    if custom := os.getenv(_ROOT_ENV, "").strip():
+        return Path(custom).expanduser().resolve()
+    # integrations/trade_integrations/context/hub.py -> parents[3]
+    return Path(__file__).resolve().parents[3]
+
+
 def get_hub_dir() -> Path:
     """Return the shared context hub root directory."""
     if custom := os.getenv(_HUB_ENV, "").strip():
-        return Path(custom).expanduser().resolve()
-    # trade repo root: integrations/trade_integrations/context/hub.py -> parents[3]
-    repo_root = Path(__file__).resolve().parents[3]
-    return repo_root / "reports" / "hub"
+        path = Path(custom).expanduser()
+        if not path.is_absolute():
+            path = _trade_stack_root() / path
+        return path.resolve()
+    return _trade_stack_root() / "reports" / "hub"
 
 
 def is_prefetch_enabled() -> bool:
@@ -70,6 +80,73 @@ def _company_history_retention() -> int:
         return max(7, int(os.getenv("COMPANY_RESEARCH_HISTORY_RETENTION", "365")))
     except ValueError:
         return 90
+
+
+def _options_stock_history_retention() -> int:
+    try:
+        return max(7, int(os.getenv("OPTIONS_STOCK_RESEARCH_HISTORY_RETENTION", "30")))
+    except ValueError:
+        return 30
+
+
+def _append_json_history(out_dir: Path, payload_text: str, *, retention: int) -> None:
+    """Write a timestamped snapshot under ``history/`` and prune to retention count."""
+    history_dir = out_dir / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
+    (history_dir / f"{stamp}.json").write_text(payload_text, encoding="utf-8")
+    snapshots = sorted(history_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in snapshots[retention:]:
+        old.unlink(missing_ok=True)
+
+
+def archive_research_snapshots(
+    kind: str,
+    *,
+    as_of_date: str | None = None,
+) -> dict[str, int]:
+    """Copy each symbol's latest.json to history/YYYY-MM-DD.json for options or stock research."""
+    hub = get_hub_dir()
+    if not hub.is_dir():
+        return {"archived": 0, "skipped": 0, "kind": kind}
+
+    subdir = f"{kind}_research"
+    day = as_of_date or datetime.now(timezone.utc).date().isoformat()
+    archived = 0
+    skipped = 0
+    for symbol_dir in hub.iterdir():
+        if not symbol_dir.is_dir() or symbol_dir.name.startswith("_"):
+            continue
+        latest = symbol_dir / subdir / "latest.json"
+        if not latest.is_file():
+            continue
+        history_dir = symbol_dir / subdir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        daily_path = history_dir / f"{day}.json"
+        if daily_path.is_file():
+            skipped += 1
+            continue
+        daily_path.write_text(latest.read_text(encoding="utf-8"), encoding="utf-8")
+        archived += 1
+
+        snapshots = sorted(history_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        retention = _options_stock_history_retention()
+        for old in snapshots[retention:]:
+            old.unlink(missing_ok=True)
+
+    return {"archived": archived, "skipped": skipped, "date": day, "kind": kind}
+
+
+def archive_options_stock_snapshots(*, as_of_date: str | None = None) -> dict[str, Any]:
+    """Archive latest options and stock research for all hub symbols."""
+    options = archive_research_snapshots("options", as_of_date=as_of_date)
+    stock = archive_research_snapshots("stock", as_of_date=as_of_date)
+    return {
+        "options": options,
+        "stock": stock,
+        "archived": int(options.get("archived", 0)) + int(stock.get("archived", 0)),
+        "skipped": int(options.get("skipped", 0)) + int(stock.get("skipped", 0)),
+    }
 
 
 def archive_company_research_snapshots(*, as_of_date: str | None = None) -> dict[str, int]:
@@ -333,7 +410,9 @@ def save_options_research(doc: OptionsResearchDoc) -> Path:
         for stage in doc.stages
     ]
     json_path = out_dir / "latest.json"
-    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    payload_text = json.dumps(payload, indent=2, default=str)
+    json_path.write_text(payload_text, encoding="utf-8")
+    _append_json_history(out_dir, payload_text, retention=_options_stock_history_retention())
     return json_path
 
 
@@ -400,7 +479,9 @@ def save_stock_research(doc) -> Path:
         {**asdict(stage), "fetched_at": stage.fetched_at.isoformat()} for stage in doc.stages
     ]
     json_path = out_dir / "latest.json"
-    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    payload_text = json.dumps(payload, indent=2, default=str)
+    json_path.write_text(payload_text, encoding="utf-8")
+    _append_json_history(out_dir, payload_text, retention=_options_stock_history_retention())
     return json_path
 
 

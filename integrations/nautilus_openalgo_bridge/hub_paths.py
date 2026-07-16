@@ -7,14 +7,23 @@ import os
 from pathlib import Path
 
 _HUB_ENV = "TRADE_STACK_HUB_DIR"
+_ROOT_ENV = "TRADE_STACK_ROOT"
+
+
+def _trade_stack_root() -> Path:
+    if custom := os.getenv(_ROOT_ENV, "").strip():
+        return Path(custom).expanduser().resolve()
+    # integrations/nautilus_openalgo_bridge/hub_paths.py -> repo root is parents[2]
+    return Path(__file__).resolve().parents[2]
 
 
 def get_hub_dir() -> Path:
     if custom := os.getenv(_HUB_ENV, "").strip():
-        return Path(custom).expanduser().resolve()
-    # integrations/nautilus_openalgo_bridge/hub_paths.py -> repo root is parents[2]
-    repo_root = Path(__file__).resolve().parents[2]
-    return repo_root / "reports" / "hub"
+        path = Path(custom).expanduser()
+        if not path.is_absolute():
+            path = _trade_stack_root() / path
+        return path.resolve()
+    return _trade_stack_root() / "reports" / "hub"
 
 
 def agent_json_path(agent_id: str) -> Path:

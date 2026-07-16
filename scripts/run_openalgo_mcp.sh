@@ -30,6 +30,13 @@ if [[ -f "$ROOT/.env" ]]; then
   set +a
 fi
 
+export TRADE_STACK_ROOT="${TRADE_STACK_ROOT:-$ROOT}"
+if [[ -z "${TRADE_STACK_HUB_DIR:-}" ]]; then
+  export TRADE_STACK_HUB_DIR="$ROOT/reports/hub"
+elif [[ "${TRADE_STACK_HUB_DIR:0:1}" != "/" ]]; then
+  export TRADE_STACK_HUB_DIR="$ROOT/$TRADE_STACK_HUB_DIR"
+fi
+
 export TRADE_INTEGRATIONS_SKIP_APPLY=1
 export PYTHONPATH="$ROOT/integrations:$ROOT/tradingagents${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PY" mcp/mcpserver.py "$@"

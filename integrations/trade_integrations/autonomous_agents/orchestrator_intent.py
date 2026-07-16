@@ -28,7 +28,7 @@ _PAPER_TRADE_RE = re.compile(r"\bpaper\s+trade\b", re.I)
 _AUTONOMOUS_RE = re.compile(r"\bautonomous\b", re.I)
 _INTRADAY_RE = re.compile(r"\bintraday\b", re.I)
 _SWING_RE = re.compile(r"\bswing\b", re.I)
-_US_HINT_RE = re.compile(r"\b(us|usa|alpaca|nasdaq|nyse|america|dollar|\$)\b", re.I)
+_US_HINT_RE = re.compile(r"\b(us|usa|alpaca|nasdaq|nyse|america|usd|dollar)\b|\$", re.I)
 _IN_HINT_RE = re.compile(r"\b(india|indian|nse|bse|nifty|banknifty|₹|inr|openalgo)\b", re.I)
 _AMOUNT_RE = re.compile(
     r"(?:budget|₹|\$|inr|usd|rs\.?|loss(?:\s+limit)?|max(?:imum)?\s+(?:daily\s+)?loss)"
@@ -228,6 +228,12 @@ def build_auto_propose_kwargs(
 
     if "mandate" not in kwargs:
         kwargs["mandate"] = _infer_mandate(user_message, symbols)
+
+    kwargs["user_text"] = user_message
+    if _IN_HINT_RE.search(user_message) and not _US_HINT_RE.search(user_message):
+        kwargs["execution_market"] = "IN"
+    elif _US_HINT_RE.search(user_message) and not _IN_HINT_RE.search(user_message):
+        kwargs["execution_market"] = "US"
 
     sym0 = symbols[0]
     if not kwargs.get("name"):

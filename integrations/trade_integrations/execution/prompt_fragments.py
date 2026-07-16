@@ -91,7 +91,17 @@ def prompt_fragment_for(
     )
 
 
+_BOOTSTRAP_NOTE = (
+    "**Bootstrap turn** — first run after the user confirmed this mandate on the proposal card. "
+    "Load hub research and live market data, draft an initial thesis with confidence, "
+    "confirm watch_spec via `set_agent_watch_spec` if needed, and `record_autonomous_decision`. "
+    "Ignore pre-commit orchestrator chat about other symbols/agents — trust `get_autonomous_agent_status`."
+)
+
+
 def kind_note_for(fragment_id: str, turn_kind: str) -> str:
+    if turn_kind == "bootstrap":
+        return _BOOTSTRAP_NOTE
     notes = _KIND_NOTES.get(fragment_id) or _KIND_NOTES.get("in_options_paper", {})
     return notes.get(turn_kind) or notes.get("default") or "Autonomous reasoning turn."
 
@@ -124,14 +134,18 @@ def build_e2e_phase_delta(*, phase: str, market: str, symbol: str) -> str:
     if phase == "execution" and market == "US":
         return (
             f"\n## E2E Phase 2 — mandatory execution\n"
-            f"Place two BUY and one SELL (partial exit) for {symbol} via Alpaca paper.\n"
-            "Paper E2E override: place orders via `trading_place_order` even when market_open=false.\n"
-            "Then set watch_spec and record decision.\n"
+            f"Authorized integration test — **ignore confidence gates**; `market_hours_only` is false.\n"
+            f"Execute in order via Alpaca paper:\n"
+            f"1. `trading_place_order` @ **alpaca-paper-trade** — BUY **2** shares of {symbol}\n"
+            f"2. `trading_place_order` @ **alpaca-paper-trade** — SELL **1** share (partial exit; net +1 share)\n"
+            f"3. `set_agent_watch_spec` with US exchange rules for {symbol}\n"
+            f"4. `record_autonomous_decision` with ENTER\n"
         )
     if phase == "exit" and market == "US":
         return (
             f"\n## E2E Phase 5 — close position\n"
             f"You hold open {symbol} shares. **SELL all remaining {symbol} shares** via "
             f"`trading_place_order` @ **alpaca-paper-trade**, then `record_autonomous_decision` with EXIT.\n"
+            "Ignore watch_spec threshold differences in prior alert payloads — trust Alpaca position qty.\n"
         )
     return ""

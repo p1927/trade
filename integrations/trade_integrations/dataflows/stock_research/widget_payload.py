@@ -190,9 +190,20 @@ def build_stock_trade_widget(
     widget_intent: str | None = None,
 ) -> dict[str, Any]:
     """Load or run stock research and return widget payload."""
-    if not refresh:
+    from trade_integrations.research.orchestrator import ensure_research_complete
+    from trade_integrations.research.registry import ResearchKind
+
+    result = ensure_research_complete(
+        ticker,
+        kind=ResearchKind.STOCK,
+        refresh=refresh,
+        horizon_days=lookahead_days,
+    )
+    doc = result.doc
+    if doc is None:
         cached = load_stock_research_json(ticker)
         if cached is not None:
-            return build_stock_trade_widget_from_doc(cached, widget_intent=widget_intent)
-    doc = run_stock_research(ticker, lookahead_days=lookahead_days)
+            doc = cached
+        else:
+            doc = run_stock_research(ticker, lookahead_days=lookahead_days)
     return build_stock_trade_widget_from_doc(doc, widget_intent=widget_intent)

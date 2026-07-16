@@ -58,6 +58,17 @@ def main() -> int:
     from trade_integrations.autonomous_agents.store import delete_agent, list_agents
     from trade_integrations.context.hub import get_hub_dir
 
+    if os.getenv("REALISTIC_E2E_MARKET"):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import realistic_e2e_lib as e2e_lib
+
+            n = e2e_lib.purge_e2e_poisoned_memory()
+            if n:
+                print(f"  purged {n} poisoned memory file(s)", flush=True)
+        except Exception as exc:
+            print(f"  warn memory purge: {exc}", flush=True)
+
     hub = get_hub_dir() / "_data"
     agents = list_agents()
     print(f"Cleaning {len(agents)} agent(s)...", flush=True)

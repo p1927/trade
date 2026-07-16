@@ -73,10 +73,23 @@ def build_index_trade_widget(
     widget_intent: str | None = None,
 ) -> dict[str, Any]:
     """Load or run index research and return widget payload."""
+    from trade_integrations.research.orchestrator import ensure_research_complete
+    from trade_integrations.research.registry import ResearchKind
+
     sym = ticker.strip().upper()
-    if not refresh:
+    result = ensure_research_complete(
+        sym,
+        kind=ResearchKind.INDEX,
+        refresh=refresh,
+        horizon_days=horizon_days or 14,
+        refresh_constituents=refresh,
+        require_debate=False,
+    )
+    doc = result.doc
+    if doc is None:
         cached = load_index_research_json(sym)
         if cached and cached.factor_explanation:
-            return build_index_trade_widget_from_doc(cached, widget_intent=widget_intent)
-    doc = run_index_research(sym, horizon_days=horizon_days, refresh_constituents=refresh)
+            doc = cached
+        else:
+            doc = run_index_research(sym, horizon_days=horizon_days, refresh_constituents=refresh)
     return build_index_trade_widget_from_doc(doc, widget_intent=widget_intent)

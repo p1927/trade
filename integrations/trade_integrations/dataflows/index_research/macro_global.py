@@ -139,7 +139,15 @@ def _fii_net_column(frame) -> str | None:
     return None
 
 
-def _fetch_fii_net_5d() -> dict[str, Any] | None:
+def _dii_net_column(frame) -> str | None:
+    for column in frame.columns:
+        label = str(column).lower()
+        if "dii" in label and "net" in label:
+            return column
+    return None
+
+
+def _fetch_flow_net_5d(*, factor: str, net_col_finder) -> dict[str, Any] | None:
     try:
         from nselib import capital_market
     except ImportError:
@@ -158,7 +166,7 @@ def _fetch_fii_net_5d() -> dict[str, Any] | None:
     if frame is None or getattr(frame, "empty", True):
         return None
 
-    net_col = _fii_net_column(frame)
+    net_col = net_col_finder(frame)
     if net_col is None:
         return None
 
@@ -173,11 +181,19 @@ def _fetch_fii_net_5d() -> dict[str, Any] | None:
         return None
 
     return {
-        "factor": "fii_net_5d",
+        "factor": factor,
         "value": sum(values),
         "source": "nselib",
         "metadata": {"rows": len(values), "column": str(net_col)},
     }
+
+
+def _fetch_fii_net_5d() -> dict[str, Any] | None:
+    return _fetch_flow_net_5d(factor="fii_net_5d", net_col_finder=_fii_net_column)
+
+
+def _fetch_dii_net_5d() -> dict[str, Any] | None:
+    return _fetch_flow_net_5d(factor="dii_net_5d", net_col_finder=_dii_net_column)
 
 
 def _fetch_nifty_pe() -> dict[str, Any] | None:
@@ -348,6 +364,7 @@ def fetch_global_macro_snapshot(
         ("us_10y", _fetch_us_10y),
         ("india_vix", _fetch_india_vix),
         ("fii_net_5d", _fetch_fii_net_5d),
+        ("dii_net_5d", _fetch_dii_net_5d),
         ("nifty_pe", _fetch_nifty_pe),
         ("nifty_pcr", _fetch_nifty_pcr),
     ):

@@ -381,6 +381,28 @@ def run_walk_forward_backtest(
             }
         )
 
+    trading_dates = frame["date"].astype(str).str[:10].tolist()
+    from trade_integrations.dataflows.index_research.prediction_miss_analysis import (
+        enrich_eval_row_horizon,
+    )
+
+    exclude_cols = {"date", "close", "target", "realized_1d_pct"}
+    horizon_feature_cols = [
+        c
+        for c in frame.columns
+        if c not in exclude_cols and pd.api.types.is_numeric_dtype(frame[c])
+    ]
+    eval_rows = [
+        enrich_eval_row_horizon(
+            row,
+            frame,
+            horizon_feature_cols,
+            horizon_days=horizon.days,
+            trading_dates=trading_dates,
+        )
+        for row in eval_rows
+    ]
+
     mae = float(np.mean(errors)) if errors else None
     hit_rate = directions_hit / directions_total if directions_total else None
 

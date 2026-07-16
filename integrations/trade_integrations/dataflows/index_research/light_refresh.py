@@ -22,7 +22,10 @@ from trade_integrations.dataflows.index_research.explain import build_factor_exp
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.macro_global import fetch_global_macro_snapshot
 from trade_integrations.dataflows.index_research.models import ConstituentSignal, IndexResearchDoc, PredictionRecord
-from trade_integrations.dataflows.index_research.prediction_ledger import append_prediction
+from trade_integrations.dataflows.index_research.prediction_ledger import (
+    append_prediction,
+    build_prediction_metadata,
+)
 from trade_integrations.dataflows.index_research.predictor import load_stored_model_artifact, predict_nifty
 from trade_integrations.dataflows.index_research.regime import classify_regime
 from trade_integrations.dataflows.index_research.scenarios import (
@@ -248,13 +251,15 @@ def run_index_light_refresh(
                 expected_return_pct=expected,
                 range_low=float(range_block.get("low") or spot),
                 range_high=float(range_block.get("high") or spot),
-                metadata={
-                    "ticker": sym,
-                    "horizon_name": horizon.name,
-                    "refresh": "light",
-                    "bottom_up_return_pct": float(prediction.get("bottom_up_return_pct") or 0.0),
-                    "macro_delta_pct": float(prediction.get("macro_delta_pct") or 0.0),
-                },
+                metadata=build_prediction_metadata(
+                    ticker=sym,
+                    horizon_name=horizon.name,
+                    refresh="light",
+                    prediction=prediction,
+                    global_factors=global_factors,
+                    regime=regime,
+                    scenarios=scenarios,
+                ),
             )
         )
 

@@ -49,8 +49,8 @@ def test_prefetch_emits_index_artifact_and_widget():
     bus = _FakeEventBus()
 
     with (
-        patch("src.trade.hub_bridge.extract_primary_ticker", return_value="NIFTY"),
-        patch("src.trade.hub_bridge.infer_asset_type", return_value="options"),
+        patch("src.trade.session_context.resolve_prefetch_ticker", return_value="NIFTY"),
+        patch("src.trade.session_context.infer_prefetch_asset_type", return_value="options"),
         patch("src.trade.hub_bridge.prefetch_hub_plan", return_value=options_artifact),
         patch("src.trade.hub_bridge.prefetch_index_hub_plan", return_value=index_artifact),
         patch("src.trade.hub_bridge._options_auto_widget_enabled", return_value=False),

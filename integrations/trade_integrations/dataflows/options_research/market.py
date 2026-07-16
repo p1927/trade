@@ -7,22 +7,13 @@ from enum import Enum
 
 from trade_integrations.dataflows.company_research.market import (
     Market,
-    _IN_INDEX_TICKERS,
     detect_market,
     normalize_ticker,
 )
+from trade_integrations.dataflows.symbol_registry import is_india_fno_underlying
+from trade_integrations.dataflows.symbol_registry.openalgo_indices import ALL_INDEX_SYMBOLS
 
-_INDEX_SYMBOLS = frozenset(
-    {
-        "NIFTY",
-        "NIFTY50",
-        "BANKNIFTY",
-        "FINNIFTY",
-        "MIDCPNIFTY",
-        "SENSEX",
-        "BANKEX",
-    }
-)
+_INDEX_SYMBOLS = ALL_INDEX_SYMBOLS | frozenset({"NIFTY50", "BANKEX", "^NSEI", "^BSESN"})
 
 
 class InstrumentType(str, Enum):
@@ -47,11 +38,11 @@ def is_index_symbol(ticker: str) -> bool:
     raw = ticker.strip().upper()
     if raw.startswith("^"):
         raw = raw[1:]
-    return raw in _INDEX_SYMBOLS or raw in _IN_INDEX_TICKERS
+    return raw in _INDEX_SYMBOLS
 
 
 def is_options_research_eligible(ticker: str) -> bool:
-    """Return True for India index or equity F&O underlyings."""
+    """Return True when OpenAlgo SymToken has F&O contracts for this underlying."""
     raw = ticker.strip().upper()
     if not raw:
         return False
@@ -59,10 +50,13 @@ def is_options_research_eligible(ticker: str) -> bool:
         raw = raw[1:]
     if is_index_symbol(raw):
         return True
-    if raw.endswith(".NS") or raw.endswith(".BO"):
+    if is_india_fno_underlying(raw):
         return True
+    if raw.endswith(".NS") or raw.endswith(".BO"):
+        base = raw.rsplit(".", 1)[0]
+        return is_india_fno_underlying(base)
     market = detect_market(ticker)
-    return market == Market.IN
+    return market == Market.IN and is_india_fno_underlying(raw)
 
 
 def resolve_options_instrument(ticker: str) -> OptionsInstrument:

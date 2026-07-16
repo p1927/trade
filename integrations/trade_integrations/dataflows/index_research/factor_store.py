@@ -57,14 +57,13 @@ def _write_parquet(df: pd.DataFrame, path: Path) -> None:
 
 
 def _read_parquet(path: Path) -> pd.DataFrame:
+    csv_path = path.with_suffix(".csv")
     if path.is_file():
         try:
             return pd.read_parquet(path)
-        except ImportError:
-            csv_path = path.with_suffix(".csv")
+        except (ImportError, Exception):
             if csv_path.is_file():
                 return pd.read_csv(csv_path)
-    csv_path = path.with_suffix(".csv")
     if csv_path.is_file():
         return pd.read_csv(csv_path)
     return pd.DataFrame()

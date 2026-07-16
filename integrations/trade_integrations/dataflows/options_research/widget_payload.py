@@ -312,23 +312,34 @@ def build_options_trade_widget(
     widget_intent: str | None = None,
 ) -> dict[str, Any]:
     """Load or run options research and return widget payload."""
-    if not refresh:
-        cached = load_options_research_json(ticker)
-        if cached is not None:
-            if plan_status_from_doc(cached) == "incomplete":
-                refresh = True
-            else:
-                return build_options_trade_widget_from_doc(
-                    cached,
-                    supersedes=supersedes,
-                    revision_reason=revision_reason,
-                    widget_intent=widget_intent,
-                )
-    doc = run_options_research(
+    from trade_integrations.research.orchestrator import ensure_research_complete
+    from trade_integrations.research.registry import ResearchKind
+
+    result = ensure_research_complete(
         ticker,
+        kind=ResearchKind.OPTIONS,
+        refresh=refresh,
+        horizon_days=lookahead_days or 14,
         expiry_date=expiry_date,
-        lookahead_days=lookahead_days,
+        require_debate=False,
     )
+    doc = result.doc
+    if doc is None:
+        cached = load_options_research_json(ticker)
+        if cached is not None and plan_status_from_doc(cached) != "incomplete":
+            doc = cached
+        else:
+            doc = run_options_research(
+                ticker,
+                expiry_date=expiry_date,
+                lookahead_days=lookahead_days,
+            )
+    elif plan_status_from_doc(doc) == "incomplete":
+        doc = run_options_research(
+            ticker,
+            expiry_date=expiry_date,
+            lookahead_days=lookahead_days,
+        )
     return build_options_trade_widget_from_doc(
         doc,
         supersedes=supersedes,

@@ -62,7 +62,15 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         agent["last_watch_at"] = now
         save_agent(agent)
-        return {"status": "watch_only", "reason": "outside_market_hours", "summary": "[autonomous_watch] market closed — summary only"}
+        summary = "[autonomous_watch] market closed — summary only"
+        svc = _session_service()
+        session_id = str(agent.get("vibe_session_id") or "")
+        if svc and session_id:
+            try:
+                await svc.send_message(session_id, summary, role="system")
+            except Exception as exc:
+                logger.warning("failed to append market-closed watch summary to session %s: %s", session_id, exc)
+        return {"status": "watch_only", "reason": "outside_market_hours", "summary": summary}
 
     profile = resolve_profile(agent=agent)
     bridge_agent = profile.uses_nautilus_handoff
@@ -95,7 +103,7 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
             session_id = str(agent.get("vibe_session_id") or "")
             if svc and session_id:
                 try:
-                    await svc.send_message(session_id, summary)
+                    await svc.send_message(session_id, summary, role="system")
                 except Exception as exc:
                     logger.warning("failed to append watch summary to session %s: %s", session_id, exc)
             return {
@@ -146,7 +154,7 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     session_id = str(agent.get("vibe_session_id") or "")
     if svc and session_id:
         try:
-            await svc.send_message(session_id, summary)
+            await svc.send_message(session_id, summary, role="system")
         except Exception as exc:
             logger.warning("failed to append watch summary to session %s: %s", session_id, exc)
 
@@ -158,21 +166,21 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     return {"status": "watch", "summary": summary, "feedback": feedback, "watch_path": "auto_paper_legacy"}
 
 
-async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research") -> None:
-    """Enqueue a full reasoning turn on the agent's bound session."""
+async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research") -> bool:
+    """Enqueue a full reasoning turn on the agent's bound session. Returns True if dispatched."""
     agent = get_agent(agent_id)
     if not agent or str(agent.get("status")) != "running":
-        return
+        return False
 
     if agent.get("streaming"):
         logger.info("skip full reasoning for %s: turn already in flight", agent_id)
-        return
+        return False
 
     svc = _session_service()
     session_id = str(agent.get("vibe_session_id") or "")
     if not svc or not session_id:
         logger.warning("no session service for autonomous agent %s", agent_id)
-        return
+        return False
 
     prompt = build_full_reasoning_prompt(agent=agent, turn_kind=turn_kind)
     agent["streaming"] = True
@@ -183,7 +191,9 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
 
     try:
         await svc.send_message(session_id, prompt)
-    finally:
+        return True
+    except Exception:
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
+        raise

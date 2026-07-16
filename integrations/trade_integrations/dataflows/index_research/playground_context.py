@@ -9,6 +9,9 @@ from trade_integrations.dataflows.index_research.causal_attribution import (
     _NEWS_KEYWORDS,
     _FACTOR_CAUSE_COPY,
 )
+from trade_integrations.dataflows.index_research.cascade.heuristic_rules import (
+    HEURISTIC_CASCADE_RULES,
+)
 from trade_integrations.dataflows.index_research.simulate import macro_factors_from_rows
 
 
@@ -39,6 +42,33 @@ def _headline_factor_hints(title: str) -> list[str]:
 def _why_for_factor(factor: str, direction: str = "up") -> str:
     copy = _FACTOR_CAUSE_COPY.get(factor, {})
     return copy.get(direction) or copy.get("up") or f"May affect Nifty via {factor.replace('_', ' ')}."
+
+
+def _group_triggers_by_factor(triggers: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for item in triggers:
+        keys = list(item.get("suggested_factors") or [])
+        primary = item.get("primary_factor")
+        if primary and primary not in keys:
+            keys.insert(0, str(primary))
+        for factor in keys:
+            key = str(factor or "").strip()
+            if not key:
+                continue
+            rows = buckets.setdefault(key, [])
+            if not any(r.get("title") == item.get("title") for r in rows):
+                rows.append(item)
+    return buckets
+
+
+def _cascade_downstream_map() -> dict[str, list[dict[str, Any]]]:
+    return {
+        primary: [
+            {"factor": secondary, "multiplier": mult, "mode": mode}
+            for secondary, mult, mode in rules
+        ]
+        for primary, rules in HEURISTIC_CASCADE_RULES.items()
+    }
 
 
 def build_playground_context(
@@ -177,6 +207,9 @@ def build_playground_context(
         "blend_alpha": cascade_cal.get("blend_alpha"),
     }
 
+    all_triggers = headlines[:12] + events[:16]
+    factor_news = _group_triggers_by_factor(all_triggers)
+
     return {
         "ticker": ticker,
         "as_of": doc.as_of.isoformat() if hasattr(doc.as_of, "isoformat") else str(doc.as_of),
@@ -184,6 +217,8 @@ def build_playground_context(
         "horizon_days": (doc.horizon or {}).get("days"),
         "headlines": headlines[:12],
         "events": events[:16],
+        "factor_news": factor_news,
+        "cascade_downstream": _cascade_downstream_map(),
         "ranked_factors": ranked_factors[:16],
         "event_impact_curves": doc.event_impact_curves or [],
         "global_factors": global_map,

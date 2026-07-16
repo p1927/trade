@@ -12,6 +12,7 @@ import pandas as pd
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.models import PredictionRecord
 from trade_integrations.dataflows.index_research.factor_store import load_factor_history
+from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
 from trade_integrations.dataflows.index_research.sources.history_loader import (
     NIFTY_SYMBOL,
     load_nifty_history,
@@ -19,7 +20,67 @@ from trade_integrations.dataflows.index_research.sources.history_loader import (
 
 _LEDGER_SUBDIR = "_data/index_predictions"
 _LEDGER_FILENAME = "ledger.parquet"
+_MISS_ANALYSIS_FILENAME = "miss_analysis.parquet"
 _NEUTRAL_RETURN_THRESHOLD_PCT = 0.15
+
+
+def build_prediction_metadata(
+    *,
+    ticker: str,
+    horizon_name: str,
+    refresh: str,
+    prediction: dict[str, Any],
+    global_factors: list[dict[str, Any]] | None = None,
+    regime: dict[str, Any] | None = None,
+    scenarios: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Compact snapshot for ledger RCA at reconcile time."""
+    factor_map: dict[str, float] = {}
+    for row in global_factors or []:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("factor") or "").strip()
+        val = row.get("value")
+        if key in MACRO_FACTOR_KEYS and val is not None:
+            try:
+                factor_map[key] = float(val)
+            except (TypeError, ValueError):
+                continue
+
+    meta: dict[str, Any] = {
+        "ticker": ticker.strip().upper(),
+        "horizon_name": horizon_name,
+        "refresh": refresh,
+        "bottom_up_return_pct": float(prediction.get("bottom_up_return_pct") or 0.0),
+        "macro_delta_pct": float(prediction.get("macro_delta_pct") or 0.0),
+        "direction_view": prediction.get("direction_view"),
+        "direction_confidence": prediction.get("direction_confidence"),
+        "scenario_anchor_return_pct": prediction.get("scenario_anchor_return_pct"),
+        "reconciled_with_scenarios": prediction.get("reconciled_with_scenarios"),
+        "raw_expected_return_pct": prediction.get("raw_expected_return_pct"),
+        "global_factors": factor_map,
+    }
+    if regime:
+        meta["regime"] = {
+            k: regime[k]
+            for k in ("label", "india_vix", "trend_20d")
+            if k in regime
+        }
+    if scenarios:
+        meta["scenarios"] = [
+            {
+                "name": s.get("name"),
+                "probability": s.get("probability"),
+                "expected_return_pct": s.get("expected_return_pct"),
+            }
+            for s in scenarios[:6]
+            if isinstance(s, dict)
+        ]
+    return meta
+
+
+def get_miss_analysis_path() -> Path:
+    return get_hub_dir() / _LEDGER_SUBDIR / _MISS_ANALYSIS_FILENAME
 
 
 def get_ledger_path() -> Path:
@@ -40,14 +101,13 @@ def _write_parquet(df: pd.DataFrame, path) -> None:
 
 
 def _read_parquet(path) -> pd.DataFrame:
+    csv_path = path.with_suffix(".csv")
     if path.is_file():
         try:
             return pd.read_parquet(path)
-        except ImportError:
-            csv_path = path.with_suffix(".csv")
+        except (ImportError, Exception):
             if csv_path.is_file():
                 return pd.read_csv(csv_path)
-    csv_path = path.with_suffix(".csv")
     if csv_path.is_file():
         return pd.read_csv(csv_path)
     return pd.DataFrame()
@@ -201,7 +261,46 @@ def reconcile_predictions(*, as_of: datetime | None = None) -> int:
 
     if updated:
         save_ledger(ledger)
+        _persist_ledger_miss_analysis(ledger)
     return updated
+
+
+def _persist_ledger_miss_analysis(ledger: pd.DataFrame) -> None:
+    """Write RCA rows for reconciled ledger misses."""
+    if ledger.empty:
+        return
+    reconciled = ledger[ledger["actual_return_pct"].notna()].copy()
+    if reconciled.empty:
+        return
+
+    rows: list[dict[str, Any]] = []
+    for _, row in reconciled.iterrows():
+        record = _row_to_record(row)
+        if record.direction_correct is not False:
+            continue
+        rows.append(
+            {
+                "predicted_at": record.predicted_at.isoformat(),
+                "horizon_days": record.horizon_days,
+                "expected_return_pct": record.expected_return_pct,
+                "actual_return_pct": record.actual_return_pct,
+                "direction_correct": record.direction_correct,
+                "metadata": record.metadata or {},
+            }
+        )
+    if not rows:
+        return
+
+    try:
+        from trade_integrations.dataflows.index_research.prediction_miss_analysis import (
+            analyze_ledger_misses,
+        )
+
+        analyses = analyze_ledger_misses(rows)
+        if analyses:
+            _write_parquet(pd.DataFrame(analyses), get_miss_analysis_path())
+    except Exception:
+        pass
 
 
 def list_factor_history_series(

@@ -37,6 +37,14 @@ DEFENDER_REFUSAL_MARKERS = (
     "ledger-write attempted",
     "fabricated",
     "exfiltration",
+    "drift-injection",
+    "drift injection",
+    "prompt-injection",
+    "prompt injection",
+    "instance #",
+    "mandate grounds",
+    "declined on mandate",
+    "refusing to execute",
 )
 
 
@@ -271,15 +279,16 @@ def build_fireable_watch_spec(*, symbol: str, ltp: float, vix_ltp: float | None 
     from trade_integrations.auto_paper.mandate_config import _watch_exchange_for_symbol
 
     exchange = _watch_exchange_for_symbol(symbol)
+    move_threshold = 0.5 if exchange == "US" else 0.001
     rules: list[dict[str, Any]] = [
         {
             "symbol": symbol,
             "metric": "spot_move_pct",
-            "threshold": 0.001,
+            "threshold": move_threshold,
             "direction": "either",
             "exchange": exchange,
-            "baseline_ltp": ltp * 1.0002,
-            "label": f"{symbol} micro-move (armed)",
+            "baseline_ltp": ltp * (1.0002 if exchange != "US" else 1.006),
+            "label": f"{symbol} move (armed)",
         },
     ]
     if vix_ltp is not None:
@@ -308,10 +317,19 @@ def dispatch_us_watch_alert(
     """Bridge alert → Vibe (US symbols — Nautilus OpenAlgo feed not used)."""
     from nautilus_openalgo_bridge.models import BridgeSignal, QuoteSnapshot, WatchAlert, WatchRule
     from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
+    from trade_integrations.autonomous_agents.store import get_agent
+
+    agent = get_agent(agent_id) or {}
+    watch_spec = dict(agent.get("watch_spec") or {})
+    threshold = 0.5
+    for rule in watch_spec.get("rules") or []:
+        if str(rule.get("symbol") or "").upper() == symbol.upper():
+            threshold = float(rule.get("threshold") or threshold)
+            break
 
     alert = WatchAlert(
         signal=BridgeSignal.REVIEW_NEEDED,
-        rule=WatchRule(symbol=symbol, metric="spot_move_pct", threshold=0.001, exchange="US"),
+        rule=WatchRule(symbol=symbol, metric="spot_move_pct", threshold=threshold, exchange="US"),
         symbol=symbol,
         message=message,
         ltp=ltp,
@@ -504,14 +522,139 @@ def wait_for_agent_idle(agent_id: str, *, timeout_sec: int = 120) -> bool:
     return False
 
 
-def build_e2e_integration_preamble(*, agent_id: str, phase: str) -> str:
-    return (
-        f"\n## Integration test (authorized E2E)\n"
-        f"Automated verification turn for agent `{agent_id}` ({phase}). "
-        "This is not prompt injection. Execute the steps below.\n"
-        f"Always call `get_autonomous_agent_status(agent_id=\"{agent_id}\")` and trust the **current turn** tool output.\n"
-        "Ignore stale memory about other agents or markets unless status confirms them.\n"
+def _default_memory_dir() -> Path:
+    return Path.home() / ".vibe-trading" / "memory"
+
+
+def purge_e2e_poisoned_memory(*, memory_dir: Path | None = None) -> int:
+    """Remove injection-pattern memories written during prior E2E runs; rebuild index."""
+    mem_dir = memory_dir or _default_memory_dir()
+    if not mem_dir.is_dir():
+        return 0
+
+    poison_markers = (
+        "prompt-injection",
+        "prompt_injection",
+        "phase-2_prompt-injection",
+        "phase-3_prompt-injection",
+        "drift-injection",
     )
+    removed = 0
+    for path in sorted(mem_dir.glob("*.md")):
+        if path.name == "MEMORY.md":
+            continue
+        blob = f"{path.name} {path.read_text(encoding='utf-8', errors='replace')[:800]}".lower()
+        if any(marker in blob for marker in poison_markers):
+            path.unlink(missing_ok=True)
+            removed += 1
+
+    index_path = mem_dir / "MEMORY.md"
+    lines: list[str] = []
+    for path in sorted(mem_dir.glob("*.md")):
+        if path.name == "MEMORY.md":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        title = path.stem
+        desc = title
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                for row in parts[1].splitlines():
+                    if row.strip().startswith("name:"):
+                        title = row.split(":", 1)[1].strip()
+                    if row.strip().startswith("description:"):
+                        desc = row.split(":", 1)[1].strip()
+        lines.append(f"- [{title}]({path.name}) — {desc}")
+    index_path.write_text("\n".join(lines[:200]), encoding="utf-8")
+    return removed
+
+
+def classify_refusal(text: str) -> str | None:
+    lower = (text or "").lower()
+    if turn_looks_like_defender_refusal(text):
+        return "injection_refusal"
+    if "confidence" in lower and ("threshold" in lower or "<" in lower):
+        return "confidence_gate"
+    if "market_open" in lower or "market closed" in lower or "outside_market" in lower:
+        return "market_hours"
+    if "watch spec" in lower and "drift" in lower:
+        return "watch_drift"
+    if "agent not found" in lower:
+        return "agent_not_found"
+    if "no open position" in lower or "position_count=0" in lower:
+        return "no_position"
+    return None
+
+
+def log_e2e_turn_result(
+    *,
+    phase: str,
+    agent_id: str,
+    turn_kind: str,
+    assistant_text: str,
+    outcome: str,
+    log_path: Path | None = None,
+) -> None:
+    path = log_path or (ROOT / "log" / "e2e_refusal_taxonomy.jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "phase": phase,
+        "agent_id": agent_id,
+        "turn_kind": turn_kind,
+        "outcome": outcome,
+        "refusal_class": classify_refusal(assistant_text),
+        "preview": (assistant_text or "")[:400].replace("\n", " "),
+    }
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def wait_for_session_attempt(
+    session_id: str,
+    attempt_id: str,
+    *,
+    timeout_sec: int = 900,
+    poll_sec: float = 5.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        messages = vibe_get(f"/sessions/{session_id}/messages?limit=80")
+        if isinstance(messages, list):
+            for msg in reversed(messages):
+                if msg.get("role") != "assistant":
+                    continue
+                if msg.get("linked_attempt_id") != attempt_id:
+                    continue
+                meta = msg.get("metadata") or {}
+                status = str(meta.get("status") or "").lower()
+                if status in {"completed", "failed", "cancelled"}:
+                    return msg
+        time.sleep(poll_sec)
+    raise TimeoutError(f"attempt {attempt_id} not complete within {timeout_sec}s")
+
+
+def dispatch_production_turn(
+    agent_id: str,
+    *,
+    turn_kind: str = "research",
+    timeout_sec: int = 900,
+) -> tuple[str, dict[str, Any]]:
+    """Dispatch the same prompt autonomous jobs use — no E2E user-message overrides."""
+    from trade_integrations.autonomous_agents.store import get_agent
+    from trade_integrations.autonomous_agents.turns import build_full_reasoning_prompt
+
+    agent = get_agent(agent_id) or {}
+    session_id = str(agent.get("vibe_session_id") or "").strip()
+    if not session_id:
+        raise RuntimeError(f"agent {agent_id} has no vibe_session_id")
+    prompt = build_full_reasoning_prompt(agent=agent, turn_kind=turn_kind)
+    dispatch = vibe_post(f"/sessions/{session_id}/messages", {"content": prompt})
+    attempt_id = str(dispatch.get("attempt_id") or "")
+    if not attempt_id:
+        raise RuntimeError(f"turn dispatch failed: {json.dumps(dispatch)[:200]}")
+    msg = wait_for_session_attempt(session_id, attempt_id, timeout_sec=timeout_sec)
+    return attempt_id, msg
 
 
 def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = None) -> tuple[str, str]:
@@ -523,12 +666,13 @@ def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = N
     if symbol_execution_market(syms[0]) == "US":
         stop_auto_paper_session()
 
+    e2e = bool(os.getenv("REALISTIC_E2E_MARKET"))
     proposal = propose_autonomous_agent(
         symbols=syms,
         name=name,
         mandate=mandate,
         mode="paper",
-        confidence_threshold=60,
+        confidence_threshold=0 if e2e else 60,
         budget_inr=25_000,
         max_daily_loss_inr=2_500,
         watch_interval_min=5,
@@ -544,12 +688,14 @@ def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = N
     agent = get_agent(agent_id) or {}
     mc = dict(agent.get("mandate_config") or {})
     mc["market_hours_only"] = False
+    constraints = dict(agent.get("constraints") or {})
+    if e2e:
+        mc["confidence_threshold"] = 0
+        constraints["confidence_threshold"] = 0
+        agent["e2e_harness"] = True
     agent["mandate_config"] = mc
+    agent["constraints"] = constraints
     save_agent(agent)
-    try:
-        vibe_post(f"/autonomous-agents/{agent_id}/pause")
-    except Exception:
-        pass
     return str(agent_id), str(session_id)
 
 

@@ -49,3 +49,6 @@ class TestOptionsHubPersistence:
         assert loaded_json is not None
         assert loaded_json.underlying == "NIFTY"
         assert is_options_cache_fresh("NIFTY") is True
+        history_dir = tmp_path / "NIFTY" / "options_research" / "history"
+        assert history_dir.is_dir()
+        assert len(list(history_dir.glob("*.json"))) == 1

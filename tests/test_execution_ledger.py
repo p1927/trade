@@ -7,6 +7,7 @@ import json
 import pytest
 
 from trade_integrations.monitor.execution_ledger import (
+    close_ledger_entry,
     get_ledger_entry,
     list_open_by_underlying,
     list_open_entries,
@@ -142,3 +143,70 @@ def test_ledger_round_trip_json_shape(monkeypatch, tmp_path):
         "broker_order_ids",
     ):
         assert key in row
+
+
+@pytest.mark.unit
+def test_save_ledger_writes_executions_parquet(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+
+    record_execution(
+        widget_id="tp_NIFTY_parquet",
+        underlying="NIFTY",
+        legs=[{"symbol": "NIFTY31JUL25C24500", "quantity": 50}],
+        prediction_view="bullish",
+        recommended_name="Bull Call Spread",
+        scenarios=[],
+        broker_order_ids=["OID-1"],
+        plan_spot=24500.0,
+    )
+
+    parquet_path = tmp_path / "_data" / "trades" / "executions.parquet"
+    csv_path = parquet_path.with_suffix(".csv")
+    assert parquet_path.is_file() or csv_path.is_file()
+
+    try:
+        import pandas as pd
+
+        df = pd.read_parquet(parquet_path) if parquet_path.is_file() else pd.read_csv(csv_path)
+    except ImportError:
+        df = __import__("pandas").read_csv(csv_path)
+    assert len(df) == 1
+    assert df.iloc[0]["widget_id"] == "tp_NIFTY_parquet"
+    assert df.iloc[0]["strategy"] == "Bull Call Spread"
+
+
+@pytest.mark.unit
+def test_close_ledger_entry_sets_pnl_and_outcome(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+
+    entry = record_execution(
+        widget_id="tp_NIFTY_close",
+        underlying="NIFTY",
+        legs=[{"symbol": "NIFTY31JUL25C24500"}],
+        prediction_view="bullish",
+        recommended_name="Bull Call Spread",
+        scenarios=[],
+        execution_mode="paper",
+    )
+
+    def _fake_position_book():
+        return {
+            "data": [
+                {"symbol": "NIFTY31JUL25C24500", "quantity": 50, "pnl": 150.0},
+            ]
+        }
+
+    monkeypatch.setattr(
+        "trade_integrations.monitor.execution_ledger.fetch_position_book",
+        _fake_position_book,
+    )
+    assert close_ledger_entry(entry["widget_id"]) is True
+
+    closed = get_ledger_entry(entry["widget_id"])
+    assert closed["status"] == "closed"
+    assert closed.get("closed_at")
+    assert closed.get("realized_pnl_inr") == 150.0
+
+    outcomes_path = tmp_path / "_data" / "auto_paper" / "outcomes.parquet"
+    outcomes_csv = outcomes_path.with_suffix(".csv")
+    assert outcomes_path.is_file() or outcomes_csv.is_file()

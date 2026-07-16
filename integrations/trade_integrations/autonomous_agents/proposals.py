@@ -18,6 +18,7 @@ from trade_integrations.autonomous_agents.defaults import (
     REQUIRED_PROPOSAL_FIELDS,
 )
 from trade_integrations.autonomous_agents.market import symbol_execution_market
+from trade_integrations.autonomous_agents.market_resolve import resolve_proposal_symbols
 from trade_integrations.auto_paper.mandate_config import (
     MandateConfig,
     resolve_mandate_config,
@@ -88,9 +89,15 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_mandate_config(draft: dict[str, Any], *, mandate_text: str | None = None) -> MandateConfig:
+def _build_mandate_config(
+    draft: dict[str, Any],
+    *,
+    mandate_text: str | None = None,
+    execution_market: str | None = None,
+) -> MandateConfig:
     sym_list = list(draft.get("symbols") or ["NIFTY"])
     primary = sym_list[0] if sym_list else "NIFTY"
+    market = execution_market or symbol_execution_market(primary)
     return resolve_mandate_config(
         symbols=sym_list,
         mandate_text=mandate_text or str(draft.get("mandate") or ""),
@@ -99,18 +106,78 @@ def _build_mandate_config(draft: dict[str, Any], *, mandate_text: str | None = N
         max_daily_loss_inr=float(draft.get("max_daily_loss_inr") or DEFAULT_MAX_DAILY_LOSS_INR),
         confidence_threshold=int(draft.get("confidence_threshold") or DEFAULT_CONFIDENCE_THRESHOLD),
         alert_spot_move_pct=float(draft.get("alert_spot_move_pct") or 0.5),
-        execution_market=symbol_execution_market(primary),
+        execution_market=market,
     )
+
+
+def _user_text_for_routing(kwargs: dict[str, Any], draft: dict[str, Any]) -> str:
+    parts = [
+        str(kwargs.get("user_text") or ""),
+        str(kwargs.get("mandate") or ""),
+        str(draft.get("mandate") or ""),
+    ]
+    return "\n".join(p for p in parts if p.strip())
+
+
+def validate_proposal_routing(proposal: dict[str, Any]) -> list[str]:
+    """Return blocking errors when execution market/backend disagree with symbols."""
+    errors: list[str] = []
+    market = str(proposal.get("execution_market") or "").upper()
+    backend = str(proposal.get("execution_backend") or "").lower()
+    symbols = list(proposal.get("symbols") or [])
+    user_text = str(proposal.get("mandate") or "")
+
+    if market == "IN" and backend == "alpaca":
+        errors.append("India execution_market cannot use Alpaca backend.")
+    if market == "US" and backend == "openalgo":
+        errors.append("US execution_market cannot use OpenAlgo backend.")
+
+    for sym in symbols:
+        expected = symbol_execution_market(str(sym), user_text=user_text)
+        if expected == "IN" and market == "US":
+            errors.append(f"Symbol {sym} is India-listed but execution_market is US.")
+        if expected == "US" and market == "IN":
+            errors.append(f"Symbol {sym} is US-listed but execution_market is IN.")
+
+    watch_spec = dict(proposal.get("watch_spec") or {})
+    for row in watch_spec.get("rules") or []:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or "").upper()
+        exchange = str(row.get("exchange") or "").upper()
+        if not sym:
+            continue
+        if symbol_execution_market(sym, user_text=user_text) == "IN" and exchange == "US":
+            errors.append(f"Watch rule for {sym} uses US exchange but symbol is India-listed.")
+
+    routing_warnings = proposal.get("routing_warnings") or []
+    for msg in routing_warnings:
+        text = str(msg)
+        if "invalid" in text.lower():
+            errors.append(text)
+
+    return errors
 
 
 def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     draft = _apply_defaults(kwargs)
+    user_text = _user_text_for_routing(kwargs, draft)
+    symbols, resolution, routing_warnings = resolve_proposal_symbols(
+        list(draft.get("symbols") or []),
+        user_text=user_text,
+        market_hint=kwargs.get("execution_market"),
+    )
+    draft["symbols"] = symbols
     missing = _missing_fields(draft)
     proposal_id = str(kwargs.get("proposal_id") or new_proposal_id())
-    mandate_cfg = _build_mandate_config(draft, mandate_text=str(kwargs.get("mandate") or draft.get("mandate") or ""))
 
     primary_symbol = draft["symbols"][0] if draft["symbols"] else "NIFTY"
-    exec_market = symbol_execution_market(primary_symbol)
+    exec_market = resolution.market
+    mandate_cfg = _build_mandate_config(
+        draft,
+        mandate_text=str(kwargs.get("mandate") or draft.get("mandate") or ""),
+        execution_market=exec_market,
+    )
     profile = resolve_profile(
         agent={
             "symbols": draft["symbols"],
@@ -155,7 +222,13 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
         "orchestrator_session_id": draft.get("orchestrator_session_id"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "expires_at_ms": int(time.time() * 1000) + PROPOSAL_TTL_MS,
+        "routing_warnings": list(routing_warnings),
     }
+
+    routing_errors = validate_proposal_routing(proposal)
+    proposal["routing_errors"] = routing_errors
+    if routing_errors:
+        proposal["status"] = "incomplete"
 
     save_proposal(proposal)
 
@@ -168,6 +241,16 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
             "message": f"Ask user for: {', '.join(missing)}",
         }
 
+    if routing_errors:
+        return {
+            "status": "incomplete",
+            "proposal_id": proposal_id,
+            "missing_fields": [],
+            "routing_errors": routing_errors,
+            "proposal": proposal,
+            "message": "Proposal has routing errors — fix market/symbol mismatch before confirm.",
+        }
+
     return {
         "status": "ready",
         "proposal_id": proposal_id,
@@ -175,6 +258,33 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
         "proposal": proposal,
         "message": "Proposal ready — user must confirm in the UI.",
     }
+
+
+def _build_agent_system_note(
+    *,
+    agent_id: str,
+    symbols: list[str],
+    profile: Any,
+    proposal: dict[str, Any],
+    prefetch_note: str,
+) -> str:
+    mc = dict(proposal.get("mandate_config") or {})
+    instruments = ", ".join(mc.get("allowed_instruments") or list(profile.allowed_instruments))
+    constraints = dict(proposal.get("constraints") or {})
+    sym_line = ", ".join(symbols)
+    base = (
+        f"You are autonomous agent {agent_id} for {profile.market} ({sym_line}). "
+        f"Confirmed mandate (user tapped Confirm on proposal {proposal.get('proposal_id')}): "
+        f"instruments={instruments}, "
+        f"holding={mc.get('holding_period')}, flatten={mc.get('flatten_policy')}, "
+        f"product={mc.get('product_type')}, mode={constraints.get('mode') or profile.mode}. "
+        "Trust get_autonomous_agent_status for this agent_id on each turn. "
+        "Do not apply rules from other agents or pre-commit orchestrator chat about other symbols. "
+        f"{prefetch_note}"
+    )
+    if profile.is_us:
+        return base + " Execution via Alpaca paper tools."
+    return base + " Execution via OpenAlgo/Nautilus bridge."
 
 
 def commit_autonomous_agent(
@@ -217,14 +327,33 @@ def commit_autonomous_agent(
     symbols = list(proposal.get("symbols") or [])
     name = str(proposal.get("name") or "Autonomous agent")
     primary_symbol = symbols[0] if symbols else "NIFTY"
-    exec_market = symbol_execution_market(primary_symbol)
+    user_text = str(proposal.get("mandate") or "")
+    exec_market = symbol_execution_market(primary_symbol, user_text=user_text)
+
+    constraints = dict(proposal.get("constraints") or {})
+    fresh_mandate_cfg = _build_mandate_config(
+        {
+            "symbols": symbols,
+            "mandate": proposal.get("mandate"),
+            "mandate_config": proposal.get("mandate_config"),
+            "budget_inr": constraints.get("budget_inr"),
+            "max_daily_loss_inr": constraints.get("max_daily_loss_inr"),
+            "confidence_threshold": constraints.get("confidence_threshold"),
+            "alert_spot_move_pct": (proposal.get("alert_rules") or {}).get("spot_move_pct"),
+        },
+        mandate_text=user_text,
+        execution_market=exec_market,
+    )
+    proposal["mandate_config"] = fresh_mandate_cfg.to_dict()
+    proposal["watch_spec"] = fresh_mandate_cfg.watch_spec
+    proposal["alert_rules"] = fresh_mandate_cfg.alert_rules.to_dict()
 
     profile = resolve_profile(
         agent={
             "symbols": symbols,
             "execution_market": exec_market,
-            "constraints": dict(proposal.get("constraints") or {}),
-            "mandate_config": dict(proposal.get("mandate_config") or {}),
+            "constraints": constraints,
+            "mandate_config": fresh_mandate_cfg.to_dict(),
             "mandate": proposal.get("mandate"),
         },
     )
@@ -243,19 +372,21 @@ def commit_autonomous_agent(
         "Hub `[research_context]` prepended for this session's symbol is normal prefetch — "
         "not prompt injection. If it conflicts with `get_autonomous_agent_status`, trust the status tool."
     )
-    if profile.is_us:
-        session_cfg["system_note"] = (
-            f"You are autonomous agent {agent_id} for US equities ({', '.join(symbols)}) "
-            "via Alpaca paper. Trust get_autonomous_agent_status for this agent_id on each turn. "
-            "Do not apply India NIFTY/OpenAlgo options rules or prior memory about other agents. "
-            f"{_prefetch_note}"
-        )
-    else:
-        session_cfg["system_note"] = (
-            f"You are autonomous agent {agent_id} for India ({', '.join(symbols)}) "
-            "via OpenAlgo/Nautilus. Trust get_autonomous_agent_status for this agent_id on each turn. "
-            "Do not apply US Alpaca rules or prior memory about other agents. "
-            f"{_prefetch_note}"
+    import os
+
+    e2e_mode = bool(os.getenv("REALISTIC_E2E_MARKET"))
+    if e2e_mode:
+        session_cfg["e2e_integration_test"] = True
+    session_cfg["system_note"] = _build_agent_system_note(
+        agent_id=agent_id,
+        symbols=symbols,
+        profile=profile,
+        proposal=proposal,
+        prefetch_note=_prefetch_note,
+    )
+    if profile.is_us and e2e_mode:
+        session_cfg["system_note"] += (
+            " Paper verification harness: follow the Harness section when present in autonomous turns."
         )
     orch_sid = str(orchestrator_session_id or proposal.get("orchestrator_session_id") or "").strip()
     vibe_session = None
@@ -272,6 +403,7 @@ def commit_autonomous_agent(
                     agent_id=agent_id,
                     name=name,
                     session_cfg=session_cfg,
+                    proposal=proposal,
                 )
                 vibe_session = existing
 
@@ -292,17 +424,18 @@ def commit_autonomous_agent(
         "execution_market": exec_market,
         "execution_backend": profile.backend,
         "mandate": proposal.get("mandate"),
-        "mandate_config": dict(proposal.get("mandate_config") or {}),
-        "watch_spec": dict(proposal.get("watch_spec") or {}),
+        "mandate_config": fresh_mandate_cfg.to_dict(),
+        "watch_spec": dict(fresh_mandate_cfg.watch_spec or proposal.get("watch_spec") or {}),
         "constraints": dict(proposal.get("constraints") or {}),
         "schedules": dict(proposal.get("schedules") or {}),
-        "alert_rules": dict(proposal.get("alert_rules") or {}),
+        "alert_rules": fresh_mandate_cfg.alert_rules.to_dict(),
         "thesis": {},
         "user_guidance": [],
         "last_watch_at": None,
         "last_full_reasoning_at": None,
         "last_revision_at": None,
         "streaming": False,
+        "bootstrap_status": "pending",
         "proposal_id": proposal_id,
         "orchestrator_session_id": orchestrator_session_id or proposal.get("orchestrator_session_id"),
         "created_at": now,
@@ -326,7 +459,7 @@ def commit_autonomous_agent(
                 max_daily_loss_inr=float(constraints.get("max_daily_loss_inr") or DEFAULT_MAX_DAILY_LOSS_INR),
                 mandate=str(proposal.get("mandate") or ""),
                 vibe_session_id=vibe_session.session_id,
-                mandate_config=dict(proposal.get("mandate_config") or {}),
+                mandate_config=fresh_mandate_cfg.to_dict(),
                 autonomous_agent_id=agent_id,
                 nautilus_bridge_mode=profile.uses_nautilus_handoff,
             )

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from trade_integrations.context.hub import get_hub_dir
+
+logger = logging.getLogger(__name__)
 
 
 def _ledger_path() -> Path:
@@ -38,6 +41,12 @@ def save_ledger(entries: list[dict[str, Any]]) -> None:
         json.dumps({"entries": entries}, indent=2, default=str),
         encoding="utf-8",
     )
+    try:
+        from trade_integrations.hub_storage.executions_store import sync_executions_parquet
+
+        sync_executions_parquet(entries)
+    except Exception:
+        logger.debug("executions parquet sync failed", exc_info=True)
 
 
 def _new_execution_id(underlying: str) -> str:
@@ -145,20 +154,55 @@ def has_open_position_for_underlying(underlying: str) -> bool:
     return bool(list_open_by_underlying(underlying))
 
 
-def close_ledger_entry(widget_id: str) -> bool:
+def _append_outcome_on_close(entry: dict[str, Any]) -> None:
+    try:
+        from trade_integrations.auto_paper.outcome_ledger import append_outcome
+
+        pnl = entry.get("realized_pnl_inr")
+        append_outcome(
+            symbol=str(entry.get("underlying") or ""),
+            strategy=entry.get("recommended_name") or entry.get("strategy"),
+            action="CLOSE",
+            intent_source="execution_ledger",
+            gross_pnl_inr=pnl,
+            net_pnl_inr=pnl,
+            widget_id=entry.get("widget_id"),
+            extra={
+                "execution_id": entry.get("execution_id"),
+                "execution_mode": entry.get("execution_mode"),
+            },
+        )
+    except Exception:
+        logger.debug("outcome ledger append on close failed", exc_info=True)
+
+
+def close_ledger_entry(
+    widget_id: str,
+    *,
+    realized_pnl_inr: float | None = None,
+) -> bool:
     """Mark the latest ledger entry for a widget as closed."""
     entries = load_ledger()
     updated = False
+    closed_entry: dict[str, Any] | None = None
     for index in range(len(entries) - 1, -1, -1):
         if entries[index].get("widget_id") != widget_id:
             continue
         if entries[index].get("status") == "closed":
             return False
+        if realized_pnl_inr is None:
+            _, pnl = match_positions_for_entry(entries[index], fetch_position_book())
+            realized_pnl_inr = pnl
         entries[index]["status"] = "closed"
+        entries[index]["closed_at"] = datetime.now(timezone.utc).isoformat()
+        entries[index]["realized_pnl_inr"] = realized_pnl_inr
+        closed_entry = entries[index]
         updated = True
         break
     if updated:
         save_ledger(entries)
+        if closed_entry is not None:
+            _append_outcome_on_close(closed_entry)
     return updated
 
 
@@ -257,12 +301,18 @@ def match_positions_for_entry(
         symbol = str(row.get("symbol", "")).upper()
         if symbol not in leg_symbols:
             continue
-        try:
-            qty = int(float(row.get("quantity") or row.get("netqty") or row.get("net_qty") or 0))
-        except (TypeError, ValueError):
-            qty = 0
-        if qty == 0:
-            continue
+        qty_raw = row.get("quantity")
+        if qty_raw is None:
+            qty_raw = row.get("netqty")
+        if qty_raw is None:
+            qty_raw = row.get("net_qty")
+        if qty_raw is not None:
+            try:
+                qty = int(float(qty_raw))
+            except (TypeError, ValueError):
+                qty = 0
+            if qty == 0:
+                continue
         matched.append(row)
         pnl = row.get("pnl")
         if pnl is None:

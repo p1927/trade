@@ -59,24 +59,43 @@ def format_research_context_for_agent(
 
 def _format_paper_calibration_context() -> str:
     try:
-        from trade_integrations.auto_paper.outcome_ledger import compute_paper_calibration_metrics
+        from trade_integrations.auto_paper.outcome_ledger import (
+            compute_execution_calibration_metrics,
+            compute_paper_calibration_metrics,
+        )
 
-        metrics = compute_paper_calibration_metrics()
+        paper = compute_paper_calibration_metrics()
+        execution = compute_execution_calibration_metrics()
     except Exception:
         return ""
-    if not metrics.get("closed_trades"):
+    if not paper.get("closed_trades") and not execution.get("closed_trades"):
         return ""
-    lines = [
-        "[paper_calibration]",
-        f"closed_trades: {metrics.get('closed_trades')}",
-        f"avg_net_pnl_inr: {metrics.get('avg_net_pnl_inr')}",
-    ]
-    rates = metrics.get("strategy_hit_rates") or {}
-    if rates:
-        lines.append("strategy_hit_rates:")
-        for name, hit in sorted(rates.items(), key=lambda kv: kv[1], reverse=True)[:8]:
-            lines.append(f"  - {name}: {hit:.0%}")
-    lines.append("[/paper_calibration]")
+    lines = ["[trade_calibration]"]
+    if paper.get("closed_trades"):
+        lines.extend(
+            [
+                f"paper_closed_trades: {paper.get('closed_trades')}",
+                f"paper_avg_net_pnl_inr: {paper.get('avg_net_pnl_inr')}",
+            ]
+        )
+        rates = paper.get("strategy_hit_rates") or {}
+        if rates:
+            lines.append("paper_strategy_hit_rates:")
+            for name, hit in sorted(rates.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+                lines.append(f"  - {name}: {hit:.0%}")
+    if execution.get("closed_trades"):
+        lines.extend(
+            [
+                f"execution_closed_trades: {execution.get('closed_trades')}",
+                f"execution_avg_net_pnl_inr: {execution.get('avg_net_pnl_inr')}",
+            ]
+        )
+        rates = execution.get("strategy_hit_rates") or {}
+        if rates:
+            lines.append("execution_strategy_hit_rates:")
+            for name, hit in sorted(rates.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+                lines.append(f"  - {name}: {hit:.0%}")
+    lines.append("[/trade_calibration]")
     return "\n".join(lines)
 
 

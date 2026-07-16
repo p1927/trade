@@ -15,6 +15,21 @@ This workspace runs a layered trade stack:
 
 Always prefer **OpenAlgo MCP** for live Indian execution (Groww, INDmoney, etc.). Vibe's native Dhan/Shoonya connectors are read-only/paper only.
 
+## Hub-first data discipline (avoid duplicate API calls)
+
+The shared hub at `{{TRADE_STACK_HUB_DIR}}` is the **single store** for research, history, and calibration. Vibe and TradingAgents both read from it — do not re-fetch upstream vendors when hub data is fresh.
+
+**Read order:**
+
+1. **Research panel / `[research_context]`** — auto-prefetched on ticker mention
+2. **OpenAlgo MCP** — `get_*_browse`, `get_*_trade_plan`, `get_*_widget` with **`refresh=false`** unless the user asks to regenerate
+3. **`run_tradingagents_analysis(refresh=false)`** — debate synthesis only on finalize / second opinion
+4. **Avoid** — `get_market_data`, `get_stock_news`, or raw vendor calls when hub `latest.json` / MCP browse already covers the symbol
+
+**Long-term repository:** `_data/index_factors/`, `_data/*_predictions/ledger.parquet`, `_data/news/daily/`, `_data/derivatives_chain/daily/`, `_data/ticks/daily/` (exported from Timescale), `{TICKER}/company_research/history/` feed model retrain and ranker calibration. Inventory: `python scripts/hub_inventory.py`. Unified nightly calibration: `python scripts/run_hub_calibration.py --phase all`. Cross-ledger SQL: `python scripts/hub_query.py --list-builtins`.
+
+**What lives where:** `latest.json` = live working copy (TTL refresh). Hub parquet/json history = training + replay. TimescaleDB = hot sub-minute ticks during watch only (optional; `TIMESCALE_ENABLED=true`).
+
 ## Shared context hub
 
 Pre-computed research lives at:

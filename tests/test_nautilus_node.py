@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("nautilus_trader")
+pytest.importorskip("nautilus_trader.cache.config")
 
 from nautilus_openalgo_bridge.node import build_trading_node_config  # noqa: E402
 

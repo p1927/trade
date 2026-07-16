@@ -40,6 +40,17 @@ MACRO_FACTOR_KEYS: tuple[str, ...] = (
 _MAX_FEATURES = 40
 _MIN_ABS_CORR = 0.05
 
+# Always include in Ridge training when present in history (flows, vol, oil).
+_PINNED_MACRO_FACTORS: frozenset[str] = frozenset(
+    {
+        "fii_net_5d",
+        "dii_net_5d",
+        "oil_brent",
+        "india_vix",
+        "nifty_pcr",
+    }
+)
+
 
 def _forward_return_pct(close: pd.Series, horizon_days: int) -> pd.Series:
     future = close.shift(-horizon_days)
@@ -107,6 +118,10 @@ def build_factor_matrix(
             reverse=True,
         )
         selected = ranked[:_MAX_FEATURES]
+
+    for col in _PINNED_MACRO_FACTORS:
+        if col in macro_cols and col not in selected:
+            selected.append(col)
 
     X = usable[selected].to_numpy(dtype=float)
     return X, y, selected

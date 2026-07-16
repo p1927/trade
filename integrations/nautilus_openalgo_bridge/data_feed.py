@@ -93,8 +93,22 @@ class OpenAlgoQuoteFeed:
 
         quotes = parse_multiquote_response(payload, requests)
         if quotes:
+            try:
+                from trade_integrations.hub_storage.timescale_ticks import record_quote_snapshots
+
+                record_quote_snapshots(quotes, source="openalgo_watch")
+            except Exception:
+                logger.debug("timescale tick record skipped", exc_info=True)
             return quotes
-        return self._poll_fallback(watch_symbols)
+        fallback = self._poll_fallback(watch_symbols)
+        if fallback:
+            try:
+                from trade_integrations.hub_storage.timescale_ticks import record_quote_snapshots
+
+                record_quote_snapshots(fallback, source="openalgo_watch")
+            except Exception:
+                logger.debug("timescale tick record skipped", exc_info=True)
+        return fallback
 
     def _poll_fallback(self, watch_symbols: list[str]) -> dict[str, QuoteSnapshot]:
         out: dict[str, QuoteSnapshot] = {}

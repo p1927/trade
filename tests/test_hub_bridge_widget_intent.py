@@ -49,8 +49,8 @@ def test_prefetch_no_widget_when_intent_none_even_if_auto_enabled():
     bus = _FakeEventBus()
 
     with (
-        patch("src.trade.hub_bridge.extract_primary_ticker", return_value="NIFTY"),
-        patch("src.trade.hub_bridge.infer_asset_type", return_value="options"),
+        patch("src.trade.session_context.resolve_prefetch_ticker", return_value="NIFTY"),
+        patch("src.trade.session_context.infer_prefetch_asset_type", return_value="options"),
         patch("src.trade.hub_bridge.prefetch_hub_plan", return_value=artifact),
         patch("src.trade.hub_bridge._options_auto_widget_enabled", return_value=True),
         patch("src.trade.hub_bridge._maybe_emit_options_widget") as emit_opt,
@@ -75,8 +75,8 @@ def test_prefetch_emits_options_widget_on_strategy_intent():
     bus = _FakeEventBus()
 
     with (
-        patch("src.trade.hub_bridge.extract_primary_ticker", return_value="NIFTY"),
-        patch("src.trade.hub_bridge.infer_asset_type", return_value="options"),
+        patch("src.trade.session_context.resolve_prefetch_ticker", return_value="NIFTY"),
+        patch("src.trade.session_context.infer_prefetch_asset_type", return_value="options"),
         patch("src.trade.hub_bridge.prefetch_hub_plan", return_value=artifact),
         patch("src.trade.hub_bridge._options_auto_widget_enabled", return_value=True),
         patch("src.trade.hub_bridge._maybe_emit_options_widget") as emit_opt,

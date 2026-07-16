@@ -73,6 +73,7 @@ _FACTOR_LABELS: dict[str, str] = {
     "us_10y": "US 10Y yield",
     "india_vix": "India VIX",
     "fii_net_5d": "FII net (5d)",
+    "dii_net_5d": "DII net (5d)",
     "nifty_pe": "Nifty PE",
     "cpi_yoy_proxy": "CPI (proxy)",
     "repo_rate": "Repo rate",
@@ -129,7 +130,17 @@ _EVENT_SHOCKS: list[dict[str, Any]] = [
     },
 ]
 
-_ABSOLUTE_SHOCK_FACTORS = frozenset({"repo_rate", "india_vix", "us_10y", "fii_net_5d"})
+_ABSOLUTE_SHOCK_FACTORS = frozenset({"repo_rate", "india_vix", "us_10y", "fii_net_5d", "dii_net_5d"})
+
+# Always emit sensitivity curves for these drivers (flows, vol, oil, FX).
+PINNED_SENSITIVITY_FACTORS: tuple[str, ...] = (
+    "fii_net_5d",
+    "dii_net_5d",
+    "oil_brent",
+    "india_vix",
+    "nifty_pcr",
+    "usd_inr",
+)
 
 
 def _factor_label(key: str) -> str:
@@ -281,6 +292,41 @@ def explain_macro_factors(
     }
 
 
+def _factor_available(
+    factor: str,
+    macro_factors: dict[str, Any],
+    artifact: ModelArtifact | None,
+) -> bool:
+    if factor in macro_factors:
+        return True
+    return bool(artifact and factor in (artifact.feature_names or []))
+
+
+def _merge_sensitivity_factors(
+    top_factors: list[str],
+    macro_factors: dict[str, Any],
+    artifact: ModelArtifact | None,
+    *,
+    max_factors: int,
+) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for factor in PINNED_SENSITIVITY_FACTORS:
+        if factor not in seen:
+            ordered.append(factor)
+            seen.add(factor)
+    for factor in top_factors:
+        if factor not in seen:
+            ordered.append(factor)
+            seen.add(factor)
+    for factor in _iter_macro_factor_names(macro_factors, artifact):
+        if factor not in seen and _factor_available(factor, macro_factors, artifact):
+            ordered.append(factor)
+            seen.add(factor)
+    cap = max(max_factors, len(PINNED_SENSITIVITY_FACTORS))
+    return ordered[:cap]
+
+
 def build_factor_sensitivity(
     macro_factors: dict[str, Any],
     *,
@@ -301,16 +347,33 @@ def build_factor_sensitivity(
         bottom_up_return_pct=bottom_up_return_pct,
         artifact=artifact,
     )
-    top_factors = [
-        row["factor"]
-        for row in explanation.get("contributors", [])[:max_factors]
-    ]
+    top_factors = _merge_sensitivity_factors(
+        [
+            row["factor"]
+            for row in explanation.get("contributors", [])[:max_factors]
+        ],
+        macro_factors,
+        artifact,
+        max_factors=max_factors,
+    )
     if not top_factors:
         top_factors = [
             k
             for k in _iter_macro_factor_names(macro_factors, artifact)
             if k in macro_factors
         ][:max_factors]
+
+    base_ridge_macro = _capped_macro_delta(macro_factors, horizon, artifact)
+    reconciled_base_macro = (
+        headline_return_pct - bottom_up_return_pct
+        if headline_return_pct is not None
+        else base_ridge_macro
+    )
+    reconcile_scale = (
+        reconciled_base_macro / base_ridge_macro
+        if headline_return_pct is not None and abs(base_ridge_macro) > 1e-9
+        else 1.0
+    )
 
     curves: list[dict[str, Any]] = []
     start, end, step = sweep_pct
@@ -327,17 +390,20 @@ def build_factor_sensitivity(
             else:
                 perturbed[factor] = base_val * (1.0 + pct / 100.0) if base_val else pct / 100.0
 
-            macro_delta = _capped_macro_delta(perturbed, horizon, artifact)
-            total_return = bottom_up_return_pct + macro_delta
+            shocked_ridge_macro = _capped_macro_delta(perturbed, horizon, artifact)
+            raw_marginal = shocked_ridge_macro - base_ridge_macro
+            macro_delta = round(raw_marginal * reconcile_scale, 4)
             if pct == 0 and headline_return_pct is not None:
                 total_return = headline_return_pct
-                macro_delta = total_return - bottom_up_return_pct
+                macro_delta = round(reconciled_base_macro, 4)
+            else:
+                total_return = round(bottom_up_return_pct + reconciled_base_macro + macro_delta, 4)
             index_level = spot * (1.0 + total_return / 100.0)
             points.append(
                 {
                     "factor_delta_pct": pct,
                     "factor_value": perturbed.get(factor),
-                    "macro_delta_pct": round(macro_delta, 4),
+                    "macro_delta_pct": macro_delta,
                     "return_pct": round(total_return, 4),
                     "index_level": round(index_level, 2),
                 }

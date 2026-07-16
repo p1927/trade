@@ -308,6 +308,63 @@ def parse_mandate_from_text(
     return cfg
 
 
+def _infer_allowed_instruments(
+    mandate_text: str,
+    symbols: list[str],
+    *,
+    is_us: bool,
+) -> list[str] | None:
+    """Return allowed_instruments when mandate text clearly signals equity vs options."""
+    text = mandate_text.lower()
+    index_symbols = {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "BANKEX", "MIDCPNIFTY"}
+    sym0 = (symbols[0] if symbols else "").upper()
+
+    equity_signals = (
+        "equity",
+        "stock",
+        "stocks",
+        "shares",
+        "share",
+        "cnc",
+        "cash market",
+        "underlying stock",
+        "underlying",
+        "not options",
+        "no options",
+        "without options",
+        "not option",
+    )
+    options_signals = (
+        "options",
+        "option chain",
+        "option",
+        "calls",
+        "puts",
+        "straddle",
+        "strangle",
+        "iron condor",
+        "credit spread",
+        "debit spread",
+    )
+
+    has_equity = any(w in text for w in equity_signals)
+    has_options = any(w in text for w in options_signals)
+
+    if not has_options and any(w in text for w in ("buy", "sell")) and sym0 not in index_symbols and len(sym0) > 2:
+        has_equity = True
+
+    if "mis" in text and "nrml" not in text and not has_options:
+        has_equity = True
+
+    if has_equity and not has_options:
+        return ["equity"]
+    if has_options and not has_equity:
+        return ["options"]
+    if has_options and has_equity:
+        return ["options", "equity"]
+    return None
+
+
 def resolve_mandate_config(
     *,
     symbols: list[str],
@@ -363,6 +420,11 @@ def resolve_mandate_config(
 
     if not cfg.watch_spec.get("rules"):
         cfg.watch_spec = to_watch_spec(cfg, symbols=sym_list)
+
+    inferred = _infer_allowed_instruments(mandate_text, sym_list, is_us=is_us)
+    if inferred is not None:
+        cfg.allowed_instruments = inferred
+
     return cfg
 
 

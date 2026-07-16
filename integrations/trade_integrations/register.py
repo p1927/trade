@@ -12,13 +12,17 @@ def apply() -> None:
     global _APPLIED
     if _APPLIED:
         return
-    _APPLIED = True
+
+    from trade_integrations.env import load_trade_env
+
+    load_trade_env()
 
     _patch_default_config()
     _patch_vendor_routing()
     _patch_sentiment_analyst()
     _patch_news_analyst()
     _patch_trading_graph()
+    _APPLIED = True
 
 
 def _patch_default_config() -> None:

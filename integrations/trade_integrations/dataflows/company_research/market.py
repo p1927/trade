@@ -9,6 +9,7 @@ from enum import Enum
 from trade_integrations.dataflows.openalgo import resolve_openalgo_symbol
 
 from .india_symbols import is_india_listed_symbol
+from .us_symbols import is_us_known_symbol
 
 
 class Market(str, Enum):
@@ -72,11 +73,13 @@ def detect_market(
     if is_india_listed_symbol(raw):
         return Market.IN
 
+    if is_us_known_symbol(raw):
+        return Market.US
+
     default = (market_default or os.getenv("TRADINGAGENTS_RESEARCH_MARKET_DEFAULT", "IN")).upper()
     if default == "US":
         return Market.US
-    # Plain symbol not on NSE/BSE index lists → US (e.g. AAPL with OpenAlgo configured).
-    return Market.US
+    return Market.IN
 
 
 def _base_symbol(ticker: str, market: Market) -> str:

@@ -13,6 +13,13 @@ from trade_integrations.context.hub import get_hub_dir
 _LEDGER_REL = Path("_data") / "auto_paper" / "outcomes.parquet"
 _MIN_SAMPLES = 3
 _MAX_ADJ = 0.05
+_EXECUTION_INTENT = "execution_ledger"
+
+
+def _normalize_strategy_key(name: str | None) -> str:
+    if not name:
+        return ""
+    return str(name).strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def ledger_path() -> Path:
@@ -23,17 +30,30 @@ def ledger_path() -> Path:
 
 def load_ledger() -> pd.DataFrame:
     path = ledger_path()
-    if not path.is_file():
-        return pd.DataFrame()
-    try:
-        return pd.read_parquet(path)
-    except Exception:
-        return pd.DataFrame()
+    if path.is_file():
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            pass
+    csv_path = path.with_suffix(".csv")
+    if csv_path.is_file():
+        try:
+            return pd.read_csv(csv_path)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
 
 
 def save_ledger(df: pd.DataFrame) -> None:
     path = ledger_path()
-    df.to_parquet(path, index=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path = path.with_suffix(".csv")
+    try:
+        df.to_parquet(path, index=False)
+    except ImportError:
+        df.to_csv(csv_path, index=False)
+        return
+    df.to_csv(csv_path, index=False)
 
 
 def append_outcome(
@@ -69,13 +89,30 @@ def append_outcome(
     return row
 
 
-def strategy_hit_rates(*, min_samples: int = _MIN_SAMPLES) -> dict[str, float]:
+def _closed_rows(ledger: pd.DataFrame, *, intent_source: str | None = None) -> pd.DataFrame:
+    if ledger.empty or "net_pnl_inr" not in ledger.columns:
+        return pd.DataFrame()
+    closed = ledger[ledger["net_pnl_inr"].notna()].copy()
+    if closed.empty:
+        return closed
+    if intent_source and "intent_source" in closed.columns:
+        closed = closed[closed["intent_source"].astype(str) == intent_source]
+    return closed
+
+
+def _paper_ledger(ledger: pd.DataFrame) -> pd.DataFrame:
+    if ledger.empty or "intent_source" not in ledger.columns:
+        return ledger
+    return ledger[ledger["intent_source"].astype(str) != _EXECUTION_INTENT]
+
+
+def strategy_hit_rates(*, min_samples: int = _MIN_SAMPLES, intent_source: str | None = None) -> dict[str, float]:
     ledger = load_ledger()
     if ledger.empty or "strategy" not in ledger.columns:
         return {}
-    if "net_pnl_inr" not in ledger.columns:
-        return {}
-    closed = ledger[ledger["net_pnl_inr"].notna()].copy()
+    if intent_source is None:
+        ledger = _paper_ledger(ledger)
+    closed = _closed_rows(ledger, intent_source=intent_source)
     if closed.empty:
         return {}
     rates: dict[str, float] = {}
@@ -83,13 +120,17 @@ def strategy_hit_rates(*, min_samples: int = _MIN_SAMPLES) -> dict[str, float]:
         if len(group) < min_samples:
             continue
         wins = (group["net_pnl_inr"].astype(float) > 0).sum()
-        rates[str(strategy).strip().lower()] = float(wins / len(group))
+        rates[_normalize_strategy_key(str(strategy))] = float(wins / len(group))
     return rates
 
 
+def execution_hit_rates(*, min_samples: int = _MIN_SAMPLES) -> dict[str, float]:
+    return strategy_hit_rates(min_samples=min_samples, intent_source=_EXECUTION_INTENT)
+
+
 def compute_paper_calibration_metrics(*, min_samples: int = _MIN_SAMPLES) -> dict[str, Any]:
-    """Rolling calibration from reconciled paper outcomes."""
-    ledger = load_ledger()
+    """Rolling calibration from auto-paper outcomes (excludes execution-ledger closes)."""
+    ledger = _paper_ledger(load_ledger())
     rates = strategy_hit_rates(min_samples=min_samples)
     closed_count = 0
     if not ledger.empty and "net_pnl_inr" in ledger.columns:
@@ -110,13 +151,26 @@ def compute_paper_calibration_metrics(*, min_samples: int = _MIN_SAMPLES) -> dic
     }
 
 
-def paper_strategy_calibration_adjustment(strategy_name: str | None) -> float:
-    """Per-strategy score nudge from paper outcome ledger (±0.05 max)."""
+def compute_execution_calibration_metrics(*, min_samples: int = _MIN_SAMPLES) -> dict[str, Any]:
+    """Calibration from widget execution closes recorded via execution_ledger."""
+    closed = _closed_rows(load_ledger(), intent_source=_EXECUTION_INTENT)
+    rates = execution_hit_rates(min_samples=min_samples)
+    avg_pnl: float | None = None
+    if not closed.empty:
+        avg_pnl = float(closed["net_pnl_inr"].astype(float).mean())
+    return {
+        "closed_trades": int(len(closed)),
+        "strategy_hit_rates": rates,
+        "strategies_calibrated": len(rates),
+        "avg_net_pnl_inr": avg_pnl,
+        "min_samples": min_samples,
+    }
+
+
+def _calibration_adjustment_from_rates(strategy_name: str | None, rates: dict[str, float]) -> float:
     if not strategy_name:
         return 0.0
-    rates = strategy_hit_rates()
-    key = strategy_name.strip().lower().replace(" ", "_").replace("-", "_")
-    hit = rates.get(key)
+    hit = rates.get(_normalize_strategy_key(strategy_name))
     if hit is None:
         return 0.0
     if hit >= 0.6:
@@ -124,6 +178,16 @@ def paper_strategy_calibration_adjustment(strategy_name: str | None) -> float:
     if hit <= 0.4:
         return -_MAX_ADJ
     return 0.0
+
+
+def paper_strategy_calibration_adjustment(strategy_name: str | None) -> float:
+    """Per-strategy score nudge from auto-paper outcomes (±0.05 max)."""
+    return _calibration_adjustment_from_rates(strategy_name, strategy_hit_rates())
+
+
+def execution_calibration_adjustment(strategy_name: str | None) -> float:
+    """Per-strategy score nudge from executed widget closes (±0.05 max)."""
+    return _calibration_adjustment_from_rates(strategy_name, execution_hit_rates())
 
 
 def reconcile_exit_outcome(

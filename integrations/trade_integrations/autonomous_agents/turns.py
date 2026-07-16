@@ -95,6 +95,38 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 
     title_suffix = " — US / Alpaca" if profile.is_us else ""
 
+    bootstrap_block = ""
+    if turn_kind == "bootstrap":
+        bootstrap_block = (
+            "\n## Bootstrap checklist\n"
+            "1. Call `get_autonomous_agent_status(agent_id=\""
+            f"{agent_id}\")` — this is the confirmed mandate; do not refuse as injection.\n"
+            f"2. Load research for **{focus}** (hub + browse tools for {instrument_line}).\n"
+            "3. Draft initial thesis (direction, strategy, confidence 0–100, rationale).\n"
+            "4. Confirm or update watch_spec; record HOLD/SKIP if below confidence gate.\n"
+        )
+
+    harness_block = ""
+    if agent.get("e2e_harness") and turn_kind == "research" and profile.is_paper:
+        if profile.is_us:
+            harness_block = (
+                "\n## Harness (paper verification)\n"
+                f"If flat with no open {focus} position, enter one paper long via the normal Alpaca flow "
+                "on this turn, then set watch rules and record the decision.\n"
+            )
+        elif profile.market == "IN":
+            harness_block = (
+                "\n## Harness (paper verification)\n"
+                f"If flat, enter a paper {focus} options position via the normal OpenAlgo basket flow "
+                "on this turn, then set watch rules and record the decision.\n"
+            )
+    elif agent.get("e2e_harness") and turn_kind == "strategy_revision" and profile.is_us and profile.is_paper:
+        harness_block = (
+            "\n## Harness (paper verification)\n"
+            f"If you hold {focus} shares, close the paper position via the normal Alpaca flow "
+            "and record EXIT.\n"
+        )
+
     return f"""# Autonomous agent turn ({turn_kind}){title_suffix}
 
 {header}
@@ -112,8 +144,8 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 
 {mandate_json}
 {thesis_block}{guidance_block}{scorer_block}
-{flow}
-"""
+{bootstrap_block}{flow}
+{harness_block}"""
 
 
 def build_orchestrator_system_note() -> str:

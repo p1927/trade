@@ -113,7 +113,7 @@ def run_agent_debate(
     if hub_past_context:
         original_run_graph = graph._run_graph
 
-        def _run_graph_with_hub(company_name, trade_date_arg, asset_type_arg=resolved_asset):
+        def _run_graph_with_hub(company_name, trade_date_arg, asset_type=resolved_asset):
             original_create = graph.propagator.create_initial_state
 
             def _create_with_hub(*args, **kwargs):
@@ -124,7 +124,7 @@ def run_agent_debate(
 
             graph.propagator.create_initial_state = _create_with_hub
             try:
-                return original_run_graph(company_name, trade_date_arg, asset_type=asset_type_arg)
+                return original_run_graph(company_name, trade_date_arg, asset_type=asset_type)
             finally:
                 graph.propagator.create_initial_state = original_create
 

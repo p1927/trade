@@ -54,3 +54,31 @@ def test_reconcile_exit_outcome_fills_pnl(ledger_path):
     )
     assert row is not None
     assert float(row["net_pnl_inr"]) == -250.0
+
+
+def test_execution_calibration_adjustment(ledger_path):
+    df = pd.DataFrame(
+        [
+            {
+                "strategy": "iron_condor",
+                "net_pnl_inr": 100.0,
+                "action": "CLOSE",
+                "intent_source": "execution_ledger",
+            },
+            {
+                "strategy": "iron_condor",
+                "net_pnl_inr": 80.0,
+                "action": "CLOSE",
+                "intent_source": "execution_ledger",
+            },
+            {
+                "strategy": "iron_condor",
+                "net_pnl_inr": 50.0,
+                "action": "CLOSE",
+                "intent_source": "execution_ledger",
+            },
+        ]
+    )
+    ol.save_ledger(df)
+    assert ol.execution_calibration_adjustment("iron_condor") == pytest.approx(0.05)
+    assert ol.paper_strategy_calibration_adjustment("iron_condor") == 0.0

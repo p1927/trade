@@ -60,6 +60,26 @@ def rank_stock_strategies(
     ranked: list[dict[str, Any]] = []
     for name in names:
         score, tier, rationale = _score_candidate(name, signals)
+        try:
+            from trade_integrations.auto_paper.outcome_ledger import (
+                execution_calibration_adjustment,
+                paper_strategy_calibration_adjustment,
+            )
+
+            score = round(
+                min(
+                    max(
+                        score
+                        + paper_strategy_calibration_adjustment(name)
+                        + execution_calibration_adjustment(name),
+                        0.2,
+                    ),
+                    0.95,
+                ),
+                3,
+            )
+        except Exception:
+            pass
         action = "BUY" if name != "hold_cash" else "HOLD"
         qty = 1
         target = round(spot * 1.05, 2) if action == "BUY" else None

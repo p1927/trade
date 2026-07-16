@@ -50,6 +50,72 @@ def test_explain_macro_factors_marginal_contributions():
 
 
 @pytest.mark.unit
+def test_factor_sensitivity_reconciled_around_headline():
+    """Shocked points must be continuous with reconciled headline at 0%."""
+    horizon = resolve_horizon(14)
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 2.0, "oil_brent": -1.0},
+        intercept=4.5,
+        mae=1.2,
+        feature_names=["usd_inr", "oil_brent"],
+        poly_degree=1,
+        horizon_name="B",
+    )
+    macro = {"usd_inr": 83.2, "oil_brent": 82.0}
+    bottom_up = 0.5
+    headline = bottom_up + 0.9
+    curves = build_factor_sensitivity(
+        macro,
+        horizon=horizon,
+        spot=24500.0,
+        bottom_up_return_pct=bottom_up,
+        headline_return_pct=headline,
+        artifact=artifact,
+        sweep_pct=(-5, 5, 5),
+        max_factors=2,
+    )
+    curve = curves[0]
+    zero = next(p for p in curve["points"] if p["factor_delta_pct"] == 0)
+    minus = next(p for p in curve["points"] if p["factor_delta_pct"] == -5)
+    plus = next(p for p in curve["points"] if p["factor_delta_pct"] == 5)
+    assert zero["return_pct"] == pytest.approx(headline, abs=0.01)
+    assert abs(minus["return_pct"] - zero["return_pct"]) < 2.5
+    assert abs(plus["return_pct"] - zero["return_pct"]) < 2.5
+
+
+@pytest.mark.unit
+def test_factor_sensitivity_includes_pinned_flow_factors():
+    horizon = resolve_horizon(14)
+    macro = {
+        "usd_inr": 83.2,
+        "oil_brent": 82.0,
+        "fii_net_5d": 1200.0,
+        "dii_net_5d": -800.0,
+        "india_vix": 14.0,
+    }
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 0.05, "fii_net_5d": -0.02, "dii_net_5d": 0.01},
+        intercept=0.1,
+        mae=1.2,
+        feature_names=["usd_inr", "fii_net_5d", "dii_net_5d"],
+        poly_degree=1,
+        horizon_name="B",
+    )
+    curves = build_factor_sensitivity(
+        macro,
+        horizon=horizon,
+        spot=24500.0,
+        bottom_up_return_pct=0.5,
+        artifact=artifact,
+        sweep_pct=(-5, 5, 5),
+        max_factors=2,
+    )
+    factors = {c["factor"] for c in curves}
+    assert "fii_net_5d" in factors
+    assert "dii_net_5d" in factors
+
+
+@pytest.mark.unit
 def test_factor_sensitivity_curve_points():
     horizon = resolve_horizon(14)
     curves = build_factor_sensitivity(

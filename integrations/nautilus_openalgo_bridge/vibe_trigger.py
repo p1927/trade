@@ -50,7 +50,8 @@ def build_bridge_alert_block(
         "alert": alert.to_dict(),
         "quotes": quote_rows,
     }
-    exchange = str(alert.rule.exchange or "").upper()
+    rule = alert.rule
+    exchange = str(rule.exchange or "").upper() if rule is not None else ""
     title = "Watch alert (US Alpaca)" if exchange == "US" else "Nautilus watch alert (bridge)"
     return (
         f"## {title}\n"

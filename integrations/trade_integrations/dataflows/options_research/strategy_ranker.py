@@ -151,10 +151,12 @@ def rank_strategies(
             pass
         try:
             from trade_integrations.auto_paper.outcome_ledger import (
+                execution_calibration_adjustment,
                 paper_strategy_calibration_adjustment,
             )
 
             score += paper_strategy_calibration_adjustment(cand.get("name"))
+            score += execution_calibration_adjustment(cand.get("name"))
         except Exception:
             pass
         score = max(0.0, min(1.0, score))

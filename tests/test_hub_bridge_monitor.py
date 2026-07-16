@@ -105,8 +105,8 @@ def test_prefetch_research_does_not_call_monitor_when_disabled(monkeypatch):
     bus = _FakeEventBus()
 
     with (
-        patch("src.trade.hub_bridge.extract_primary_ticker", return_value="NIFTY"),
-        patch("src.trade.hub_bridge.infer_asset_type", return_value="options"),
+        patch("src.trade.session_context.resolve_prefetch_ticker", return_value="NIFTY"),
+        patch("src.trade.session_context.infer_prefetch_asset_type", return_value="options"),
         patch("src.trade.hub_bridge.prefetch_hub_plan", return_value=artifact),
         patch("src.trade.hub_bridge._options_auto_widget_enabled", return_value=False),
         patch(
