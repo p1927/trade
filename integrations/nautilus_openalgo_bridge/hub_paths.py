@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 _HUB_ENV = "TRADE_STACK_HUB_DIR"
 _ROOT_ENV = "TRADE_STACK_ROOT"
