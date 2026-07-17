@@ -107,6 +107,10 @@ def test_commit_reuses_orchestrator_session(monkeypatch, agents_hub):
         "trade_integrations.auto_paper.mcp_actions.start_auto_paper",
         lambda **k: None,
     )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.infra_startup.start_required_infra",
+        lambda **k: ([], []),
+    )
 
     result = proposals.commit_autonomous_agent(
         proposal_id=proposal_id,
@@ -117,3 +121,70 @@ def test_commit_reuses_orchestrator_session(monkeypatch, agents_hub):
     assert result["vibe_session_id"] == orch_sid
     assert created == []  # must NOT create a new session
     assert result["agent"]["vibe_session_id"] == orch_sid
+
+
+def test_commit_trusts_proposal_execution_market(monkeypatch, agents_hub):
+    from trade_integrations.autonomous_agents import proposals
+    from trade_integrations.autonomous_agents.store import save_proposal
+
+    proposal_id = "aap_market1"
+    save_proposal(
+        {
+            "proposal_id": proposal_id,
+            "status": "ready",
+            "missing_fields": [],
+            "routing_errors": [],
+            "symbols": ["NVDA"],
+            "execution_market": "US",
+            "execution_backend": "alpaca",
+            "name": "NVDA bot",
+            "mandate": "paper trade US equity",
+            "constraints": {
+                "mode": "paper",
+                "budget_inr": 20000,
+                "max_daily_loss_inr": 2000,
+                "confidence_threshold": 75,
+            },
+            "mandate_config": {"allowed_instruments": ["equity"]},
+            "watch_spec": {},
+            "schedules": {"watch_ms": 420000, "research_ms": 5400000},
+            "alert_rules": {},
+            "expires_at_ms": 9999999999999,
+        }
+    )
+
+    class FakeSvc:
+        def create_session(self, title="", config=None):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(session_id="sess_us", title=title)
+
+        class Bus:
+            def emit(self, *a, **k):
+                pass
+
+        event_bus = Bus()
+
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.infra_startup.start_required_infra",
+        lambda **k: ([], ["US agent — informational"]),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.proposals.validate_proposal_routing",
+        lambda _p: [],
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.proposals.validate_proposal_symbols",
+        lambda _s: [],
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.market.symbol_execution_market",
+        lambda *_a, **_k: "IN",
+    )
+
+    result = proposals.commit_autonomous_agent(
+        proposal_id=proposal_id,
+        consent_ack=True,
+        session_service=FakeSvc(),
+    )
+    assert result["agent"]["execution_market"] == "US"

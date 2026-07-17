@@ -85,6 +85,10 @@ class TestOrchestratorProposeFlow:
             "trade_integrations.auto_paper.mcp_actions.start_auto_paper",
             lambda **k: None,
         )
+        monkeypatch.setattr(
+            "trade_integrations.autonomous_agents.infra_startup.start_required_infra",
+            lambda **k: ([], []),
+        )
 
         orch_sid = "orch_flow3"
         first = proposals.propose_autonomous_agent(
@@ -96,7 +100,8 @@ class TestOrchestratorProposeFlow:
         second = proposals.propose_autonomous_agent(
             symbols=["BANKNIFTY"],
             name="Second",
-            mandate="Paper",
+            mandate="Paper options",
+            allowed_instruments=["options"],
             orchestrator_session_id=orch_sid,
         )
         first_id = first["proposal_id"]
