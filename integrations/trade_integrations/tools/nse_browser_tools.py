@@ -78,18 +78,19 @@ def query_run_browser_task(
     max_steps: int = 50,
     persist: bool = True,
 ) -> str:
-    """Run an agentic Skyvern browse/extract task (ad-hoc web research)."""
-    from trade_integrations.nse_browser.skyvern_bridge import run_skyvern_task
+    """Run an ad-hoc nodriver + MiniMax browse/extract task."""
+    from trade_integrations.nse_browser.agent_runner import run_nodriver_agent_task
 
     url = None
     if start_urls:
-        url = start_urls[0] if isinstance(start_urls, list) else str(start_urls)
-    max_wait = max(60, min(max_steps * 6, 600))
-    result = run_skyvern_task(
+        if isinstance(start_urls, list):
+            url = str(start_urls[0]) if start_urls else None
+        else:
+            url = str(start_urls)
+    result = run_nodriver_agent_task(
         goal,
         url=url,
-        output_schema=output_schema,
-        max_wait_s=max_wait,
+        max_steps=max(1, min(max_steps, 20)),
         persist=persist,
     )
     return json.dumps(result, indent=2, default=str)
@@ -104,7 +105,7 @@ def get_nse_browser_data(
     end_date: Annotated[str | None, "End date YYYY-MM-DD; default today"] = None,
     refresh: Annotated[bool, "Force browser fetch even if hub cache is fresh"] = False,
     refresh_cookies: Annotated[bool, "Bootstrap nodriver cookies before fetch"] = False,
-    agent_fallback: Annotated[bool, "Skyvern then MiniMax rescue when page navigation fails"] = True,
+    agent_fallback: Annotated[bool, "MiniMax nodriver rescue when page navigation fails"] = True,
     backfill_historical: Annotated[
         bool, "Full historical backfill via CSV download + archives (headed browser, ~120s)"
     ] = False,
@@ -232,7 +233,7 @@ def run_browser_task(
     persist: Annotated[bool, "Save result to hub tasks/"] = True,
 ) -> str:
     """
-    Agentic web research via Skyvern (falls back to error if Skyvern unavailable).
+    Agentic web research via local nodriver + MiniMax (requires MINIMAX_API_KEY).
 
     Use for ad-hoc research: RBI/SEBI filings, event pages, macro data, any public URL.
     For preset India datasets (FII/DII, FPI, archives) prefer get_nse_browser_data.
