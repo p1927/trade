@@ -95,6 +95,22 @@ def test_capture_disabled_skips_write_through(hub_tmp):
     assert not capture_dir.exists() or not any(capture_dir.glob("*.parquet"))
 
 
+def test_watch_policy_uses_short_ttl(monkeypatch):
+    from trade_integrations.openalgo.freshness import FreshnessPolicy, ttl_seconds
+
+    monkeypatch.setenv("OPENALGO_WATCH_QUOTE_TTL_SECONDS", "5")
+    assert ttl_seconds(FreshnessPolicy.WATCH) == 5
+    assert ttl_seconds(FreshnessPolicy.LIVE) == 0
+
+
+def test_l1_dedupe_within_ttl():
+    from trade_integrations.openalgo.freshness import L1Cache
+
+    cache = L1Cache()
+    cache.set("NIFTY:quotes", {"ltp": 1}, ttl_seconds=5)
+    assert cache.get("NIFTY:quotes")["ltp"] == 1
+
+
 def test_read_captured_pcr(hub_tmp):
     from trade_integrations.hub_capture.registry import save_registry, update_entity
     from trade_integrations.hub_capture.writers import record_chain_snapshot

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -20,8 +19,11 @@ from trade_integrations.hub_capture.writers import (
     record_quote_snapshot,
 )
 from trade_integrations.hub_storage.parquet_io import read_dataframe
+from trade_integrations.openalgo.freshness import FreshnessPolicy, L1Cache, ttl_seconds
 
 logger = logging.getLogger(__name__)
+
+_l1_cache = L1Cache()
 
 _STATS_REL = Path("_data") / "capture" / "channel_stats.json"
 
@@ -32,13 +34,6 @@ def _now_iso() -> str:
 
 def _today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
-
-
-def _options_cache_ttl_minutes() -> int:
-    try:
-        return max(0, int(os.getenv("TRADINGAGENTS_OPTIONS_CACHE_MINUTES", "30")))
-    except ValueError:
-        return 30
 
 
 def _stats_path() -> Path:
@@ -157,7 +152,11 @@ def _chain_from_capture_today(entity_id: str) -> dict[str, Any] | None:
     }
 
 
-def _chain_from_hub_latest(entity_id: str) -> tuple[dict[str, Any] | None, bool]:
+def _chain_from_hub_latest(
+    entity_id: str,
+    *,
+    max_age_seconds: float,
+) -> tuple[dict[str, Any] | None, bool]:
     path = _options_latest_path(entity_id)
     if not path.is_file():
         captured = _chain_from_capture_today(entity_id)
@@ -170,12 +169,11 @@ def _chain_from_hub_latest(entity_id: str) -> tuple[dict[str, Any] | None, bool]
         return captured, captured is not None
 
     as_of = payload.get("as_of") or payload.get("channel_patched_at")
-    ttl = _options_cache_ttl_minutes()
-    if as_of and ttl > 0:
+    if as_of and max_age_seconds > 0:
         try:
             ts = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
-            age = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
-            if age > ttl:
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            if age > max_age_seconds:
                 captured = _chain_from_capture_today(entity_id)
                 return captured, captured is not None
         except ValueError:
@@ -237,47 +235,104 @@ def get_chain(
     *,
     expiry_date: str | None = None,
     strike_count: int | None = None,
+    policy: FreshnessPolicy = FreshnessPolicy.NORMAL,
 ) -> dict[str, Any]:
     """Hub-first option chain: read cache, vendor fetch, write-through capture."""
     entity = resolve_registered_entity(underlying)
     if entity is None:
         return fetch_fn(underlying, exchange, expiry_date=expiry_date, strike_count=strike_count)
 
-    cached, fresh = _chain_from_hub_latest(entity)
+    if policy == FreshnessPolicy.LIVE:
+        data = fetch_fn(underlying, exchange, expiry_date=expiry_date, strike_count=strike_count)
+        record_channel_stat("vendor_fetch", "derivatives_chain")
+        if should_capture(entity, "derivatives_chain"):
+            _write_through_chain(entity, data, vendor=str(data.get("source") or "openalgo"))
+        return data
+
+    max_age = float(ttl_seconds(policy))
+    l1_key = f"{entity}:chain"
+
+    if policy == FreshnessPolicy.WATCH:
+        cached_l1 = _l1_cache.get(l1_key)
+        if cached_l1 and cached_l1.get("chain"):
+            record_channel_stat("hub_hit", "derivatives_chain")
+            return cached_l1
+
+    cached, fresh = _chain_from_hub_latest(entity, max_age_seconds=max_age)
     if fresh and cached and cached.get("chain"):
         record_channel_stat("hub_hit", "derivatives_chain")
+        if policy == FreshnessPolicy.WATCH:
+            _l1_cache.set(l1_key, cached, ttl_seconds=int(max_age))
         return cached
 
     data = fetch_fn(underlying, exchange, expiry_date=expiry_date, strike_count=strike_count)
     record_channel_stat("vendor_fetch", "derivatives_chain")
     if should_capture(entity, "derivatives_chain"):
         _write_through_chain(entity, data, vendor=str(data.get("source") or "openalgo"))
+    if policy == FreshnessPolicy.WATCH:
+        _l1_cache.set(l1_key, data, ttl_seconds=int(max_age))
     return data
 
 
-def get_quote(symbol: str, fetch_fn: Callable[[str], dict[str, Any] | None]) -> dict[str, Any] | None:
+def _quote_from_hub_latest(entity_id: str, *, max_age_seconds: float) -> dict[str, Any] | None:
+    path = _options_latest_path(entity_id)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        as_of = payload.get("as_of") or payload.get("channel_patched_at")
+        if as_of and max_age_seconds > 0:
+            ts = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            if age > max_age_seconds:
+                return None
+        if payload.get("spot") is None:
+            return None
+        return {
+            "ltp": payload.get("spot"),
+            "source": "hub_latest",
+            "channel": "hub_latest",
+        }
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
+
+
+def get_quote(
+    symbol: str,
+    fetch_fn: Callable[[str], dict[str, Any] | None],
+    *,
+    policy: FreshnessPolicy = FreshnessPolicy.NORMAL,
+) -> dict[str, Any] | None:
     """Hub-first live quote with write-through for registered entities."""
     entity = resolve_registered_entity(symbol)
     if entity is None:
         return fetch_fn(symbol)
 
-    path = _options_latest_path(entity)
-    if path.is_file():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            as_of = payload.get("as_of") or payload.get("channel_patched_at")
-            if as_of and _options_cache_ttl_minutes() > 0:
-                ts = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
-                age = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
-                if age <= _options_cache_ttl_minutes() and payload.get("spot") is not None:
-                    record_channel_stat("hub_hit", "quotes")
-                    return {
-                        "ltp": payload.get("spot"),
-                        "source": "hub_latest",
-                        "channel": "hub_latest",
-                    }
-        except (json.JSONDecodeError, OSError, ValueError):
-            pass
+    if policy == FreshnessPolicy.LIVE:
+        quote = fetch_fn(symbol)
+        if quote is None:
+            return None
+        record_channel_stat("vendor_fetch", "quotes")
+        if should_capture(entity, "derivatives_chain"):
+            record_quote_snapshot(entity, quote, source=str(quote.get("source") or "openalgo"))
+            _patch_options_latest(entity, {}, quote=quote)
+        return quote
+
+    max_age = float(ttl_seconds(policy))
+    l1_key = f"{entity}:quotes"
+
+    if policy == FreshnessPolicy.WATCH:
+        cached_l1 = _l1_cache.get(l1_key)
+        if cached_l1 is not None:
+            record_channel_stat("hub_hit", "quotes")
+            return cached_l1
+
+    hub_quote = _quote_from_hub_latest(entity, max_age_seconds=max_age)
+    if hub_quote is not None:
+        record_channel_stat("hub_hit", "quotes")
+        if policy == FreshnessPolicy.WATCH:
+            _l1_cache.set(l1_key, hub_quote, ttl_seconds=int(max_age))
+        return hub_quote
 
     quote = fetch_fn(symbol)
     if quote is None:
@@ -286,6 +341,8 @@ def get_quote(symbol: str, fetch_fn: Callable[[str], dict[str, Any] | None]) -> 
     if should_capture(entity, "derivatives_chain"):
         record_quote_snapshot(entity, quote, source=str(quote.get("source") or "openalgo"))
         _patch_options_latest(entity, {}, quote=quote)
+    if policy == FreshnessPolicy.WATCH:
+        _l1_cache.set(l1_key, quote, ttl_seconds=int(max_age))
     return quote
 
 
