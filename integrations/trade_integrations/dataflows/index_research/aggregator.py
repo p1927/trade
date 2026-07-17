@@ -132,6 +132,10 @@ def run_index_research(
         refresh_constituents=refresh_constituents,
     )
 
+    log.info(
+        "data_completeness",
+        "Checking flow-factor coverage (FII/DII/PCR gate)…",
+    )
     try:
         from trade_integrations.dataflows.index_research.data_completeness import (
             ensure_factor_data_complete,
@@ -151,9 +155,19 @@ def run_index_research(
         "constituents",
         "Loading NIFTY 50 constituent research (news, sentiment, calendar, filings)…",
     )
+    def _constituent_progress(symbol: str, done: int, total: int) -> None:
+        log.info(
+            "constituents",
+            f"Researched {symbol} ({done}/{total})",
+            symbol=symbol,
+            progress=done,
+            total=total,
+        )
+
     signals = batch_constituent_research(
         lookahead_days=horizon.days,
         refresh=refresh_constituents,
+        on_progress=_constituent_progress,
     )
     try:
         from trade_integrations.hub_capture.channel import record_news_headlines

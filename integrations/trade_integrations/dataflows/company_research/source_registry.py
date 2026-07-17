@@ -2,6 +2,9 @@
 
 Consumed by factor_catalog (UI/API) and agent context. Keep in sync when adding
 or reordering fetchers under sources/*.py.
+
+Core sources are always fetched; stage status and errors depend on them only.
+Optional sources are best-effort enrichment — failures are skipped silently.
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from typing import Any
 
 # reliability: high | partial | fragile | optional
 # cost: free | freemium | broker
+# tier: core | optional  (core = drives stage status; optional = silent skip on failure)
 
 INDIA_COMPANY_DATA_SOURCES: tuple[dict[str, Any], ...] = (
     {
@@ -17,6 +21,7 @@ INDIA_COMPANY_DATA_SOURCES: tuple[dict[str, Any], ...] = (
         "label": "OpenAlgo (INDmoney / Zerodha / …)",
         "stages": ["identity"],
         "priority": 1,
+        "tier": "core",
         "env": ["OPENALGO_HOST", "OPENALGO_API_KEY"],
         "package": "openalgo (local)",
         "provides": ["ltp", "volume", "bid", "ask", "ohlc", "oi"],
@@ -30,75 +35,80 @@ INDIA_COMPANY_DATA_SOURCES: tuple[dict[str, Any], ...] = (
         "label": "Yahoo Finance (.NS / .BO)",
         "stages": ["identity", "fundamentals", "calendar", "peers"],
         "priority": 2,
+        "tier": "core",
         "env": [],
         "package": "yfinance",
         "provides": ["sector", "industry", "market_cap", "pe_ratio", "ratios", "earnings_date"],
         "limits": "Informal Yahoo throttling on heavy batch use",
         "reliability": "high",
         "cost": "free",
-        "notes": "Baseline for identity and fundamentals; peers stage gets sector context only.",
+        "notes": "Always-on baseline for identity, fundamentals, and earnings calendar.",
     },
     {
         "key": "dalal_bse",
         "label": "dalal (BSE routes)",
-        "stages": ["identity", "fundamentals", "calendar", "filings"],
+        "stages": ["identity", "fundamentals", "filings"],
         "priority": 3,
+        "tier": "core",
         "env": ["TRADINGAGENTS_BSE_CODE_MAP"],
         "package": "dalal>=0.2.1",
-        "provides": ["sector", "industry", "pe_ratio", "fundamentals_table", "bse_announcements"],
-        "limits": "Requires BSE scrip code (auto via bse.getScripCode when map missing)",
+        "provides": ["sector", "industry", "pe_ratio", "fundamentals_table"],
+        "limits": "Requires BSE scrip code; announcements feed often empty (use bse package for calendar)",
         "reliability": "high",
         "cost": "free",
-        "notes": "Preferred BSE path; dalal NSE routes hit Akamai 403 — do not use for NSE.",
+        "notes": "Identity/fundamentals via dalal.meta + dalal.fundamentals (no user API key). NSE routes 403.",
     },
     {
         "key": "bse_india",
         "label": "BSE India API (bse package)",
-        "stages": ["calendar"],
+        "stages": ["calendar", "filings"],
         "priority": 1,
+        "tier": "core",
         "env": [],
         "package": "bse>=3.3.0",
         "provides": ["corporate_announcements", "corporate_actions"],
         "limits": "Scrape/API courtesy; 7-day lookback in calendar_in",
         "reliability": "high",
         "cost": "free",
-        "notes": "Primary calendar source when Tapetide quota exhausted.",
+        "notes": "Primary calendar and filings source (bse pip). No user API key — public BSE API.",
     },
     {
         "key": "screener_in",
         "label": "Screener.in (screenercli)",
         "stages": ["peers"],
         "priority": 1,
+        "tier": "core",
         "env": [],
         "package": "screenercli>=0.1.2",
         "provides": ["peer_comparison", "sector", "industry", "peer_market_cap"],
         "limits": "HTML scrape; add delays for batch; respect screener.in ToS",
         "reliability": "high",
         "cost": "free",
-        "notes": "Primary peer list replacement for Tapetide (≥5 peers typical).",
+        "notes": "Primary peer list (≥5 peers typical). Fetcher name in code: screener.",
     },
     {
         "key": "nselib",
         "label": "nselib (NSE public data)",
         "stages": ["identity", "fundamentals", "calendar", "peers", "macro"],
         "priority": 4,
+        "tier": "optional",
         "env": [],
         "package": "nselib>=2.0",
         "provides": ["pe_ratio", "quarterly_results", "event_calendar", "nifty50_list", "india_vix"],
         "limits": "NSE-side fragility; calendar/financials APIs often return empty",
         "reliability": "fragile",
         "cost": "free",
-        "notes": "pe_ratio works; event_calendar_for_equity unreliable. Peers = Nifty50 industry heuristic only.",
+        "notes": "Optional enrichment only; failures do not affect stage status.",
     },
     {
         "key": "tapetide",
         "label": "Tapetide MCP",
         "stages": ["identity", "peers", "fundamentals", "calendar"],
         "priority": 99,
+        "tier": "optional",
         "env": [
             "TAPETIDE_TOKEN",
             "TAPETIDE_MCP_URL",
-            "TAPETIDE_ENABLED",
             "TAPETIDE_BATCH",
             "TAPETIDE_CACHE_MINUTES",
         ],
@@ -107,30 +117,58 @@ INDIA_COMPANY_DATA_SOURCES: tuple[dict[str, Any], ...] = (
         "limits": "Free tier ~4,000 MCP calls/day; skipped in Nifty batch unless TAPETIDE_BATCH=true",
         "reliability": "optional",
         "cost": "freemium",
-        "notes": "Optional enrichment only. Set TAPETIDE_ENABLED=false when quota hit.",
+        "notes": "Always attempted when TAPETIDE_TOKEN is set. Free tier quota may rate-limit; disk cache used when available.",
     },
     {
         "key": "moneycontrol_rss",
         "label": "Moneycontrol RSS",
         "stages": ["calendar"],
         "priority": 5,
+        "tier": "optional",
         "env": [],
         "package": "feedparser (via moneycontrol_rss)",
         "provides": ["results_news"],
         "limits": "Sparse coverage",
         "reliability": "fragile",
         "cost": "free",
-        "notes": "Weak calendar fallback.",
+        "notes": "Optional calendar enrichment; RSS parse failures are ignored.",
     },
 )
 
+# Fetcher names as used in sources/*.py (may differ from registry keys).
+STAGE_CORE_SOURCES: dict[str, tuple[str, ...]] = {
+    "identity": ("openalgo", "yfinance", "dalal_bse"),
+    "peers": ("screener", "yfinance"),
+    "calendar": ("bse_india", "yfinance"),
+    "fundamentals": ("yfinance", "dalal_bse"),
+    "filings": ("bse_india",),
+}
+
+STAGE_OPTIONAL_SOURCES: dict[str, tuple[str, ...]] = {
+    "identity": ("nselib", "tapetide"),
+    "peers": ("nselib", "tapetide"),
+    "calendar": ("nselib", "moneycontrol_rss", "dalal_bse", "tapetide"),
+    "fundamentals": ("nselib", "tapetide"),
+    "filings": ("dalal_bse",),
+}
+
 STAGE_SOURCE_ORDER: dict[str, list[str]] = {
     "identity": ["openalgo", "yfinance", "dalal_bse", "nselib", "tapetide"],
-    "peers": ["screener_in", "tapetide", "nselib", "yfinance"],
+    "peers": ["screener_in", "yfinance", "tapetide", "nselib"],
     "calendar": ["bse_india", "yfinance", "nselib", "moneycontrol_rss", "dalal_bse", "tapetide"],
-    "fundamentals": ["dalal_bse", "yfinance", "nselib", "tapetide"],
-    "filings": ["dalal_bse"],
+    "fundamentals": ["yfinance", "dalal_bse", "nselib", "tapetide"],
+    "filings": ["bse_india", "dalal_bse"],
 }
+
+
+def core_source_names(stage: str) -> frozenset[str]:
+    """Core fetcher names for a pipeline stage (drive status + errors)."""
+    return frozenset(STAGE_CORE_SOURCES.get(stage, ()))
+
+
+def optional_source_names(stage: str) -> frozenset[str]:
+    """Optional fetcher names — failures become skipped, not errors."""
+    return frozenset(STAGE_OPTIONAL_SOURCES.get(stage, ()))
 
 
 def list_india_company_data_sources() -> dict[str, Any]:
@@ -139,10 +177,12 @@ def list_india_company_data_sources() -> dict[str, Any]:
         "market": "IN",
         "sources": [dict(row) for row in INDIA_COMPANY_DATA_SOURCES],
         "stage_source_order": STAGE_SOURCE_ORDER,
+        "stage_core_sources": {k: list(v) for k, v in STAGE_CORE_SOURCES.items()},
+        "stage_optional_sources": {k: list(v) for k, v in STAGE_OPTIONAL_SOURCES.items()},
         "tapetide_policy": {
-            "batch_default": "skipped (TAPETIDE_BATCH=false)",
-            "calendar": "only when no events from cheaper sources",
-            "disable": "TAPETIDE_ENABLED=false or unset TAPETIDE_TOKEN",
+            "enabled": "always (when TAPETIDE_TOKEN set)",
+            "batch_default": "included (TAPETIDE_BATCH defaults true)",
+            "calendar": "always attempted alongside BSE/yfinance",
         },
     }
 

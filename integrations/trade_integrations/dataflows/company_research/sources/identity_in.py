@@ -10,12 +10,14 @@ from tradingagents.dataflows.errors import VendorNotConfiguredError
 
 from ..market import NormalizedTicker
 from ..models import StageResult
+from ..source_registry import optional_source_names
 from .resilience import (
     SourceAttempt,
     merge_identity_fields,
     remediation_for,
     resolve_bse_scrip_code,
     run_sources,
+    stage_errors,
     stage_status_from_attempts,
 )
 from .tapetide_in import fetch_tapetide_identity
@@ -61,27 +63,6 @@ def _fetch_yfinance(normalized: NormalizedTicker) -> dict[str, Any] | None:
         "market_cap": info.get("marketCap"),
         "currency": info.get("currency") or "INR",
         "source": "yfinance",
-    }
-
-
-def _fetch_dalal_nse(normalized: NormalizedTicker) -> dict[str, Any] | None:
-    import dalal  # type: ignore[import-untyped]
-
-    exchange = "BSE" if normalized.openalgo_exchange == "BSE" else "NSE"
-    quote = dalal.quote(normalized.base_symbol, exchange=exchange)
-    if not quote or not isinstance(quote, dict):
-        return None
-    header = quote.get("Header") or {}
-    cmpname = quote.get("Cmpname") or {}
-    ltp = header.get("LTP") or (quote.get("CurrRate") or {}).get("LTP")
-    if ltp in (None, "-", ""):
-        return None
-    return {
-        "name": cmpname.get("FullN") or normalized.base_symbol,
-        "exchange": exchange,
-        "last_price": ltp,
-        "currency": "INR",
-        "source": "dalal_nse",
     }
 
 
@@ -149,18 +130,10 @@ def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
 
     fetchers: list[tuple[str, Any]] = [
         ("yfinance", lambda: _fetch_yfinance(normalized)),
-        ("nselib", lambda: _fetch_nselib_pe(normalized)),
     ]
 
     if resolve_bse_scrip_code(normalized.base_symbol):
-        fetchers.insert(1, ("dalal_bse", lambda: _fetch_dalal_bse(normalized)))
-
-    try:
-        import dalal  # noqa: F401
-
-        fetchers.append(("dalal_nse", lambda: _fetch_dalal_nse(normalized)))
-    except ImportError:
-        pass
+        fetchers.append(("dalal_bse", lambda: _fetch_dalal_bse(normalized)))
 
     try:
         from trade_integrations.dataflows.openalgo import _openalgo_settings
@@ -170,12 +143,20 @@ def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
     except (VendorNotConfiguredError, ImportError):
         pass
 
-    from trade_integrations.clients.tapetide import is_active as tapetide_active
+    try:
+        import nselib  # noqa: F401
 
-    if tapetide_active():
+        fetchers.append(("nselib", lambda: _fetch_nselib_pe(normalized)))
+    except ImportError:
+        pass
+
+    from trade_integrations.clients.tapetide import is_configured as tapetide_configured
+
+    if tapetide_configured():
         fetchers.append(("tapetide", lambda: fetch_tapetide_identity(normalized.base_symbol)))
 
-    attempts = run_sources(fetchers)
+    optional = optional_source_names("identity")
+    attempts = run_sources(fetchers, optional=optional)
     merged = merge_identity_fields(attempts)
     merged.update(base)
 
@@ -191,7 +172,9 @@ def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
 
     ok_sources = [a.name for a in attempts if a.status == "ok"]
     vendor = "+".join(ok_sources) if ok_sources else "identity_in"
-    status = stage_status_from_attempts(attempts, has_output=bool(merged.get("name")))
+    status = stage_status_from_attempts(
+        attempts, has_output=bool(merged.get("name")), stage="identity"
+    )
 
     return StageResult(
         stage="identity",
@@ -202,5 +185,5 @@ def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
             **merged,
             "source_attempts": [a.to_dict() for a in attempts],
         },
-        errors=[f"{a.name}: {a.error}" for a in attempts if a.status != "ok" and a.error],
+        errors=stage_errors(attempts, stage="identity"),
     )

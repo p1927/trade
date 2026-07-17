@@ -147,7 +147,7 @@ def build_manifest(hub: Path | None = None) -> dict[str, Any]:
             "registry_path": "_data/capture_registry.json",
             "entities": reg.get("entities") or [],
             "stats": build_capture_stats("NIFTY"),
-            "coverage": capture_coverage_stats("NIFTY"),
+            "coverage": capture_coverage_stats(entity_id="NIFTY"),
         }
     except Exception:
         pass

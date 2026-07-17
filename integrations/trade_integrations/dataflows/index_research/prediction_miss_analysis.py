@@ -509,7 +509,7 @@ def run_miss_analysis(
 
         capture_block = {
             "stats": build_capture_stats(ticker.strip().upper()),
-            "coverage": capture_coverage_stats(ticker.strip().upper()),
+            "coverage": capture_coverage_stats(entity_id=ticker.strip().upper()),
             "channel_today": channel_stats_today(),
         }
     except Exception:

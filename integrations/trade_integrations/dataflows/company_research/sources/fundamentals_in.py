@@ -8,11 +8,13 @@ from typing import Any
 
 from ..market import NormalizedTicker
 from ..models import StageResult
+from ..source_registry import optional_source_names
 from .resilience import (
     SourceAttempt,
     remediation_for,
     resolve_bse_scrip_code,
     run_sources,
+    stage_errors,
     stage_status_from_attempts,
 )
 
@@ -194,15 +196,15 @@ def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
     except ImportError:
         pass
 
-    from trade_integrations.clients.tapetide import is_active as tapetide_active
+    from trade_integrations.clients.tapetide import is_configured as tapetide_configured
 
-    if tapetide_active():
+    if tapetide_configured():
         fetchers.append(("tapetide", lambda: _fetch_tapetide(normalized.base_symbol)))
 
-    attempts = run_sources(fetchers)
+    attempts = run_sources(fetchers, optional=optional_source_names("fundamentals"))
     merged = _merge_fundamentals(attempts)
     has_output = bool(merged.get("ratios") or merged.get("financials") or merged.get("quarterly_results"))
-    status = stage_status_from_attempts(attempts, has_output=has_output)
+    status = stage_status_from_attempts(attempts, has_output=has_output, stage="fundamentals")
 
     if not resolve_bse_scrip_code(normalized.base_symbol):
         attempts.append(
@@ -220,5 +222,5 @@ def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
         vendor=merged.get("primary_source") or "fundamentals_in",
         fetched_at=_stage_now(),
         data={**merged, "source_attempts": [a.to_dict() for a in attempts]},
-        errors=[f"{a.name}: {a.error}" for a in attempts if a.status != "ok" and a.error],
+        errors=stage_errors(attempts, stage="fundamentals"),
     )

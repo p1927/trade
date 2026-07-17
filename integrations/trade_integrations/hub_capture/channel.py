@@ -85,8 +85,16 @@ def channel_stats_today() -> dict[str, Any]:
     return stats
 
 
-def resolve_registered_entity(symbol: str) -> str | None:
+def resolve_registered_entity(symbol: str | Any) -> str | None:
     """Return entity id when symbol is in capture registry."""
+    if symbol is None:
+        return None
+    if not isinstance(symbol, str):
+        base = getattr(symbol, "base_symbol", None) or getattr(symbol, "display_symbol", None)
+        if isinstance(base, str) and base.strip():
+            symbol = base
+        else:
+            symbol = str(symbol)
     key = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
     reg = load_registry(create=False)
     for entity in reg.get("entities") or []:

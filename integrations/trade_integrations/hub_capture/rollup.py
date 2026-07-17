@@ -102,7 +102,7 @@ def run_capture_rollup(*, as_of_date: str | None = None) -> dict[str, Any]:
     return summary
 
 
-def capture_coverage_stats(*, entity_id: str = "NIFTY", trading_days: int = 252) -> dict[str, Any]:
+def capture_coverage_stats(entity_id: str = "NIFTY", *, trading_days: int = 252) -> dict[str, Any]:
     """Per-series fill rate for DuckDB capture_coverage view."""
     base = capture_base_dir(entity_id)
     out: dict[str, Any] = {"entity_id": entity_id, "series": {}}

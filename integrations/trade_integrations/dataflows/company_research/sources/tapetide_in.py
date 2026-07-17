@@ -10,7 +10,7 @@ from trade_integrations.clients.tapetide import (
     TapetideRateLimitError,
     get_company_profile,
     get_stock_events,
-    is_active,
+    is_configured,
     is_rate_limit_message,
 )
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def fetch_tapetide_identity(symbol: str) -> dict[str, Any] | None:
-    if not is_active():
+    if not is_configured():
         return None
     try:
         profile = get_company_profile(symbol, include_peers=False)
@@ -54,7 +54,7 @@ def fetch_tapetide_identity(symbol: str) -> dict[str, Any] | None:
 
 
 def fetch_tapetide_calendar_events(symbol: str) -> list[dict[str, Any]]:
-    if not is_active():
+    if not is_configured():
         return []
     try:
         payload = get_stock_events(symbol)

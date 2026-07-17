@@ -51,13 +51,13 @@ def _env_flag(name: str, *, default: bool) -> bool:
 
 
 def is_enabled() -> bool:
-    """False when TAPETIDE_ENABLED=0|false|no|off."""
-    return _env_flag("TAPETIDE_ENABLED", default=True)
+    """Tapetide is always enabled when a token is configured."""
+    return True
 
 
 def is_batch_enabled() -> bool:
-    """True when TAPETIDE_BATCH=1|true — allow Tapetide during Nifty batch refresh."""
-    return _env_flag("TAPETIDE_BATCH", default=False)
+    """True by default — Tapetide runs during Nifty batch refresh too."""
+    return _env_flag("TAPETIDE_BATCH", default=True)
 
 
 def is_configured() -> bool:
@@ -82,15 +82,8 @@ def is_batch_research() -> bool:
 
 
 def is_active(*, batch: bool | None = None) -> bool:
-    """Tapetide may be called when enabled, configured, not rate-limited, and batch policy allows."""
-    if not is_enabled() or not is_configured():
-        return False
-    in_batch = is_batch_research() if batch is None else batch
-    if in_batch and not is_batch_enabled():
-        return False
-    if is_rate_limited():
-        return False
-    return True
+    """Tapetide is attempted whenever TAPETIDE_TOKEN is set (failures handled per call)."""
+    return is_configured()
 
 
 def _mcp_url() -> str:

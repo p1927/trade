@@ -6,6 +6,15 @@ import json
 
 from .models import CompanyResearchDoc, StageResult
 from .signals_bridge import format_corp_events_section, format_earnings_signal_section
+from .source_registry import optional_source_names
+
+
+def _md_cell(value: object, *, max_len: int = 80) -> str:
+    """Sanitize a value for markdown table cells (no pipes or newlines)."""
+    text = str(value or "—").replace("|", "/").replace("\n", " ").strip()
+    if len(text) > max_len:
+        return text[: max_len - 1] + "…"
+    return text or "—"
 
 
 def _stage_table(stages: list[StageResult]) -> str:
@@ -27,8 +36,8 @@ def _events_table(events: list[dict]) -> str:
     for event in events[:20]:
         detail = event.get("description") or event.get("purpose") or event.get("type") or "—"
         lines.append(
-            f"| {event.get('date') or '—'} | {event.get('type') or '—'} | "
-            f"{detail} | {event.get('source') or '—'} |"
+            f"| {_md_cell(event.get('date'))} | {_md_cell(event.get('type'))} | "
+            f"{_md_cell(detail, max_len=120)} | {_md_cell(event.get('source'))} |"
         )
     if len(events) > 20:
         lines.append(f"\n_+ {len(events) - 20} more events omitted._")
@@ -37,22 +46,39 @@ def _events_table(events: list[dict]) -> str:
 
 def _source_health_table(stages: list[StageResult]) -> str:
     rows: list[str] = [
-        "| Source | Stage | Status | Error | Fix |",
-        "|--------|-------|--------|-------|-----|",
+        "| Source | Stage | Status | Notes |",
+        "|--------|-------|--------|-------|",
     ]
     for stage in stages:
         attempts = (stage.data or {}).get("source_attempts") or []
+        optional = optional_source_names(stage.stage)
         if not attempts:
             rows.append(
-                f"| {stage.vendor} | {stage.stage} | {stage.status} | — | — |"
+                f"| {_md_cell(stage.vendor)} | {stage.stage} | {stage.status} | — |"
             )
             continue
+        shown = False
         for attempt in attempts:
+            name = attempt.get("name", "?")
+            status = attempt.get("status", "?")
+            if name in optional and status == "skipped":
+                continue
+            note = "—"
+            if status == "error":
+                note = _md_cell(attempt.get("error"), max_len=100)
+            elif status == "skipped":
+                note = _md_cell(attempt.get("error") or "skipped", max_len=60)
             rows.append(
-                f"| {attempt.get('name', '?')} | {stage.stage} | "
-                f"{attempt.get('status', '?')} | "
-                f"{attempt.get('error') or '—'} | "
-                f"{attempt.get('remediation') or '—'} |"
+                f"| {_md_cell(name)} | {stage.stage} | {status} | {note} |"
+            )
+            shown = True
+        if not shown:
+            rows.append(
+                f"| (core only) | {stage.stage} | {stage.status} | all optional skipped |"
+            )
+        if stage.errors:
+            rows.append(
+                f"| **stage errors** | {stage.stage} | — | {_md_cell('; '.join(stage.errors), max_len=120)} |"
             )
     return "\n".join(rows) + "\n"
 
@@ -229,7 +255,8 @@ def format_research_report(doc: CompanyResearchDoc) -> str:
         _stage_table(doc.stages),
         "",
         "## Data Source Health",
-        "_Every backend is attempted; working sources are merged. Failed sources show remediation hints._",
+        "_Core sources (OpenAlgo, yfinance, BSE, screener.in, dalal BSE) drive stage status. "
+        "Optional sources (nselib, RSS, Tapetide) are omitted when skipped._",
         "",
         _source_health_table(doc.stages),
     ]

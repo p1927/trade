@@ -7,6 +7,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from ..config import get_research_config
 from ..market import NormalizedTicker
 from ..models import StageResult
 from .bse_india import fetch_bse_calendar_events
@@ -16,7 +17,9 @@ from .resilience import (
     classify_error,
     remediation_for,
     resolve_bse_scrip_code,
+    stage_errors,
     stage_status_from_attempts,
+    _record_source_failure,
 )
 from .tapetide_in import fetch_tapetide_calendar_events
 
@@ -277,23 +280,25 @@ def _fetch_dalal_bse_calendar(symbol: str) -> list[dict[str, Any]]:
 def _fetch_calendar_source(
     name: str,
     fetcher,
+    *,
+    optional: bool = False,
 ) -> SourceAttempt:
     try:
         events = fetcher()
     except Exception as exc:
         code = classify_error(exc)
-        return SourceAttempt(
-            name=name,
-            status="error",
+        return _record_source_failure(
+            name,
             error=str(exc),
             remediation=remediation_for(code),
+            optional=optional,
         )
     if not events:
-        return SourceAttempt(
-            name=name,
-            status="error",
+        return _record_source_failure(
+            name,
             error="no data",
             remediation=remediation_for("no_data"),
+            optional=optional,
         )
     return SourceAttempt(name=name, status="ok", data={"events": events})
 
@@ -302,18 +307,23 @@ def fetch_calendar_in(
     normalized: NormalizedTicker,
     *,
     lookahead_days: int = 14,
-    lookback_days: int = 0,
+    lookback_days: int | None = None,
 ) -> StageResult:
     """Collect upcoming Indian corporate events from every available source."""
+    if lookback_days is None:
+        lookback_days = get_research_config().calendar_lookback_days
     start, end = _date_window(lookahead_days, lookback_days=lookback_days)
     symbol = normalized.base_symbol
+
+    def _bse_india() -> list[dict[str, Any]]:
+        return fetch_bse_calendar_events(symbol, start=start, end=end)
+
+    def _yfinance_earnings() -> list[dict[str, Any]]:
+        return _fetch_yfinance_earnings_events(normalized)
 
     def _nselib() -> list[dict[str, Any]]:
         events, _ = _fetch_nselib_events(symbol, start=start, end=end)
         return events
-
-    def _bse_india() -> list[dict[str, Any]]:
-        return fetch_bse_calendar_events(symbol, start=start, end=end)
 
     def _rss() -> list[dict[str, Any]]:
         events = fetch_results_news(symbol)
@@ -321,53 +331,38 @@ def fetch_calendar_in(
             return events
         return _fetch_news_calendar_events(symbol, start=start, end=end)
 
-    def _yfinance_earnings() -> list[dict[str, Any]]:
-        return _fetch_yfinance_earnings_events(normalized)
+    def _dalal_bse() -> list[dict[str, Any]]:
+        return _fetch_dalal_bse_calendar(symbol)
 
     def _tapetide() -> list[dict[str, Any]]:
         return fetch_tapetide_calendar_events(symbol)
 
-    def _dalal_bse() -> list[dict[str, Any]]:
-        return _fetch_dalal_bse_calendar(symbol)
-
-    source_jobs = [
-        ("nselib", _nselib),
-        ("bse_india", _bse_india),
-        ("yfinance", _yfinance_earnings),
-        ("moneycontrol_rss", _rss),
+    source_jobs: list[tuple[str, Any, bool]] = [
+        ("bse_india", _bse_india, False),
+        ("yfinance", _yfinance_earnings, False),
+        ("nselib", _nselib, True),
+        ("moneycontrol_rss", _rss, True),
     ]
     if resolve_bse_scrip_code(symbol):
-        source_jobs.append(("dalal_bse", _dalal_bse))
+        source_jobs.append(("dalal_bse", _dalal_bse, True))
 
-    attempts = [_fetch_calendar_source(name, fn) for name, fn in source_jobs]
+    attempts = [
+        _fetch_calendar_source(name, fn, optional=is_optional)
+        for name, fn, is_optional in source_jobs
+    ]
 
     raw_events: list[dict[str, Any]] = []
     for attempt in attempts:
         if attempt.status == "ok":
             raw_events.extend(attempt.data.get("events") or [])
 
-    from trade_integrations.clients.tapetide import (
-        is_active as tapetide_active,
-        is_batch_enabled,
-        is_batch_research,
-        is_configured,
-        is_enabled,
-    )
+    from trade_integrations.clients.tapetide import is_configured as tapetide_configured
 
-    if tapetide_active() and not raw_events:
-        tapetide_attempt = _fetch_calendar_source("tapetide", _tapetide)
+    if tapetide_configured():
+        tapetide_attempt = _fetch_calendar_source("tapetide", _tapetide, optional=True)
         attempts.append(tapetide_attempt)
         if tapetide_attempt.status == "ok":
             raw_events.extend(tapetide_attempt.data.get("events") or [])
-    elif is_configured() and is_enabled() and is_batch_research() and not is_batch_enabled():
-        attempts.append(
-            SourceAttempt(
-                name="tapetide",
-                status="skipped",
-                error="tapetide_batch_disabled",
-                remediation=remediation_for("tapetide_batch_disabled"),
-            )
-        )
 
     if not resolve_bse_scrip_code(symbol):
         attempts.append(
@@ -382,7 +377,15 @@ def fetch_calendar_in(
     events = merge_calendar_events(raw_events)
     ok_sources = [a.name for a in attempts if a.status == "ok"]
     vendor = "+".join(ok_sources) if ok_sources else "calendar_in"
-    status = stage_status_from_attempts(attempts, has_output=bool(events))
+    status = stage_status_from_attempts(attempts, has_output=bool(events), stage="calendar")
+
+    live_quote: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.market_quotes import fetch_live_quote
+
+        live_quote = fetch_live_quote(symbol) or {}
+    except Exception:
+        pass
 
     return StageResult(
         stage="calendar",
@@ -397,7 +400,8 @@ def fetch_calendar_in(
             "lookback_days": lookback_days,
             "event_count": len(events),
             "events": events,
+            "live_quote": live_quote,
             "source_attempts": [a.to_dict() for a in attempts],
         },
-        errors=[f"{a.name}: {a.error}" for a in attempts if a.status != "ok" and a.error],
+        errors=stage_errors(attempts, stage="calendar"),
     )

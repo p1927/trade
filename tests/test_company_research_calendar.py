@@ -57,7 +57,7 @@ def test_fetch_calendar_in_reliance_has_event():
     from trade_integrations.dataflows.company_research.sources.calendar_in import fetch_calendar_in
 
     normalized = normalize_ticker("RELIANCE", market_hint=Market.IN)
-    result = fetch_calendar_in(normalized, lookahead_days=30)
+    result = fetch_calendar_in(normalized, lookahead_days=30, lookback_days=7)
     assert result.stage == "calendar"
     assert result.status in ("ok", "partial")
     events = result.data.get("events") or []

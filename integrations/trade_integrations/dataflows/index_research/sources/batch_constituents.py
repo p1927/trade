@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Callable
+
+ProgressCallback = Callable[[str, int, int], None]
 
 from trade_integrations.context.hub import (
     is_cache_fresh,
@@ -152,6 +154,7 @@ def batch_constituent_research(
     max_workers: int | None = None,
     lookahead_days: int = 14,
     refresh: bool = False,
+    on_progress: ProgressCallback | None = None,
 ) -> list[ConstituentSignal]:
     """Run or load company research for each Nifty 50 constituent."""
     constituents = load_nifty50_constituents()
@@ -172,9 +175,14 @@ def batch_constituent_research(
             ): row.symbol
             for row in constituents
         }
+        total = len(futures)
+        done = 0
         for future in as_completed(futures):
             symbol = futures[future]
             docs[symbol] = future.result()
+            done += 1
+            if on_progress is not None:
+                on_progress(symbol, done, total)
 
     signals = [
         _build_signal(by_symbol[symbol], docs[symbol], lookahead_days=lookahead_days)

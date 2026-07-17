@@ -33,8 +33,8 @@ REMEDIATION_HINTS: dict[str, str] = {
         "identity, calendar, and peer enrichment."
     ),
     "tapetide_rate_limited": (
-        "Tapetide free-tier quota exhausted. Unset TAPETIDE_TOKEN, set TAPETIDE_ENABLED=false, "
-        "or wait for reset. Peers/calendar fall back to screener.in, BSE, and yfinance."
+        "Tapetide free-tier quota exhausted. Retry after reset or use disk cache; "
+        "BSE, screener.in, yfinance, and dalal BSE fallbacks continue."
     ),
     "vendor_rate_limited": (
         "Upstream vendor rate-limited this request (often yfinance). Retry later or rely on "
@@ -99,33 +99,54 @@ def remediation_for(code: str) -> str:
     return REMEDIATION_HINTS.get(code, "Check logs and network connectivity for this source.")
 
 
+def _record_source_failure(
+    name: str,
+    *,
+    error: str,
+    remediation: str,
+    optional: bool,
+) -> SourceAttempt:
+    if optional:
+        logger.debug("Optional source %s skipped: %s", name, error)
+        return SourceAttempt(name=name, status="skipped", error=error, remediation=remediation)
+    logger.info("Source %s failed: %s", name, error)
+    return SourceAttempt(name=name, status="error", error=error, remediation=remediation)
+
+
 def run_sources(
     fetchers: list[tuple[str, Callable[[], dict[str, Any] | None]]],
+    *,
+    optional: frozenset[str] | None = None,
 ) -> list[SourceAttempt]:
-    """Run every fetcher; never stop at the first success."""
+    """Run every fetcher; never stop at the first success.
+
+    Optional sources that fail or return empty data are marked ``skipped`` and
+    do not contribute to stage errors or status.
+    """
+    optional_names = optional or frozenset()
     attempts: list[SourceAttempt] = []
     for name, fetcher in fetchers:
+        is_optional = name in optional_names
         try:
             payload = fetcher()
         except Exception as exc:
             code = classify_error(exc)
             attempts.append(
-                SourceAttempt(
-                    name=name,
-                    status="error",
+                _record_source_failure(
+                    name,
                     error=str(exc),
                     remediation=remediation_for(code),
+                    optional=is_optional,
                 )
             )
-            logger.info("Source %s failed: %s", name, exc)
             continue
         if not payload:
             attempts.append(
-                SourceAttempt(
-                    name=name,
-                    status="error",
+                _record_source_failure(
+                    name,
                     error="no data",
                     remediation=remediation_for("no_data"),
+                    optional=is_optional,
                 )
             )
             continue
@@ -135,7 +156,7 @@ def run_sources(
 
 def merge_identity_fields(attempts: list[SourceAttempt]) -> dict[str, Any]:
     """Merge identity payloads; later sources fill gaps only."""
-    priority = ("openalgo", "tapetide", "yfinance", "dalal_bse", "dalal_nse", "nselib")
+    priority = ("openalgo", "tapetide", "yfinance", "dalal_bse", "nselib")
     ordered = sorted(
         [a for a in attempts if a.status == "ok" and a.data],
         key=lambda a: priority.index(a.name) if a.name in priority else 99,
@@ -154,15 +175,57 @@ def merge_identity_fields(attempts: list[SourceAttempt]) -> dict[str, Any]:
     return merged
 
 
-def stage_status_from_attempts(attempts: list[SourceAttempt], *, has_output: bool) -> str:
-    ok_count = sum(1 for a in attempts if a.status == "ok")
+def _attempts_for_status(
+    attempts: list[SourceAttempt],
+    *,
+    stage: str | None,
+) -> list[SourceAttempt]:
+    if not stage:
+        return attempts
+    from ..source_registry import core_source_names
+
+    core = core_source_names(stage)
+    if not core:
+        return attempts
+    return [a for a in attempts if a.name in core]
+
+
+def stage_status_from_attempts(
+    attempts: list[SourceAttempt],
+    *,
+    has_output: bool,
+    stage: str | None = None,
+) -> str:
+    """Derive stage status from core sources only when ``stage`` is set."""
+    scoped = _attempts_for_status(attempts, stage=stage)
+    ok_count = sum(1 for a in scoped if a.status == "ok")
+    if has_output:
+        if ok_count > 0:
+            if ok_count == len(scoped):
+                return "ok"
+            return "partial"
+        return "partial"
     if ok_count and not has_output:
         return "partial"
-    if ok_count == len(attempts):
+    if ok_count == len(scoped) and scoped:
         return "ok"
     if ok_count > 0:
         return "partial"
     return "error"
+
+
+def stage_errors(
+    attempts: list[SourceAttempt],
+    *,
+    stage: str | None = None,
+) -> list[str]:
+    """Return user-visible errors for core source failures only."""
+    scoped = _attempts_for_status(attempts, stage=stage)
+    return [
+        f"{a.name}: {a.error}"
+        for a in scoped
+        if a.status == "error" and a.error
+    ]
 
 
 def load_bse_code_map() -> dict[str, str]:

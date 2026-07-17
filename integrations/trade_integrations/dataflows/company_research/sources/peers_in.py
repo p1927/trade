@@ -9,10 +9,12 @@ from typing import Any
 from ..config import get_research_config
 from ..market import NormalizedTicker
 from ..models import StageResult
+from ..source_registry import optional_source_names
 from .resilience import (
     SourceAttempt,
     remediation_for,
     run_sources,
+    stage_errors,
     stage_status_from_attempts,
 )
 from .screener_in import fetch_screener_peers
@@ -123,10 +125,9 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
         ("screener", lambda: fetch_screener_peers(normalized.base_symbol, max_peers=max_peers)),
     ]
 
-    from trade_integrations.clients.tapetide import is_active as tapetide_active
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
 
-    if tapetide_active():
+    if tapetide_configured():
         fetchers.append(
             ("tapetide", lambda: _fetch_tapetide_peers(normalized.base_symbol, max_peers=max_peers)),
         )
@@ -144,7 +145,7 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
 
     fetchers.append(("yfinance", lambda: _fetch_yfinance_peers(normalized, max_peers=max_peers)))
 
-    attempts = run_sources(fetchers)
+    attempts = run_sources(fetchers, optional=optional_source_names("peers"))
     peers: list[dict[str, Any]] = []
     sector_context: dict[str, Any] = {}
     primary = ""
@@ -171,7 +172,7 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
             )
 
     has_output = bool(peers) or bool(sector_context)
-    status = stage_status_from_attempts(attempts, has_output=has_output)
+    status = stage_status_from_attempts(attempts, has_output=has_output, stage="peers")
     if peers:
         status = "ok"
     elif sector_context:
@@ -187,4 +188,5 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
             "sector_context": sector_context,
             "source_attempts": [a.to_dict() for a in attempts],
         },
+        errors=stage_errors(attempts, stage="peers"),
     )

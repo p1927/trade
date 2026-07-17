@@ -8,13 +8,16 @@ from typing import Any
 
 from ..market import NormalizedTicker
 from ..models import StageResult
+from ..source_registry import optional_source_names
 from .bse_india import fetch_bse_calendar_events
 from .resilience import (
     SourceAttempt,
     classify_error,
     remediation_for,
     resolve_bse_scrip_code,
+    stage_errors,
     stage_status_from_attempts,
+    _record_source_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +88,7 @@ def fetch_filings_in(
 ) -> StageResult:
     """Recent corporate announcements and filings for India equities."""
     symbol = normalized.base_symbol
+    optional = optional_source_names("filings")
     attempts: list[SourceAttempt] = []
     all_filings: list[dict[str, Any]] = []
 
@@ -92,6 +96,7 @@ def fetch_filings_in(
         ("bse_india", lambda: _fetch_bse_filings(symbol, lookback_days=lookback_days)),
         ("dalal_bse", lambda: _fetch_dalal_bse_filings(symbol)),
     ):
+        is_optional = name in optional
         try:
             rows = fetcher()
             if rows:
@@ -99,20 +104,20 @@ def fetch_filings_in(
                 attempts.append(SourceAttempt(name=name, status="ok", data={"filings": rows}))
             else:
                 attempts.append(
-                    SourceAttempt(
-                        name=name,
-                        status="error",
+                    _record_source_failure(
+                        name,
                         error="no data",
                         remediation=remediation_for("no_data"),
+                        optional=is_optional,
                     )
                 )
         except Exception as exc:
             attempts.append(
-                SourceAttempt(
-                    name=name,
-                    status="error",
+                _record_source_failure(
+                    name,
                     error=str(exc),
                     remediation=remediation_for(classify_error(exc)),
+                    optional=is_optional,
                 )
             )
 
@@ -137,7 +142,7 @@ def fetch_filings_in(
     deduped.sort(key=lambda r: r.get("date") or "", reverse=True)
 
     ok_sources = [a.name for a in attempts if a.status == "ok"]
-    status = stage_status_from_attempts(attempts, has_output=bool(deduped))
+    status = stage_status_from_attempts(attempts, has_output=bool(deduped), stage="filings")
 
     return StageResult(
         stage="filings",
@@ -150,5 +155,5 @@ def fetch_filings_in(
             "lookback_days": lookback_days,
             "source_attempts": [a.to_dict() for a in attempts],
         },
-        errors=[f"{a.name}: {a.error}" for a in attempts if a.status != "ok" and a.error],
+        errors=stage_errors(attempts, stage="filings"),
     )
