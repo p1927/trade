@@ -68,12 +68,45 @@ def _fetch_nifty_context() -> dict[str, Any] | None:
     }
 
 
+def _fetch_openalgo_vix() -> dict[str, Any] | None:
+    from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+
+    quote = fetch_openalgo_quote("INDIAVIX")
+    ltp = quote.get("ltp") if quote else None
+    if ltp is None:
+        return None
+    return {"india_vix": ltp, "source": "openalgo", "symbol": "INDIAVIX"}
+
+
+def _fetch_openalgo_nifty() -> dict[str, Any] | None:
+    from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+
+    quote = fetch_openalgo_quote("NIFTY")
+    ltp = quote.get("ltp") if quote else None
+    if ltp is None:
+        return None
+    return {
+        "nifty_level": ltp,
+        "nifty_change_pct": quote.get("change_pct"),
+        "source": "openalgo",
+        "symbol": "NIFTY",
+    }
+
+
 def fetch_macro_in() -> StageResult:
     """Market-wide India macro snapshot (VIX + Nifty)."""
     fetchers: list[tuple[str, Any]] = [
         ("yfinance_vix", _fetch_yfinance_vix),
         ("yfinance_nifty", _fetch_nifty_context),
     ]
+    try:
+        from trade_integrations.openalgo.market_data import openalgo_configured
+
+        if openalgo_configured():
+            fetchers.insert(0, ("openalgo_vix", _fetch_openalgo_vix))
+            fetchers.insert(1, ("openalgo_nifty", _fetch_openalgo_nifty))
+    except ImportError:
+        pass
     try:
         import nselib  # noqa: F401
 

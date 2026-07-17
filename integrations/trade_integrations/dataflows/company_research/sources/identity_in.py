@@ -6,8 +6,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from tradingagents.dataflows.errors import VendorNotConfiguredError
-
 from ..market import NormalizedTicker
 from ..models import StageResult
 from ..source_registry import optional_source_names
@@ -30,19 +28,17 @@ def _stage_now() -> datetime:
 
 
 def _fetch_openalgo(normalized: NormalizedTicker) -> dict[str, Any] | None:
-    from trade_integrations.dataflows.openalgo import _openalgo_post, resolve_openalgo_symbol
+    from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
 
-    symbol, exchange = resolve_openalgo_symbol(normalized.input_ticker)
-    data = _openalgo_post("quotes", {"symbol": symbol, "exchange": exchange})
-    quote = data.get("data") or data
+    quote = fetch_openalgo_quote(normalized.input_ticker)
     if not quote:
         return None
     return {
-        "name": quote.get("name") or quote.get("symbol") or normalized.base_symbol,
-        "sector": quote.get("sector") or "",
-        "industry": quote.get("industry") or "",
-        "exchange": exchange,
-        "last_price": quote.get("ltp") or quote.get("last_price") or quote.get("close"),
+        "name": normalized.base_symbol,
+        "sector": "",
+        "industry": "",
+        "exchange": normalized.openalgo_exchange,
+        "last_price": quote.get("ltp") or quote.get("last_price"),
         "currency": "INR",
         "source": "openalgo",
     }
@@ -110,16 +106,17 @@ def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
         fetchers.append(("dalal_bse", lambda: _fetch_dalal_bse(normalized)))
 
     try:
-        from trade_integrations.dataflows.openalgo import _openalgo_settings
+        from trade_integrations.openalgo.market_data import openalgo_configured
 
-        _openalgo_settings()
-        fetchers.insert(0, ("openalgo", lambda: _fetch_openalgo(normalized)))
-    except (VendorNotConfiguredError, ImportError):
+        if openalgo_configured():
+            fetchers.insert(0, ("openalgo", lambda: _fetch_openalgo(normalized)))
+    except ImportError:
         pass
 
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
+    from ..fetch_policy import allow_tiered_apis
 
-    if tapetide_configured():
+    if tapetide_configured() and allow_tiered_apis():
         fetchers.append(("tapetide", lambda: fetch_tapetide_identity(normalized.base_symbol)))
 
     optional = optional_source_names("identity")

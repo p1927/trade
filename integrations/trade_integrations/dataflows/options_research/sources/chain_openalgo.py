@@ -6,14 +6,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from trade_integrations.dataflows.openalgo import (
-    VendorNotConfiguredError,
-    fetch_option_chain,
+from trade_integrations.openalgo.market_data import (
+    fetch_option_chain_with_fallback,
     fetch_option_expiry_dates,
-    normalize_openalgo_expiry,
 )
-from trade_integrations.openalgo.market_data import _fetch_nselib_chain
-from tradingagents.dataflows.errors import NoMarketDataError
+from trade_integrations.openalgo.symbols import normalize_openalgo_expiry
+from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError
 
 from ..market import OptionsInstrument
 from ..models import StageResult
@@ -37,20 +35,6 @@ def fetch_chain_stage(
     data: dict[str, Any] = {}
     vendor = "openalgo"
 
-    def _apply_fallback(reason: str) -> bool:
-        nonlocal vendor, data
-        errors.append(reason)
-        fallback = _fetch_nselib_chain(
-            instrument.underlying_symbol,
-            expiry_date,
-            is_index=instrument.instrument_type.value == "index",
-        )
-        if fallback:
-            vendor = "nselib"
-            data = fallback
-            return True
-        return False
-
     try:
         expiries = fetch_option_expiry_dates(
             instrument.underlying_symbol,
@@ -61,42 +45,35 @@ def fetch_chain_stage(
             if expiry_date
             else (normalize_openalgo_expiry(expiries[0]) if expiries else "")
         )
-        chain = fetch_option_chain(
+        chain = fetch_option_chain_with_fallback(
             instrument.underlying_symbol,
             instrument.underlying_exchange,
             expiry_date=chosen_expiry or None,
             strike_count=strike_count,
+            is_index=instrument.instrument_type.value == "index",
         )
         chain["expiries"] = expiries
         chain["options_exchange"] = instrument.options_exchange
         data = chain
-        if not chain.get("chain"):
-            if not _apply_fallback("OpenAlgo returned empty chain"):
-                return StageResult(
-                    stage="chain",
-                    status="error",
-                    vendor="openalgo",
-                    fetched_at=now,
-                    errors=errors,
-                )
+        vendor = str(chain.get("source") or "openalgo")
     except (NoMarketDataError, VendorNotConfiguredError) as exc:
-        if not _apply_fallback(str(exc)):
-            return StageResult(
-                stage="chain",
-                status="error",
-                vendor="openalgo",
-                fetched_at=now,
-                errors=errors,
-            )
+        errors.append(str(exc))
+        return StageResult(
+            stage="chain",
+            status="error",
+            vendor=vendor,
+            fetched_at=now,
+            errors=errors,
+        )
     except Exception as exc:
-        if not _apply_fallback(str(exc)):
-            return StageResult(
-                stage="chain",
-                status="error",
-                vendor="openalgo",
-                fetched_at=now,
-                errors=errors,
-            )
+        errors.append(str(exc))
+        return StageResult(
+            stage="chain",
+            status="error",
+            vendor=vendor,
+            fetched_at=now,
+            errors=errors,
+        )
 
     status = "ok" if data.get("chain") else "partial"
     return StageResult(

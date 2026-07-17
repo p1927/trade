@@ -67,19 +67,18 @@ def check_registry() -> Check:
 
 def check_openalgo(symbol: str) -> Check:
     try:
-        from trade_integrations.dataflows.openalgo import _openalgo_post, resolve_openalgo_symbol
+        from trade_integrations.openalgo.market_data import fetch_quote_raw
 
-        sym, exch = resolve_openalgo_symbol(symbol)
-        q = _openalgo_post("quotes", {"symbol": sym, "exchange": exch})
-        data = q.get("data") or q
-        ltp = data.get("ltp")
+        quote = fetch_quote_raw(symbol)
+        ltp = quote.get("ltp") if quote else None
         if ltp is None:
-            return Check("openalgo_quotes", "fail", "no ltp in response", {"keys": list(data.keys())})
+            keys = list(quote.keys()) if quote else []
+            return Check("openalgo_quotes", "fail", "no ltp in response", {"keys": keys})
         return Check(
             "openalgo_quotes",
             "pass",
             f"LTP={ltp}",
-            {"has_sector": bool(data.get("sector")), "has_industry": bool(data.get("industry"))},
+            {"source": quote.get("source")},
         )
     except Exception as exc:
         return Check("openalgo_quotes", "fail", str(exc)[:200])
@@ -205,19 +204,22 @@ def check_tapetide_calendar_clean() -> Check:
     )
 
 
-def check_batch_includes_tapetide() -> Check:
-    if not tt.is_configured():
-        return Check("batch_tapetide_included", "skip", "TAPETIDE_TOKEN not set")
-    tt.set_batch_research(True)
+def check_batch_skips_tiered_apis() -> Check:
+    from trade_integrations.dataflows.company_research.fetch_policy import (
+        allow_tiered_apis,
+        set_nifty50_batch,
+    )
+
+    set_nifty50_batch(True)
     try:
-        active = tt.is_active()
+        tiered_ok = allow_tiered_apis()
         return Check(
-            "batch_tapetide_included",
-            "pass" if active else "fail",
-            "Tapetide active during batch (default TAPETIDE_BATCH=true)",
+            "batch_skips_tiered_apis",
+            "pass" if not tiered_ok else "fail",
+            "Nifty 50 batch disables Tapetide and Alpha Vantage",
         )
     finally:
-        tt.set_batch_research(False)
+        set_nifty50_batch(False)
 
 
 def check_raw_source_proof(symbol: str) -> Check:
@@ -327,7 +329,7 @@ def main() -> int:
     checks: list[Check] = [
         check_registry(),
         check_tapetide_calendar_clean(),
-        check_batch_includes_tapetide(),
+        check_batch_skips_tiered_apis(),
     ]
 
     for sym in SYMBOLS:
