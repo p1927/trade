@@ -73,7 +73,9 @@ def _patch_default_config() -> None:
         "macro_data": "fred",
         "prediction_markets": "polymarket",
     }
-    cfg["openalgo_host"] = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001")
+    cfg["openalgo_host"] = os.getenv("OPENALGO_HOST") or __import__(
+        "trade_integrations.stack_ports", fromlist=["openalgo_host"]
+    ).openalgo_host()
     cfg["openalgo_api_key"] = os.getenv("OPENALGO_API_KEY", "")
     cfg["alpaca_profile"] = os.getenv("ALPACA_PROFILE", "paper")
     cfg["alpaca_realtime_enabled"] = (

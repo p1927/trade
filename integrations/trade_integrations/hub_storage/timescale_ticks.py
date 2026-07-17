@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
+from trade_integrations.env import load_trade_env
 from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
 
 logger = logging.getLogger(__name__)
@@ -20,15 +21,23 @@ _TICKS_DAILY_REL = Path("_data") / "ticks" / "daily"
 _ENABLED_ENV = "TIMESCALE_ENABLED"
 _URL_ENV = "TIMESCALE_DATABASE_URL"
 _HOT_RETENTION_DAYS_ENV = "TIMESCALE_HOT_RETENTION_DAYS"
-_DEFAULT_URL = "postgresql://postgres:tradehub@localhost:5433/trade_hub"
+
+
+def _default_timescale_url() -> str:
+    from trade_integrations.stack_ports import timescale_database_url as ports_timescale_url
+
+    load_trade_env()
+    return ports_timescale_url()
 
 
 def is_timescale_enabled() -> bool:
+    load_trade_env()
     return os.getenv(_ENABLED_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def timescale_database_url() -> str:
-    return os.getenv(_URL_ENV, _DEFAULT_URL).strip() or _DEFAULT_URL
+    load_trade_env()
+    return os.getenv(_URL_ENV, _default_timescale_url()).strip() or _default_timescale_url()
 
 
 def hot_retention_days() -> int:

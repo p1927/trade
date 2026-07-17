@@ -1,7 +1,7 @@
-.PHONY: start status stop-searxng logs-searxng sync sync-status \
+.PHONY: start status stop-searxng stop-docker logs-searxng sync sync-status sync-ports \
         tunnel-quick tunnel-restart tunnel-named tunnel-stop tunnel-status tunnel-urls \
         vibe setup-vibe vibe-frontend trade setup-ed-alpha start-ed-alpha stop-ed-alpha \
-        start-daemon restart-vibe stop-vibe status-vibe
+        start-daemon restart-vibe stop-vibe status-vibe status-hub doctor
 
 trade:
 	@./trade --help
@@ -10,7 +10,7 @@ start:
 	./trade start
 
 start-daemon:
-	./start.sh --daemon --no-searxng
+	./start.sh --daemon
 
 restart-vibe:
 	./scripts/restart_vibe_stack.sh
@@ -20,6 +20,12 @@ stop-vibe:
 
 status-vibe:
 	./scripts/status_vibe_stack.sh
+
+status-hub:
+	./scripts/status_hub_stack.sh
+
+doctor:
+	./scripts/stack_doctor.sh
 
 vibe:
 	./start.sh --vibe-only
@@ -52,7 +58,10 @@ tunnel-urls:
 	./trade webhooks all
 
 stop-searxng:
-	docker compose -f docker-compose.stack.yml down
+	./trade stop-docker searxng
+
+stop-docker:
+	./trade stop-docker all
 
 logs-searxng:
 	docker compose -f docker-compose.stack.yml logs -f searxng
@@ -62,6 +71,9 @@ sync:
 
 sync-status:
 	./scripts/sync.sh status
+
+sync-ports:
+	./.venv/bin/python scripts/sync_stack_ports.py --apply
 
 setup-ed-alpha:
 	./scripts/setup_ed_alpha.sh

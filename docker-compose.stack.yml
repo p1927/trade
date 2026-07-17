@@ -1,14 +1,15 @@
+# Hub Docker services — host ports come from stack/ports.yaml (sync: python scripts/sync_stack_ports.py --apply)
 services:
   searxng:
     image: docker.io/searxng/searxng:latest
     container_name: tradingagents-searxng
     restart: unless-stopped
     ports:
-      - "5556:8080"
+      - "${SEARXNG_HOST_PORT}:${SEARXNG_CONTAINER_PORT}"
     volumes:
       - ./stack/searxng:/etc/searxng:rw
     environment:
-      - SEARXNG_BASE_URL=http://localhost:5556/
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
@@ -25,7 +26,7 @@ services:
     stop_grace_period: 120s
     shm_size: 256mb
     ports:
-      - "5433:5432"
+      - "${TIMESCALE_HOST_PORT}:${TIMESCALE_CONTAINER_PORT}"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: tradehub
@@ -52,7 +53,7 @@ services:
     container_name: trade-hub-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT}:${REDIS_CONTAINER_PORT}"
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     volumes:
       - trade_hub_redis_data:/data

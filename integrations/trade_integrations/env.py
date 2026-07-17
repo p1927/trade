@@ -11,9 +11,23 @@ def trade_repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def load_trade_env(*, root: Path | None = None) -> Path | None:
-    """Load ``{root}/.env`` into os.environ with setdefault."""
+def load_stack_ports_env(*, root: Path | None = None) -> None:
+    """Apply defaults from stack/ports.yaml (does not override existing env)."""
     base = root or trade_repo_root()
+    try:
+        from trade_integrations.stack_ports import build_env_map
+
+        for key, value in build_env_map(root=base).items():
+            os.environ.setdefault(key, value)
+    except Exception:
+        # Ports yaml / PyYAML may be unavailable during partial installs.
+        return
+
+
+def load_trade_env(*, root: Path | None = None) -> Path | None:
+    """Load stack ports + ``{root}/.env`` into os.environ with setdefault."""
+    base = root or trade_repo_root()
+    load_stack_ports_env(root=base)
     env_file = base / ".env"
     if not env_file.is_file():
         return None
@@ -32,6 +46,8 @@ def load_trade_env(*, root: Path | None = None) -> Path | None:
 def ensure_openalgo_env(*, root: Path | None = None) -> dict[str, str]:
     """Load trade .env and return OpenAlgo host + api key (may be empty strings)."""
     load_trade_env(root=root)
-    host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
+    from trade_integrations.stack_ports import openalgo_host
+
+    host = openalgo_host(root=root)
     api_key = os.getenv("OPENALGO_API_KEY", "").strip()
     return {"host": host, "api_key": api_key}

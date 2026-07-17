@@ -1,8 +1,7 @@
 """SearXNG-based news search for ticker and macro headlines.
 
 Uses a local or remote SearXNG instance (JSON API) instead of yfinance Search
-or a paid news API. Base URL defaults to http://localhost:5555 and can be set
-via ``SEARXNG_BASE_URL``.
+or a paid news API. Base URL comes from ``stack/ports.yaml`` via ``SEARXNG_BASE_URL``.
 """
 import logging
 import os
@@ -19,11 +18,16 @@ from tradingagents.dataflows.yfinance_news import _in_news_window
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 30
-DEFAULT_BASE_URL = "http://localhost:5555"
+
+
+def _default_base_url() -> str:
+    from trade_integrations.stack_ports import searxng_base_url
+
+    return searxng_base_url()
 
 
 def _base_url() -> str:
-    return os.environ.get("SEARXNG_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+    return os.environ.get("SEARXNG_BASE_URL", _default_base_url()).rstrip("/")
 
 
 def _parse_pub_date(result: dict) -> datetime | None:

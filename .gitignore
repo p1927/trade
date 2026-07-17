@@ -150,6 +150,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.stack.ports.env
 .venv
 .venv-*/
 .venv-nautilus/
@@ -237,6 +238,11 @@ stack/vibe-upstream/
 data/nse/raw/
 !data/nse/manifest.json
 !data/nse/**/*.parquet
+
+# Stack runtime artifacts (daemon pidfiles, Nautilus registry)
+log/nautilus-watch.agent_id
+log/nautilus-watch.agents.json
+log/nautilus-watch.pid
 
 # Local stack launcher
 .stack.pids

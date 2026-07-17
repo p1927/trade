@@ -38,20 +38,26 @@ class BridgeConfig:
 
 def get_bridge_config() -> BridgeConfig:
     try:
-        from trade_integrations.env import ensure_openalgo_env
+        from trade_integrations.env import ensure_openalgo_env, load_trade_env
+        from trade_integrations.stack_ports import nautilus_redis_url, vibe_backend_url
 
+        load_trade_env()
         oa = ensure_openalgo_env()
         host = oa["host"]
         api_key = oa["api_key"]
+        vibe_url = os.getenv("VIBE_BACKEND_URL", vibe_backend_url()).rstrip("/")
+        redis_default = nautilus_redis_url()
     except ImportError:
-        host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
+        host = os.getenv("OPENALGO_HOST", "").rstrip("/")
         api_key = os.getenv("OPENALGO_API_KEY", "").strip()
-    redis_raw = os.getenv("NAUTILUS_REDIS_URL", "").strip()
+        vibe_url = os.getenv("VIBE_BACKEND_URL", "").rstrip("/")
+        redis_default = os.getenv("NAUTILUS_REDIS_URL", "").strip()
+    redis_raw = os.getenv("NAUTILUS_REDIS_URL", redis_default).strip()
     return BridgeConfig(
         watch_enabled=_env_bool("NAUTILUS_WATCH_ENABLE", "true"),
         openalgo_host=host,
         openalgo_api_key=api_key,
-        vibe_backend_url=os.getenv("VIBE_BACKEND_URL", "http://127.0.0.1:8899").rstrip("/"),
+        vibe_backend_url=vibe_url,
         vibe_api_key=os.getenv("VIBE_API_AUTH_KEY", os.getenv("API_AUTH_KEY", "")).strip(),
         quote_poll_ms=max(500, int(os.getenv("NAUTILUS_QUOTE_POLL_MS", "2000"))),
         watch_symbols=_parse_symbols(os.getenv("NAUTILUS_WATCH_SYMBOLS", "NIFTY,BANKNIFTY,INDIAVIX")),

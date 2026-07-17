@@ -16,11 +16,17 @@ Stack:
   start [mode]          Start services (default: vibe, foreground)
                         Modes: vibe | openalgo | cli | full | daemon | nautilus-watch
   restart               Restart OpenAlgo + Vibe in background
-  stop                  Stop OpenAlgo + Vibe background services
-  status                Check SearXNG, OpenAlgo, Vibe, agents readiness
+  stop [--all]          Stop OpenAlgo + Vibe ( --all: + hub Docker + tunnels )
+  status                Check SearXNG, OpenAlgo, Vibe, hub Docker readiness
   status-vibe           Check OpenAlgo + Vibe ports only
-  stop-searxng          Stop SearXNG Docker container
+  status-hub            Check hub Docker tier + manifest
+  stop-docker [target]  Stop hub Docker: searxng | timescale | redis | all | down
+  stop-searxng          Stop SearXNG Docker only (alias for stop-docker searxng)
   logs-searxng          Follow SearXNG logs
+  doctor                Run unified stack + hub preflight checks
+  dev                   Dev mode: auto-reload API/UI + OpenAlgo debug
+  reload [target]       Reload after code/env change (app|env|nautilus|hub|all)
+  sync-ports            Apply stack/ports.yaml to .env files
 
 Tunnel (webhook exposure):
   tunnel quick          Start trycloudflare.com tunnel (dev/testing)
@@ -40,6 +46,7 @@ Research:
 
 Maintenance:
   sync [target]         Sync submodules (all|tradingagents|openalgo|status)
+  sync-ports            Apply stack/ports.yaml to .env, compose, OpenAlgo/Vibe
   setup vibe            Wire OpenAlgo MCP into Vibe agent config
 
 Examples:
@@ -111,7 +118,7 @@ case "$cmd" in
       openalgo)         exec "$ROOT/start.sh" --openalgo-only "$@" ;;
       cli|agents)       exec "$ROOT/start.sh" --cli "$@" ;;
       full)             exec "$ROOT/start.sh" "$@" ;;
-      daemon)           exec "$ROOT/start.sh" --daemon --no-searxng "$@" ;;
+      daemon)           exec "$ROOT/start.sh" --daemon "$@" ;;
       nautilus-watch)
         # shellcheck disable=SC1091
         STACK_ROOT="$ROOT"
@@ -137,6 +144,22 @@ case "$cmd" in
     exec "$ROOT/scripts/status_vibe_stack.sh" "$@"
     ;;
 
+  status-hub)
+    exec "$ROOT/scripts/status_hub_stack.sh" "$@"
+    ;;
+
+  doctor)
+    exec "$ROOT/scripts/stack_doctor.sh" "$@"
+    ;;
+
+  dev)
+    exec "$ROOT/scripts/stack_dev.sh" "$@"
+    ;;
+
+  reload)
+    exec "$ROOT/scripts/reload_vibe_stack.sh" "$@"
+    ;;
+
   restart)
     exec "$ROOT/scripts/restart_vibe_stack.sh" "$@"
     ;;
@@ -145,8 +168,36 @@ case "$cmd" in
     exec "$ROOT/scripts/stop_vibe_stack.sh" "$@"
     ;;
 
+  stop-docker)
+    target="${1:-all}"
+    shift || true
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/stack_lib.sh"
+    STACK_ROOT="$ROOT"
+    stack_load_env
+    case "$target" in
+      searxng)    stack_docker_stop_searxng "$@" ;;
+      timescale)  stack_docker_stop_service timescaledb "$@" ;;
+      redis)      stack_docker_stop_redis "$@" ;;
+      all)        stack_docker_stop_all "$@" ;;
+      down)       stack_docker_down_all "$@" ;;
+      -h|--help|help)
+        echo "Usage: trade stop-docker [searxng|timescale|redis|all|down]"
+        exit 0
+        ;;
+      *)
+        echo "Unknown stop-docker target: $target (try: searxng, timescale, redis, all, down)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
   stop-searxng)
-    exec docker compose -f "$ROOT/docker-compose.stack.yml" down "$@"
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/stack_lib.sh"
+    STACK_ROOT="$ROOT"
+    stack_load_env
+    stack_docker_stop_searxng "$@"
     ;;
 
   logs-searxng)
@@ -201,6 +252,10 @@ case "$cmd" in
     target="${1:-all}"
     shift || true
     exec "$ROOT/scripts/sync.sh" "$target" "$@"
+    ;;
+
+  sync-ports)
+    exec "$ROOT/.venv/bin/python" "$ROOT/scripts/sync_stack_ports.py" --apply "$@"
     ;;
 
   setup)

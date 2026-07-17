@@ -1,0 +1,90 @@
+# Canonical Trade stack port registry — single source of truth.
+#
+# After editing, run:
+#   python scripts/sync_stack_ports.py --apply
+#
+# Validate only (CI / pre-start):
+#   python scripts/sync_stack_ports.py --check
+#
+# host: loopback for service URLs (OpenAlgo, Vibe API, Redis, Postgres)
+# browser_host: used in browser-facing URLs (SearXNG)
+
+meta:
+  host: 127.0.0.1
+  browser_host: localhost
+
+services:
+  openalgo:
+    description: OpenAlgo broker bridge (Flask UI + REST API)
+    host_port: 5001
+    env:
+      FLASK_PORT: "{host_port}"
+    urls:
+      OPENALGO_HOST: "http://{host}:{host_port}"
+
+  openalgo_websocket:
+    description: OpenAlgo unified WebSocket proxy (market data)
+    host_port: 8765
+    env:
+      WEBSOCKET_PORT: "{host_port}"
+    urls:
+      WEBSOCKET_URL: "ws://{host}:{host_port}"
+
+  openalgo_zmq:
+    description: OpenAlgo internal ZeroMQ bus (loopback; not HTTP)
+    host_port: 5555
+    env:
+      ZMQ_PORT: "{host_port}"
+    notes: Must stay separate from HTTP services (e.g. SearXNG).
+
+  vibe_frontend:
+    description: Vibe Trading chat UI (Vite dev server)
+    host_port: 5899
+    env:
+      VIBE_FRONTEND_PORT: "{host_port}"
+    urls:
+      VIBE_FRONTEND_URL: "http://{host}:{host_port}"
+
+  vibe_backend:
+    description: Vibe Trading API (FastAPI / Uvicorn)
+    host_port: 8899
+    env:
+      VIBE_BACKEND_PORT: "{host_port}"
+    urls:
+      VIBE_BACKEND_URL: "http://{host}:{host_port}"
+
+  searxng:
+    description: SearXNG news search (Docker)
+    host_port: 5556
+    container_port: 8080
+    docker:
+      publish: "{host_port}:{container_port}"
+    env:
+      SEARXNG_HOST_PORT: "{host_port}"
+      SEARXNG_CONTAINER_PORT: "{container_port}"
+    urls:
+      SEARXNG_BASE_URL: "http://{browser_host}:{host_port}"
+
+  timescaledb:
+    description: Hub hot-tick TimescaleDB (Docker)
+    host_port: 5433
+    container_port: 5432
+    docker:
+      publish: "{host_port}:{container_port}"
+    env:
+      TIMESCALE_HOST_PORT: "{host_port}"
+      TIMESCALE_CONTAINER_PORT: "{container_port}"
+    urls:
+      TIMESCALE_DATABASE_URL: "postgresql://postgres:tradehub@{host}:{host_port}/trade_hub"
+
+  redis:
+    description: Nautilus watch cache (Docker)
+    host_port: 6379
+    container_port: 6379
+    docker:
+      publish: "{host_port}:{container_port}"
+    env:
+      REDIS_HOST_PORT: "{host_port}"
+      REDIS_CONTAINER_PORT: "{container_port}"
+    urls:
+      NAUTILUS_REDIS_URL: "redis://{host}:{host_port}/0"
