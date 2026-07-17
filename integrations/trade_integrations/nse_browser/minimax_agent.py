@@ -39,6 +39,13 @@ def _client():
     return OpenAI(api_key=_api_key(), base_url=_base_url())
 
 
+def chat_completions_create(**kwargs: Any) -> Any:
+    """Queue-backed MiniMax chat completion (serialized + rate-limit retry)."""
+    from trade_integrations.nse_browser.minimax_queue import chat_completions_create as _queued_create
+
+    return _queued_create(_client(), **kwargs)
+
+
 def _strip_html(html: str) -> str:
     text = re.sub(r"(?is)<script.*?>.*?</script>", " ", html or "")
     text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
@@ -96,9 +103,8 @@ def analyze_page(
         "Do not invent numbers — extract only what is present. Use empty lists if not found."
     )
 
-    client = _client()
     try:
-        response = client.chat.completions.create(
+        response = chat_completions_create(
             model=_model(),
             temperature=0.1,
             messages=[
@@ -195,9 +201,8 @@ def plan_browser_action(
             }
         )
 
-    client = _client()
     try:
-        response = client.chat.completions.create(
+        response = chat_completions_create(
             model=_model(),
             temperature=0.1,
             messages=[

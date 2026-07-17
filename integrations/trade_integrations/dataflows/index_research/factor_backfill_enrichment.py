@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 _SENTIMENT_SCALE = 10.0
 
 
-def _prepare_nse_repository_layers() -> dict[str, int | dict[str, int]]:
+def _prepare_nse_repository_layers(
+    *,
+    allow_live_fetch: bool = True,
+    enrich_days: int = 365,
+) -> dict[str, int | dict[str, int]]:
     """Sync git-tracked data/nse seeds (FII/DII, SEBI monthly, sector CSVs) into hub."""
     try:
         from trade_integrations.nse_browser.repository import (
@@ -37,8 +41,11 @@ def _prepare_nse_repository_layers() -> dict[str, int | dict[str, int]]:
             sync_all_repo_seed_layers,
         )
 
-        seed_counts = sync_all_repo_seed_layers()
-        hub_counts = ingest_repository_to_hub()
+        seed_counts = sync_all_repo_seed_layers(
+            allow_live_fetch=allow_live_fetch,
+            enrich_days=enrich_days,
+        )
+        hub_counts = ingest_repository_to_hub(allow_live_fetch=False, enrich_days=enrich_days)
         return {"seed": seed_counts, "hub": hub_counts}
     except Exception as exc:
         logger.warning("NSE repository sync failed: %s", exc)
@@ -50,51 +57,71 @@ def fetch_fii_history_frame() -> pd.DataFrame:
     return fetch_mrchartist_flow_frame(include_seeded=False)
 
 
-def fetch_fii_daily_net_series(start: str, end: str) -> pd.Series:
+def fetch_fii_daily_net_series(
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.Series:
     """Best-effort FII daily net (₹ crore) from merged public history."""
-    frame = merge_flow_derivatives_frame(start, end)
+    frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     if frame.empty or "fii_net" not in frame.columns:
         return pd.Series(dtype=float)
     series = pd.Series(frame["fii_net"].astype(float).values, index=frame["date"].astype(str))
     return series.sort_index()
 
 
-def fetch_dii_daily_net_series(start: str, end: str) -> pd.Series:
+def fetch_dii_daily_net_series(
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.Series:
     """Best-effort DII daily net (₹ crore) from merged public history."""
-    frame = merge_flow_derivatives_frame(start, end)
+    frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     if frame.empty or "dii_net" not in frame.columns:
         return pd.Series(dtype=float)
     series = pd.Series(frame["dii_net"].astype(float).values, index=frame["date"].astype(str))
     return series.sort_index()
 
 
-def build_fii_net_5d_series(trading_dates: list[str], start: str, end: str) -> pd.Series:
+def build_fii_net_5d_series(
+    trading_dates: list[str],
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.Series:
     """Rolling 5-session FII net sum aligned to Nifty trading dates."""
-    frame = merge_flow_derivatives_frame(start, end)
+    frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     return build_rolling_sum_series(frame, "fii_net", trading_dates, window=5)
 
 
-def build_dii_net_5d_series(trading_dates: list[str], start: str, end: str) -> pd.Series:
+def build_dii_net_5d_series(
+    trading_dates: list[str],
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.Series:
     """Rolling 5-session DII net sum aligned to Nifty trading dates."""
-    frame = merge_flow_derivatives_frame(start, end)
+    frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     return build_rolling_sum_series(frame, "dii_net", trading_dates, window=5)
 
 
 def build_nifty_pe_proxy_series(nifty: pd.DataFrame) -> pd.Series:
     """Scale current trailing PE by historical Nifty close ratio."""
-    import yfinance as yf
+    from trade_integrations.dataflows.index_research.sources.nifty_pe_fetch import (
+        resolve_nifty_trailing_pe,
+    )
 
     if nifty.empty or "close" not in nifty.columns:
         return pd.Series(dtype=float)
 
-    info = yf.Ticker("^NSEI").info or {}
-    current_pe = info.get("trailingPE")
+    resolved = resolve_nifty_trailing_pe()
+    current_pe = resolved.get("value") if resolved else None
     if current_pe is None:
-        env_raw = __import__("os").getenv("NIFTY_TRAILING_PE", "22.0").strip()
-        try:
-            current_pe = float(env_raw)
-        except ValueError:
-            current_pe = 22.0
+        return pd.Series(dtype=float)
 
     latest_close = float(nifty["close"].iloc[-1])
     if latest_close <= 0:
@@ -182,10 +209,12 @@ def build_institutional_joint_series(
     trading_dates: list[str],
     start: str,
     end: str,
+    *,
+    allow_live_fetch: bool = True,
 ) -> tuple[pd.Series, pd.Series]:
     """Rolling institutional_net_5d and dii_absorption_ratio aligned to Nifty dates."""
-    fii_5d = build_fii_net_5d_series(trading_dates, start, end)
-    dii_5d = build_dii_net_5d_series(trading_dates, start, end)
+    fii_5d = build_fii_net_5d_series(trading_dates, start, end, allow_live_fetch=allow_live_fetch)
+    dii_5d = build_dii_net_5d_series(trading_dates, start, end, allow_live_fetch=allow_live_fetch)
     inst = fii_5d.add(dii_5d, fill_value=np.nan)
     ratio = pd.Series(dtype=float)
     if not fii_5d.empty and not dii_5d.empty:
@@ -216,9 +245,9 @@ def purge_anomalous_factor_snapshots() -> list[str]:
     return removed
 
 
-def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
+def enrich_factor_history(*, days: int = 365, allow_live_fetch: bool = True) -> dict[str, int | str]:
     """Merge missing factors (repo_rate, FII, PE, momentum, sentiment proxies) into daily store."""
-    repo_sync = _prepare_nse_repository_layers()
+    repo_sync = _prepare_nse_repository_layers(allow_live_fetch=allow_live_fetch, enrich_days=days)
     removed = purge_anomalous_factor_snapshots()
     nifty = load_nifty_history(days=days)
     if nifty.empty:
@@ -228,18 +257,25 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
     start = trading_dates[0]
     end = trading_dates[-1]
 
-    fao_backfill = backfill_nse_fao_to_cache(trading_dates, sleep_s=0.25)
-    flow_frame = merge_flow_derivatives_frame(start, end)
+    fao_backfill: dict[str, int | str] = {"status": "skipped", "reason": "cached_only"}
+    if allow_live_fetch:
+        fao_backfill = backfill_nse_fao_to_cache(trading_dates, sleep_s=0.25)
+    flow_frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     if not flow_frame.empty:
         cash_rows = flow_frame.to_dict("records")
         upsert_flow_cash_cache(cash_rows)
 
-    fii_5d = build_fii_net_5d_series(trading_dates, start, end)
-    dii_5d = build_dii_net_5d_series(trading_dates, start, end)
-    inst_5d, absorption = build_institutional_joint_series(trading_dates, start, end)
+    fii_5d = build_fii_net_5d_series(trading_dates, start, end, allow_live_fetch=allow_live_fetch)
+    dii_5d = build_dii_net_5d_series(trading_dates, start, end, allow_live_fetch=allow_live_fetch)
+    inst_5d, absorption = build_institutional_joint_series(
+        trading_dates,
+        start,
+        end,
+        allow_live_fetch=allow_live_fetch,
+    )
     pe_series = build_nifty_pe_proxy_series(nifty)
     momentum = build_constituent_momentum_series(trading_dates, start=start, end=end)
-    flow_summary = flow_backfill_summary(days=days)
+    flow_summary = flow_backfill_summary(days=days, allow_live_fetch=allow_live_fetch)
 
     sector_factors: dict[str, pd.Series] = {}
     try:
@@ -439,6 +475,17 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
         logger.warning("news event features backfill failed: %s", exc)
         news_backfill = {"status": "error", "error": str(exc)}
 
+    alpha_zoo_backfill: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.index_research.alpha_bridge.backfill import (
+            backfill_alpha_zoo_history,
+        )
+
+        alpha_zoo_backfill = backfill_alpha_zoo_history(days=days)
+    except Exception as exc:
+        logger.warning("alpha zoo backfill failed: %s", exc)
+        alpha_zoo_backfill = {"status": "error", "error": str(exc)}
+
     return {
         "days_enriched": days_enriched,
         "start": start,
@@ -453,6 +500,7 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
         "momentum_days": int(momentum.notna().sum()) if not momentum.empty else 0,
         "sector_breadth_days": int(sector_factors.get("sector_breadth_price_7d", pd.Series()).notna().sum()),
         "news_event_features": news_backfill,
+        "alpha_zoo_backfill": alpha_zoo_backfill,
     }
 
 

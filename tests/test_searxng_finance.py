@@ -1,0 +1,85 @@
+"""Tests for SearXNG finance enrichment helpers."""
+
+from __future__ import annotations
+
+
+def test_parse_scalar_from_results_finds_nifty_pe():
+    from trade_integrations.dataflows.searxng_finance import parse_scalar_from_results
+
+    results = [
+        {
+            "title": "Nifty 50 PE ratio at 23.4 as of July 2026",
+            "content": "Index valuation remains elevated",
+            "url": "https://www.moneycontrol.com/news/business/markets/",
+        }
+    ]
+    assert parse_scalar_from_results(results) == 23.4
+
+
+def test_fetch_nifty_trailing_pe_via_searxng(monkeypatch):
+    from trade_integrations.dataflows import searxng_finance
+
+    monkeypatch.setattr(
+        searxng_finance,
+        "search_finance",
+        lambda query, **kwargs: [
+            {
+                "title": "Nifty trailing P/E 21.8",
+                "content": "",
+                "url": "https://www.screener.in/market/",
+                "engines": ["screener india"],
+            }
+        ],
+    )
+
+    payload = searxng_finance.fetch_nifty_trailing_pe_via_searxng()
+    assert payload is not None
+    assert payload["value"] == 21.8
+    assert payload["source"] == "searxng_finance"
+
+
+def test_fetch_rbi_macro_via_searxng(monkeypatch):
+    from trade_integrations.dataflows import searxng_finance
+
+    def _search(query, **kwargs):
+        if "repo" in query.lower():
+            return [
+                {
+                    "title": "RBI keeps repo rate unchanged at 6.5 per cent",
+                    "content": "",
+                    "url": "https://www.moneycontrol.com/news/economy/policy/",
+                }
+            ]
+        return [
+            {
+                "title": "India CPI inflation at 4.2% in June",
+                "content": "",
+                "url": "https://www.livemint.com/economy/",
+            }
+        ]
+
+    monkeypatch.setattr(searxng_finance, "search_finance", _search)
+
+    payload = searxng_finance.fetch_rbi_macro_via_searxng()
+    assert payload["repo_rate"] == 6.5
+    assert payload["cpi_yoy_proxy"] == 4.2
+    assert payload["source"] == "searxng_finance"
+
+
+def test_resolve_nifty_trailing_pe_prefers_yfinance(monkeypatch):
+    from trade_integrations.dataflows.index_research.sources import nifty_pe_fetch
+
+    monkeypatch.setattr(
+        nifty_pe_fetch,
+        "_fetch_yfinance_index_pe",
+        lambda: {"value": 24.5, "source": "yfinance", "metadata": {}},
+    )
+    def _fail_weighted():
+        raise AssertionError("should not run")
+
+    monkeypatch.setattr(nifty_pe_fetch, "_fetch_weighted_constituent_pe", _fail_weighted)
+
+    out = nifty_pe_fetch.resolve_nifty_trailing_pe()
+    assert out is not None
+    assert out["value"] == 24.5
+    assert out["source"] == "yfinance"

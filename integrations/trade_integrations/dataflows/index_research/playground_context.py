@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from trade_integrations.dataflows.index_research.causal_attribution import (
@@ -162,7 +162,14 @@ def build_playground_context(
             )
 
     try:
-        material = check_material_news(ticker)
+        as_of = getattr(doc, "as_of", None)
+        if as_of is None and isinstance(doc, dict):
+            as_of = doc.get("as_of")
+        if isinstance(as_of, datetime):
+            news_since = as_of.replace(tzinfo=timezone.utc) if as_of.tzinfo is None else as_of
+        else:
+            news_since = datetime.now(timezone.utc)
+        material = check_material_news(ticker, news_since)
         for item in material[:6]:
             title = getattr(item, "title", "") or ""
             if not title or any(h["title"] == title for h in headlines):

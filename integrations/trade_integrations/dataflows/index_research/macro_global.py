@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -113,8 +114,22 @@ def _fetch_us_10y() -> dict[str, Any] | None:
     return None
 
 
+def _fetch_openalgo_vix() -> dict[str, Any] | None:
+    from trade_integrations.dataflows.openalgo import fetch_openalgo_live_snapshot
+
+    snap = fetch_openalgo_live_snapshot("INDIAVIX")
+    if not snap or snap.get("ltp") is None:
+        return None
+    return {
+        "india_vix": snap["ltp"],
+        "source": snap.get("source") or "openalgo",
+        "symbol": "INDIAVIX",
+    }
+
+
 def _fetch_india_vix() -> dict[str, Any] | None:
     for fetcher, source_name in (
+        (_fetch_openalgo_vix, "openalgo"),
         (_fetch_nselib_vix, "nselib"),
         (_fetch_yfinance_vix, "yfinance"),
     ):
@@ -266,18 +281,29 @@ def _fetch_dii_net_5d() -> dict[str, Any] | None:
 
 
 def _fetch_nifty_pe() -> dict[str, Any] | None:
-    import yfinance as yf
+    from trade_integrations.dataflows.index_research.sources.nifty_pe_fetch import (
+        resolve_nifty_trailing_pe,
+    )
 
-    info = yf.Ticker("^NSEI").info or {}
-    pe = info.get("trailingPE")
-    if pe is None:
+    payload = resolve_nifty_trailing_pe()
+    if not payload:
         return None
     return {
         "factor": "nifty_pe",
-        "value": float(pe),
-        "source": "yfinance",
-        "metadata": {"symbol": "^NSEI", "field": "trailingPE"},
+        "value": float(payload["value"]),
+        "source": payload.get("source") or "unknown",
+        "metadata": payload.get("metadata") or {},
     }
+
+
+def _pcr_value_is_valid(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return False
+    return not math.isnan(parsed) and parsed > 0
 
 
 def _fetch_nifty_pcr() -> dict[str, Any] | None:
@@ -288,7 +314,7 @@ def _fetch_nifty_pcr() -> dict[str, Any] | None:
 
     if read_captured_pcr is not None:
         captured = read_captured_pcr("NIFTY")
-        if captured is not None:
+        if _pcr_value_is_valid(captured):
             return {
                 "factor": "nifty_pcr",
                 "value": float(captured),
@@ -297,18 +323,18 @@ def _fetch_nifty_pcr() -> dict[str, Any] | None:
             }
 
     try:
-        from trade_integrations.dataflows.openalgo import fetch_option_chain
+        from trade_integrations.openalgo.market_data import fetch_option_chain_with_fallback
     except ImportError:
         return None
 
     try:
-        chain = fetch_option_chain("NIFTY", "NFO", strike_count=10)
+        chain = fetch_option_chain_with_fallback("NIFTY", "NFO", strike_count=15, is_index=True)
     except Exception as exc:
         logger.debug("OpenAlgo NIFTY PCR fetch failed: %s", exc)
         return None
 
     pcr = chain.get("pcr")
-    if pcr is None:
+    if not _pcr_value_is_valid(pcr):
         return None
     return {
         "factor": "nifty_pcr",

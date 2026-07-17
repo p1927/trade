@@ -93,6 +93,20 @@ def build_quant_review_payload(
     deriv_map = {r["factor"]: r["value"] for r in deriv_rows}
     factors = _merge_factor_maps(hub_factors, live_ta, deriv_map)
 
+    alpha_bridge_keys: list[str] = []
+    try:
+        from trade_integrations.dataflows.index_research.alpha_bridge.config import (
+            is_bridge_enabled,
+        )
+        from trade_integrations.dataflows.index_research.alpha_bridge.promotion import (
+            ALPHA_ZOO_FACTOR_KEYS,
+        )
+
+        if is_bridge_enabled():
+            alpha_bridge_keys = [k for k in ALPHA_ZOO_FACTOR_KEYS if k in factors]
+    except Exception:
+        alpha_bridge_keys = []
+
     trend = _nifty_trend_20d()
     interpretation = build_index_interpretation_bundle(
         factors,
@@ -142,6 +156,7 @@ def build_quant_review_payload(
             "hub_index_research": bool(index_doc),
             "live_technical_keys": sorted(live_ta.keys()),
             "derivatives_bridge_keys": sorted(deriv_map.keys()),
+            "alpha_zoo_bridge_keys": alpha_bridge_keys,
         },
         "ta_consensus": {
             "direction": ta_direction,

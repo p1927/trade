@@ -103,6 +103,12 @@ STRUCTURAL_CHANGES: list[dict[str, Any]] = [
         "promotion_key": "event_promotion",
     },
     {
+        "id": "alpha_zoo_composites",
+        "hypothesis": "Alpha Zoo cross-sectional composites (L/S spread, breadth) improve 14d direction OOS.",
+        "status": "pending_ablation",
+        "promotion_key": "alpha_promotion",
+    },
+    {
         "id": "hybrid_deferred_tier3",
         "hypothesis": "Hybrid bottom-up promotion until non-backfill archives and hybrid_eval_count > 0.",
         "status": "rejected",
@@ -139,7 +145,7 @@ def _resolve_structural_changes(
                 item["rejection_reason"] = (
                     f"Promotion ablation delta {delta_pp} pp < {_ABLATION_ACCEPT_PP} pp gate "
                     f"(baseline {promo.get('baseline_hit_rate')}, "
-                    f"with block {promo.get('with_sector_hit_rate') or promo.get('with_event_hit_rate')})."
+                    f"with block {promo.get('with_sector_hit_rate') or promo.get('with_event_hit_rate') or promo.get('with_alpha_zoo_hit_rate')})."
                 )
         elif item.get("status") == "pending_ablation" and block:
             row = ablation.get(block) or {}

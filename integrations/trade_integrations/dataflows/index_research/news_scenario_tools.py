@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any
 
 from trade_integrations.dataflows.index_research.news_event_scenarios import (
+    NewsScenarioError,
     load_news_event_scenario,
     list_recent_news_scenarios,
     run_news_event_scenario,
@@ -29,6 +30,8 @@ from trade_integrations.dataflows.index_research.cascade.calibration_store impor
 
 def _error_payload(exc: Exception) -> str:
     if isinstance(exc, PipelineSnapshotError):
+        return json.dumps({"status": "error", **exc.to_dict()}, indent=2)
+    if isinstance(exc, NewsScenarioError):
         return json.dumps({"status": "error", **exc.to_dict()}, indent=2)
     return json.dumps({"status": "error", "message": str(exc)}, indent=2)
 
@@ -220,7 +223,12 @@ def tool_run_news_event_scenario(
             draft_id=draft_id,
             session_id=session_id,
         )
-        return json.dumps({"status": "ok", "scenario": product}, indent=2, default=str)
+        payload: dict[str, Any] = {"status": "ok", "scenario": product}
+        if product.get("warnings"):
+            payload["warnings"] = product["warnings"]
+        if product.get("errors"):
+            payload["errors"] = product["errors"]
+        return json.dumps(payload, indent=2, default=str)
     except Exception as exc:
         return _error_payload(exc)
 
@@ -242,6 +250,17 @@ def tool_get_news_scenario_widget(
             scenario_id=scenario_id,
             selected_outcome_id=selected_outcome_id,
         )
+        from trade_integrations.trade_widgets.store import persist_trade_widget
+
+        scenario = load_news_event_scenario(ticker, scenario_id)
+        if isinstance(scenario, dict):
+            meta = widget.setdefault("meta", {})
+            if scenario.get("warnings"):
+                meta["scenario_warnings"] = scenario["warnings"]
+            if scenario.get("errors"):
+                meta["scenario_errors"] = scenario["errors"]
+                widget["plan_status"] = scenario.get("status") or "partial"
+        persist_trade_widget(widget)
         return json.dumps(widget, indent=2, default=str)
     except Exception as exc:
         return _error_payload(exc)

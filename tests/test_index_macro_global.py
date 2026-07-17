@@ -59,8 +59,8 @@ def test_collect_global_factor_rows_returns_expected_keys(monkeypatch):
         "trade_integrations.dataflows.index_research.macro_global._fetch_rbi_factors",
         lambda: {
             "rows": [
-                {"factor": "repo_rate", "value": 6.5, "source": "env_seed"},
-                {"factor": "cpi_yoy_proxy", "value": 4.8, "source": "env_seed"},
+                {"factor": "repo_rate", "value": 6.5, "source": "rbi_scrape"},
+                {"factor": "cpi_yoy_proxy", "value": 4.8, "source": "rbi_scrape"},
             ],
             "context": {"repo_rate": 6.5, "cpi_yoy_proxy": 4.8},
         },
@@ -120,7 +120,7 @@ def test_macro_global_stage_degraded_on_partial_failure(monkeypatch):
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.macro_global._fetch_rbi_factors",
         lambda: {
-            "rows": [{"factor": "repo_rate", "value": 6.5, "source": "env_seed"}],
+            "rows": [{"factor": "repo_rate", "value": 6.5, "source": "rbi_scrape"}],
             "context": {},
         },
     )
@@ -140,14 +140,14 @@ def test_macro_global_stage_degraded_on_partial_failure(monkeypatch):
 
 
 @pytest.mark.unit
-def test_rbi_cpi_env_seed_fallback(monkeypatch):
+def test_rbi_cpi_explicit_env_override(monkeypatch):
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.sources.rbi_cpi._scrape_rbi_press_releases",
         lambda: None,
     )
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.sources.rbi_cpi._fetch_inflation_etf_proxy",
-        lambda: None,
+        "trade_integrations.dataflows.searxng_finance.fetch_rbi_macro_via_searxng",
+        lambda: {},
     )
     monkeypatch.setenv("RBI_REPO_RATE", "6.25")
 
@@ -157,5 +157,30 @@ def test_rbi_cpi_env_seed_fallback(monkeypatch):
 
     context = fetch_rbi_cpi_context()
     assert context["repo_rate"] == 6.25
-    assert context["source"] == "env_seed"
+    assert context["source"] == "env_override"
+    assert context["cpi_yoy_proxy"] is None
+    assert context["rbi_events"]
+
+
+@pytest.mark.unit
+def test_rbi_cpi_missing_without_vendors(monkeypatch):
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.sources.rbi_cpi._scrape_rbi_press_releases",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.searxng_finance.fetch_rbi_macro_via_searxng",
+        lambda: {},
+    )
+    monkeypatch.delenv("RBI_REPO_RATE", raising=False)
+    monkeypatch.delenv("RBI_CPI_YOY_PROXY", raising=False)
+
+    from trade_integrations.dataflows.index_research.sources.rbi_cpi import (
+        fetch_rbi_cpi_context,
+    )
+
+    context = fetch_rbi_cpi_context()
+    assert context["repo_rate"] is None
+    assert context["cpi_yoy_proxy"] is None
+    assert context["source"] == "missing"
     assert context["rbi_events"]

@@ -101,6 +101,13 @@ from trade_integrations.dataflows.index_research.sector_promotion import (
     save_sector_promotion_decision,
     sector_promotion_gate_pp,
 )
+from trade_integrations.dataflows.index_research.alpha_bridge.promotion import (
+    ALPHA_ZOO_FACTOR_KEYS,
+    alpha_promotion_gate_pp,
+    load_alpha_promotion_decision,
+    promoted_alpha_zoo_factor_keys,
+    save_alpha_promotion_decision,
+)
 
 LITERATURE_SIGNS: dict[str, str] = {
     "fii_net_5d": "positive",
@@ -274,6 +281,58 @@ def run_event_promotion_ablation(
         "as_of": datetime.now(timezone.utc).isoformat(),
     }
     save_event_promotion_decision(decision)
+    return decision
+
+
+def run_alpha_zoo_promotion_ablation(
+    frame: pd.DataFrame,
+    *,
+    horizon_days: int = 14,
+    min_train_rows: int = _MIN_TRAIN_ROWS,
+    eval_step: int = _DEFAULT_EVAL_STEP,
+    gate_pp: float | None = None,
+) -> dict[str, Any]:
+    """Promote Alpha Zoo composite factors if walk-forward direction improves by gate_pp."""
+    gate = alpha_promotion_gate_pp() if gate_pp is None else gate_pp
+    present = [k for k in ALPHA_ZOO_FACTOR_KEYS if k in frame.columns]
+    if not present:
+        decision = {
+            "promoted": False,
+            "reason": "alpha_zoo_factors_not_in_history",
+            "baseline_hit_rate": None,
+            "with_alpha_zoo_hit_rate": None,
+            "delta_pp": None,
+        }
+        save_alpha_promotion_decision(decision)
+        return decision
+
+    baseline_hit = _walk_forward_hit_rate(
+        frame,
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+    with_alpha_hit = _walk_forward_hit_rate_with_force_keys(
+        frame,
+        force_keys=tuple(present),
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+    delta_pp = None
+    if baseline_hit is not None and with_alpha_hit is not None:
+        delta_pp = round((with_alpha_hit - baseline_hit) * 100, 2)
+    promoted = delta_pp is not None and delta_pp >= gate
+    decision = {
+        "promoted": promoted,
+        "baseline_hit_rate": round(baseline_hit, 4) if baseline_hit is not None else None,
+        "with_alpha_zoo_hit_rate": round(with_alpha_hit, 4) if with_alpha_hit is not None else None,
+        "delta_pp": delta_pp,
+        "gate_pp": gate,
+        "alpha_zoo_keys_tested": present,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+    }
+    save_alpha_promotion_decision(decision)
     return decision
 
 
@@ -590,6 +649,12 @@ def run_equation_diagnostics(
         min_train_rows=min_train_rows,
         eval_step=eval_step,
     )
+    alpha_promotion = run_alpha_zoo_promotion_ablation(
+        frame,
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
 
     return {
         "status": "ok",
@@ -611,6 +676,7 @@ def run_equation_diagnostics(
         "logic_conflict_register": LOGIC_CONFLICTS,
         "sector_promotion": sector_promotion,
         "event_promotion": event_promotion,
+        "alpha_promotion": alpha_promotion,
     }
 
 

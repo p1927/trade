@@ -38,6 +38,7 @@ def scenario_product(tmp_path, monkeypatch):
         ticker="NIFTY",
         pipeline_as_of=as_of_str,
         draft={
+            "date_range": {"start": "2026-08-01", "end": "2026-08-15"},
             "event": {"title": "Test event"},
             "outcomes": [
                 {

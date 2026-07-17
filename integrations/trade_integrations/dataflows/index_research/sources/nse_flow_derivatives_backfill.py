@@ -67,8 +67,14 @@ def _is_seeded_row(item: dict) -> bool:
     return False
 
 
-def fetch_mrchartist_flow_frame(*, include_seeded: bool = False) -> pd.DataFrame:
+def fetch_mrchartist_flow_frame(
+    *,
+    include_seeded: bool = False,
+    allow_live_fetch: bool = True,
+) -> pd.DataFrame:
     """Load FII/DII/PCR/F&O OI from Mr. Chartist history-full JSON."""
+    if not allow_live_fetch:
+        return pd.DataFrame()
     try:
         import requests
 
@@ -123,8 +129,10 @@ def fetch_mrchartist_flow_frame(*, include_seeded: bool = False) -> pd.DataFrame
     return frame
 
 
-def fetch_mrchartist_latest_session() -> pd.DataFrame:
+def fetch_mrchartist_latest_session(*, allow_live_fetch: bool = True) -> pd.DataFrame:
     """Latest FII/DII + derivatives from Mr. Chartist (NSE-sourced, post-close)."""
+    if not allow_live_fetch:
+        return pd.DataFrame()
     try:
         import requests
 
@@ -187,8 +195,15 @@ def _date_column(frame: pd.DataFrame) -> str | None:
     return None
 
 
-def fetch_nselib_fii_dii_frame(start: str, end: str) -> pd.DataFrame:
+def fetch_nselib_fii_dii_frame(
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.DataFrame:
     """Fetch latest FII/DII cash from NSE public API (same-day; historical via Mr. Chartist)."""
+    if not allow_live_fetch:
+        return pd.DataFrame()
     try:
         import requests
     except ImportError:
@@ -324,8 +339,17 @@ def _parse_fao_participant_csv(csv_text: str) -> dict[str, dict[str, float]]:
     """Parse NSE F&O participant OI CSV into FII/DII positioning dicts."""
     if not csv_text or len(csv_text) < 80:
         return {}
+    lines = [line for line in csv_text.strip().splitlines() if line.strip()]
+    header_idx = None
+    for idx, line in enumerate(lines):
+        lowered = line.lower()
+        if "client type" in lowered and "future index long" in lowered:
+            header_idx = idx
+            break
+    if header_idx is None:
+        return {}
     try:
-        frame = pd.read_csv(StringIO(csv_text), skipinitialspace=True)
+        frame = pd.read_csv(StringIO("\n".join(lines[header_idx:])), skipinitialspace=True)
     except Exception as exc:
         logger.debug("FAO CSV parse failed: %s", exc)
         return {}
@@ -482,19 +506,25 @@ def load_nse_browser_fii_dii_frame(start: str, end: str) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-def fetch_web_flow_cash_frame(start: str, end: str) -> pd.DataFrame:
+def fetch_web_flow_cash_frame(
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.DataFrame:
     """Load FII/DII cash rows from Nifty Invest API cache + saved HTML snapshots."""
     frames: list[pd.DataFrame] = []
-    try:
-        from trade_integrations.dataflows.index_research.sources.web_flow_fetch import (
-            fetch_niftyinvest_flow_frame,
-        )
+    if allow_live_fetch:
+        try:
+            from trade_integrations.dataflows.index_research.sources.web_flow_fetch import (
+                fetch_niftyinvest_flow_frame,
+            )
 
-        api_frame = fetch_niftyinvest_flow_frame(start=start, end=end)
-        if not api_frame.empty:
-            frames.append(api_frame)
-    except ImportError:
-        pass
+            api_frame = fetch_niftyinvest_flow_frame(start=start, end=end, allow_live_fetch=True)
+            if not api_frame.empty:
+                frames.append(api_frame)
+        except ImportError:
+            pass
     try:
         from trade_integrations.nse_browser.missions.web_flow_history import load_web_flow_from_raw_cache
 
@@ -516,7 +546,12 @@ def fetch_web_flow_cash_frame(start: str, end: str) -> pd.DataFrame:
     return combined.reset_index(drop=True)
 
 
-def merge_flow_derivatives_frame(start: str, end: str) -> pd.DataFrame:
+def merge_flow_derivatives_frame(
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = True,
+) -> pd.DataFrame:
     """Merge web scrape, Mr. Chartist, nse repo/hub, NSE today, flow cache, and FAO archives."""
     try:
         from trade_integrations.nse_browser.repository import load_nse_repository_fii_dii_frame
@@ -526,13 +561,14 @@ def merge_flow_derivatives_frame(start: str, end: str) -> pd.DataFrame:
         repo_flow = pd.DataFrame()
 
     browser_flow = load_nse_browser_fii_dii_frame(start, end)
-    web_flow = fetch_web_flow_cash_frame(start, end)
-    mr = fetch_mrchartist_flow_frame(include_seeded=False)
-    latest = fetch_mrchartist_latest_session()
-    nse = fetch_nselib_fii_dii_frame(start, end)
+    web_flow = fetch_web_flow_cash_frame(start, end, allow_live_fetch=allow_live_fetch)
+    mr = fetch_mrchartist_flow_frame(include_seeded=False, allow_live_fetch=allow_live_fetch)
+    latest = fetch_mrchartist_latest_session(allow_live_fetch=allow_live_fetch)
+    nse = fetch_nselib_fii_dii_frame(start, end, allow_live_fetch=allow_live_fetch)
     cache = load_flow_cash_cache()
 
-    # Last wins: cache → web (Moneycontrol/NiftyInvest) → mrchartist → nselib/latest → repo → hub
+    # Per-date last wins (listed low → high priority): flow cache, web snapshots,
+    # Mr. Chartist, NSE today, git repo parquet, nse_browser hub rows.
     frames = [
         f
         for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow)
@@ -616,7 +652,7 @@ def backfill_nse_fao_to_cache(
     }
 
 
-def flow_backfill_summary(*, days: int = 365) -> dict[str, int | str]:
+def flow_backfill_summary(*, days: int = 365, allow_live_fetch: bool = False) -> dict[str, int | str]:
     """Dry-run summary of merged flow coverage."""
     from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
 
@@ -626,7 +662,7 @@ def flow_backfill_summary(*, days: int = 365) -> dict[str, int | str]:
     start = str(nifty["date"].iloc[0])[:10]
     end = str(nifty["date"].iloc[-1])[:10]
     trading_dates = nifty["date"].astype(str).str[:10].tolist()
-    frame = merge_flow_derivatives_frame(start, end)
+    frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     era_start = flow_effective_start(frame)
     era_dates = [d for d in trading_dates if era_start is None or d >= era_start]
     fii_days = int(frame["fii_net"].notna().sum()) if "fii_net" in frame.columns else 0

@@ -157,9 +157,9 @@ def load_repo_dataset(dataset_id: str) -> pd.DataFrame:
     return frame
 
 
-def ingest_repository_to_hub() -> dict[str, int]:
+def ingest_repository_to_hub(*, allow_live_fetch: bool = True, enrich_days: int = 365) -> dict[str, int]:
     """Sync repo parquet files into reports/hub/_data/nse_browser/."""
-    sync_all_repo_seed_layers()
+    sync_all_repo_seed_layers(allow_live_fetch=allow_live_fetch, enrich_days=enrich_days)
     counts: dict[str, int] = {}
     hub = hub_root()
     hub.mkdir(parents=True, exist_ok=True)
@@ -195,13 +195,13 @@ def load_nse_repository_fii_dii_frame(start: str, end: str) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-def seed_mrchartist_fii_dii() -> int:
+def seed_mrchartist_fii_dii(*, allow_live_fetch: bool = True) -> int:
     """Bootstrap repo FII/DII from Mr. Chartist history-full (gap filler)."""
     from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
         fetch_mrchartist_flow_frame,
     )
 
-    frame = fetch_mrchartist_flow_frame(include_seeded=False)
+    frame = fetch_mrchartist_flow_frame(include_seeded=False, allow_live_fetch=allow_live_fetch)
     if frame.empty:
         return 0
     cols = [c for c in ("date", "fii_net", "dii_net", "nifty_pcr", "source") if c in frame.columns]
@@ -328,23 +328,24 @@ def sync_sebi_monthly_repo_layers() -> dict[str, int]:
     }
 
 
-def sync_niftyinvest_api_flow() -> dict[str, Any]:
-    """Fetch Nifty Invest public API months into fii_dii repo."""
+def sync_niftyinvest_api_flow(*, days: int = 365) -> dict[str, Any]:
+    """Fetch recent Nifty Invest public API months into fii_dii repo."""
     from trade_integrations.dataflows.index_research.sources.web_flow_fetch import (
         seed_niftyinvest_flow_to_repo,
     )
 
-    return seed_niftyinvest_flow_to_repo()
+    return seed_niftyinvest_flow_to_repo(days=days)
 
 
-def sync_all_repo_seed_layers() -> dict[str, int]:
+def sync_all_repo_seed_layers(*, allow_live_fetch: bool = True, enrich_days: int = 365) -> dict[str, int]:
     """Apply all git-tracked CSV seed layers into repo parquet."""
     counts = sync_fii_dii_repo_layers()
     counts.update(sync_sebi_monthly_repo_layers())
     counts["sector_indices"] = seed_sector_indices_from_nifty50()
-    ni = sync_niftyinvest_api_flow()
-    if isinstance(ni, dict) and ni.get("status") == "ok":
-        counts["niftyinvest_api"] = int(ni.get("rows") or 0)
+    if allow_live_fetch:
+        ni = sync_niftyinvest_api_flow(days=enrich_days)
+        if isinstance(ni, dict) and ni.get("status") == "ok":
+            counts["niftyinvest_api"] = int(ni.get("rows") or 0)
     return counts
 
 

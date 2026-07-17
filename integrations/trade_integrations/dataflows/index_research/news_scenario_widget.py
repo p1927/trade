@@ -40,6 +40,7 @@ def build_news_scenario_widget(
         "baseline": baseline,
         "outcomes": outcomes,
         "fan_band": scenario.get("fan_band"),
+        "equation_ref": (baseline.get("equation_ref") if isinstance(baseline, dict) else None),
         "selected_outcome_id": selected_outcome_id,
         "scenario_id": scenario_id,
         "pipeline_as_of": scenario.get("pipeline_as_of"),

@@ -124,15 +124,35 @@ def list_niftyinvest_calendar_months() -> list[str]:
     return []
 
 
+def _months_for_range(
+    months: list[str],
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> list[str]:
+    """Keep only yearMonth keys that can overlap ``[start, end]``."""
+    if not months:
+        return []
+    if not start and not end:
+        return months
+    start_ym = (start or "1900-01")[:7]
+    end_ym = (end or "2999-12")[:7]
+    return [ym for ym in months if start_ym[:7] <= str(ym)[:7] <= end_ym[:7]]
+
+
 def fetch_niftyinvest_flow_frame(
     *,
     months: list[str] | None = None,
     start: str | None = None,
     end: str | None = None,
     sleep_s: float = 0.25,
+    allow_live_fetch: bool = True,
 ) -> pd.DataFrame:
     """Fetch daily FII/DII cash (+ partial F&O) from Nifty Invest public API."""
+    if not allow_live_fetch:
+        return pd.DataFrame()
     available = months or list_niftyinvest_calendar_months()
+    available = _months_for_range(available, start=start, end=end)
     if not available:
         return pd.DataFrame()
     frames: list[pd.DataFrame] = []
@@ -152,15 +172,19 @@ def fetch_niftyinvest_flow_frame(
     return combined.reset_index(drop=True)
 
 
-def seed_niftyinvest_flow_to_repo() -> dict[str, Any]:
-    """Fetch all available Nifty Invest months and upsert into fii_dii repo."""
+def seed_niftyinvest_flow_to_repo(*, days: int = 365) -> dict[str, Any]:
+    """Fetch recent Nifty Invest months and upsert into fii_dii repo."""
+    from datetime import date, timedelta
+
     from trade_integrations.nse_browser.parsers.fii_dii import merge_fii_dii_variants
     from trade_integrations.nse_browser.repository import load_repo_dataset, save_raw_file, upsert_repo_parquet
 
-    months = list_niftyinvest_calendar_months()
-    frame = fetch_niftyinvest_flow_frame(months=months)
+    end = date.today().isoformat()
+    start = (date.today() - timedelta(days=max(30, days))).isoformat()
+    months = _months_for_range(list_niftyinvest_calendar_months(), start=start, end=end)
+    frame = fetch_niftyinvest_flow_frame(months=months, start=start, end=end)
     if frame.empty:
-        return {"status": "error", "error": "no_rows", "months": months}
+        return {"status": "error", "error": "no_rows", "months": months, "start": start, "end": end}
     save_raw_file(
         frame.to_csv(index=False),
         dataset="web_flow",

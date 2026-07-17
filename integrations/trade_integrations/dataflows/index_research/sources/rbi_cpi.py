@@ -1,11 +1,11 @@
-"""RBI CPI and policy rate context — best-effort scrape or env seeds."""
+"""RBI CPI and policy rate context — scrape, SearXNG finance, or explicit env override."""
 
 from __future__ import annotations
 
 import logging
 import os
 import re
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -89,13 +89,35 @@ def _extract_policy_dates(text: str) -> list[str]:
     return sorted(set(events))
 
 
-def _fetch_inflation_etf_proxy() -> float | None:
-    """Optional CPI proxy — env/RBI scrape preferred; skip noisy invalid yfinance symbols."""
-    env_default = os.getenv("RBI_CPI_YOY_PROXY_DEFAULT", "5.0").strip()
+def _merge_source(primary: str, extra: str) -> str:
+    if not primary or primary == "missing":
+        return extra
+    if extra in primary:
+        return primary
+    return f"{primary}+{extra}"
+
+
+def _apply_env_override(result: dict[str, Any], field: str, env_name: str) -> None:
+    if result.get(field) is not None:
+        return
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return
     try:
-        return float(env_default)
+        result[field] = float(raw)
     except ValueError:
-        return 5.0
+        logger.debug("Invalid %s=%r", env_name, raw)
+        return
+    result["source"] = _merge_source(str(result.get("source") or "missing"), "env_override")
+
+
+def _finalize_source(result: dict[str, Any]) -> None:
+    has_data = result.get("repo_rate") is not None or result.get("cpi_yoy_proxy") is not None
+    source = str(result.get("source") or "missing")
+    if not has_data:
+        result["source"] = "missing"
+    elif source == "missing":
+        result["source"] = "partial"
 
 
 def fetch_rbi_cpi_context() -> dict:
@@ -104,7 +126,7 @@ def fetch_rbi_cpi_context() -> dict:
         "repo_rate": None,
         "cpi_yoy_proxy": None,
         "rbi_events": [],
-        "source": "env_seed",
+        "source": "missing",
     }
 
     try:
@@ -114,24 +136,30 @@ def fetch_rbi_cpi_context() -> dict:
     except Exception as exc:
         logger.debug("RBI scrape failed: %s", exc)
 
-    if result["repo_rate"] is None:
-        raw = os.getenv("RBI_REPO_RATE", "6.5").strip()
+    if result["repo_rate"] is None or result["cpi_yoy_proxy"] is None:
         try:
-            result["repo_rate"] = float(raw)
-        except ValueError:
-            result["repo_rate"] = 6.5
+            from trade_integrations.dataflows.searxng_finance import fetch_rbi_macro_via_searxng
 
-    if result["cpi_yoy_proxy"] is None:
-        env_cpi = os.getenv("RBI_CPI_YOY_PROXY", "").strip()
-        if env_cpi:
-            try:
-                result["cpi_yoy_proxy"] = float(env_cpi)
-            except ValueError:
-                pass
-        if result["cpi_yoy_proxy"] is None:
-            result["cpi_yoy_proxy"] = _fetch_inflation_etf_proxy()
+            enriched = fetch_rbi_macro_via_searxng()
+            if enriched:
+                if result["repo_rate"] is None and enriched.get("repo_rate") is not None:
+                    result["repo_rate"] = enriched["repo_rate"]
+                if result["cpi_yoy_proxy"] is None and enriched.get("cpi_yoy_proxy") is not None:
+                    result["cpi_yoy_proxy"] = enriched["cpi_yoy_proxy"]
+                result["source"] = _merge_source(
+                    str(result.get("source") or "missing"),
+                    str(enriched.get("source") or "searxng_finance"),
+                )
+                if enriched.get("metadata"):
+                    result.setdefault("metadata", {}).update(enriched["metadata"])
+        except Exception as exc:
+            logger.debug("RBI SearXNG enrichment failed: %s", exc)
+
+    _apply_env_override(result, "repo_rate", "RBI_REPO_RATE")
+    _apply_env_override(result, "cpi_yoy_proxy", "RBI_CPI_YOY_PROXY")
 
     if not result["rbi_events"]:
         result["rbi_events"] = list(_STATIC_POLICY_DATES)
 
+    _finalize_source(result)
     return result

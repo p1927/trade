@@ -103,16 +103,32 @@ def attach_constituent_momentum(
     signals: list[ConstituentSignal],
     *,
     returns_by_symbol: dict[str, float] | None = None,
+    force_refresh: bool = True,
 ) -> list[ConstituentSignal]:
-    """Attach ``momentum_7d_pct`` to each signal (batch fetch or injected map)."""
+    """Attach ``momentum_7d_pct`` to each signal (batch fetch or injected map).
+
+    When ``force_refresh`` is false, existing ``momentum_7d_pct`` values are kept
+    and only missing symbols are fetched.
+    """
     from dataclasses import replace
 
-    if returns_by_symbol is None and signals:
-        symbols = [s.symbol for s in signals]
-        returns_by_symbol = batch_fetch_returns_7d(symbols)
+    need_fetch = force_refresh or any(s.momentum_7d_pct is None for s in signals)
+    if returns_by_symbol is None and signals and need_fetch:
+        fetch_symbols = [
+            s.symbol
+            for s in signals
+            if force_refresh or s.momentum_7d_pct is None
+        ]
+        if fetch_symbols:
+            fetched = batch_fetch_returns_7d(fetch_symbols)
+            returns_by_symbol = dict(fetched) if returns_by_symbol is None else {**returns_by_symbol, **fetched}
 
     updated: list[ConstituentSignal] = []
     for signal in signals:
+        if not force_refresh and signal.momentum_7d_pct is not None:
+            updated.append(signal)
+            continue
+
         momentum: float | None = None
         if returns_by_symbol is not None:
             raw = returns_by_symbol.get(signal.symbol.upper())

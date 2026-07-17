@@ -62,6 +62,8 @@ NEWS_EVENT_MACRO_KEYS: tuple[str, ...] = NEWS_EVENT_FACTOR_KEYS
 
 _MAX_FEATURES = 40
 _MIN_ABS_CORR = 0.05
+_MIN_COLUMN_COVERAGE_RATIO = 0.45
+_MIN_COLUMN_COVERAGE_ROWS = 10
 
 # Always include in Ridge training when present in history (flows, vol, oil).
 _PINNED_MACRO_FACTORS: frozenset[str] = frozenset(
@@ -87,6 +89,10 @@ _EXCLUDED_REDUNDANT: frozenset[str] = frozenset(
         "sector_breadth_mean_sentiment",
         "oil_wti",
         "constituent_momentum_7d",
+        "alpha_zoo_ls_spread",
+        "alpha_zoo_breadth",
+        "alpha_zoo_momentum_consensus",
+        "alpha_zoo_dispersion",
     }
 )
 
@@ -158,15 +164,34 @@ def _select_macro_columns(
         for key in promoted_event_factor_keys():
             if key in history_df.columns and key not in present:
                 present.append(key)
+        from trade_integrations.dataflows.index_research.alpha_bridge.promotion import (
+            promoted_alpha_zoo_factor_keys,
+        )
+
+        for key in promoted_alpha_zoo_factor_keys():
+            if key in history_df.columns and key not in present:
+                present.append(key)
     except ImportError:
         pass
     if present:
         return present
     exclude = {"date", "close", "open", "high", "low", "volume"}
+    try:
+        from trade_integrations.dataflows.index_research.alpha_bridge.promotion import (
+            ALPHA_ZOO_FACTOR_KEYS,
+            promoted_alpha_zoo_factor_keys,
+        )
+
+        promoted_alpha = set(promoted_alpha_zoo_factor_keys())
+    except ImportError:
+        promoted_alpha = set()
+        ALPHA_ZOO_FACTOR_KEYS = ()
     return [
         col
         for col in history_df.columns
-        if col not in exclude and pd.api.types.is_numeric_dtype(history_df[col])
+        if col not in exclude
+        and pd.api.types.is_numeric_dtype(history_df[col])
+        and (col not in ALPHA_ZOO_FACTOR_KEYS or col in promoted_alpha)
     ]
 
 
@@ -189,6 +214,10 @@ def build_factor_matrix(
     frame["target"] = _forward_return_pct(frame["close"].astype(float), horizon.days)
 
     macro_cols = _select_macro_columns(frame, horizon)
+    force_keys = tuple(force_include_keys or ())
+    for col in force_keys:
+        if col in frame.columns and col not in macro_cols and col not in {"date", "close", "open", "high", "low", "volume"}:
+            macro_cols.append(col)
     if not macro_cols:
         return np.empty((0, 0)), np.empty(0), []
 
@@ -197,17 +226,22 @@ def build_factor_matrix(
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
         frame[col] = frame[col].rolling(window=window, min_periods=1).mean()
 
-    usable = frame.dropna(subset=["target"] + macro_cols).copy()
+    min_cov = max(_MIN_COLUMN_COVERAGE_ROWS, int(len(frame) * _MIN_COLUMN_COVERAGE_RATIO))
+    macro_cols = [col for col in macro_cols if int(frame[col].notna().sum()) >= min_cov]
+    if not macro_cols:
+        return np.empty((0, 0)), np.empty(0), []
+
+    usable = frame.dropna(subset=["target"]).copy()
     if len(usable) < 3:
         return np.empty((0, 0)), np.empty(0), []
 
-    y = usable["target"].to_numpy(dtype=float)
+    y_all = usable["target"]
     selected: list[str] = []
     for col in macro_cols:
         series = usable[col]
-        if series.std(ddof=0) == 0:
+        if series.notna().sum() < 3 or series.std(ddof=0, skipna=True) == 0:
             continue
-        corr = abs(series.corr(pd.Series(y)))
+        corr = abs(series.corr(y_all))
         if corr is None or np.isnan(corr) or corr < _MIN_ABS_CORR:
             continue
         selected.append(col)
@@ -217,7 +251,7 @@ def build_factor_matrix(
     else:
         ranked = sorted(
             selected,
-            key=lambda name: abs(usable[name].corr(pd.Series(y))),
+            key=lambda name: abs(usable[name].corr(y_all)),
             reverse=True,
         )
         selected = ranked[:_MAX_FEATURES]
@@ -228,9 +262,14 @@ def build_factor_matrix(
 
     selected = _apply_redundancy_prune(selected)
 
-    for col in force_include_keys or ():
-        if col in macro_cols and col not in selected:
+    for col in force_keys:
+        if col in frame.columns and col not in selected:
             selected.append(col)
 
-    X = usable[selected].to_numpy(dtype=float)
+    final = usable.dropna(subset=["target"] + selected).copy()
+    if len(final) < 3:
+        return np.empty((0, 0)), np.empty(0), []
+
+    y = final["target"].to_numpy(dtype=float)
+    X = final[selected].to_numpy(dtype=float)
     return X, y, selected

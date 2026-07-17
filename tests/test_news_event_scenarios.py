@@ -97,6 +97,33 @@ def test_tool_get_pipeline_snapshot(hub_with_index):
 
 
 @pytest.mark.unit
+def test_run_requires_date_range(hub_with_index):
+    as_of = hub_with_index
+    draft = save_news_scenario_draft(
+        ticker="NIFTY",
+        pipeline_as_of=as_of,
+        draft={
+            "event": {"title": "Test"},
+            "outcomes": [{"id": "a", "label": "A", "intensity": "medium", "primary_factor": "oil_brent"}],
+        },
+    )
+    with pytest.raises(Exception) as exc:
+        run_news_event_scenario(ticker="NIFTY", pipeline_as_of=as_of, draft_id=draft["draft_id"])
+    assert getattr(exc.value, "code", "") == "missing_date_range" or "missing_date_range" in str(exc.value)
+
+
+@pytest.mark.unit
+def test_date_range_max_90_days(hub_with_index):
+    from trade_integrations.dataflows.index_research.news_event_scenarios import (
+        DateRangeTooWideError,
+        validate_scenario_date_range,
+    )
+
+    with pytest.raises(DateRangeTooWideError):
+        validate_scenario_date_range({"start": "2026-01-01", "end": "2026-06-01"}, require_complete=True)
+
+
+@pytest.mark.unit
 def test_tool_save_draft_json(hub_with_index):
     raw = tool_save_news_scenario_draft(
         "NIFTY",

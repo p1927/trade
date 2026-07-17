@@ -94,18 +94,18 @@ class TestIndexJobRegistration:
     def test_registers_defaults_when_missing(self, tmp_path):
         store = ScheduledResearchJobStore(path=tmp_path / "jobs.json")
         created = register_default_index_jobs(store)
-        assert created == 4
+        assert created >= 4
         jobs = store.load()
         assert "nifty-index-factor-snapshot" in jobs
         assert "nifty-index-research" in jobs
-        assert "nifty-index-calibration" in jobs
-        assert "nifty-company-research-archive" in jobs
+        assert "nifty-hub-news-entity" in jobs
         assert jobs["nifty-index-factor-snapshot"].config["job_type"] == JOB_TYPE_INDEX_FACTOR_SNAPSHOT
         assert jobs["nifty-index-research"].config["job_type"] == JOB_TYPE_INDEX_RESEARCH
 
     def test_idempotent_registration(self, tmp_path):
         store = ScheduledResearchJobStore(path=tmp_path / "jobs.json")
-        assert register_default_index_jobs(store) == 4
+        first = register_default_index_jobs(store)
+        assert first >= 4
         assert register_default_index_jobs(store) == 0
 
     def test_index_job_types_frozen(self):

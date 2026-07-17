@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, timedelta
 
 import pandas as pd
@@ -94,10 +95,16 @@ def load_symbols_ohlcv(
     start_date: str,
     end_date: str,
 ) -> dict[str, pd.DataFrame]:
+    from trade_integrations.env import ensure_vibe_stack_heal
+
+    ensure_vibe_stack_heal()
+
     out: dict[str, pd.DataFrame] = {}
-    for symbol in symbols:
+    for idx, symbol in enumerate(symbols):
         base = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
         frame = load_symbol_ohlcv(base, start_date=start_date, end_date=end_date)
         if not frame.empty:
             out[base] = frame
+        if idx + 1 < len(symbols):
+            time.sleep(0.05)
     return out
