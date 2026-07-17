@@ -8,7 +8,10 @@ import re
 from typing import Any
 
 from trade_integrations.autonomous_agents.symbol_extract import extract_orchestrator_symbols
-from trade_integrations.dataflows.symbol_registry.openalgo_registry import search_india_symbols
+from trade_integrations.dataflows.symbol_registry.openalgo_registry import (
+    is_symbol_known_for_proposal,
+    search_india_symbols,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,12 +116,26 @@ def _search_symbols_from_name_tokens(text: str) -> list[str]:
         token = match.group(1)
         if token in _NAME_SEARCH_SKIP:
             continue
-        hits = search_india_symbols(token, limit=1)
-        if hits:
-            sym = str(hits[0].get("symbol") or "").upper()
-            if sym:
-                return [sym]
+        hits = search_india_symbols(token, limit=2)
+        if len(hits) != 1:
+            continue
+        sym = str(hits[0].get("symbol") or "").upper()
+        if sym and is_symbol_known_for_proposal(sym):
+            return [sym]
     return []
+
+
+def _us_market_explicit(text: str, symbols: list[str]) -> bool:
+    from trade_integrations.autonomous_agents.market import symbol_execution_market
+
+    if symbols and all(symbol_execution_market(str(s)) == "US" for s in symbols):
+        return True
+    stripped = re.sub(r"\$", " ", text or "")
+    return bool(re.search(r"\b(us|usa|alpaca|nasdaq|nyse|america|usd|dollar)\b", stripped, re.I))
+
+
+def _instruments_clarified(text: str) -> bool:
+    return bool(re.search(r"\b(equity|equities|option|options|stock|stocks|fno|f&o)\b", text, re.I))
 
 
 def _has_trading_goal(text: str) -> bool:
@@ -203,6 +220,16 @@ def build_auto_propose_kwargs(
     if not symbols:
         return None
 
+    if not any(is_symbol_known_for_proposal(str(s)) or str(s).upper() in {"SPY", "QQQ", "NVDA", "AAPL"} for s in symbols):
+        from trade_integrations.autonomous_agents.market import symbol_execution_market
+
+        if not all(symbol_execution_market(str(s)) == "US" for s in symbols):
+            return None
+
+    if latest and "allowed_instruments" in list(latest.get("missing_fields") or []):
+        if not _instruments_clarified(user_message):
+            return None
+
     if not (create_intent or symbol_goal_intent or adjust_intent or hallucinated):
         return None
 
@@ -241,9 +268,9 @@ def build_auto_propose_kwargs(
         kwargs["mandate"] = _infer_mandate(user_message, symbols)
 
     kwargs["user_text"] = user_message
-    if _IN_HINT_RE.search(user_message) and not _US_HINT_RE.search(user_message):
+    if _IN_HINT_RE.search(user_message) and not _us_market_explicit(user_message, symbols):
         kwargs["execution_market"] = "IN"
-    elif _US_HINT_RE.search(user_message) and not _IN_HINT_RE.search(user_message):
+    elif _us_market_explicit(user_message, symbols) and not _IN_HINT_RE.search(user_message):
         kwargs["execution_market"] = "US"
 
     sym0 = symbols[0]

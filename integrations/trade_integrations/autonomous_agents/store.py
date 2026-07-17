@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from trade_integrations.context.hub import get_hub_dir
 
@@ -209,7 +211,59 @@ def save_orchestrator_meta(meta: dict[str, Any]) -> dict[str, Any]:
     return meta
 
 
-def clear_orchestrator_meta() -> None:
+def _proposal_commit_lock_path(proposal_id: str) -> Path:
+    return _proposal_path(proposal_id).with_suffix(".commit.lock")
+
+
+@contextmanager
+def acquire_proposal_commit_lock(proposal_id: str) -> Iterator[None]:
+    """Exclusive lock for proposal commit — prevents double-commit races."""
+    pid = str(proposal_id or "").strip()
+    if not pid:
+        raise ValueError("proposal_id is required for commit lock")
+    lock_path = _proposal_commit_lock_path(pid)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd: int | None = None
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+    except FileExistsError as exc:
+        raise ValueError("commit already in progress") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+    try:
+        yield
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+
+def clear_orchestrator_meta(orchestrator_session_id: str | None = None) -> None:
+    """Clear orchestrator meta globally or for a specific session."""
     path = _agents_root() / _ORCHESTRATOR_FILE
-    if path.is_file():
+    if not path.is_file():
+        return
+    if orchestrator_session_id is None:
         path.unlink()
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        path.unlink(missing_ok=True)
+        return
+    if not isinstance(data, dict):
+        path.unlink(missing_ok=True)
+        return
+    active = str(data.get("active_orchestrator_session_id") or "")
+    if active == str(orchestrator_session_id).strip():
+        path.unlink(missing_ok=True)
+
+
+def get_active_orchestrator_session_id() -> str | None:
+    meta = get_orchestrator_meta()
+    sid = str(meta.get("active_orchestrator_session_id") or "").strip()
+    return sid or None
+
+
+def set_active_orchestrator_session_id(session_id: str) -> dict[str, Any]:
+    return save_orchestrator_meta({"active_orchestrator_session_id": str(session_id).strip()})

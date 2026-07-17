@@ -26,6 +26,7 @@ from trade_integrations.auto_paper.mandate_config import (
 )
 from trade_integrations.autonomous_agents.runtime_status import build_stack_health
 from trade_integrations.autonomous_agents.store import (
+    acquire_proposal_commit_lock,
     delete_proposal,
     get_agent,
     list_agents,
@@ -51,10 +52,44 @@ def _normalize_symbols(raw: Any) -> list[str]:
 
 def _missing_fields(draft: dict[str, Any]) -> list[str]:
     missing: list[str] = []
-    symbols = _normalize_symbols(draft.get("symbols"))
-    if not symbols:
-        missing.append("symbols")
+    for field in REQUIRED_PROPOSAL_FIELDS:
+        if field == "symbols":
+            if not _normalize_symbols(draft.get("symbols")):
+                missing.append("symbols")
+        elif not draft.get(field):
+            missing.append(field)
     return missing
+
+
+def _live_mode_error(mode: str) -> str | None:
+    if str(mode or "").lower() == "live":
+        return "live mode not supported in v1"
+    return None
+
+
+def _validate_proposal_committable(proposal: dict[str, Any]) -> None:
+    if str(proposal.get("status") or "") != "ready":
+        raise ValueError("proposal is not ready — fix missing fields or routing errors")
+
+    missing = list(proposal.get("missing_fields") or [])
+    if missing:
+        raise ValueError(f"proposal incomplete — missing: {', '.join(missing)}")
+
+    stored_routing = list(proposal.get("routing_errors") or [])
+    if stored_routing:
+        raise ValueError("proposal has routing errors — cannot commit")
+
+    constraints = dict(proposal.get("constraints") or {})
+    live_err = _live_mode_error(str(constraints.get("mode") or DEFAULT_MODE))
+    if live_err:
+        raise ValueError(live_err)
+
+    symbols = list(proposal.get("symbols") or [])
+    routing_errors = validate_proposal_routing(proposal)
+    symbol_errors = validate_proposal_symbols(symbols)
+    fresh_errors = list(routing_errors) + list(symbol_errors)
+    if fresh_errors:
+        raise ValueError(f"proposal routing validation failed: {'; '.join(fresh_errors)}")
 
 
 def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -192,6 +227,38 @@ def validate_proposal_symbols(symbols: list[str]) -> list[str]:
 
 def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     draft = _apply_defaults(kwargs)
+    live_err = _live_mode_error(draft.get("mode", DEFAULT_MODE))
+    if live_err:
+        proposal_id = str(kwargs.get("proposal_id") or new_proposal_id())
+        symbols = list(draft.get("symbols") or [])
+        proposal: dict[str, Any] = {
+            "type": "autonomous_agent.proposal",
+            "proposal_id": proposal_id,
+            "status": "incomplete",
+            "missing_fields": [],
+            "routing_errors": [live_err],
+            "symbols": symbols,
+            "name": draft.get("name"),
+            "mandate": draft.get("mandate"),
+            "constraints": {
+                "mode": draft.get("mode"),
+                "budget_inr": draft.get("budget_inr"),
+                "max_daily_loss_inr": draft.get("max_daily_loss_inr"),
+                "confidence_threshold": draft.get("confidence_threshold"),
+            },
+            "orchestrator_session_id": draft.get("orchestrator_session_id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at_ms": int(time.time() * 1000) + PROPOSAL_TTL_MS,
+        }
+        save_proposal(proposal)
+        return {
+            "status": "incomplete",
+            "proposal_id": proposal_id,
+            "missing_fields": [],
+            "routing_errors": [live_err],
+            "proposal": proposal,
+            "message": live_err,
+        }
     user_text = _user_text_for_routing(kwargs, draft)
     symbols, resolution, routing_warnings = resolve_proposal_symbols(
         list(draft.get("symbols") or []),
@@ -355,41 +422,61 @@ def commit_autonomous_agent(
     if not consent_ack:
         raise ValueError("consent_ack is required")
 
-    proposal = load_proposal(proposal_id)
-    if proposal is None:
-        raise ValueError(f"proposal not found: {proposal_id}")
-
-    if proposal.get("committed_agent_id"):
-        existing = get_agent(str(proposal["committed_agent_id"]))
-        if existing:
-            return {
-                "status": "ok",
-                "agent": existing,
-                "vibe_session_id": existing.get("vibe_session_id"),
-                "already_committed": True,
-            }
-        raise ValueError("proposal already committed")
-
-    if proposal.get("superseded"):
-        raise ValueError("proposal superseded — confirm the latest proposal card")
-
-    expires_at = int(proposal.get("expires_at_ms") or 0)
-    if expires_at and int(time.time() * 1000) > expires_at:
-        raise ValueError("proposal expired")
-
-    running = [a for a in list_agents() if str(a.get("status")) in {"running", "paused"}]
-    if len(running) >= MAX_CONCURRENT_AGENTS:
-        raise ValueError(f"max concurrent agents ({MAX_CONCURRENT_AGENTS}) reached")
-
     if session_service is None:
         raise ValueError("session runtime not enabled")
 
+    with acquire_proposal_commit_lock(proposal_id):
+        proposal = load_proposal(proposal_id)
+        if proposal is None:
+            raise ValueError(f"proposal not found: {proposal_id}")
+
+        if proposal.get("committed_agent_id"):
+            existing = get_agent(str(proposal["committed_agent_id"]))
+            if existing:
+                return {
+                    "status": "ok",
+                    "agent": existing,
+                    "vibe_session_id": existing.get("vibe_session_id"),
+                    "already_committed": True,
+                }
+            raise ValueError("proposal already committed")
+
+        if proposal.get("superseded"):
+            raise ValueError("proposal superseded — confirm the latest proposal card")
+
+        expires_at = int(proposal.get("expires_at_ms") or 0)
+        if expires_at and int(time.time() * 1000) > expires_at:
+            raise ValueError("proposal expired")
+
+        running = [a for a in list_agents() if str(a.get("status")) in {"running", "paused"}]
+        if len(running) >= MAX_CONCURRENT_AGENTS:
+            raise ValueError(f"max concurrent agents ({MAX_CONCURRENT_AGENTS}) reached")
+
+        _validate_proposal_committable(proposal)
+
+        return _commit_autonomous_agent_locked(
+            proposal=proposal,
+            proposal_id=proposal_id,
+            session_service=session_service,
+            orchestrator_session_id=orchestrator_session_id,
+        )
+
+
+def _commit_autonomous_agent_locked(
+    *,
+    proposal: dict[str, Any],
+    proposal_id: str,
+    session_service: Any,
+    orchestrator_session_id: str | None,
+) -> dict[str, Any]:
     agent_id = new_agent_id()
     symbols = list(proposal.get("symbols") or [])
     name = str(proposal.get("name") or "Autonomous agent")
     primary_symbol = symbols[0] if symbols else "NIFTY"
     user_text = str(proposal.get("mandate") or "")
-    exec_market = symbol_execution_market(primary_symbol, user_text=user_text)
+    exec_market = str(proposal.get("execution_market") or "").upper()
+    if exec_market not in {"IN", "US"}:
+        exec_market = symbol_execution_market(primary_symbol, user_text=user_text)
 
     constraints = dict(proposal.get("constraints") or {})
     fresh_mandate_cfg = _build_mandate_config(
@@ -469,7 +556,6 @@ def commit_autonomous_agent(
                 vibe_session = existing
 
     if vibe_session is None:
-        # Fresh session (no orchestrator promotion) — empty history; cutoff not needed.
         vibe_session = session_service.create_session(
             title=f"autonomous:{name}",
             config=session_cfg,
@@ -481,6 +567,9 @@ def commit_autonomous_agent(
         "type": "autonomous_agent.instance",
         "name": name,
         "status": "running",
+        "pause_reason": None,
+        "infra_pending": [],
+        "infra_last_attempt_at": None,
         "vibe_session_id": vibe_session.session_id,
         "symbols": symbols,
         "execution_market": exec_market,
@@ -506,73 +595,26 @@ def commit_autonomous_agent(
 
     from trade_integrations.autonomous_agents.store import clear_orchestrator_meta
 
-    clear_orchestrator_meta()
+    clear_orchestrator_meta(orch_sid or None)
 
-    paper_session_warnings: list[str] = []
-    if profile.uses_openalgo_auto_paper:
-        try:
-            from trade_integrations.auto_paper.mcp_actions import start_auto_paper
+    from trade_integrations.autonomous_agents.infra_startup import start_required_infra
 
-            constraints = dict(proposal.get("constraints") or {})
-            start_auto_paper(
-                ticker=primary_symbol,
-                budget_inr=float(constraints.get("budget_inr") or DEFAULT_BUDGET_INR),
-                watchlist=symbols,
-                max_daily_loss_inr=float(constraints.get("max_daily_loss_inr") or DEFAULT_MAX_DAILY_LOSS_INR),
-                mandate=str(proposal.get("mandate") or ""),
-                vibe_session_id=vibe_session.session_id,
-                mandate_config=fresh_mandate_cfg.to_dict(),
-                autonomous_agent_id=agent_id,
-                nautilus_bridge_mode=profile.uses_nautilus_handoff,
-            )
-        except Exception as exc:
-            import logging
+    blocking, paper_session_warnings = start_required_infra(
+        agent=agent,
+        profile=profile,
+        proposal=proposal,
+        primary_symbol=primary_symbol,
+        symbols=symbols,
+        vibe_session_id=vibe_session.session_id,
+        fresh_mandate_cfg=fresh_mandate_cfg,
+    )
 
-            logging.getLogger(__name__).warning(
-                "start_auto_paper on autonomous commit failed",
-                exc_info=True,
-            )
-            paper_session_warnings.append(f"start_auto_paper failed: {exc}")
-    elif profile.is_us:
-        paper_session_warnings.append(
-            "US agent — OpenAlgo INR auto-paper session not started; use Alpaca paper tools."
-        )
-
-    if profile.uses_nautilus_watch:
-        try:
-            from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
-
-            watch_warning = ensure_nautilus_watch_for_agent(agent_id)
-            if watch_warning:
-                paper_session_warnings.append(watch_warning)
-        except Exception as exc:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "ensure_nautilus_watch on commit failed",
-                exc_info=True,
-            )
-            paper_session_warnings.append(
-                f"Nautilus watch not started ({exc}). "
-                f"Run: trade start nautilus-watch --registry"
-            )
-
-    try:
-        from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
-
-        watch_spec = dict(proposal.get("watch_spec") or {})
-        mc = dict(proposal.get("mandate_config") or {})
-        if not watch_spec.get("rules") and mc.get("watch_spec"):
-            watch_spec = dict(mc["watch_spec"])
-        if watch_spec.get("rules") and profile.uses_nautilus_watch:
-            sync_watch_spec_to_handoff(agent_id, watch_spec)
-    except Exception as exc:
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "initial handoff on commit failed for %s: %s", agent_id, exc
-        )
-        paper_session_warnings.append(f"watch_spec handoff sync failed: {exc}")
+    if blocking and profile.market == "IN":
+        agent["status"] = "paused"
+        agent["pause_reason"] = "infra"
+        agent["infra_pending"] = blocking
+        agent["infra_last_attempt_at"] = now
+        save_agent(agent)
 
     proposal["committed_agent_id"] = agent_id
     proposal["committed_at"] = now
@@ -582,6 +624,7 @@ def commit_autonomous_agent(
         "status": "ok",
         "agent": agent,
         "vibe_session_id": vibe_session.session_id,
+        "infra_paused": bool(blocking and profile.market == "IN"),
     }
     if paper_session_warnings:
         result["paper_session_warnings"] = paper_session_warnings
@@ -624,6 +667,7 @@ def pause_autonomous_agent(agent_id: str) -> dict[str, Any]:
     if not agent:
         raise ValueError(f"agent not found: {agent_id}")
     agent["status"] = "paused"
+    agent["pause_reason"] = "user"
     save_agent(agent)
     return {"status": "ok", "agent": agent}
 
@@ -635,7 +679,20 @@ def resume_autonomous_agent(agent_id: str) -> dict[str, Any]:
     if str(agent.get("status")) == "stopped":
         raise ValueError("stopped agents cannot resume; create a new agent")
 
+    if str(agent.get("pause_reason") or "") == "infra":
+        from trade_integrations.autonomous_agents.infra_startup import attempt_infra_heal
+
+        healed = attempt_infra_heal(agent_id)
+        if healed is None:
+            raise ValueError(f"agent not found: {agent_id}")
+        if str(healed.get("status")) != "running":
+            pending = list(healed.get("infra_pending") or [])
+            detail = pending[0] if pending else "infra not ready"
+            raise ValueError(f"infra not ready — {detail}")
+        return {"status": "ok", "agent": healed}
+
     agent["status"] = "running"
+    agent["pause_reason"] = None
     save_agent(agent)
     return {"status": "ok", "agent": agent}
 
