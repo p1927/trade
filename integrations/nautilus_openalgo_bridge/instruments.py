@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from nautilus_openalgo_bridge.models import ExecutionLeg
 
 logger = logging.getLogger(__name__)
+
+_FNO_EXCHANGES = frozenset({"NFO", "BFO", "MCX", "CDS"})
+_UNDERLYING_PATTERN = re.compile(
+    r"^(.+?)"
+    r"(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2})"
+    r"(?:\d+(?:\.\d+)?)?(?:FUT|CE|PE)?$",
+    re.IGNORECASE,
+)
 
 # symbol -> (OpenAlgo symbol, exchange)
 WATCH_SYMBOL_MAP: dict[str, tuple[str, str]] = {
@@ -51,6 +60,19 @@ def multiquote_requests(symbols: list[str]) -> list[dict[str, str]]:
     return rows
 
 
+def _row_matches_underlying(row: dict[str, Any], symbol: str, exchange: str, underlying: str) -> bool:
+    ul = underlying.upper()
+    row_ul = row.get("underlying") or row.get("underlyingsymbol")
+    if row_ul:
+        return str(row_ul).strip().upper() == ul
+    if exchange in _FNO_EXCHANGES:
+        match = _UNDERLYING_PATTERN.match(symbol)
+        if match:
+            return match.group(1).upper() == ul
+        return symbol.startswith(ul)
+    return symbol == ul
+
+
 def position_rows_to_legs(
     rows: list[dict[str, Any]],
     *,
@@ -64,6 +86,8 @@ def position_rows_to_legs(
         if not symbol:
             continue
         exchange = str(row.get("exchange") or "NFO").upper()
+        if ul and not _row_matches_underlying(row, symbol, exchange, ul):
+            continue
         try:
             qty = int(float(row.get("quantity") or row.get("netqty") or 0))
         except (TypeError, ValueError):
