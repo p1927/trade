@@ -127,4 +127,5 @@ Track SHAs here for easy revert audit.
 
 | SHA | Message | Submodule? |
 |-----|---------|--------------|
-| — | — | — |
+| 3faf0b4 | master todo: fix flaky agent debate wrapper test date assertion | parent |
+| bd1ffef | master todo: add master-todo tracking doc for nightly loop | parent |
