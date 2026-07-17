@@ -74,6 +74,7 @@ def test_dispatch_watch_alert_sync_success(mock_client_factory, mock_save, mock_
         "status": "running",
         "vibe_session_id": "sess123",
         "streaming": False,
+        "plan_approved_at": "2026-07-01T00:00:00+00:00",
     }
     mock_get_agent.side_effect = lambda _id: dict(agent)
 
@@ -107,6 +108,7 @@ def test_dispatch_watch_alert_sync_error_clears_streaming(mock_client_factory, m
         "status": "running",
         "vibe_session_id": "sess123",
         "streaming": False,
+        "plan_approved_at": "2026-07-01T00:00:00+00:00",
     }
     mock_get_agent.side_effect = lambda _id: dict(agent)
 
@@ -125,6 +127,25 @@ def test_dispatch_watch_alert_sync_error_clears_streaming(mock_client_factory, m
     assert result["status"] == "error"
     last_saved = mock_save.call_args_list[-1][0][0]
     assert last_saved.get("streaming") is False
+
+
+@patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
+def test_dispatch_skips_when_plan_not_approved(mock_get_agent):
+    mock_get_agent.return_value = {
+        "id": "aa_test",
+        "status": "running",
+        "vibe_session_id": "s1",
+        "bootstrap_status": "awaiting_plan_approval",
+    }
+    alert = WatchAlert(
+        signal=BridgeSignal.REVIEW_NEEDED,
+        rule=None,
+        symbol="NIFTY",
+        message="move",
+    )
+    result = dispatch_watch_alert_sync("aa_test", alert)
+    assert result["status"] == "skipped"
+    assert result.get("reason") == "plan_not_approved"
 
 
 @patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
