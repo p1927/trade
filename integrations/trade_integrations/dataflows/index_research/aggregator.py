@@ -33,6 +33,8 @@ from trade_integrations.dataflows.index_research.scenarios import (
     build_index_scenarios,
     reconcile_prediction_with_scenarios,
 )
+from trade_integrations.context.hub import load_index_research_json
+from trade_integrations.dataflows.index_research.constituent_snapshot import signals_from_cached_doc
 from trade_integrations.dataflows.index_research.sources.batch_constituents import (
     batch_constituent_research,
 )
@@ -141,55 +143,82 @@ def run_index_research(
             ensure_factor_data_complete,
         )
 
-        completeness = ensure_factor_data_complete()
+        completeness = ensure_factor_data_complete(
+            enrich=refresh_constituents,
+            allow_live_fetch=False,
+        )
         log.info(
             "data_completeness",
             f"Flow coverage min {completeness.get('after', {}).get('min_pct')}% "
-            f"(gate={'pass' if completeness.get('passes_gate') else 'fail'})",
+            f"(gate={'pass' if completeness.get('passes_gate') else 'fail'}"
+            f"{'; cached-only check' if completeness.get('skipped_enrich') else ''})",
             **{k: completeness.get(k) for k in ("enriched", "passes_gate")},
         )
     except Exception as exc:
         logger.debug("data completeness check skipped: %s", exc)
 
-    log.info(
-        "constituents",
-        "Loading NIFTY 50 constituent research (news, sentiment, calendar, filings)…",
-    )
-    def _constituent_progress(symbol: str, done: int, total: int) -> None:
+    constituent_mode = "full_refresh" if refresh_constituents else "cached_snapshot"
+    if refresh_constituents:
         log.info(
             "constituents",
-            f"Researched {symbol} ({done}/{total})",
-            symbol=symbol,
-            progress=done,
-            total=total,
+            "Loading NIFTY 50 constituent research (news, sentiment, calendar, filings)…",
+            mode=constituent_mode,
         )
 
-    signals = batch_constituent_research(
-        lookahead_days=horizon.days,
-        refresh=refresh_constituents,
-        on_progress=_constituent_progress,
-    )
-    try:
-        from trade_integrations.hub_capture.channel import record_news_headlines
+        def _constituent_progress(symbol: str, done: int, total: int) -> None:
+            log.info(
+                "constituents",
+                f"Researched {symbol} ({done}/{total})",
+                symbol=symbol,
+                progress=done,
+                total=total,
+            )
 
-        index_headlines: list[dict[str, Any]] = []
-        for signal in signals:
-            for factor in signal.factors or []:
-                if factor.get("type") != "news":
-                    continue
-                title = str(factor.get("title") or "").strip()
-                if title:
-                    index_headlines.append(
-                        {
-                            "title": title,
-                            "summary": factor.get("note"),
-                            "source": factor.get("source"),
-                        }
-                    )
-        if index_headlines:
-            record_news_headlines("NIFTY", index_headlines[:50], source="index_constituents")
-    except Exception:
-        pass
+        signals = batch_constituent_research(
+            lookahead_days=horizon.days,
+            refresh=True,
+            on_progress=_constituent_progress,
+        )
+        try:
+            from trade_integrations.hub_capture.channel import record_news_headlines
+
+            index_headlines: list[dict[str, Any]] = []
+            for signal in signals:
+                for factor in signal.factors or []:
+                    if factor.get("type") != "news":
+                        continue
+                    title = str(factor.get("title") or "").strip()
+                    if title:
+                        index_headlines.append(
+                            {
+                                "title": title,
+                                "summary": factor.get("note"),
+                                "source": factor.get("source"),
+                            }
+                        )
+            if index_headlines:
+                record_news_headlines("NIFTY", index_headlines[:50], source="index_constituents")
+        except Exception:
+            pass
+    else:
+        cached_doc = load_index_research_json(sym)
+        if cached_doc is None:
+            raise RuntimeError(
+                f"No index research snapshot for {sym}; run full analysis with "
+                "'Refresh all 50 constituents' checked first"
+            )
+        signals = signals_from_cached_doc(cached_doc)
+        if not signals:
+            raise RuntimeError(
+                f"Cached index snapshot for {sym} has no constituent signals; "
+                "run full analysis with 'Refresh all 50 constituents' checked"
+            )
+        log.info(
+            "constituents",
+            f"Using cached constituent snapshot ({len(signals)} stocks) — skipping per-stock research",
+            mode=constituent_mode,
+            count=len(signals),
+        )
     with_news = sum(
         1 for s in signals if any(f.get("type") == "news" for f in (s.factors or []))
     )
@@ -202,8 +231,27 @@ def run_index_research(
         with_news=with_news,
     )
 
+    try:
+        from trade_integrations.hub_capture.ohlcv_cache import prefetch_symbols
+
+        prefetch_symbols_list = [sym] + [s.symbol for s in signals]
+        ohlcv_stats = prefetch_symbols(
+            prefetch_symbols_list,
+            days=14,
+            force=refresh_constituents,
+        )
+        log.info(
+            "ohlcv_cache",
+            f"OHLCV cache warm — loaded {ohlcv_stats.get('loaded', 0)}/{ohlcv_stats.get('symbols', 0)} "
+            f"(cache hits {ohlcv_stats.get('cache_hits', 0)}, vendor fetches {ohlcv_stats.get('vendor_fetches', 0)})",
+            **ohlcv_stats,
+        )
+    except Exception as exc:
+        logger.debug("ohlcv prefetch skipped: %s", exc)
+
     log.info("momentum", "Fetching 7-day price momentum per constituent…")
-    signals = attach_constituent_momentum(signals)
+    momentum_force = True if not refresh_constituents else refresh_constituents
+    signals = attach_constituent_momentum(signals, force_refresh=momentum_force)
     momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
     log.info(
         "momentum",
@@ -214,9 +262,13 @@ def run_index_research(
         StageResult(
             stage="constituents",
             status="ok" if signals else "partial",
-            vendor="batch_constituents",
+            vendor="batch_constituents" if refresh_constituents else "cached_snapshot",
             fetched_at=now,
-            data={"count": len(signals), "momentum_count": momentum_count},
+            data={
+                "count": len(signals),
+                "momentum_count": momentum_count,
+                "mode": constituent_mode,
+            },
             errors=[] if signals else ["no constituent signals"],
         )
     )
@@ -275,7 +327,16 @@ def run_index_research(
             }
         )
 
-    log.info("spot", f"Fetching live NIFTY spot via OpenAlgo / yfinance…")
+    try:
+        from trade_integrations.dataflows.index_research.alpha_bridge.snapshot import (
+            apply_alpha_zoo_to_macro,
+        )
+
+        macro_factors, global_factors = apply_alpha_zoo_to_macro(macro_factors, global_factors)
+    except Exception as exc:
+        logger.debug("alpha_zoo bridge skipped: %s", exc)
+
+    log.info("spot", f"Fetching live NIFTY spot via OpenAlgo INDstocks / yfinance…")
     spot = _fetch_spot(sym)
     log.info("spot", f"Spot: {spot:.2f}" if spot > 0 else "Spot unavailable", spot=spot)
 
@@ -463,13 +524,20 @@ def run_index_research(
             for r in global_factors
             if r.get("factor") is not None and r.get("value") is not None
         }
-        news_impact = news_hub_bridge.refresh_news_impact(
-            ticker=sym,
-            horizon_days=horizon.days,
-            spot=float(spot or 0),
-            macro_factors=macro_map,
-            refresh_ingest=True,
-        )
+        if refresh_constituents:
+            news_impact = news_hub_bridge.refresh_news_impact(
+                ticker=sym,
+                horizon_days=horizon.days,
+                spot=float(spot or 0),
+                macro_factors=macro_map,
+                refresh_ingest=True,
+            )
+        else:
+            news_impact = news_hub_bridge.resolve_news_impact(
+                ticker=sym,
+                limit=12,
+                hydrate_from_hub=True,
+            )
         stages.append(
             StageResult(
                 stage="news_impact",

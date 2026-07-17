@@ -14,8 +14,8 @@ from trade_integrations.context.hub import (
     load_company_research_json,
     save_company_research,
 )
-from trade_integrations.clients.tapetide import set_batch_research
 from trade_integrations.dataflows.company_research.aggregator import run_company_research
+from trade_integrations.dataflows.company_research.fetch_policy import set_nifty50_batch
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 from trade_integrations.dataflows.index_research.constituent_factors import build_constituent_factors
@@ -140,11 +140,15 @@ def _research_one(
         doc = load_company_research_json(symbol)
         if doc is not None:
             return doc
-    set_batch_research(True)
+    set_nifty50_batch(True)
     try:
-        doc = run_company_research(symbol, lookahead_days=lookahead_days)
+        doc = run_company_research(
+            symbol,
+            lookahead_days=lookahead_days,
+            include_macro=False,
+        )
     finally:
-        set_batch_research(False)
+        set_nifty50_batch(False)
     save_company_research(doc)
     return doc
 

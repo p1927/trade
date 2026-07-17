@@ -57,6 +57,10 @@ def test_run_index_research_orchestration(monkeypatch):
         append_mock,
     )
     monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.data_completeness.ensure_factor_data_complete",
+        lambda **kwargs: {"passes_gate": True, "after": {"min_pct": 95.0}},
+    )
+    monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.aggregator.batch_constituent_research",
         lambda **kwargs: _mock_signals(),
     )
@@ -76,6 +80,14 @@ def test_run_index_research_orchestration(monkeypatch):
         "trade_integrations.dataflows.index_research.aggregator.compute_accuracy_metrics",
         lambda **kwargs: {"sample_count": 3, "mae_14d_pct": 1.2},
     )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.aggregator.attach_constituent_momentum",
+        lambda signals, **kwargs: signals,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge.refresh_news_impact",
+        lambda **kwargs: {"items": [], "summary": {"approved_count": 0}},
+    )
     from trade_integrations.dataflows.index_research.predictor import ModelArtifact
 
     artifact = ModelArtifact(
@@ -92,7 +104,7 @@ def test_run_index_research_orchestration(monkeypatch):
 
     from trade_integrations.dataflows.index_research.aggregator import run_index_research
 
-    doc = run_index_research("NIFTY", horizon_days=14)
+    doc = run_index_research("NIFTY", horizon_days=14, refresh_constituents=True)
 
     assert isinstance(doc, IndexResearchDoc)
     assert doc.ticker == "NIFTY"
@@ -112,6 +124,10 @@ def test_run_index_research_orchestration(monkeypatch):
 
 @pytest.mark.unit
 def test_run_index_research_horizon_a(monkeypatch):
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.data_completeness.ensure_factor_data_complete",
+        lambda **kwargs: {"passes_gate": True, "after": {"min_pct": 95.0}},
+    )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.aggregator.append_prediction",
         MagicMock(),
@@ -136,10 +152,18 @@ def test_run_index_research_horizon_a(monkeypatch):
         "trade_integrations.dataflows.index_research.aggregator.compute_accuracy_metrics",
         lambda **kwargs: {"sample_count": 0},
     )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.aggregator.attach_constituent_momentum",
+        lambda signals, **kwargs: signals,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge.refresh_news_impact",
+        lambda **kwargs: {"items": [], "summary": {"approved_count": 0}},
+    )
 
     from trade_integrations.dataflows.index_research.aggregator import run_index_research
 
-    doc = run_index_research("NIFTY", horizon_days=2)
+    doc = run_index_research("NIFTY", horizon_days=2, refresh_constituents=True)
 
     assert doc.horizon["name"] == "A"
     assert doc.horizon["days"] == 2

@@ -19,6 +19,47 @@ from trade_integrations.dataflows.index_research.ml_experiments_defer import (
 
 
 @pytest.mark.unit
+def test_ensure_factor_data_complete_enrich_uses_cached_only_by_default():
+    with patch(
+        "trade_integrations.dataflows.index_research.data_completeness.measure_flow_coverage",
+        return_value={"passes_gate": False, "min_pct": 50.0},
+    ), patch(
+        "trade_integrations.dataflows.index_research.factor_backfill_enrichment.enrich_factor_history",
+        return_value={"days_enriched": 1},
+    ) as enrich_mock:
+        from trade_integrations.dataflows.index_research.data_completeness import (
+            ensure_factor_data_complete,
+        )
+
+        result = ensure_factor_data_complete(enrich=True)
+
+    assert result["enriched"] is True
+    enrich_mock.assert_called_once()
+    assert enrich_mock.call_args.kwargs.get("allow_live_fetch") is False
+
+
+@pytest.mark.unit
+def test_ensure_factor_data_complete_skips_enrich_when_disabled():
+    with patch(
+        "trade_integrations.dataflows.index_research.data_completeness.measure_flow_coverage",
+        return_value={"passes_gate": False, "min_pct": 50.0},
+    ) as measure_mock, patch(
+        "trade_integrations.dataflows.index_research.factor_backfill_enrichment.enrich_factor_history",
+    ) as enrich_mock:
+        from trade_integrations.dataflows.index_research.data_completeness import (
+            ensure_factor_data_complete,
+        )
+
+        result = ensure_factor_data_complete(enrich=False)
+
+    assert result["skipped_enrich"] is True
+    assert result["enriched"] is False
+    assert measure_mock.call_count == 2
+    assert measure_mock.call_args.kwargs.get("allow_live_fetch") is False
+    enrich_mock.assert_not_called()
+
+
+@pytest.mark.unit
 def test_measure_flow_coverage_passes_when_all_factors_full():
     nifty = pd.DataFrame({"date": ["2026-01-01", "2026-01-02"], "close": [100.0, 101.0]})
     factors = pd.DataFrame(

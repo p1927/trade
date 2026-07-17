@@ -46,6 +46,10 @@ def test_run_index_research_emits_pipeline_log(monkeypatch):
     from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 
     monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.data_completeness.ensure_factor_data_complete",
+        lambda **kwargs: {"passes_gate": True, "after": {"min_pct": 95.0}},
+    )
+    monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.aggregator.batch_constituent_research",
         lambda **_: [
             ConstituentSignal(symbol="RELIANCE", weight=0.5, sentiment_score=0.1, momentum_7d_pct=1.0),
@@ -53,7 +57,7 @@ def test_run_index_research_emits_pipeline_log(monkeypatch):
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.aggregator.attach_constituent_momentum",
-        lambda signals: signals,
+        lambda signals, **kwargs: signals,
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.aggregator.fetch_global_macro_snapshot",
@@ -84,9 +88,13 @@ def test_run_index_research_emits_pipeline_log(monkeypatch):
         "trade_integrations.dataflows.index_research.aggregator.compute_accuracy_metrics",
         lambda: {},
     )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge.refresh_news_impact",
+        lambda **kwargs: {"items": [], "summary": {"approved_count": 0}},
+    )
 
     plog = PipelineLogger()
-    doc = run_index_research("NIFTY", horizon_days=14, pipeline=plog)
+    doc = run_index_research("NIFTY", horizon_days=14, pipeline=plog, refresh_constituents=True)
 
     assert doc.pipeline_log
     stages = {row["stage"] for row in doc.pipeline_log}

@@ -59,14 +59,23 @@ def test_light_refresh_emits_self_contained_pipeline_log(monkeypatch, tmp_path):
     from trade_integrations.context import hub as hub_mod
     from trade_integrations.dataflows.company_research.models import StageResult
     from trade_integrations.dataflows.index_research.light_refresh import run_index_light_refresh
-    from trade_integrations.dataflows.index_research.models import ConstituentSignal
 
     monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: tmp_path)
-    monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.light_refresh.batch_constituent_research",
-        lambda **_: [
-            ConstituentSignal(symbol="RELIANCE", weight=0.5, sentiment_score=0.1, momentum_7d_pct=1.0),
+    cached = IndexResearchDoc(
+        ticker="NIFTY",
+        as_of=datetime.now(timezone.utc),
+        constituent_signals=[
+            {
+                "symbol": "RELIANCE",
+                "weight": 0.5,
+                "sentiment_score": 0.1,
+                "momentum_7d_pct": 1.0,
+            }
         ],
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.light_refresh.load_index_research_json",
+        lambda _: cached,
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.light_refresh.fetch_global_macro_snapshot",

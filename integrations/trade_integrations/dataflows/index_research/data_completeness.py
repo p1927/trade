@@ -15,7 +15,11 @@ MIN_FLOW_COVERAGE_PCT = 90.0
 DEFAULT_ENRICH_DAYS = 365
 
 
-def measure_flow_coverage(*, days: int = DEFAULT_ENRICH_DAYS) -> dict[str, Any]:
+def measure_flow_coverage(
+    *,
+    days: int = DEFAULT_ENRICH_DAYS,
+    allow_live_fetch: bool = False,
+) -> dict[str, Any]:
     """Return per-factor non-null coverage (%) over the Nifty trading window.
 
     FII/DII gate uses *flow-era* coverage (days on/after first real cash flow row)
@@ -38,7 +42,7 @@ def measure_flow_coverage(*, days: int = DEFAULT_ENRICH_DAYS) -> dict[str, Any]:
     long_df = load_factor_history(start, end)
     day_count = max(1, len(trading_dates))
 
-    flow_frame = merge_flow_derivatives_frame(start, end)
+    flow_frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     era_start = flow_effective_start(flow_frame)
     era_dates = [d for d in trading_dates if era_start is None or d >= era_start[:10]]
     era_day_count = max(1, len(era_dates))
@@ -92,30 +96,26 @@ def ensure_factor_data_complete(
     days: int = DEFAULT_ENRICH_DAYS,
     min_pct: float = MIN_FLOW_COVERAGE_PCT,
     force_enrich: bool = False,
+    enrich: bool = True,
+    allow_live_fetch: bool = False,
 ) -> dict[str, Any]:
-    """Run factor enrichment when flow coverage is below threshold."""
-    before = measure_flow_coverage(days=days)
+    """Run factor enrichment when flow coverage is below threshold.
+
+    When ``enrich=False`` (fast analysis), measure cached coverage only and never
+    block on NiftyInvest / Mr. Chartist live backfill. Live HTTP is opt-in via
+    ``allow_live_fetch=True`` (scheduled jobs / manual backfill only).
+    """
+    before = measure_flow_coverage(days=days, allow_live_fetch=False)
     enriched = False
     enrich_result: dict[str, Any] | None = None
 
-    if force_enrich or not before.get("passes_gate") or float(before.get("min_pct") or 0) < min_pct:
-        try:
-            from trade_integrations.nse_browser.repository import (
-                ingest_repository_to_hub,
-                seed_mrchartist_fii_dii,
-            )
-
-            seed_mrchartist_fii_dii()
-            ingest_repository_to_hub()
-        except Exception as seed_exc:
-            logger.debug("nse repo seed skipped: %s", seed_exc)
-
+    if enrich and (force_enrich or not before.get("passes_gate") or float(before.get("min_pct") or 0) < min_pct):
         try:
             from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
                 enrich_factor_history,
             )
 
-            enrich_result = enrich_factor_history(days=days)
+            enrich_result = enrich_factor_history(days=days, allow_live_fetch=allow_live_fetch)
             enriched = True
             logger.info("factor enrichment completed: %s", enrich_result)
         except Exception as exc:
@@ -126,13 +126,16 @@ def ensure_factor_data_complete(
                 "after": before,
                 "enrich_result": None,
                 "error": str(exc),
+                "passes_gate": bool(before.get("passes_gate")),
+                "skipped_enrich": not enrich,
             }
 
-    after = measure_flow_coverage(days=days)
+    after = measure_flow_coverage(days=days, allow_live_fetch=False)
     return {
         "enriched": enriched,
         "before": before,
         "after": after,
         "enrich_result": enrich_result,
         "passes_gate": bool(after.get("passes_gate")),
+        "skipped_enrich": not enrich and not enriched,
     }

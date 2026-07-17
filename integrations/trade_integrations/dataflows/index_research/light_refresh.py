@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from trade_integrations.context.hub import load_index_research_json, save_index_research
+from trade_integrations.dataflows.index_research.constituent_snapshot import signals_from_cached_doc
 from trade_integrations.dataflows.company_research.models import StageResult
 from trade_integrations.dataflows.index_research.attribution import (
     attribute_constituents,
     rollup_attribution,
 )
 from trade_integrations.dataflows.index_research.constituent_momentum import (
-    attach_constituent_momentum,
     momentum_coverage_stats,
     resolve_constituent_momentum_rollup,
 )
@@ -33,9 +33,6 @@ from trade_integrations.dataflows.index_research.regime import classify_regime
 from trade_integrations.dataflows.index_research.scenarios import (
     build_index_scenarios,
     reconcile_prediction_with_scenarios,
-)
-from trade_integrations.dataflows.index_research.sources.batch_constituents import (
-    batch_constituent_research,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,22 +112,43 @@ def _news_since_for_index(ticker: str) -> datetime:
     return as_of if isinstance(as_of, datetime) else _stage_now()
 
 
-def _material_news_for_index(ticker: str) -> list[str]:
+def _headline_titles(headlines: list[Any]) -> list[str]:
+    """Extract title strings from MaterialHeadline objects or plain strings."""
+    titles: list[str] = []
+    for item in headlines:
+        if isinstance(item, str):
+            titles.append(item)
+            continue
+        title = getattr(item, "title", None)
+        if title:
+            titles.append(str(title))
+    return titles
+
+
+def _material_news_for_index(ticker: str) -> list[Any]:
     try:
         from trade_integrations.monitor.news_watcher import check_material_news
     except ImportError:
         return []
     since = _news_since_for_index(ticker)
-    return check_material_news(ticker, since)
+    try:
+        return check_material_news(ticker, since)
+    except Exception as exc:
+        logger.warning("material news check failed for %s: %s", ticker, exc)
+        return []
 
 
 def _heavyweight_news(signals: list[ConstituentSignal]) -> bool:
-    headlines = _material_news_for_index("NIFTY")
-    if not headlines:
+    try:
+        headlines = _material_news_for_index("NIFTY")
+        if not headlines:
+            return False
+        top_symbols = {signal.symbol for signal in signals[:10]}
+        joined = " ".join(_headline_titles(headlines)).upper()
+        return any(sym in joined for sym in top_symbols)
+    except Exception as exc:
+        logger.warning("heavyweight news check failed: %s", exc)
         return False
-    top_symbols = {signal.symbol for signal in signals[:10]}
-    joined = " ".join(headlines).upper()
-    return any(sym in joined for sym in top_symbols)
 
 
 def _coerce_utc(value: datetime | str | None) -> datetime | None:
@@ -173,22 +191,56 @@ def run_index_light_refresh(
     cached_doc = load_index_research_json(sym)
     disk_as_of_at_start = _coerce_utc(getattr(cached_doc, "as_of", None) if cached_doc else None)
 
+    if cached_doc is None and not force:
+        raise RuntimeError(
+            f"No index research snapshot for {sym}; run full analysis before enabling live refresh"
+        )
+
+    signals = signals_from_cached_doc(cached_doc)
+    momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
+
     previous_factors: dict[str, Any] = {}
     if cached_doc and cached_doc.global_factors:
         for row in cached_doc.global_factors:
             if isinstance(row, dict) and row.get("factor") is not None:
                 previous_factors[str(row["factor"])] = row.get("value")
 
-    signals = batch_constituent_research(
-        lookahead_days=horizon.days,
-        refresh=False,
-    )
-    signals = attach_constituent_momentum(signals)
-    momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
     sentiments = [s.sentiment_score for s in signals if s.sentiment_score is not None]
     macro_stage = fetch_global_macro_snapshot(constituent_sentiments=sentiments or None)
     macro_factors = dict(macro_stage.data.get("factors") or {})
     global_factors = list(macro_stage.data.get("factor_rows") or [])
+
+    headlines = _material_news_for_index(sym)
+    macro_changed = _macro_factor_changed(
+        previous_factors,
+        macro_factors,
+        threshold_pct=_macro_drift_threshold(),
+    )
+    news_hit = bool(headlines) or _heavyweight_news(signals)
+
+    if not force and cached_doc is not None and not macro_changed and not news_hit:
+        fresh = load_index_research_json(sym)
+        return fresh or cached_doc, "unchanged"
+
+    reason = "material_news" if news_hit else "macro_drift" if macro_changed else "forced"
+
+    try:
+        from trade_integrations.dataflows.index_research.constituent_momentum import attach_constituent_momentum
+        from trade_integrations.hub_capture.ohlcv_cache import prefetch_symbols
+
+        prefetch_list = [sym] + [s.symbol for s in signals]
+        ohlcv_stats = prefetch_symbols(prefetch_list, days=14, force=False)
+        signals = attach_constituent_momentum(signals, force_refresh=True)
+        momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
+        logger.info(
+            "light_refresh ohlcv_cache loaded=%s cache_hits=%s vendor_fetches=%s momentum=%s",
+            ohlcv_stats.get("loaded"),
+            ohlcv_stats.get("cache_hits"),
+            ohlcv_stats.get("vendor_fetches"),
+            momentum_count,
+        )
+    except Exception as exc:
+        logger.debug("light_refresh momentum refresh skipped: %s", exc)
 
     try:
         from datetime import date as _date
@@ -215,7 +267,7 @@ def run_index_light_refresh(
                 refresh_nse_browser_for_prediction(days=30, refresh=False)
             except Exception as browser_exc:
                 logger.debug("nse_browser light_refresh skipped: %s", browser_exc)
-        flow = merge_flow_derivatives_frame(today, today)
+        flow = merge_flow_derivatives_frame(today, today, allow_live_fetch=False)
         if not flow.empty:
             upsert_flow_cash_cache(flow.to_dict("records"))
         flow_rows = [
@@ -227,6 +279,21 @@ def run_index_light_refresh(
             upsert_daily_factors(today, flow_rows)
     except Exception as exc:
         logger.debug("light_refresh factor upsert skipped: %s", exc)
+
+    try:
+        from datetime import date as _date
+
+        from trade_integrations.dataflows.index_research.alpha_bridge.snapshot import (
+            apply_alpha_zoo_to_macro,
+        )
+
+        macro_factors, global_factors = apply_alpha_zoo_to_macro(
+            macro_factors,
+            global_factors,
+            as_of_day=_date.today().isoformat(),
+        )
+    except Exception as exc:
+        logger.debug("alpha_zoo light_refresh skipped: %s", exc)
 
     momentum_rollup, momentum_source = resolve_constituent_momentum_rollup(
         signals,
@@ -242,21 +309,6 @@ def run_index_light_refresh(
             }
         )
 
-    headlines = _material_news_for_index(sym)
-    macro_changed = _macro_factor_changed(
-        previous_factors,
-        macro_factors,
-        threshold_pct=_macro_drift_threshold(),
-    )
-    news_hit = bool(headlines) or _heavyweight_news(signals)
-
-    if not force and cached_doc is not None and not macro_changed and not news_hit:
-        # Re-read hub so a concurrent full analysis save is not masked by the
-        # cached_doc snapshot taken at the start of this refresh.
-        fresh = load_index_research_json(sym)
-        return fresh or cached_doc, "unchanged"
-
-    reason = "material_news" if news_hit else "macro_drift" if macro_changed else "forced"
     log = PipelineLogger()
     log.info(
         "light_refresh",
@@ -365,7 +417,7 @@ def run_index_light_refresh(
         StageResult(
             stage="constituents",
             status="ok" if signals else "partial",
-            vendor="batch_constituents_cached",
+            vendor="index_snapshot_cached",
             fetched_at=_stage_now(),
             data={"count": len(signals), "refresh": False, "momentum_count": momentum_count},
         ),
