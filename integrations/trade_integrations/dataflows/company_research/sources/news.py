@@ -10,6 +10,7 @@ from typing import Any
 from ..config import get_research_config
 from ..market import NormalizedTicker
 from ..models import StageResult
+from ..fetch_policy import is_nifty50_batch
 from .resilience import SourceAttempt, classify_error, remediation_for, stage_status_from_attempts
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,63 @@ def fetch_news(
     days = lookback_days if lookback_days is not None else config.news_lookback_days
     attempts: list[SourceAttempt] = []
     blocks: list[dict[str, Any]] = []
+
+    # Nifty 50 batch: SearXNG only, company ticker — no peer fan-out, no tiered APIs.
+    if is_nifty50_batch():
+        try:
+            from trade_integrations.dataflows.searxng_news import get_news_searxng
+
+            end = datetime.now(timezone.utc).date()
+            start = end - timedelta(days=days)
+            markdown = get_news_searxng(
+                normalized.base_symbol,
+                start.strftime("%Y-%m-%d"),
+                end.strftime("%Y-%m-%d"),
+            )
+            if markdown and "No news" not in markdown[:200]:
+                company = {
+                    "ticker": normalized.base_symbol,
+                    "label": normalized.display_symbol,
+                    "markdown": markdown,
+                    "headlines": _extract_headlines(markdown),
+                    "source": "searxng",
+                }
+                blocks.append(company)
+                attempts.append(SourceAttempt(name="company", status="ok", data=company))
+            else:
+                attempts.append(
+                    SourceAttempt(
+                        name="company",
+                        status="skipped",
+                        error="no_data",
+                        remediation="SearXNG returned no headlines for this symbol.",
+                    )
+                )
+        except Exception as exc:
+            attempts.append(
+                SourceAttempt(
+                    name="company",
+                    status="error",
+                    error=str(exc),
+                    remediation=remediation_for(classify_error(exc)),
+                )
+            )
+
+        status = stage_status_from_attempts(attempts, has_output=bool(blocks))
+        combined_md = blocks[0]["markdown"] if blocks else ""
+        return StageResult(
+            stage="news",
+            status=status if blocks else "skipped",
+            vendor="searxng",
+            fetched_at=_stage_now(),
+            data={
+                "blocks": blocks,
+                "markdown": combined_md,
+                "headline_count": sum(len(b.get("headlines") or []) for b in blocks),
+                "batch_mode": "nifty50",
+                "source_attempts": [a.to_dict() for a in attempts],
+            },
+        )
 
     try:
         company = _fetch_ticker_news(

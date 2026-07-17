@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import time
-from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,7 +22,6 @@ DISK_CACHE_DEFAULT_MINUTES = 60
 _profile_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _events_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _rate_limited_until: float = 0.0
-_batch_research: ContextVar[bool] = ContextVar("tapetide_batch_research", default=False)
 
 
 class TapetideNotConfiguredError(RuntimeError):
@@ -43,21 +41,9 @@ def _token() -> str:
     return token
 
 
-def _env_flag(name: str, *, default: bool) -> bool:
-    raw = os.getenv(name, "").strip().lower()
-    if not raw:
-        return default
-    return raw in ("1", "true", "yes", "on")
-
-
 def is_enabled() -> bool:
     """Tapetide is always enabled when a token is configured."""
     return True
-
-
-def is_batch_enabled() -> bool:
-    """True by default — Tapetide runs during Nifty batch refresh too."""
-    return _env_flag("TAPETIDE_BATCH", default=True)
 
 
 def is_configured() -> bool:
@@ -70,15 +56,6 @@ def is_configured() -> bool:
 
 def is_rate_limited() -> bool:
     return time.monotonic() < _rate_limited_until
-
-
-def set_batch_research(active: bool) -> None:
-    """Mark the current context as Nifty/batch research (honours TAPETIDE_BATCH)."""
-    _batch_research.set(active)
-
-
-def is_batch_research() -> bool:
-    return _batch_research.get()
 
 
 def is_active(*, batch: bool | None = None) -> bool:

@@ -14,6 +14,17 @@ FETCH_MULTIPLIER = 3
 
 def get_aggregator_sources() -> list[str]:
     """Return the ordered list of news backends to merge."""
+    try:
+        from trade_integrations.dataflows.company_research.fetch_policy import (
+            news_sources_for_batch,
+        )
+
+        batch_sources = news_sources_for_batch()
+        if batch_sources is not None:
+            return [s for s in batch_sources if s in SUPPORTED_SOURCES]
+    except ImportError:
+        pass
+
     raw = os.environ.get(
         "TRADINGAGENTS_NEWS_AGGREGATOR_SOURCES",
         get_config().get("news_aggregator_sources", DEFAULT_SOURCES),

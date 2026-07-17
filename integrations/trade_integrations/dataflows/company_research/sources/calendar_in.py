@@ -186,8 +186,9 @@ def fetch_calendar_in(
             raw_events.extend(attempt.data.get("events") or [])
 
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
+    from ..fetch_policy import allow_tiered_apis
 
-    if tapetide_configured():
+    if tapetide_configured() and allow_tiered_apis():
         tapetide_attempt = _fetch_calendar_source("tapetide", _tapetide, optional=True)
         attempts.append(tapetide_attempt)
         if tapetide_attempt.status == "ok":

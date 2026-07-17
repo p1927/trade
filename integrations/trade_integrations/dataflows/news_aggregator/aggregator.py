@@ -70,6 +70,17 @@ def _fetch_from_source(
         return []
 
     try:
+        from trade_integrations.dataflows.company_research.fetch_policy import (
+            tiered_source_allowed,
+        )
+
+        if not tiered_source_allowed(source_name):
+            logger.debug("Source %r skipped (Nifty 50 batch — tiered APIs off).", source_name)
+            return []
+    except ImportError:
+        pass
+
+    try:
         if kind == "ticker":
             return adapter.fetch_ticker_articles(
                 ticker or "",

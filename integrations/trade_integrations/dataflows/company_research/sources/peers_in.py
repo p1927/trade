@@ -83,8 +83,9 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
     ]
 
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
+    from ..fetch_policy import allow_tiered_apis
 
-    if tapetide_configured():
+    if tapetide_configured() and allow_tiered_apis():
         fetchers.append(
             ("tapetide", lambda: _fetch_tapetide_peers(normalized.base_symbol, max_peers=max_peers)),
         )

@@ -153,8 +153,8 @@ def test_batch_runs_research_when_stale(monkeypatch):
     assert len(signals) == 2
     assert run_mock.call_count == 2
     assert save_mock.call_count == 2
-    run_mock.assert_any_call("RELIANCE", lookahead_days=14)
-    run_mock.assert_any_call("TCS", lookahead_days=14)
+    run_mock.assert_any_call("RELIANCE", lookahead_days=14, include_macro=False)
+    run_mock.assert_any_call("TCS", lookahead_days=14, include_macro=False)
 
 
 @pytest.mark.unit

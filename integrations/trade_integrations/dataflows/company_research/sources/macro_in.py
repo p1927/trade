@@ -93,35 +93,65 @@ def _fetch_openalgo_nifty() -> dict[str, Any] | None:
     }
 
 
+def _merge_macro_snapshot(attempts: list[SourceAttempt]) -> dict[str, Any]:
+    """Pick best field per priority — OpenAlgo/INDstocks first, enrichment fills gaps."""
+    ok = {a.name: a.data for a in attempts if a.status == "ok" and a.data}
+    macro: dict[str, Any] = {"sources": ok}
+
+    for name in ("openalgo_vix", "nselib_vix", "yfinance_vix"):
+        payload = ok.get(name)
+        if payload and payload.get("india_vix") is not None:
+            macro["india_vix"] = payload["india_vix"]
+            macro["india_vix_source"] = payload.get("source") or name.replace("_vix", "")
+            break
+
+    for name in ("openalgo_nifty", "yfinance_nifty"):
+        payload = ok.get(name)
+        if payload and payload.get("nifty_level") is not None:
+            macro["nifty_level"] = payload["nifty_level"]
+            macro["nifty_change_pct"] = payload.get("nifty_change_pct")
+            macro["nifty_source"] = payload.get("source") or name.replace("_nifty", "")
+            break
+
+    if macro.get("india_vix_source"):
+        macro["primary_source"] = macro["india_vix_source"]
+    elif macro.get("nifty_source"):
+        macro["primary_source"] = macro["nifty_source"]
+    elif ok:
+        macro["primary_source"] = next(iter(ok))
+    return macro
+
+
 def fetch_macro_in() -> StageResult:
     """Market-wide India macro snapshot (VIX + Nifty)."""
-    fetchers: list[tuple[str, Any]] = [
-        ("yfinance_vix", _fetch_yfinance_vix),
-        ("yfinance_nifty", _fetch_nifty_context),
-    ]
+    fetchers: list[tuple[str, Any]] = []
     try:
         from trade_integrations.openalgo.market_data import openalgo_configured
 
         if openalgo_configured():
-            fetchers.insert(0, ("openalgo_vix", _fetch_openalgo_vix))
-            fetchers.insert(1, ("openalgo_nifty", _fetch_openalgo_nifty))
+            fetchers.extend(
+                [
+                    ("openalgo_vix", _fetch_openalgo_vix),
+                    ("openalgo_nifty", _fetch_openalgo_nifty),
+                ]
+            )
     except ImportError:
         pass
     try:
         import nselib  # noqa: F401
 
-        fetchers.insert(0, ("nselib_vix", _fetch_nselib_vix))
+        fetchers.append(("nselib_vix", _fetch_nselib_vix))
     except ImportError:
         pass
+    fetchers.extend(
+        [
+            ("yfinance_vix", _fetch_yfinance_vix),
+            ("yfinance_nifty", _fetch_nifty_context),
+        ]
+    )
 
     attempts = run_sources(fetchers)
-    macro: dict[str, Any] = {"sources": {}}
-    for attempt in attempts:
-        if attempt.status == "ok" and attempt.data:
-            macro["sources"][attempt.name] = attempt.data
-            macro.update({k: v for k, v in attempt.data.items() if k != "source"})
-    if macro.get("sources"):
-        macro["primary_source"] = next(iter(macro["sources"]))
+    macro = _merge_macro_snapshot(attempts)
 
     has_output = bool(macro.get("india_vix") or macro.get("nifty_level"))
     status = stage_status_from_attempts(attempts, has_output=has_output)

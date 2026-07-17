@@ -40,8 +40,9 @@ REMEDIATION_HINTS: dict[str, str] = {
         "Upstream vendor rate-limited this request (often yfinance). Retry later or rely on "
         "OpenAlgo, dalal BSE, BSE, and screener.in fallbacks."
     ),
-    "tapetide_batch_disabled": (
-        "Tapetide skipped for Nifty batch (TAPETIDE_BATCH=false). Set TAPETIDE_BATCH=true to include."
+    "nifty50_batch_free_sources": (
+        "Nifty 50 batch uses free sources only (OpenAlgo, BSE, screener, yfinance, SearXNG). "
+        "Tapetide and Alpha Vantage are skipped."
     ),
     "no_data": "Source responded but returned no rows for this ticker/date window.",
     "weekend_trade_date": (

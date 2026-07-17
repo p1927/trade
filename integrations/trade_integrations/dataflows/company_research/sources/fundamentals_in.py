@@ -169,8 +169,9 @@ def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
         fetchers.insert(0, ("dalal_bse", lambda: _fetch_dalal_bse(normalized)))
 
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
+    from ..fetch_policy import allow_tiered_apis
 
-    if tapetide_configured():
+    if tapetide_configured() and allow_tiered_apis():
         fetchers.append(("tapetide", lambda: _fetch_tapetide(normalized.base_symbol)))
 
     attempts = run_sources(fetchers, optional=optional_source_names("fundamentals"))
