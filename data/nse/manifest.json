@@ -1,53 +1,53 @@
 {
   "files": [
     {
-      "path": "fii_dii/fii_dii_daily.parquet",
-      "dataset": "fii_dii",
-      "sha256": "2949bdc178e6441c80bb86fb59d3a1345226cd3ddfcce7d6df96c463f5fd8ddb",
-      "rows": 482,
-      "date_range": {
-        "start": "2024-01-31",
-        "end": "2026-07-16"
-      },
-      "fetched_at": "2026-07-17T10:59:41.297552+00:00",
-      "source": "nse_monthly_cash"
-    },
-    {
       "path": "mf_sebi/mf_sebi_monthly.parquet",
       "dataset": "mf_sebi",
-      "sha256": "79633c5c4112426866fe097834b273f67db7d1d3c6d8a08729527acf66306f98",
+      "sha256": "05e6f3a423afda633fee8f0bdb89c698aed6154e82ed93532608d51716166a34",
       "rows": 30,
       "date_range": {
         "start": "2024-01-31",
         "end": "2026-06-30"
       },
-      "fetched_at": "2026-07-17T10:59:41.313936+00:00",
+      "fetched_at": "2026-07-17T17:16:33.412207+00:00",
       "source": "nse_mf_sebi_monthly"
     },
     {
       "path": "fii_sebi/fii_sebi_monthly.parquet",
       "dataset": "fii_sebi",
-      "sha256": "eacedd3090f9e36a53f89f2a8ad20065434931980183f9cc7bb534c5e33ca40a",
+      "sha256": "4aec53b92d01daef145dd1a970effe95e4620c1c402d8152b6cbfe9ae3aad98a",
       "rows": 30,
       "date_range": {
         "start": "2024-01-31",
         "end": "2026-06-30"
       },
-      "fetched_at": "2026-07-17T10:59:41.320511+00:00",
+      "fetched_at": "2026-07-17T17:16:33.419069+00:00",
       "source": "nse_fii_sebi_monthly"
     },
     {
       "path": "sector_indices/sector_index_daily.parquet",
       "dataset": "sector_indices",
-      "sha256": "2d266bb3761e9f275dd8071203e23b8df484461627703c1948fbd1892d656a8c",
+      "sha256": "93d1157d8b70b195c05bea5f844ff0f841541209cde10f595b0b2b49889a85aa",
       "rows": 2450,
       "date_range": {
         "start": "2025-07-18",
         "end": "2026-07-16"
       },
-      "fetched_at": "2026-07-17T10:59:41.596986+00:00",
+      "fetched_at": "2026-07-17T17:16:33.744933+00:00",
       "source": "nse_sector_csv"
+    },
+    {
+      "path": "fii_dii/fii_dii_daily.parquet",
+      "dataset": "fii_dii",
+      "sha256": "7dd20974fbb7f87f5b6ca8bb4d610d81c7e99f62cf3e1cac79d7ac5efc830edb",
+      "rows": 483,
+      "date_range": {
+        "start": "2024-01-31",
+        "end": "2026-07-17"
+      },
+      "fetched_at": "2026-07-17T17:16:40.581777+00:00",
+      "source": "niftyinvest_api"
     }
   ],
-  "updated_at": "2026-07-17T10:59:41.597089+00:00"
+  "updated_at": "2026-07-17T17:16:40.581905+00:00"
 }
