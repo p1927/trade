@@ -252,3 +252,5 @@ cookies.txt
 
 # Editor / local IDE
 .cursor/
+data/.DS_Store
+data/**/.DS_Store
