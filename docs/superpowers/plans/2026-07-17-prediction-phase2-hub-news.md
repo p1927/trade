@@ -89,7 +89,7 @@ c070e1d feat(company-research): gate tiered APIs during Nifty-50 batch
 
 | Gap | Current behavior | Target |
 |-----|------------------|--------|
-| Constituent news → hub on refresh-all-50 | SearXNG headlines land in `company_research` JSON only; **not** ingested via `news_hub_bridge` | Task 1: `constituent_news_ingest.py` after cold research |
+| Constituent news → hub on refresh-all-50 | `constituent_news_ingest.py` wired in `batch_constituents._research_one` | ✅ Shipped |
 | `headlines_for_day` fallback | Still calls `collect_headlines_for_day` (aggregator/tiered) when hub empty | Task 2: return `hub_empty`; no live collect on normal paths |
 | News Impact GET auto-refresh | `trade_routes.py` calls `refresh_news_impact(refresh_ingest=False)` when resolve empty | OK if ingest false; verify no hidden tiered fetch in `build_news_impact_snapshot` |
 | Constituent news factors | From cached `company_research` doc, not hub union | Document staleness; optional Phase 2b hub read |
@@ -100,8 +100,8 @@ c070e1d feat(company-research): gate tiered APIs during Nifty-50 batch
 
 | Item | Planned file / work |
 |------|---------------------|
-| `constituent_news_ingest.py` | Extract headlines from company research → `ingest_rows_to_hub` |
-| `tests/test_constituent_news_ingest.py` | Assert ingest only when `refresh=True` |
+| `constituent_news_ingest.py` | ✅ `maybe_ingest_constituent_news` on refresh-all-50 |
+| `tests/test_constituent_news_ingest.py` | ✅ |
 | Hub-read-only guard tests | Block `collect_headlines_for_day` on normal `run_index_research` |
 | `hub_empty` status in API + panel | Distinct from generic empty items |
 | `constituent_news_as_of` on index doc | Pipeline log / UI freshness hint |
@@ -140,7 +140,7 @@ run_index_research(refresh_constituents=True)
   → batch_constituent_research(refresh=True)
        → run_company_research × 50 (SearXNG news, no Tapetide/AV)
        → save company_research JSON
-       → [GAP] no hub ingest yet
+       → ingest headline rows → news_hub_bridge → staging  ✅
   → refresh_news_impact(refresh_ingest=True)              # NIFTY index tiered ingest OK
 ```
 
@@ -178,21 +178,17 @@ Committed in `c070e1d`, `a9b47ac`, and related tests. Push to remote and reload 
 
 ## Phase 2 — Remaining tasks (implement next)
 
-### Task 1: Hub ingest on constituent refresh only — ❌ NOT STARTED
+### Task 1: Hub ingest on constituent refresh only — ✅ DONE
 
 **Files:**
-- Create: `integrations/trade_integrations/dataflows/index_research/constituent_news_ingest.py`
-- Modify: `integrations/trade_integrations/dataflows/index_research/sources/batch_constituents.py`
-- Test: `tests/test_constituent_news_ingest.py`
+- Create: `integrations/trade_integrations/dataflows/index_research/constituent_news_ingest.py` ✅
+- Modify: `integrations/trade_integrations/dataflows/index_research/sources/batch_constituents.py` ✅
+- Test: `tests/test_constituent_news_ingest.py` ✅
 
-**Produces:** `maybe_ingest_constituent_news(doc, symbol, refresh=True)` → `news_hub_bridge.ingest_rows_to_hub`
-
-Wire in `_research_one` after `save_company_research` when `refresh=True`. Map SearXNG headline dicts to hub rows (`title`, `summary`, `url`, `source`, `published_at`).
-
-- [ ] Write failing tests (skip when `refresh=False`, run when `refresh=True`)
-- [ ] Implement ingest helper
-- [ ] Wire batch path
-- [ ] Verify `staging_queue_stats()` grows after refresh-all-50 run
+- [x] Write tests (skip when `refresh=False`, run when `refresh=True`)
+- [x] Implement `headline_rows_from_company_doc` + `maybe_ingest_constituent_news`
+- [x] Wire `_research_one` after `save_company_research` when `refresh=True`
+- [ ] Verify `staging_queue_stats()` grows after refresh-all-50 run (manual E2E — Task 5)
 
 ---
 
@@ -289,7 +285,7 @@ No coef edits without walk-forward OOS gate (+3 pp). Wire hub-tagged factors onl
 | No tiered APIs in Nifty batch | ✅ Shipped |
 | Poll never batch research | ✅ Shipped |
 | Normal run no constituent re-research | ✅ Shipped (stricter than original plan) |
-| Hub ingest on Refresh all 50 only | ❌ Task 1 |
+| Hub ingest on Refresh all 50 only | ✅ Task 1 |
 | Normal run hub-read-only news impact | ⚠️ Task 2 remainder |
 | News Impact panel | ⚠️ Task 4 remainder |
 | Distilled entity SSOT | ⚠️ Phase 3 partial |

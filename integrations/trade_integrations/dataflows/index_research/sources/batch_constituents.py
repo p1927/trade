@@ -19,6 +19,9 @@ from trade_integrations.dataflows.company_research.fetch_policy import set_nifty
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 from trade_integrations.dataflows.index_research.constituent_factors import build_constituent_factors
+from trade_integrations.dataflows.index_research.constituent_news_ingest import (
+    maybe_ingest_constituent_news,
+)
 from trade_integrations.dataflows.index_research.models import ConstituentRow, ConstituentSignal
 
 _MAX_WORKERS_ENV = "INDEX_RESEARCH_MAX_WORKERS"
@@ -150,6 +153,8 @@ def _research_one(
     finally:
         set_nifty50_batch(False)
     save_company_research(doc)
+    if refresh:
+        maybe_ingest_constituent_news(doc, symbol=symbol, refresh=True)
     return doc
 
 
