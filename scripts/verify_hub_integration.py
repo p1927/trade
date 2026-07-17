@@ -84,7 +84,7 @@ def main() -> int:
         "fills_parquet": data / "trades" / "fills.parquet",
         "outcomes_parquet": data / "auto_paper" / "outcomes.parquet",
         "manifest": data / "manifest.json",
-        "news_verified_records": data / "news_verified" / "records.parquet",
+        "news_events": data / "news_events" / "events.parquet",
     }
     for key, path in paths.items():
         exists = path.is_file()

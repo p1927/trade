@@ -41,8 +41,44 @@ stack_stack_mode() {
   [[ -f "$file" ]] && tr -d '[:space:]' <"$file" || true
 }
 
-stack_dev_mode_active() {
+stack_dev_mode_flagged() {
   [[ "$(stack_stack_mode)" == "dev" ]]
+}
+
+# True when dev tier is actually responding (OpenAlgo + Vibe API minimum).
+stack_dev_tier_alive() {
+  local api_port openalgo_port
+  stack_load_env
+  api_port="$(stack_vibe_api_port)"
+  openalgo_port="$(stack_openalgo_port)"
+  stack_http_ok "http://127.0.0.1:${openalgo_port}/" || return 1
+  # Vibe API root is 404; /health or a listening uvicorn on the port counts as up.
+  curl -sf -o /dev/null -m 3 "http://127.0.0.1:${api_port}/health" 2>/dev/null && return 0
+  stack_vibe_api_listener_alive "$api_port"
+}
+
+# Clear orphaned dev flag when the dev tier is down (terminal closed, Ctrl+C, etc.).
+stack_reconcile_stale_dev_mode() {
+  if stack_dev_tier_alive || ! stack_dev_mode_flagged; then
+    return 0
+  fi
+  local api_port openalgo_port ui_port
+  stack_load_env
+  api_port="$(stack_vibe_api_port)"
+  openalgo_port="$(stack_openalgo_port)"
+  ui_port="$(stack_vibe_ui_port)"
+  if [[ -n "$(stack_port_listener_pid "$openalgo_port")" ]] \
+    || [[ -n "$(stack_port_listener_pid "$api_port")" ]] \
+    || [[ -n "$(stack_port_listener_pid "$ui_port")" ]]; then
+    return 0
+  fi
+  echo "[stack] clearing stale dev mode (dev tier not running — run: ./trade dev)" >&2
+  stack_clear_stack_mode
+}
+
+stack_dev_mode_active() {
+  stack_reconcile_stale_dev_mode
+  stack_dev_mode_flagged && stack_dev_tier_alive
 }
 
 stack_set_stack_mode() {
@@ -56,8 +92,9 @@ stack_clear_stack_mode() {
 }
 
 stack_refuse_if_dev_mode() {
-  if stack_dev_mode_active; then
-    echo "[stack] dev mode active — stop with Ctrl+C in trade dev, or: trade down" >&2
+  stack_reconcile_stale_dev_mode
+  if stack_dev_mode_flagged && stack_dev_tier_alive; then
+    echo "[stack] dev mode active — keep this terminal open, or stop with Ctrl+C then: ./trade dev" >&2
     exit 1
   fi
 }
@@ -1047,6 +1084,7 @@ stack_status_vibe_stack() {
   local log_dir openalgo_port api_port ui_port ok=1
   stack_load_env
   log_dir="$(stack_log_dir)"
+  stack_reconcile_stale_dev_mode
   stack_reconcile_stale_claims
   openalgo_port="$(stack_openalgo_port)"
   api_port="$(stack_vibe_api_port)"
@@ -1066,7 +1104,11 @@ stack_status_vibe_stack() {
     pidfile="${svc##*:}"
     pid="$(stack_read_pid "$pidfile")"
     claimed="$(stack_claim_pid "$service")"
-    http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 5 "http://127.0.0.1:${port}/" 2>/dev/null || true)"
+    local probe_url="http://127.0.0.1:${port}/"
+    if [[ "$service" == "vibe-api" ]]; then
+      probe_url="http://127.0.0.1:${port}/health"
+    fi
+    http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 5 "$probe_url" 2>/dev/null || true)"
     if [[ -z "$http_code" ]]; then
       http_code="000"
     fi
@@ -1139,47 +1181,16 @@ PY
     hub_ok=1
   fi
   if (( ok && hub_ok )); then return 0; fi
-  if [[ "${STACK_AUTO_HEAL:-1}" != "0" && "${STACK_AUTO_HEAL:-}" != "false" ]]; then
-    echo "[stack] auto-healing dead services (STACK_AUTO_HEAL=1) ..."
-    if stack_ensure_vibe_stack; then
-      stack_reconcile_stale_claims
-      echo "══════════════════════════════════════════════════════════"
-      echo "  Vibe stack status (after auto-heal)"
-      echo "══════════════════════════════════════════════════════════"
-      ok=1
-      for svc in "OpenAlgo:openalgo:$openalgo_port:$log_dir/openalgo.pid" \
-                 "Vibe API:vibe-api:$api_port:$log_dir/vibe-api.pid" \
-                 "Vibe UI:vibe-ui:$ui_port:$log_dir/vibe-ui.pid"; do
-        local name service port pidfile pid http_code alive="dead"
-        name="${svc%%:*}"
-        service="${svc#*:}"; service="${service%%:*}"
-        port="${svc#*:}"; port="${port#*:}"; port="${port%%:*}"
-        pidfile="${svc##*:}"
-        pid="$(stack_read_pid "$pidfile")"
-        http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 5 "http://127.0.0.1:${port}/" 2>/dev/null || true)"
-        [[ -z "$http_code" ]] && http_code="000"
-        local listener
-        listener="$(stack_port_listener_pid "$port")"
-        if [[ -n "$listener" ]] && kill -0 "$listener" 2>/dev/null; then
-          alive="alive"
-          pid="$listener"
-        elif stack_pid_alive "$pid"; then
-          alive="alive"
-        fi
-        if [[ "$http_code" == "200" ]]; then
-          echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid:-?} ($alive)"
-        else
-          echo "  ✗ $name  :$port  HTTP $http_code  pid=${pid:-none} ($alive)"
-          ok=0
-        fi
-      done
-      echo "══════════════════════════════════════════════════════════"
-      (( ok && hub_ok )) && return 0
-    fi
+  if stack_dev_mode_flagged && stack_dev_tier_alive; then
+    echo "  Dev mode: keep the ./trade dev terminal open for hot reload"
+  elif stack_dev_mode_flagged; then
+    echo "  Dev mode flag was stale — run: ./trade dev"
+  else
+    echo "  Fix: ./trade dev   (hot reload while coding)"
+    echo "  Or:  ./trade restart   (background daemon)"
   fi
-  echo "  Fix: trade restart   (starts only what's down)"
-  echo "  Full reset: trade restart --force"
-  echo "  Full stop: trade stop --all"
+  echo "  Full reset: ./trade restart --force"
+  echo "  Full stop: ./trade down"
   echo "══════════════════════════════════════════════════════════"
   return 1
 }

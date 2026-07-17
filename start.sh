@@ -710,14 +710,18 @@ start_vibe_web() {
       # shellcheck disable=SC1091
       source "$ROOT/scripts/stack_lib.sh"
       STACK_ROOT="$ROOT"
-      local log_dir api_port ui_port
+      stack_load_env
+      local log_dir api_port ui_port openalgo_port
       log_dir="$(stack_log_dir)"
       api_port="$(stack_vibe_api_port)"
       ui_port="$(stack_vibe_ui_port)"
+      openalgo_port="$(stack_openalgo_port)"
       stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$ui_port"
       stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$api_port"
+      stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
       stack_kill_openalgo_ws_proxy
       stack_clear_stack_mode
+      log "Dev mode ended — restart with: ./trade dev  (or ./trade up for background daemon)"
     fi
     cleanup
   }

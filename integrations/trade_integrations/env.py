@@ -65,12 +65,24 @@ def _stack_auto_heal_enabled() -> bool:
     return os.getenv("STACK_AUTO_HEAL", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _dev_mode_flagged(*, root: Path | None = None) -> bool:
+    mode_file = (root or trade_repo_root()) / "log" / "stack.mode"
+    if not mode_file.is_file():
+        return False
+    try:
+        return mode_file.read_text(encoding="utf-8").strip() == "dev"
+    except OSError:
+        return False
+
+
 def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
-    """Heal dead OpenAlgo/Vibe processes via ``trade restart`` when unreachable."""
+    """Heal dead OpenAlgo/Vibe via ``trade heal`` when unreachable (never during dev mode)."""
     if not _stack_auto_heal_enabled():
         return False
 
     base = root or trade_repo_root()
+    if _dev_mode_flagged(root=base):
+        return False
     cfg = ensure_openalgo_env(root=base)
     host = cfg["host"].rstrip("/")
 

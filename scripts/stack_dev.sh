@@ -30,6 +30,7 @@ stack_load_env
 stack_print_ports_summary
 
 echo "[stack] dev mode — code + .env changes:"
+echo "  Command      ./trade dev   (from repo root — not bare 'trade')"
 echo "  Vibe API     uvicorn --reload (integrations/, vibetrading/agent/)"
 echo "  Vite UI      Vite HMR"
 echo "  OpenAlgo     FLASK_DEBUG=1 (openalgo/)"
@@ -57,4 +58,5 @@ if ! stack_start_openalgo; then
 fi
 
 export STACK_DEV_FOREGROUND_VIBE=1
+echo "[stack] dev mode running — keep THIS terminal open (closing it stops the stack)"
 exec "$ROOT/start.sh" --dev-ui "$@"

@@ -107,6 +107,7 @@ stack_ctl_ensure() {
 
 stack_ctl_ensure_inner() {
   stack_refuse_if_dev_mode
+  stack_reconcile_stale_dev_mode
   echo "[stack] ensuring stack (no full preflight) ..."
   if ! stack_ensure_vibe_stack; then
     echo "[stack] ensure failed — try: trade up" >&2
