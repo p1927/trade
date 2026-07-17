@@ -10,10 +10,13 @@ from trade_integrations.context.hub import (
     get_hub_dir,
     is_company_research_eligible,
     is_cache_fresh,
+    is_stock_cache_fresh,
     load_company_research_markdown,
     save_company_research,
+    save_stock_research,
 )
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc, StageResult
+from trade_integrations.dataflows.stock_research.models import StockResearchDoc
 
 
 @pytest.mark.unit
@@ -62,3 +65,26 @@ class TestContextHubPersistence:
     def test_hub_dir_override(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path / "custom"))
         assert get_hub_dir() == (tmp_path / "custom").resolve()
+
+    def test_stock_cache_fresh_uses_stock_research_path(self, tmp_path, monkeypatch):
+        """Regression: is_stock_cache_fresh must not read company_research/latest.json."""
+        monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+        now = datetime.now(timezone.utc)
+        company = CompanyResearchDoc(
+            ticker="RELIANCE",
+            as_of=now,
+            lookahead_days=14,
+            market="IN",
+            stages=[],
+        )
+        stock = StockResearchDoc(
+            ticker="RELIANCE",
+            as_of=now,
+            lookahead_days=14,
+            market="IN",
+            stages=[],
+        )
+        save_company_research(company)
+        assert is_stock_cache_fresh("RELIANCE") is False
+        save_stock_research(stock)
+        assert is_stock_cache_fresh("RELIANCE") is True

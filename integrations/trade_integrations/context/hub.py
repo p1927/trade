@@ -542,7 +542,15 @@ def is_stock_prefetch_enabled() -> bool:
 
 def is_stock_cache_fresh(ticker: str) -> bool:
     """Return True when cached stock plan is younger than company research TTL."""
-    return is_cache_fresh(ticker)
+    max_age = _cache_max_age_minutes()
+    if max_age == 0:
+        return False
+    path = _stock_research_dir(ticker) / "latest.json"
+    if not path.is_file():
+        return False
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    age_minutes = (datetime.now(timezone.utc) - mtime).total_seconds() / 60.0
+    return age_minutes <= max_age
 
 
 def is_stock_research_eligible(ticker: str) -> bool:
