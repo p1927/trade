@@ -50,18 +50,18 @@ stack_load_env() {
 }
 
 stack_openalgo_port() {
-  local url="${OPENALGO_HOST}"
+  local url="${OPENALGO_HOST:-http://127.0.0.1:5001}"
   url="${url#*://}"
   url="${url%%/*}"
   echo "${url##*:}"
 }
 
 stack_vibe_api_port() {
-  echo "${VIBE_BACKEND_PORT}"
+  echo "${VIBE_BACKEND_PORT:-8899}"
 }
 
 stack_vibe_ui_port() {
-  echo "${VIBE_FRONTEND_PORT}"
+  echo "${VIBE_FRONTEND_PORT:-5899}"
 }
 
 stack_api_index_prediction_ok() {
@@ -104,10 +104,21 @@ stack_pid_alive() {
 }
 
 stack_read_pid() {
-  local pidfile="$1"
-  if [[ -f "$pidfile" ]]; then
-    tr -d '[:space:]' <"$pidfile"
+  local pidfile="$1" raw
+  if [[ ! -f "$pidfile" ]]; then
+    return 0
   fi
+  raw="$(head -1 "$pidfile" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ "$raw" =~ ^[0-9]+$ ]]; then
+    echo "$raw"
+    return 0
+  fi
+  raw="$(grep -Eo '[0-9]+' "$pidfile" 2>/dev/null | head -1 || true)"
+  [[ -n "$raw" ]] && echo "$raw"
+}
+
+stack_write_pidfile() {
+  printf '%s\n' "$2" >"$1"
 }
 
 stack_port_listener_pid() {
@@ -120,8 +131,329 @@ stack_sync_pidfile_from_port() {
   local listener
   listener="$(stack_port_listener_pid "$port")"
   if [[ -n "$listener" ]]; then
-    echo "$listener" >"$pidfile"
+    stack_write_pidfile "$pidfile" "$listener"
   fi
+}
+
+stack_claims_dir() {
+  echo "$(stack_log_dir)/claims"
+}
+
+stack_claim_file() {
+  local service="$1"
+  echo "$(stack_claims_dir)/${service}.claim"
+}
+
+stack_read_claim_field() {
+  local service="$1" field="$2"
+  local file
+  file="$(stack_claim_file "$service")"
+  [[ -f "$file" ]] || return 1
+  awk -F= -v want="$field" '$1 == want { print substr($0, index($0, "=") + 1); exit }' "$file"
+}
+
+stack_claim_pid() {
+  stack_read_claim_field "$1" "pid" 2>/dev/null || true
+}
+
+stack_write_claim() {
+  local service="$1" pid="$2" port="${3:-}" cmd="${4:-}"
+  local dir file
+  dir="$(stack_claims_dir)"
+  mkdir -p "$dir"
+  file="$(stack_claim_file "$service")"
+  {
+    echo "pid=$pid"
+    echo "port=$port"
+    echo "root=$(stack_root)"
+    echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "command=$cmd"
+  } >"$file"
+}
+
+stack_release_claim() {
+  local service="$1"
+  rm -f "$(stack_claim_file "$service")"
+}
+
+stack_reconcile_stale_claims() {
+  local service port claimed_pid listener health_url
+  for claim in "$(stack_claims_dir)"/*.claim; do
+    [[ -f "$claim" ]] || continue
+    service="$(basename "$claim" .claim)"
+    claimed_pid="$(stack_claim_pid "$service")"
+    port="$(stack_read_claim_field "$service" "port" 2>/dev/null || true)"
+    if [[ -n "$claimed_pid" ]] && stack_pid_alive "$claimed_pid"; then
+      if [[ -n "$port" ]] && stack_listener_matches_claim "$claimed_pid" "$port"; then
+        continue
+      fi
+      if [[ -z "$port" ]]; then
+        continue
+      fi
+      if [[ -n "$port" ]] && stack_http_ok "http://127.0.0.1:${port}/"; then
+        listener="$(stack_port_listener_pid "$port")"
+        if [[ -n "$listener" ]]; then
+          stack_write_claim "$service" "$listener" "$port" "$(stack_read_claim_field "$service" "command" 2>/dev/null || echo adopted)"
+        fi
+        continue
+      fi
+    fi
+    listener=""
+    if [[ -n "$port" ]]; then
+      listener="$(stack_port_listener_pid "$port")"
+    fi
+    if [[ -n "$listener" ]] && stack_process_in_trade_repo "$listener"; then
+      stack_write_claim "$service" "$listener" "$port" "$(stack_read_claim_field "$service" "command" 2>/dev/null || echo adopted)"
+      continue
+    fi
+    echo "[stack] clearing stale claim for $service (pid ${claimed_pid:-none})"
+    stack_release_claim "$service"
+  done
+}
+
+stack_service_for_pid() {
+  local want_pid="$1" svc file pid
+  for file in "$(stack_claims_dir)"/*.claim; do
+    [[ -f "$file" ]] || continue
+    svc="$(basename "$file" .claim)"
+    pid="$(awk -F= '$1 == "pid" { print $2; exit }' "$file")"
+    if [[ "$pid" == "$want_pid" ]]; then
+      echo "$svc"
+      return 0
+    fi
+  done
+  return 1
+}
+
+stack_claim_valid() {
+  local service="$1" claimed_pid port listener
+  claimed_pid="$(stack_claim_pid "$service")"
+  [[ -n "$claimed_pid" ]] || return 1
+  port="$(stack_read_claim_field "$service" "port" 2>/dev/null || true)"
+  if [[ -n "$port" ]]; then
+    if stack_listener_matches_claim "$claimed_pid" "$port"; then
+      listener="$(stack_port_listener_pid "$port")"
+      if [[ -n "$listener" && "$listener" != "$claimed_pid" ]]; then
+        stack_write_claim "$service" "$listener" "$port" "$(stack_read_claim_field "$service" "command" 2>/dev/null || echo adopted)"
+      fi
+      return 0
+    fi
+    return 1
+  fi
+  stack_pid_alive "$claimed_pid"
+}
+
+stack_process_in_trade_repo() {
+  local pid="$1"
+  local root args cwd
+  root="$(stack_root)"
+  args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  if [[ -n "$args" ]]; then
+    if [[ "$args" == *"$root"* ]]; then
+      return 0
+    fi
+    if [[ "$args" == *"cli._legacy"* || "$args" == *"app.py"* || "$args" == *"/vite"* ]]; then
+      return 0
+    fi
+  fi
+  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1 || true)"
+  if [[ -n "$cwd" && "$cwd" == "$root"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+stack_listener_matches_claim() {
+  local claimed_pid="$1" port="$2"
+  local listener ppid
+  [[ -n "$claimed_pid" ]] || return 1
+  listener="$(stack_port_listener_pid "$port")"
+  [[ -z "$listener" ]] && stack_pid_alive "$claimed_pid"
+  [[ "$listener" == "$claimed_pid" ]] && return 0
+  ppid="$(ps -p "$listener" -o ppid= 2>/dev/null | tr -d ' ' || true)"
+  [[ -n "$ppid" && "$ppid" == "$claimed_pid" ]] && return 0
+  if stack_pid_alive "$claimed_pid" && stack_process_in_trade_repo "$listener"; then
+    return 0
+  fi
+  return 1
+}
+
+stack_assert_port_for_start() {
+  local service="$1" port="$2"
+  local listener claimed_pid other_service
+
+  listener="$(stack_port_listener_pid "$port")"
+  [[ -z "$listener" ]] && return 0
+
+  if stack_claim_valid "$service"; then
+    return 0
+  fi
+
+  claimed_pid="$(stack_claim_pid "$service")"
+  if [[ -n "$claimed_pid" ]] && stack_listener_matches_claim "$claimed_pid" "$port"; then
+    return 0
+  fi
+
+  other_service="$(stack_service_for_pid "$listener" 2>/dev/null || true)"
+  if [[ -n "$other_service" && "$other_service" != "$service" ]]; then
+    echo "[stack] cannot start $service: :$port held by $other_service (pid $listener)" >&2
+    echo "[stack] run: trade down  (or trade restart --force)" >&2
+    return 1
+  fi
+
+  if stack_process_in_trade_repo "$listener"; then
+    echo "[stack] cannot start $service: :$port held by unclaimed trade pid $listener" >&2
+    echo "[stack] run: trade down  (or trade restart --force)" >&2
+    return 1
+  fi
+
+  echo "[stack] cannot start $service: :$port held by foreign pid $listener" >&2
+  echo "[stack] stop that process, then: trade up" >&2
+  return 1
+}
+
+stack_adopt_running_service() {
+  local service="$1" port="$2" pidfile="$3" health_url="${4:-}"
+  local listener other
+
+  if [[ -n "$health_url" ]] && ! stack_http_ok "$health_url"; then
+    return 1
+  fi
+
+  if stack_claim_valid "$service"; then
+    listener="$(stack_claim_pid "$service")"
+    echo "$listener" >"$pidfile"
+    return 0
+  fi
+
+  listener="$(stack_port_listener_pid "$port")"
+  [[ -n "$listener" ]] || return 1
+
+  other="$(stack_service_for_pid "$listener" 2>/dev/null || true)"
+  if [[ -n "$other" && "$other" != "$service" ]]; then
+    return 1
+  fi
+
+  if ! stack_process_in_trade_repo "$listener"; then
+    return 1
+  fi
+
+  stack_write_claim "$service" "$listener" "$port" "adopted"
+  echo "$listener" >"$pidfile"
+  return 0
+}
+
+stack_wait_port_free() {
+  local port="$1" attempts="${2:-15}" i listener
+  for ((i = 1; i <= attempts; i++)); do
+    listener="$(stack_port_listener_pid "$port")"
+    [[ -z "$listener" ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+stack_stop_claimed() {
+  local name="$1" service="$2" pidfile="$3" port="${4:-}"
+  local claimed_pid listener
+
+  claimed_pid="$(stack_claim_pid "$service")"
+  if [[ -z "$claimed_pid" ]]; then
+    claimed_pid="$(stack_read_pid "$pidfile")"
+  fi
+
+  if [[ -n "$claimed_pid" ]] && stack_pid_alive "$claimed_pid"; then
+    echo "[stack] stopping $name (claimed pid $claimed_pid) ..."
+    kill "$claimed_pid" 2>/dev/null || true
+    for _ in $(seq 1 15); do
+      stack_pid_alive "$claimed_pid" || break
+      sleep 0.5
+    done
+    if stack_pid_alive "$claimed_pid"; then
+      kill -9 "$claimed_pid" 2>/dev/null || true
+    fi
+  fi
+
+  if [[ -n "$port" ]]; then
+    listener="$(stack_port_listener_pid "$port")"
+    if [[ -n "$listener" ]]; then
+      if [[ -n "$claimed_pid" && "$listener" == "$claimed_pid" ]]; then
+        stack_wait_port_free "$port" 15 || {
+          echo "[stack] force-releasing :$port (pid $listener) ..."
+          kill -9 "$listener" 2>/dev/null || true
+        }
+      elif [[ -z "$claimed_pid" ]] && stack_process_in_trade_repo "$listener"; then
+        echo "[stack] stopping unclaimed $name on :$port (pid $listener) ..."
+        kill "$listener" 2>/dev/null || true
+        stack_wait_port_free "$port" 10 || kill -9 "$listener" 2>/dev/null || true
+      elif [[ -n "$listener" ]]; then
+        echo "[stack] leaving foreign listener on :$port (pid $listener) — not owned by trade" >&2
+      fi
+    fi
+  fi
+
+  stack_release_claim "$service"
+  rm -f "$pidfile"
+}
+
+stack_write_instance_manifest() {
+  local file log_dir pid
+  log_dir="$(stack_log_dir)"
+  file="$log_dir/stack.instance"
+  {
+    echo "updated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "root=$(stack_root)"
+    echo "openalgo_pid=$(stack_claim_pid openalgo)"
+    echo "vibe_api_pid=$(stack_claim_pid vibe-api)"
+    echo "vibe_ui_pid=$(stack_claim_pid vibe-ui)"
+    pid="$(stack_claim_pid nautilus-watch)"
+    if [[ -z "$pid" ]]; then
+      pid="$(stack_read_pid "$log_dir/nautilus-watch.pid")"
+    fi
+    echo "nautilus_watch_pid=$pid"
+  } >"$file"
+}
+
+stack_sync_service_claim() {
+  local service="$1" pidfile="$2" port="${3:-}" cmd="${4:-}"
+  local pid
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
+    stack_write_claim "$service" "$pid" "$port" "$cmd"
+  fi
+}
+
+stack_sync_nautilus_claim() {
+  local log_dir pidfile reg_file py reg_pid
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/nautilus-watch.pid"
+  reg_file="$log_dir/nautilus-watch.agents.json"
+  py="$(stack_pick_python)"
+  reg_pid="$("$py" - "$reg_file" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.is_file():
+    raise SystemExit(0)
+try:
+    data = json.loads(p.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+pid = data.get("node_pid")
+if isinstance(pid, int) and pid > 0:
+    print(pid)
+PY
+)"
+  if [[ -n "$reg_pid" ]] && stack_pid_alive "$reg_pid"; then
+    stack_write_pidfile "$pidfile" "$reg_pid"
+    stack_write_claim "nautilus-watch" "$reg_pid" "" "nautilus watch"
+    return 0
+  fi
+  stack_sync_service_claim "nautilus-watch" "$pidfile" "" "nautilus watch"
+}
+
+stack_clear_instance_manifest() {
+  rm -f "$(stack_log_dir)/stack.instance"
 }
 
 stack_service_up() {
@@ -129,18 +461,35 @@ stack_service_up() {
   stack_http_ok "http://127.0.0.1:${port}/"
 }
 
-# Start a detached process; writes the child PID to pidfile.
+# Start a detached process; writes the child PID to pidfile and claims it (STACK_LAUNCH_SERVICE).
 stack_launch_detached() {
   local pidfile="$1" logfile="$2" workdir="$3"
   shift 3
   local expect_port="${STACK_LAUNCH_EXPECT_PORT:-}"
+  local service="${STACK_LAUNCH_SERVICE:-}"
 
   mkdir -p "$(dirname "$pidfile")" "$(dirname "$logfile")"
+
+  if [[ -n "$service" && -n "$expect_port" ]]; then
+    if stack_claim_valid "$service"; then
+      local cpid
+      cpid="$(stack_claim_pid "$service")"
+      stack_write_pidfile "$pidfile" "$cpid"
+      echo "[stack] $service already claimed (pid $cpid)"
+      return 0
+    fi
+    if ! stack_assert_port_for_start "$service" "$expect_port"; then
+      return 1
+    fi
+  fi
 
   local existing
   existing="$(stack_read_pid "$pidfile")"
   if stack_pid_alive "$existing"; then
     if [[ -z "$expect_port" ]] || stack_service_up "$expect_port"; then
+      if [[ -n "$service" ]]; then
+        stack_write_claim "$service" "$existing" "$expect_port" "$*"
+      fi
       echo "[stack] already running (pid $existing)"
       return 0
     fi
@@ -148,63 +497,125 @@ stack_launch_detached() {
     kill "$existing" 2>/dev/null || true
     sleep 0.5
     stack_pid_alive "$existing" && kill -9 "$existing" 2>/dev/null || true
+    [[ -n "$service" ]] && stack_release_claim "$service"
   fi
 
   : >>"$logfile"
 
-  local prev="$PWD" pid
+  local prev="$PWD" pid owner_pid listener
   cd "$workdir" || return 1
   nohup "$@" >>"$logfile" 2>&1 < /dev/null &
   pid=$!
   disown "$pid" 2>/dev/null || true
-  echo "$pid" >"$pidfile"
+  stack_write_pidfile "$pidfile" "$pid"
   cd "$prev" || true
 
   sleep 2
   existing="$(stack_read_pid "$pidfile")"
-  if stack_pid_alive "$existing"; then
-    return 0
-  fi
+  owner_pid="$existing"
   if [[ -n "$expect_port" ]]; then
-    local listener
     listener="$(stack_port_listener_pid "$expect_port")"
     if [[ -n "$listener" ]]; then
-      echo "$listener" >"$pidfile"
-      return 0
+      owner_pid="$listener"
+      stack_write_pidfile "$pidfile" "$listener"
     fi
+  fi
+  if stack_pid_alive "$owner_pid" || { [[ -n "$expect_port" ]] && stack_service_up "$expect_port"; }; then
+    if [[ -n "$service" ]]; then
+      stack_write_claim "$service" "$owner_pid" "$expect_port" "$*"
+    fi
+    return 0
   fi
 
   echo "[stack] failed to start in $workdir: $*" >&2
   tail -8 "$logfile" 2>/dev/null >&2 || true
+  [[ -n "$service" ]] && stack_release_claim "$service"
   return 1
 }
 
 stack_stop_pidfile() {
-  local name="$1" pidfile="$2" pkill_pattern="${3:-}"
+  local name="$1" service="$2" pidfile="$3" port="${4:-}"
+  stack_stop_claimed "$name" "$service" "$pidfile" "$port"
+}
 
-  local pid stopped=0
-  pid="$(stack_read_pid "$pidfile")"
-  if stack_pid_alive "$pid"; then
-    echo "[stack] stopping $name (pid $pid) ..."
-    kill "$pid" 2>/dev/null || true
-    for _ in $(seq 1 10); do
-      stack_pid_alive "$pid" || break
-      sleep 0.5
-    done
-    if stack_pid_alive "$pid"; then
-      kill -9 "$pid" 2>/dev/null || true
-    fi
-    stopped=1
-  fi
-  rm -f "$pidfile"
+stack_lock_dir() {
+  echo "$(stack_log_dir)/.stack.lock.d"
+}
 
-  # Also stop stray listeners when pidfile was stale or parent forked.
-  if [[ -n "$pkill_pattern" ]]; then
-    if pgrep -f "$pkill_pattern" >/dev/null 2>&1; then
-      echo "[stack] stopping stray $name processes ..."
-      pkill -f "$pkill_pattern" 2>/dev/null || true
+stack_with_lock() {
+  local lockdir waited=0
+  lockdir="$(stack_lock_dir)"
+  mkdir -p "$(stack_log_dir)"
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    if (( waited >= 120 )); then
+      echo "[stack] another stack operation is in progress (lock: $lockdir)" >&2
+      echo "[stack] if no other trade command is running, remove: rm -rf $lockdir" >&2
+      exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  trap 'rmdir "'"$lockdir"'" 2>/dev/null || true' EXIT INT TERM
+  "$@"
+}
+
+stack_preflight_start() {
+  local root py frontend failures=0
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  frontend="${VIBE_FRONTEND_DIR:-$root/vibetrading/frontend}"
+
+  echo "[stack] preflight ..."
+  stack_reconcile_stale_claims
+
+  if ! stack_validate_ports_registry; then
+    failures=$((failures + 1))
+  fi
+
+  local api_port ui_port openalgo_port
+  api_port="$(stack_vibe_api_port)"
+  ui_port="$(stack_vibe_ui_port)"
+  openalgo_port="$(stack_openalgo_port)"
+  if stack_http_ok "http://127.0.0.1:${openalgo_port}/" \
+    && stack_http_ok "http://127.0.0.1:${api_port}/" \
+    && stack_http_ok "http://127.0.0.1:${ui_port}/"; then
+    echo "[stack] preflight: stack ports already serving — skipping foreign-port check"
+  elif ! STACK_PORTS_STRICT=1 stack_check_port_listeners; then
+    failures=$((failures + 1))
+  fi
+
+  if [[ ! -x "$root/.venv/bin/vibe-trading" ]]; then
+    echo "[stack] preflight: vibe-trading missing — pip install -e vibetrading/" >&2
+    failures=$((failures + 1))
+  fi
+
+  if [[ ! -f "$frontend/package.json" ]]; then
+    echo "[stack] preflight: Vibe frontend missing at $frontend" >&2
+    failures=$((failures + 1))
+  elif [[ ! -x "$frontend/node_modules/.bin/vite" ]]; then
+    echo "[stack] preflight: Vite not installed — run: ./scripts/ensure_vibe_frontend.sh" >&2
+    failures=$((failures + 1))
+  fi
+
+  if [[ -x "$root/scripts/setup_vibe.py" ]]; then
+    if ! "$py" "$root/scripts/setup_vibe.py" --verify 2>/dev/null; then
+      echo "[stack] preflight: setup_vibe.py --verify failed — run: trade setup vibe" >&2
+      failures=$((failures + 1))
     fi
   fi
+
+  if [[ ! -x "$root/openalgo/.venv/bin/python" ]]; then
+    echo "[stack] preflight: OpenAlgo venv missing — run setup in openalgo/ (uv sync or python -m venv .venv)" >&2
+    failures=$((failures + 1))
+  fi
+
+  if (( failures > 0 )); then
+    echo "[stack] preflight failed ($failures issue(s)) — run: trade doctor" >&2
+    return 1
+  fi
+
+  echo "[stack] preflight ok"
+  return 0
 }
 
 stack_pick_openalgo_cmd() {
@@ -244,16 +655,17 @@ stack_start_openalgo() {
   base="${OPENALGO_HOST:-http://127.0.0.1:$port}"
   base="${base%/}"
 
-  if stack_http_ok "$base/"; then
-    stack_sync_pidfile_from_port "$pidfile" "$port"
-    echo "[stack] OpenAlgo already up at $base"
+  if stack_adopt_running_service "openalgo" "$port" "$pidfile" "$base/"; then
+    echo "[stack] OpenAlgo already up at $base (pid $(stack_claim_pid openalgo))"
     return 0
   fi
 
-  stack_kill_port "$port"
-  stack_kill_port 8765
+  if ! stack_assert_port_for_start "openalgo" "$port"; then
+    return 1
+  fi
 
   echo "[stack] starting OpenAlgo on :$port ..."
+  STACK_LAUNCH_SERVICE=openalgo
   STACK_LAUNCH_EXPECT_PORT="$port"
   local -a launch_cmd=()
   if [[ -x "$root/openalgo/.venv/bin/python" ]]; then
@@ -268,9 +680,10 @@ stack_start_openalgo() {
   else
     stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" "${launch_cmd[@]}"
   fi
-  unset STACK_LAUNCH_EXPECT_PORT
+  unset STACK_LAUNCH_EXPECT_PORT STACK_LAUNCH_SERVICE
   stack_wait_for_url "OpenAlgo" "$base/" 90
   stack_sync_pidfile_from_port "$pidfile" "$port"
+  stack_write_claim "openalgo" "$(stack_read_pid "$pidfile")" "$port" "openalgo app.py"
 }
 
 stack_start_vibe_api() {
@@ -285,23 +698,34 @@ stack_start_vibe_api() {
   agent_dir="$root/vibetrading/agent"
 
   if stack_http_ok "$base/" && stack_api_index_prediction_ok "$port"; then
-    stack_sync_pidfile_from_port "$pidfile" "$port"
-    echo "[stack] Vibe API already up at $base"
+    if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/"; then
+      echo "[stack] Vibe API already up at $base (pid $(stack_claim_pid vibe-api))"
+      return 0
+    fi
+    stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli._legacy serve"
+    echo "[stack] Vibe API healthy at $base — leaving running (synced claim)"
     return 0
   fi
 
   # Root responds but index probe failed — often a busy worker (SSE analysis), not a dead API.
   if stack_http_ok "$base/" && stack_vibe_api_listener_alive "$port"; then
-    stack_sync_pidfile_from_port "$pidfile" "$port"
-    echo "[stack] Vibe API on :$port is busy but listening — leaving it running"
+    if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/"; then
+      echo "[stack] Vibe API on :$port is busy but listening — leaving it running"
+      return 0
+    fi
+    stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli._legacy serve"
+    echo "[stack] Vibe API on :$port is busy — leaving running (synced claim)"
     return 0
   fi
 
   if stack_http_ok "$base/"; then
-    echo "[stack] Vibe API on :$port is stale (missing /trade/index-prediction) — restarting ..."
+    echo "[stack] Vibe API on :$port responds but is not ready — leaving running; use: trade restart --force" >&2
+    return 0
   fi
 
-  stack_kill_port "$port"
+  if ! stack_assert_port_for_start "vibe-api" "$port"; then
+    return 1
+  fi
 
   if [[ ! -x "$root/.venv/bin/vibe-trading" ]]; then
     echo "[stack] vibe-trading not installed — run: pip install -e vibetrading/" >&2
@@ -314,13 +738,15 @@ stack_start_vibe_api() {
     serve_args+=(--reload)
     echo "[stack] Vibe API auto-reload enabled (integrations + agent code)"
   fi
+  STACK_LAUNCH_SERVICE=vibe-api
   STACK_LAUNCH_EXPECT_PORT="$port"
   stack_launch_detached \
     "$pidfile" "$logfile" "$agent_dir" \
     "$py" -m cli._legacy "${serve_args[@]}"
-  unset STACK_LAUNCH_EXPECT_PORT
+  unset STACK_LAUNCH_EXPECT_PORT STACK_LAUNCH_SERVICE
   stack_wait_for_url "Vibe API" "$base/" 60
   stack_sync_pidfile_from_port "$pidfile" "$port"
+  stack_write_claim "vibe-api" "$(stack_read_pid "$pidfile")" "$port" "cli._legacy serve"
 }
 
 stack_start_vibe_ui() {
@@ -333,13 +759,14 @@ stack_start_vibe_ui() {
   port="$(stack_vibe_ui_port)"
   url="http://127.0.0.1:$port"
 
-  if stack_http_ok "$url/"; then
-    stack_sync_pidfile_from_port "$pidfile" "$port"
-    echo "[stack] Vibe UI already up at $url"
+  if stack_adopt_running_service "vibe-ui" "$port" "$pidfile" "$url/"; then
+    echo "[stack] Vibe UI already up at $url (pid $(stack_claim_pid vibe-ui))"
     return 0
   fi
 
-  stack_kill_port "$port"
+  if ! stack_assert_port_for_start "vibe-ui" "$port"; then
+    return 1
+  fi
 
   if [[ ! -f "$frontend/package.json" ]]; then
     echo "[stack] Vibe frontend missing at $frontend" >&2
@@ -351,13 +778,15 @@ stack_start_vibe_ui() {
   fi
 
   echo "[stack] starting Vibe UI (Vite) on :$port ..."
+  STACK_LAUNCH_SERVICE=vibe-ui
   STACK_LAUNCH_EXPECT_PORT="$port"
   stack_launch_detached \
     "$pidfile" "$logfile" "$frontend" \
     "$frontend/node_modules/.bin/vite" --port "$port" --host 127.0.0.1
-  unset STACK_LAUNCH_EXPECT_PORT
+  unset STACK_LAUNCH_EXPECT_PORT STACK_LAUNCH_SERVICE
   stack_wait_for_url "Vibe UI" "$url/" 60
   stack_sync_pidfile_from_port "$pidfile" "$port"
+  stack_write_claim "vibe-ui" "$(stack_read_pid "$pidfile")" "$port" "vite"
 }
 
 stack_kill_port() {
@@ -393,22 +822,21 @@ stack_stop_vibe_stack() {
     shift
   done
   log_dir="$(stack_log_dir)"
-  stop_docker="${STACK_STOP_DOCKER:-1}"
+  stack_reconcile_stale_claims
+  stop_docker="${STACK_STOP_DOCKER:-0}"
   stop_docker="$(_stack_lc "$stop_docker")"
   api_port="$(stack_vibe_api_port)"
   ui_port="$(stack_vibe_ui_port)"
   openalgo_port="$(stack_openalgo_port)"
 
-  stack_stop_pidfile "Vibe UI" "$log_dir/vibe-ui.pid" "vite --port ${ui_port}"
-  stack_stop_pidfile "Vibe API" "$log_dir/vibe-api.pid" "cli._legacy serve"
-  stack_stop_pidfile "vibe-trading (legacy)" "$log_dir/vibe-trading.pid" "vibe-trading dev"
+  stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$ui_port"
+  stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$api_port"
+  stack_stop_claimed "vibe-trading (legacy)" "vibe-trading" "$log_dir/vibe-trading.pid"
   stack_stop_nautilus_watch
-  stack_stop_pidfile "OpenAlgo" "$log_dir/openalgo.pid" "openalgo.*app.py"
+  stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
 
-  stack_kill_port "$ui_port"
-  stack_kill_port "$api_port"
-  stack_kill_port "$openalgo_port"
   stack_kill_port 8765
+  stack_clear_instance_manifest
 
   # shellcheck disable=SC1091
   source "$(stack_root)/scripts/stack_docker_lib.sh"
@@ -488,6 +916,7 @@ stack_ensure_vibe_stack() {
   stack_start_vibe_api || ok=1
   stack_start_vibe_ui || ok=1
   stack_ensure_nautilus_watch || true
+  stack_sync_nautilus_claim
   return "$ok"
 }
 
@@ -516,12 +945,17 @@ stack_print_ready() {
   echo "  Vibe API  http://127.0.0.1:${api_port}"
   echo ""
   echo "Logs: $(stack_log_dir)/"
-  echo "Stop: ./scripts/stop_vibe_stack.sh"
+  echo "Claims: $(stack_claims_dir)/"
+  echo "Stop: trade down"
+  echo "Heal: trade restart"
+  echo "Status: trade status"
 }
 
 stack_status_vibe_stack() {
   local log_dir openalgo_port api_port ui_port ok=1
+  stack_load_env
   log_dir="$(stack_log_dir)"
+  stack_reconcile_stale_claims
   openalgo_port="$(stack_openalgo_port)"
   api_port="$(stack_vibe_api_port)"
   ui_port="$(stack_vibe_ui_port)"
@@ -530,14 +964,16 @@ stack_status_vibe_stack() {
   echo "  Vibe stack status"
   echo "══════════════════════════════════════════════════════════"
 
-  for svc in "OpenAlgo:$openalgo_port:$log_dir/openalgo.pid" \
-             "Vibe API:$api_port:$log_dir/vibe-api.pid" \
-             "Vibe UI:$ui_port:$log_dir/vibe-ui.pid"; do
-    local name port pidfile pid http_code alive="dead"
+  for svc in "OpenAlgo:openalgo:$openalgo_port:$log_dir/openalgo.pid" \
+             "Vibe API:vibe-api:$api_port:$log_dir/vibe-api.pid" \
+             "Vibe UI:vibe-ui:$ui_port:$log_dir/vibe-ui.pid"; do
+    local name service port pidfile pid http_code alive="dead" claimed=""
     name="${svc%%:*}"
-    port="${svc#*:}"; port="${port%%:*}"
+    service="${svc#*:}"; service="${service%%:*}"
+    port="${svc#*:}"; port="${port#*:}"; port="${port%%:*}"
     pidfile="${svc##*:}"
     pid="$(stack_read_pid "$pidfile")"
+    claimed="$(stack_claim_pid "$service")"
     http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 5 "http://127.0.0.1:${port}/" 2>/dev/null || true)"
     if [[ -z "$http_code" ]]; then
       http_code="000"
@@ -553,7 +989,11 @@ stack_status_vibe_stack() {
     fi
 
     if [[ "$http_code" == "200" ]]; then
-      echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid:-?} ($alive)"
+      if [[ -n "$claimed" && -n "$pid" && "$claimed" != "$pid" ]]; then
+        echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid} claim=${claimed} ($alive)"
+      else
+        echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid:-${claimed:-?}} ($alive)"
+      fi
     elif [[ -n "$listener" ]] && stack_pid_alive "$listener"; then
       echo "  ⚠ $name  :$port  HTTP $http_code  pid=${listener} (alive, not ready)"
       ok=0
@@ -587,10 +1027,12 @@ PY
 )"
   fi
   if stack_pid_alive "$nautilus_pid"; then
+    local nautilus_claim
+    nautilus_claim="$(stack_claim_pid nautilus-watch)"
     if [[ -n "$registry_summary" ]]; then
-      echo "  ✓ Nautilus watch  pid=${nautilus_pid} (alive, agents: ${registry_summary})"
+      echo "  ✓ Nautilus watch  pid=${nautilus_pid} claim=${nautilus_claim:-?} (alive, agents: ${registry_summary})"
     else
-      echo "  ✓ Nautilus watch  pid=${nautilus_pid} (alive)"
+      echo "  ✓ Nautilus watch  pid=${nautilus_pid} claim=${nautilus_claim:-?} (alive)"
     fi
   elif [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
     echo "  · Nautilus watch  disabled (NAUTILUS_WATCH_ENABLE=0)"
@@ -673,9 +1115,11 @@ stack_start_nautilus_watch() {
       stack_stop_nautilus_watch
     elif [[ -n "$agent_id" && -z "$bound_agent" ]]; then
       echo "$agent_id" >"$agent_id_file"
+      stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch"
       echo "[stack] Nautilus watch already running (pid $existing) — bound to $agent_id"
       return 0
     else
+      stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch"
       echo "[stack] Nautilus watch already running (pid $existing${bound_agent:+, agent $bound_agent})"
       return 0
     fi
@@ -706,7 +1150,9 @@ PY
     cmd+=(--agent-id "$agent_id")
     echo "$agent_id" >"$agent_id_file"
   fi
+  STACK_LAUNCH_SERVICE=nautilus-watch
   stack_launch_detached "$pidfile" "$logfile" "$root" "${cmd[@]}"
+  unset STACK_LAUNCH_SERVICE
 
   sleep 2
   existing="$(stack_read_pid "$pidfile")"
@@ -714,11 +1160,13 @@ PY
     echo "[stack] Nautilus watch failed to stay up — see $logfile" >&2
     tail -8 "$logfile" 2>/dev/null >&2 || true
     rm -f "$pidfile" "$agent_id_file"
+    stack_release_claim "nautilus-watch"
     return 1
   fi
+  stack_write_claim "nautilus-watch" "$existing" "" "${cmd[*]}"
 }
 
 stack_stop_nautilus_watch() {
-  stack_stop_pidfile "Nautilus watch" "$(stack_log_dir)/nautilus-watch.pid" "run_watch_node"
+  stack_stop_claimed "Nautilus watch" "nautilus-watch" "$(stack_log_dir)/nautilus-watch.pid"
   rm -f "$(stack_log_dir)/nautilus-watch.agent_id"
 }

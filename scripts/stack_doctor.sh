@@ -10,24 +10,26 @@ STACK_ROOT="$ROOT"
 stack_load_env
 
 py="$(stack_pick_python)"
-ok=0
+failures=0
 
 echo "══════════════════════════════════════════════════════════"
 echo "  Trade stack doctor"
 echo "══════════════════════════════════════════════════════════"
 
-if bash "$ROOT/start.sh" --status --no-bootstrap; then
-  echo "  ✓ start.sh --status"
+stack_print_ports_summary
+
+if stack_preflight_start; then
+  echo "  ✓ stack preflight (ports, vibe-trading, frontend, OpenAlgo venv)"
 else
-  echo "  ✗ start.sh --status failed"
-  ok=1
+  echo "  ✗ stack preflight failed"
+  failures=$((failures + 1))
 fi
 
 if "$py" "$ROOT/scripts/setup_vibe.py" --verify; then
   echo "  ✓ setup_vibe.py --verify"
 else
-  echo "  ✗ setup_vibe.py --verify failed"
-  ok=1
+  echo "  ✗ setup_vibe.py --verify failed — run: trade setup vibe"
+  failures=$((failures + 1))
 fi
 
 if [[ -x "$ROOT/scripts/setup_nautilus.sh" ]]; then
@@ -42,13 +44,14 @@ if "$py" "$ROOT/scripts/verify_hub_integration.py"; then
   echo "  ✓ verify_hub_integration.py"
 else
   echo "  ✗ verify_hub_integration.py failed"
-  ok=1
+  failures=$((failures + 1))
 fi
 
 echo "══════════════════════════════════════════════════════════"
-if (( ok )); then
+if (( failures == 0 )); then
   echo "  Doctor: all critical checks passed"
+  echo "  Start stack: trade up"
   exit 0
 fi
-echo "  Doctor: one or more checks failed — see output above"
+echo "  Doctor: $failures critical check(s) failed — fix above, then: trade up"
 exit 1

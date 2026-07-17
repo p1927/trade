@@ -10,16 +10,16 @@ start:
 	./trade start
 
 start-daemon:
-	./start.sh --daemon
+	./trade up
 
 restart-vibe:
-	./scripts/restart_vibe_stack.sh
+	./trade restart
 
 stop-vibe:
-	./scripts/stop_vibe_stack.sh
+	./trade down
 
 status-vibe:
-	./scripts/status_vibe_stack.sh
+	./trade status
 
 status-hub:
 	./scripts/status_hub_stack.sh
@@ -43,7 +43,7 @@ vibe-frontend:
 	./scripts/ensure_vibe_frontend.sh
 
 status:
-	./start.sh --status --no-bootstrap
+	./trade status
 
 tunnel-quick:
 	./trade tunnel quick

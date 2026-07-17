@@ -12,20 +12,22 @@ trade — Trade stack command-line interface
 Usage:
   trade <command> [subcommand] [options]
 
-Stack:
-  start [mode]          Start services (default: vibe, foreground)
+Stack (one lifecycle — use these):
+  up                    Start background stack (preflight + heal)
+  down [--all]          Stop OpenAlgo + Vibe ( --all: + hub Docker + tunnels )
+  restart [--force]     Heal missing services ( --force: full stop + start )
+  status                Vibe + hub Docker health
+  doctor                Preflight checks before start (no start)
+  dev                   Dev mode: auto-reload API/UI + OpenAlgo debug
+  reload [target]       Reload after code/env change (app|env|nautilus|hub|all)
+  start [mode]          Legacy foreground modes (prefer trade up / trade dev)
                         Modes: vibe | openalgo | cli | full | daemon | nautilus-watch
-  restart               Restart OpenAlgo + Vibe in background
-  stop [--all]          Stop OpenAlgo + Vibe ( --all: + hub Docker + tunnels )
-  status                Check SearXNG, OpenAlgo, Vibe, hub Docker readiness
-  status-vibe           Check OpenAlgo + Vibe ports only
-  status-hub            Check hub Docker tier + manifest
+  stop [--all]          Alias for down
+  status-vibe           Alias for status
+  status-hub            Hub Docker tier only
   stop-docker [target]  Stop hub Docker: searxng | timescale | redis | all | down
   stop-searxng          Stop SearXNG Docker only (alias for stop-docker searxng)
   logs-searxng          Follow SearXNG logs
-  doctor                Run unified stack + hub preflight checks
-  dev                   Dev mode: auto-reload API/UI + OpenAlgo debug
-  reload [target]       Reload after code/env change (app|env|nautilus|hub|all)
   sync-ports            Apply stack/ports.yaml to .env files
 
 Tunnel (webhook exposure):
@@ -50,18 +52,19 @@ Maintenance:
   setup vibe            Wire OpenAlgo MCP into Vibe agent config
 
 Examples:
-  trade start openalgo              # OpenAlgo only (for webhook setup)
-  trade start daemon                # OpenAlgo + Vibe in background
-  trade start nautilus-watch --agent-id aa_abc123   # continuous India watch node
-  trade restart                     # restart background stack
-  trade stop                        # stop background stack
+  trade up                          # background stack (recommended)
+  trade doctor && trade up          # verify deps, then start
+  trade restart                     # heal — start only what's down
+  trade restart --force             # full stop + preflight + start
+  trade down                        # stop background stack
+  trade dev                         # dev mode with auto-reload
+  trade start openalgo              # OpenAlgo only (webhook setup)
+  trade start nautilus-watch --agent-id aa_abc123
   trade tunnel quick                # expose OpenAlgo to the internet
-  trade tunnel restart              # stop + fresh URL + verify it works
-  trade webhooks tradingview        # show TradingView webhook URL + where to paste it
   trade status                      # is everything up?
   trade research RELIANCE
 
-Legacy scripts still work: ./start.sh, ./exposure/start.sh, make tunnel-quick
+Legacy: ./start.sh (foreground), make start-daemon → trade up
 EOF
 }
 
@@ -110,6 +113,14 @@ cmd="${1:-}"
 shift || true
 
 case "$cmd" in
+  up)
+    exec "$ROOT/scripts/stack_ctl.sh" up "$@"
+    ;;
+
+  down)
+    exec "$ROOT/scripts/stack_ctl.sh" down "$@"
+    ;;
+
   start)
     mode="${1:-vibe}"
     shift || true
@@ -118,7 +129,10 @@ case "$cmd" in
       openalgo)         exec "$ROOT/start.sh" --openalgo-only "$@" ;;
       cli|agents)       exec "$ROOT/start.sh" --cli "$@" ;;
       full)             exec "$ROOT/start.sh" "$@" ;;
-      daemon)           exec "$ROOT/start.sh" --daemon "$@" ;;
+      daemon)
+        echo "[trade] note: 'trade start daemon' is an alias for 'trade up'" >&2
+        exec "$ROOT/scripts/stack_ctl.sh" up "$@"
+        ;;
       nautilus-watch)
         # shellcheck disable=SC1091
         STACK_ROOT="$ROOT"
@@ -137,11 +151,11 @@ case "$cmd" in
     ;;
 
   status)
-    exec "$ROOT/start.sh" --status --no-bootstrap "$@"
+    exec "$ROOT/scripts/stack_ctl.sh" status "$@"
     ;;
 
   status-vibe)
-    exec "$ROOT/scripts/status_vibe_stack.sh" "$@"
+    exec "$ROOT/scripts/stack_ctl.sh" status "$@"
     ;;
 
   status-hub)
@@ -161,11 +175,11 @@ case "$cmd" in
     ;;
 
   restart)
-    exec "$ROOT/scripts/restart_vibe_stack.sh" "$@"
+    exec "$ROOT/scripts/stack_ctl.sh" restart "$@"
     ;;
 
   stop)
-    exec "$ROOT/scripts/stop_vibe_stack.sh" "$@"
+    exec "$ROOT/scripts/stack_ctl.sh" down "$@"
     ;;
 
   stop-docker)

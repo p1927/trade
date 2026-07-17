@@ -554,7 +554,7 @@ print_status() {
   elif (( READY_VIBE )); then
     local vibe_ui="${VIBE_FRONTEND_PORT}"
     local vibe_api="${VIBE_BACKEND_PORT}"
-    fail "Vibe Trading   installed but not running — use: trade start daemon"
+    fail "Vibe Trading   installed but not running — use: trade up"
     warn "               (Web UI :${vibe_ui}, API :${vibe_api})"
   elif (( START_VIBE )); then
     fail "Vibe Trading   not ready (pip install -e vibetrading/ && ./scripts/ensure_vibe_frontend.sh)"
@@ -656,7 +656,7 @@ start_vibe_web() {
     log "  After .env change: trade reload env"
   else
     log "  Tip: for dev with auto-reload use: trade dev"
-    log "  Tip: for background stack use: trade start daemon"
+    log "  Tip: for background stack use: trade up"
   fi
   cd "$ROOT"
 
@@ -672,7 +672,7 @@ start_vibe_web() {
   vibe_pid=$!
 
   cleanup_with_vibe() {
-    if kill -0 "$vibe_pid" 2>/dev/null; then
+    if [[ -n "${vibe_pid:-}" ]] && kill -0 "$vibe_pid" 2>/dev/null; then
       log "Stopping Vibe (pid $vibe_pid)..."
       kill "$vibe_pid" 2>/dev/null || true
       wait "$vibe_pid" 2>/dev/null || true
@@ -681,8 +681,7 @@ start_vibe_web() {
       # shellcheck disable=SC1091
       source "$ROOT/scripts/stack_lib.sh"
       STACK_ROOT="$ROOT"
-      stack_stop_pidfile "OpenAlgo" "$(stack_log_dir)/openalgo.pid" "openalgo.*app.py"
-      stack_kill_port "$(stack_openalgo_port)"
+      stack_stop_claimed "OpenAlgo" "openalgo" "$(stack_log_dir)/openalgo.pid" "$(stack_openalgo_port)"
       stack_kill_port 8765
     fi
     cleanup
@@ -785,7 +784,7 @@ main() {
     fi
     if (( DAEMON )); then
       trap - EXIT INT TERM
-      exec bash "$ROOT/scripts/start_vibe_stack.sh"
+      exec bash "$ROOT/scripts/stack_ctl.sh" up
     fi
     start_vibe_web
   elif (( START_CLI )); then
@@ -801,7 +800,7 @@ main() {
     echo "Ready:"
     echo "  OpenAlgo  http://127.0.0.1:$(stack_openalgo_port)"
     echo ""
-    echo "Stop: ./scripts/stop_vibe_stack.sh"
+    echo "Stop: trade down"
   else
     log "Services running. Press Ctrl+C to stop OpenAlgo (SearXNG Docker keeps running)."
     wait

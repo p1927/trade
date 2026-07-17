@@ -23,23 +23,25 @@ _reload_env() {
 }
 
 _reload_app() {
+  stack_with_lock _reload_app_inner
+}
+
+_reload_app_inner() {
   echo "[stack] restarting OpenAlgo + Vibe API + Vibe UI ..."
-  local log_dir
+  local log_dir ok=0
   log_dir="$(stack_log_dir)"
   if [[ "${STACK_DEV:-0}" == "1" || "${STACK_DEV_RELOAD:-0}" == "1" ]]; then
     export STACK_DEV_RELOAD=1
     export STACK_DEV_FLASK_DEBUG=1
   fi
-  stack_stop_pidfile "Vibe UI" "$log_dir/vibe-ui.pid" "vite --port $(stack_vibe_ui_port)"
-  stack_stop_pidfile "Vibe API" "$log_dir/vibe-api.pid" "cli._legacy serve"
-  stack_stop_pidfile "OpenAlgo" "$log_dir/openalgo.pid" "openalgo.*app.py"
-  stack_kill_port "$(stack_vibe_ui_port)"
-  stack_kill_port "$(stack_vibe_api_port)"
-  stack_kill_port "$(stack_openalgo_port)"
+  stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$(stack_vibe_ui_port)"
+  stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$(stack_vibe_api_port)"
+  stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$(stack_openalgo_port)"
   stack_kill_port 8765
-  stack_start_openalgo
-  stack_start_vibe_api
-  stack_start_vibe_ui
+  stack_start_openalgo || ok=1
+  stack_start_vibe_api || ok=1
+  stack_start_vibe_ui || ok=1
+  return "$ok"
 }
 
 case "$TARGET" in
@@ -90,4 +92,8 @@ EOF
 esac
 
 stack_print_ready
-stack_status_vibe_stack || true
+stack_write_instance_manifest
+if ! stack_status_vibe_stack; then
+  echo "[stack] reload finished with failures — see log/" >&2
+  exit 1
+fi

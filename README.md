@@ -13,7 +13,8 @@ Forks live under [p1927](https://github.com/p1927) (`p1927/TradingAgents`, `p192
 
 Trade-level orchestration:
 
-- `start.sh`, `Makefile`, `trade` — run the stack (default: **Vibe Web UI** at http://localhost:5899)
+- **`./trade`** — single CLI for stack lifecycle, tunnels, webhooks, research
+- `start.sh` — foreground modes only (interactive Vibe dev, OpenAlgo-only, TradingAgents CLI)
 - `docker-compose.stack.yml`, `stack/` — SearXNG + Vibe operator templates
 - `integrations/` — OpenAlgo data, news, company research, agent patches, `nautilus_openalgo_bridge/`
 - `reports/hub/` — shared research dossiers (TradingAgents + Vibe)
@@ -26,10 +27,19 @@ Trade-level orchestration:
 git clone --recurse-submodules https://github.com/p1927/trade.git
 cd trade
 cp .env.example .env   # configure keys
-./start.sh
 
-# Or use the unified CLI
-./trade start openalgo          # OpenAlgo only
+# First-time: verify dependencies, then start the background stack
+./trade doctor
+./trade up
+
+# Or foreground dev (Vite HMR + API reload)
+./trade dev
+```
+
+Other entry points:
+
+```bash
+./trade start openalgo          # OpenAlgo only (webhook setup)
 ./trade tunnel quick            # expose webhooks via Cloudflare
 ./trade webhooks tradingview    # show URL + where to paste it in TradingView
 ```
@@ -54,9 +64,9 @@ trade/
 ├── stack/vibe/        # Vibe agent.json template + trade-stack skill
 ├── reports/hub/       # shared company research dossiers
 ├── exposure/          # Cloudflare tunnel + webhook platform URLs
-├── scripts/           # sync, setup_vibe.py, ensure_vibe_frontend.sh
-├── trade              # unified CLI (stack, tunnel, webhooks, research)
-├── start.sh           # default → Vibe Web UI at http://localhost:5899
+├── scripts/           # sync, setup_vibe.py, stack_ctl (via ./trade), ensure_vibe_frontend.sh
+├── trade              # unified CLI — stack lifecycle, tunnel, webhooks, research
+├── start.sh           # foreground modes (dev UI, OpenAlgo-only, TradingAgents CLI)
 └── Makefile
 ```
 
@@ -94,10 +104,26 @@ python scripts/setup_vibe.py --verify   # should print: OpenAlgo MCP: ok
 
 ### Run
 
+Use **`./trade`** for the background stack (OpenAlgo + Vibe API + Vite UI + hub Docker). Each service registers a **PID claim** under `log/claims/` so start/stop never stomp foreign processes.
+
 ```bash
-./start.sh                  # default → Vibe Web UI at http://localhost:5899
-./start.sh --status         # check SearXNG, OpenAlgo, Vibe, MCP readiness
+./trade doctor              # preflight — run before first start or after .env changes
+./trade up                  # start/heal background stack (recommended)
+./trade status              # health + claimed PIDs
+./trade restart             # heal — start only what's down
+./trade restart --force     # full stop + preflight + start
+./trade down                # stop stack (releases claims)
+./trade down --all          # stop stack + hub Docker + tunnels
+./trade dev                 # dev mode: auto-reload API/UI + OpenAlgo debug (foreground UI)
+./trade reload app          # restart app tier after code edits (if not using trade dev)
+```
+
+Foreground / special modes (`start.sh`):
+
+```bash
 ./start.sh --openalgo-only  # OpenAlgo only (no Vibe UI)
+./start.sh --cli            # TradingAgents research CLI
+./start.sh --status         # extended bootstrap status (TradingAgents, hub tier)
 ```
 
 | Service | URL | Role |
@@ -105,6 +131,8 @@ python scripts/setup_vibe.py --verify   # should print: OpenAlgo MCP: ok
 | Vibe Web UI | http://localhost:5899 | Chat, research plans, strategy review |
 | Vibe API | http://localhost:8899 | Backend for the UI |
 | OpenAlgo | http://127.0.0.1:5001 | Broker bridge, option chain, execution |
+
+**PID claims:** `log/claims/{openalgo,vibe-api,vibe-ui,nautilus-watch}.claim` — written on start, removed on `trade down`. Summary: `log/stack.instance`. If a port is held by an unclaimed process, `trade up` fails fast with a clear message instead of killing it.
 
 **Autonomous agents:** Hub UI at `/autonomous` — create agents in chat, confirm proposals, then bootstrap runs immediately (watch summary + first research turn in agent chat). Cards show `initializing` → `scheduler ok`, Nautilus `poll` / `expected` / `node_on`, and `watch ready` vs `position tracked`.
 
@@ -124,7 +152,7 @@ trade start nautilus-watch --agent-id aa_your_agent_id
 # NAUTILUS_AGENT_ID=aa_your_agent_id
 
 # Background stack (OpenAlgo + Vibe) also auto-starts watch when a running India agent exists:
-trade start daemon
+trade up
 ```
 
 If `.venv-nautilus` is missing, the stack falls back to the **legacy poll loop** (same OpenAlgo feed; run `./scripts/setup_nautilus.sh` for full TradingNode). Verify: `./scripts/verify_autonomous_integration.py`
@@ -137,6 +165,8 @@ If `.venv-nautilus` is missing, the stack falls back to the **legacy poll loop**
 | `Skipped MCP server 'openalgo': Connection closed` | `python scripts/setup_vibe.py --verify` then reinstall openalgo venv deps |
 | `ModuleNotFoundError: No module named 'pandas'` in MCP logs | Use `scripts/run_openalgo_mcp.sh` (regenerate via `setup_vibe.py`) |
 | UI proxy errors on first load | Backend starts after frontend — refresh after ~5s |
+| `cannot start … :port held by foreign pid` | Stop the other process, or `trade down` then `trade up` |
+| Stale lock at `log/.stack.lock.d` | No `trade` command running — `rm -rf log/.stack.lock.d` |
 | Agent can't fetch live options | Ensure OpenAlgo is running and `OPENALGO_API_KEY` is set in `.env` |
 | Agent only chats, no structured plan | Run `python scripts/setup_vibe.py --force-env` then ask with options-advisor skill; MCP tools `get_options_browse` / `get_options_trade_plan` |
 | Analytics shows fallback IV regime | `pip install -e '.[stack,options]'` for qfinindia, then `python scripts/run_options_research.py NIFTY` |
