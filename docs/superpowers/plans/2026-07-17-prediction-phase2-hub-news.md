@@ -296,7 +296,7 @@ No coef edits without walk-forward OOS gate (+3 pp). Wire hub-tagged factors onl
 
 **Prerequisite 0 is complete locally.** Phase 2 reduces to **Tasks 1, 2 (remainder), 4 (remainder), 5**.
 
-**Recommended next step:** Task 1 (`constituent_news_ingest.py`) — this is the main reason News Impact stays empty after refresh-all-50 (headlines never reach hub).
+**Recommended next step:** Task 2 remainder (hub-read-only guards) + Task 5 E2E verification after `trade reload app`.
 
 **Execution options:**
 1. **Subagent-Driven (recommended)** — one task per subagent with review gate
