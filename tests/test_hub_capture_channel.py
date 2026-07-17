@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -122,3 +122,90 @@ def test_read_captured_pcr(hub_tmp):
     pcr = read_captured_pcr("NIFTY")
     assert pcr is not None
     assert pcr > 0
+
+
+def test_watch_stale_latest_skips_capture_fallback(hub_tmp, monkeypatch):
+    from trade_integrations.hub_capture.channel import get_chain
+    from trade_integrations.hub_capture.registry import save_registry, update_entity
+    from trade_integrations.hub_capture.writers import record_chain_snapshot
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
+
+    save_registry({"entities": []})
+    update_entity("NIFTY", {"capture_enabled": True, "factor_groups": ["derivatives"]})
+    record_chain_snapshot("NIFTY", _fake_chain("NIFTY", "NFO"))
+
+    latest = hub_tmp / "NIFTY" / "options_research" / "latest.json"
+    latest.parent.mkdir(parents=True)
+    stale_as_of = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    latest.write_text(
+        json.dumps(
+            {
+                "underlying": "NIFTY",
+                "as_of": stale_as_of,
+                "chain_snapshot": _fake_chain("NIFTY", "NFO"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"n": 0}
+
+    def counting_fetch(*args, **kwargs):
+        calls["n"] += 1
+        return _fake_chain(*args, **kwargs)
+
+    monkeypatch.setenv("OPENALGO_WATCH_QUOTE_TTL_SECONDS", "5")
+    chain = get_chain(
+        "NIFTY",
+        "NFO",
+        counting_fetch,
+        strike_count=5,
+        policy=FreshnessPolicy.WATCH,
+    )
+    assert calls["n"] == 1
+    assert chain.get("source") == "mock_vendor"
+
+
+def test_watch_get_chain_second_call_within_ttl_skips_fetch(hub_tmp, monkeypatch):
+    from trade_integrations.hub_capture import channel as channel_mod
+    from trade_integrations.hub_capture.channel import channel_stats_today, get_chain
+    from trade_integrations.hub_capture.registry import save_registry, update_entity
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
+
+    save_registry({"entities": []})
+    update_entity("NIFTY", {"capture_enabled": True, "factor_groups": ["derivatives"]})
+
+    with channel_mod._l1_cache._lock:
+        channel_mod._l1_cache._entries.clear()
+
+    calls = {"n": 0}
+
+    def counting_fetch(*args, **kwargs):
+        calls["n"] += 1
+        return _fake_chain(*args, **kwargs)
+
+    monkeypatch.setenv("OPENALGO_WATCH_QUOTE_TTL_SECONDS", "30")
+
+    first = get_chain(
+        "NIFTY",
+        "NFO",
+        counting_fetch,
+        strike_count=5,
+        policy=FreshnessPolicy.WATCH,
+    )
+    assert calls["n"] == 1
+    assert first["underlying"] == "NIFTY"
+
+    second = get_chain(
+        "NIFTY",
+        "NFO",
+        counting_fetch,
+        strike_count=5,
+        policy=FreshnessPolicy.WATCH,
+    )
+    assert calls["n"] == 1
+    assert second["underlying"] == "NIFTY"
+
+    stats = channel_stats_today()
+    assert stats.get("l1_hits", 0) >= 1
+    assert stats.get("vendor_fetches", 0) == 1

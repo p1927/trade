@@ -49,7 +49,7 @@ def _load_stats() -> dict[str, Any]:
                 return payload
         except (json.JSONDecodeError, OSError):
             pass
-    return {"date": _today(), "hub_hits": 0, "vendor_fetches": 0, "by_series": {}}
+    return {"date": _today(), "hub_hits": 0, "l1_hits": 0, "vendor_fetches": 0, "by_series": {}}
 
 
 def _save_stats(stats: dict[str, Any]) -> None:
@@ -59,14 +59,20 @@ def _save_stats(stats: dict[str, Any]) -> None:
 
 
 def record_channel_stat(event: str, series: str) -> None:
-    """Increment hub_hits or vendor_fetches for today."""
+    """Increment hub_hits, l1_hits, or vendor_fetches for today."""
     stats = _load_stats()
     if stats.get("date") != _today():
-        stats = {"date": _today(), "hub_hits": 0, "vendor_fetches": 0, "by_series": {}}
-    counter_key = "hub_hits" if event == "hub_hit" else "vendor_fetches"
+        stats = {"date": _today(), "hub_hits": 0, "l1_hits": 0, "vendor_fetches": 0, "by_series": {}}
+    counter_key = {
+        "hub_hit": "hub_hits",
+        "l1_hit": "l1_hits",
+        "vendor_fetch": "vendor_fetches",
+    }.get(event, "vendor_fetches")
     stats[counter_key] = int(stats.get(counter_key) or 0) + 1
     by_series = stats.setdefault("by_series", {})
-    bucket = by_series.setdefault(series, {"hub_hits": 0, "vendor_fetches": 0})
+    bucket = by_series.setdefault(
+        series, {"hub_hits": 0, "l1_hits": 0, "vendor_fetches": 0}
+    )
     bucket[counter_key] = int(bucket.get(counter_key) or 0) + 1
     stats["updated_at"] = _now_iso()
     _save_stats(stats)
@@ -76,7 +82,7 @@ def channel_stats_today() -> dict[str, Any]:
     """Return today's hub channel hit/fetch counters."""
     stats = _load_stats()
     if stats.get("date") != _today():
-        return {"date": _today(), "hub_hits": 0, "vendor_fetches": 0, "by_series": {}}
+        return {"date": _today(), "hub_hits": 0, "l1_hits": 0, "vendor_fetches": 0, "by_series": {}}
     return stats
 
 
@@ -152,21 +158,32 @@ def _chain_from_capture_today(entity_id: str) -> dict[str, Any] | None:
     }
 
 
+def _capture_chain_fallback(
+    entity_id: str,
+    *,
+    policy: FreshnessPolicy,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Return capture parquet chain for NORMAL; WATCH skips stale capture fallback."""
+    if policy == FreshnessPolicy.WATCH:
+        return None, False
+    captured = _chain_from_capture_today(entity_id)
+    return captured, captured is not None
+
+
 def _chain_from_hub_latest(
     entity_id: str,
     *,
     max_age_seconds: float,
+    policy: FreshnessPolicy = FreshnessPolicy.NORMAL,
 ) -> tuple[dict[str, Any] | None, bool]:
     path = _options_latest_path(entity_id)
     if not path.is_file():
-        captured = _chain_from_capture_today(entity_id)
-        return captured, captured is not None
+        return _capture_chain_fallback(entity_id, policy=policy)
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        captured = _chain_from_capture_today(entity_id)
-        return captured, captured is not None
+        return _capture_chain_fallback(entity_id, policy=policy)
 
     as_of = payload.get("as_of") or payload.get("channel_patched_at")
     if as_of and max_age_seconds > 0:
@@ -174,15 +191,13 @@ def _chain_from_hub_latest(
             ts = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
             age = (datetime.now(timezone.utc) - ts).total_seconds()
             if age > max_age_seconds:
-                captured = _chain_from_capture_today(entity_id)
-                return captured, captured is not None
+                return _capture_chain_fallback(entity_id, policy=policy)
         except ValueError:
             pass
 
     chain_snap = dict(payload.get("chain_snapshot") or {})
     if not chain_snap.get("chain"):
-        captured = _chain_from_capture_today(entity_id)
-        return captured, captured is not None
+        return _capture_chain_fallback(entity_id, policy=policy)
 
     result = dict(chain_snap)
     result.setdefault("underlying", entity_id.upper())
@@ -255,10 +270,10 @@ def get_chain(
     if policy == FreshnessPolicy.WATCH:
         cached_l1 = _l1_cache.get(l1_key)
         if cached_l1 and cached_l1.get("chain"):
-            record_channel_stat("hub_hit", "derivatives_chain")
+            record_channel_stat("l1_hit", "derivatives_chain")
             return cached_l1
 
-    cached, fresh = _chain_from_hub_latest(entity, max_age_seconds=max_age)
+    cached, fresh = _chain_from_hub_latest(entity, max_age_seconds=max_age, policy=policy)
     if fresh and cached and cached.get("chain"):
         record_channel_stat("hub_hit", "derivatives_chain")
         if policy == FreshnessPolicy.WATCH:
@@ -324,7 +339,7 @@ def get_quote(
     if policy == FreshnessPolicy.WATCH:
         cached_l1 = _l1_cache.get(l1_key)
         if cached_l1 is not None:
-            record_channel_stat("hub_hit", "quotes")
+            record_channel_stat("l1_hit", "quotes")
             return cached_l1
 
     hub_quote = _quote_from_hub_latest(entity, max_age_seconds=max_age)
