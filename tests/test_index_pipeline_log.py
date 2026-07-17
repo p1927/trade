@@ -30,6 +30,10 @@ def test_factor_catalog_covers_matrix_keys():
     assert len(catalog["derivatives"]) >= 3
     assert len(catalog["pipeline_modules"]) >= 5
     assert any(row["key"] == "tapetide" for row in catalog["pipeline_modules"])
+    assert any(row["key"] == "screener_in" for row in catalog["pipeline_modules"])
+    assert "india_data_sources" in catalog
+    assert len(catalog["india_data_sources"]["sources"]) >= 6
+    assert catalog["india_data_sources"]["stage_source_order"]["peers"][0] == "screener_in"
     assert any(row["key"] == "ed_alpha" for row in catalog["pipeline_modules"])
     assert any(row["key"] == "news_per_constituent" for row in catalog["constituent_research"])
 

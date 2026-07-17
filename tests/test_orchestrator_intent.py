@@ -75,6 +75,36 @@ def test_does_not_auto_propose_when_tool_called() -> None:
     assert result is None
 
 
+def test_does_not_auto_propose_when_mcp_tool_called() -> None:
+    from trade_integrations.autonomous_agents.orchestrator_intent import maybe_auto_propose_after_orchestrator_turn
+
+    result = maybe_auto_propose_after_orchestrator_turn(
+        orchestrator_session_id="orch4b",
+        user_message="Create NIFTY agent",
+        assistant_text="Done.",
+        tools_called=["mcp_openalgo_propose_autonomous_agent"],
+    )
+    assert result is None
+
+
+def test_reliance_paper_trade_without_create_agent_phrase(agents_hub, monkeypatch) -> None:
+    from trade_integrations.autonomous_agents.orchestrator_intent import build_auto_propose_kwargs
+
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.orchestrator_intent.search_india_symbols",
+        lambda query, limit=5: [{"symbol": "RELIANCE", "exchange": "NSE"}],
+    )
+    kwargs = build_auto_propose_kwargs(
+        user_message="Reliance paper trade ₹50k intraday",
+        assistant_text="",
+        orchestrator_session_id="orch_rel",
+    )
+    assert kwargs is not None
+    assert kwargs["symbols"] == ["RELIANCE"]
+    assert kwargs["budget_inr"] == 50_000
+    assert kwargs.get("user_text") == "Reliance paper trade ₹50k intraday"
+
+
 @pytest.fixture
 def agents_hub(tmp_path, monkeypatch):
     hub = tmp_path / "hub"

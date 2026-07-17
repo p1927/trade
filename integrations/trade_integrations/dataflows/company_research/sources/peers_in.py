@@ -1,4 +1,4 @@
-"""India market peers — Tapetide profile peers with yfinance sector fallback."""
+"""India market peers — screener.in + Tapetide with yfinance/nselib fallbacks."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from .resilience import (
     run_sources,
     stage_status_from_attempts,
 )
+from .screener_in import fetch_screener_peers
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def _fetch_yfinance_peers(normalized: NormalizedTicker, *, max_peers: int) -> di
         "peers": [],
         "sector_context": {"sector": sector, "industry": industry, "source": "yfinance"},
         "primary_source": "yfinance",
-        "note": "No peer list from yfinance; sector/industry only. Set TAPETIDE_TOKEN for NSE peers.",
+        "note": "No peer list from yfinance; sector/industry only. Peers come from screener.in or Tapetide when configured.",
     }
 
 
@@ -119,21 +120,20 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
     config = get_research_config()
     max_peers = config.max_peers
     fetchers: list[tuple[str, Any]] = [
-        ("yfinance", lambda: _fetch_yfinance_peers(normalized, max_peers=max_peers)),
+        ("screener", lambda: fetch_screener_peers(normalized.base_symbol, max_peers=max_peers)),
     ]
 
+    from trade_integrations.clients.tapetide import is_active as tapetide_active
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
 
-    if tapetide_configured():
-        fetchers.insert(
-            0,
+    if tapetide_active():
+        fetchers.append(
             ("tapetide", lambda: _fetch_tapetide_peers(normalized.base_symbol, max_peers=max_peers)),
         )
 
     industry = industry_hint
     if industry:
-        fetchers.insert(
-            1 if tapetide_configured() else 0,
+        fetchers.append(
             (
                 "nselib",
                 lambda: _fetch_nselib_peers(
@@ -141,6 +141,8 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
                 ),
             ),
         )
+
+    fetchers.append(("yfinance", lambda: _fetch_yfinance_peers(normalized, max_peers=max_peers)))
 
     attempts = run_sources(fetchers)
     peers: list[dict[str, Any]] = []

@@ -82,7 +82,20 @@ def prompt_fragment_for(
     agent_id: str,
     focus: str,
     threshold: int,
+    turn_kind: str = "research",
 ) -> str:
+    if turn_kind == "bootstrap":
+        flow = _bootstrap_flow(fragment_id, agent_id=agent_id, focus=focus, threshold=threshold)
+        if isinstance(flow, str) and flow.startswith("##"):
+            return flow
+    if turn_kind == "strategy_revision":
+        return _revision_flow(fragment_id, agent_id=agent_id, focus=focus, threshold=threshold)
+    if turn_kind == "research":
+        return (
+            "## Required flow\n"
+            "Scheduled research is disabled for autonomous agents. "
+            "Do not call trade widget tools. Reply with a one-line ack only.\n"
+        )
     template = _FRAGMENTS.get(fragment_id) or _FRAGMENTS["in_options_paper"]
     return template.format(
         agent_id=agent_id,
@@ -94,18 +107,73 @@ def prompt_fragment_for(
 
 
 _BOOTSTRAP_NOTE = (
-    "**Bootstrap turn** — first run after the user confirmed this mandate on the proposal card. "
-    "Load hub research and live market data, draft an initial thesis with confidence, "
-    "confirm watch_spec via `set_agent_watch_spec` if needed, and `record_autonomous_decision`. "
-    "Ignore pre-commit orchestrator chat about other symbols/agents — trust `get_autonomous_agent_status`."
+    "**Bootstrap turn** — first run after mandate confirm. "
+    "Load hub research + live data, emit **one** trade-plan widget, set **strategy-specific** watchers, "
+    "record decision, then stop. User must approve the plan before Nautilus revisions run."
+)
+
+_REVISION_NOTE = (
+    "**Nautilus alert revision** — re-evaluate thesis after a watcher fired. "
+    "You may refresh hub research and emit **one** updated trade-plan widget if strategy changed. "
+    "Update watchers via `set_agent_watch_spec` with the new strategy name. No user confirmation needed."
+)
+
+_RESEARCH_SKIP_NOTE = (
+    "**Scheduled research skipped** — autonomous agents only revise on Nautilus watcher alerts. "
+    "Do not call trade widget tools on this turn."
 )
 
 
 def kind_note_for(fragment_id: str, turn_kind: str) -> str:
     if turn_kind == "bootstrap":
         return _BOOTSTRAP_NOTE
+    if turn_kind == "strategy_revision":
+        return _REVISION_NOTE
+    if turn_kind == "research":
+        return _RESEARCH_SKIP_NOTE
     notes = _KIND_NOTES.get(fragment_id) or _KIND_NOTES.get("in_options_paper", {})
     return notes.get(turn_kind) or notes.get("default") or "Autonomous reasoning turn."
+
+
+def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: int = 75) -> str:
+    if fragment_id == "in_equity_paper":
+        return f"""## Required flow (bootstrap — India equity)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_research_status(ticker="{focus}", asset_type="stock")` — once; proceed when overall status is `complete`
+3. **One** `get_stock_trade_widget(ticker="{focus}")` — do not call plan + widget; do not call twice
+4. Refine thesis; confidence 0–100
+5. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)` — backend derives rules from strategy
+6. `record_autonomous_decision` with HOLD/SKIP/ENTER — **stop**; user approves plan next"""
+    if fragment_id == "in_options_paper":
+        return f"""## Required flow (bootstrap — India options)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_research_status(ticker="{focus}", asset_type="options")` — once; proceed when overall status is `complete`
+3. **One** `get_options_trade_widget(ticker="{focus}")` — do not call twice
+4. Refine thesis; confidence 0–100
+5. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)` — strategy-specific Nautilus rules
+6. `record_autonomous_decision` — **stop**; user approves plan next"""
+    if fragment_id.startswith("us_"):
+        return f"""## Required flow (bootstrap — US)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")`
+3. Refine thesis; confidence 0–100
+4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)`
+5. `record_autonomous_decision` — **stop**"""
+    return _FRAGMENTS.get(fragment_id) or _FRAGMENTS["in_options_paper"]
+
+
+def _revision_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: int) -> str:
+    if fragment_id == "in_equity_paper":
+        widget = f'`get_stock_trade_widget(ticker="{focus}")`'
+    elif fragment_id == "in_options_paper":
+        widget = f'`get_options_trade_widget(ticker="{focus}")`'
+    else:
+        widget = "live quote tools"
+    return f"""## Required flow (Nautilus revision)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. Re-evaluate alert + prior thesis
+3. If strategy changed: {widget} once + `set_agent_watch_spec(strategy=<new_strategy>)`
+4. `record_autonomous_decision` with REVISE | EXIT | HOLD | ENTER (confidence ≥ {threshold} for entry)"""
 
 
 def session_header_for(profile_market: str, *, mode: str = "paper") -> str:

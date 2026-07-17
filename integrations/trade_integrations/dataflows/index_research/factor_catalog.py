@@ -260,28 +260,28 @@ CONSTITUENT_RESEARCH_STAGES: tuple[dict[str, Any], ...] = (
         "key": "identity_in",
         "label": "Constituent identity & last price",
         "category": "constituent_research",
-        "source": "OpenAlgo · Tapetide · yfinance · BSE/NSE",
+        "source": "OpenAlgo · yfinance · dalal BSE · nselib · Tapetide (optional)",
         "role": "Sector, industry, LTP — feeds weighting and sector breadth",
     },
     {
         "key": "peers_in",
         "label": "Peer set",
         "category": "constituent_research",
-        "source": "Tapetide · yfinance",
+        "source": "screener.in · Tapetide (optional) · nselib · yfinance",
         "role": "Peer context for news fetch and relative sentiment",
     },
     {
         "key": "calendar_in",
         "label": "Corporate calendar",
         "category": "constituent_research",
-        "source": "Tapetide · BSE · NSE · yfinance",
+        "source": "BSE · yfinance earnings · nselib · dalal BSE · Tapetide (if empty)",
         "role": "Results, AGM, ex-div — drives earnings_bump and scenario table",
     },
     {
         "key": "fundamentals_in",
         "label": "Fundamentals",
         "category": "constituent_research",
-        "source": "Tapetide · yfinance · Screener",
+        "source": "dalal BSE · yfinance · nselib · Tapetide (optional)",
         "role": "P/E, margins, debt — context for attribution (not Ridge feature today)",
     },
     {
@@ -494,10 +494,17 @@ PIPELINE_MODULES: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "tapetide",
-        "label": "Tapetide (India corporate data)",
+        "label": "Tapetide MCP (optional enrichment)",
         "category": "pipeline",
-        "source": "TAPETIDE_TOKEN · TAPETIDE_MCP_URL",
-        "role": "Identity, calendar, peers, fundamentals for NIFTY constituents",
+        "source": "TAPETIDE_TOKEN · TAPETIDE_ENABLED · TAPETIDE_BATCH · TAPETIDE_CACHE_MINUTES",
+        "role": "Optional identity/calendar/peers/fundamentals; skipped in Nifty batch by default",
+    },
+    {
+        "key": "screener_in",
+        "label": "Screener.in peers (screenercli)",
+        "category": "pipeline",
+        "source": "screenercli (pip · research extra)",
+        "role": "Primary peer-comparison source replacing Tapetide peer lists",
     },
     {
         "key": "ed_alpha",
@@ -549,6 +556,10 @@ MODEL_OUTPUTS: tuple[dict[str, Any], ...] = (
 
 def list_factor_catalog() -> dict[str, Any]:
     """Return grouped factor catalog for UI and API."""
+    from trade_integrations.dataflows.company_research.source_registry import (
+        list_india_company_data_sources,
+    )
+
     return {
         "macro_and_technical": list(NIFTY_FACTOR_CATALOG),
         "bottom_up": list(BOTTOM_UP_SIGNALS),
@@ -558,5 +569,6 @@ def list_factor_catalog() -> dict[str, Any]:
         "derivatives": list(DERIVATIVES_DATA),
         "pipeline_modules": list(PIPELINE_MODULES),
         "model_layers": list(MODEL_OUTPUTS),
+        "india_data_sources": list_india_company_data_sources(),
         "total_macro_keys": len(NIFTY_FACTOR_CATALOG),
     }

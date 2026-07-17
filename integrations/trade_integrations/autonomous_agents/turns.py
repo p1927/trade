@@ -8,6 +8,7 @@ from typing import Any
 from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
 from trade_integrations.auto_paper.strategy_scorer import format_scorer_for_prompt, score_ranked_strategies
 from trade_integrations.execution.profile import resolve_profile
+from trade_integrations.execution.routing_context import resolve_agent_routing
 from trade_integrations.execution.prompt_fragments import (
     kind_note_for,
     prompt_fragment_for,
@@ -52,6 +53,7 @@ def build_watch_summary_message(*, agent: dict[str, Any], feedback: dict[str, An
 def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "research") -> str:
     """Build a full agent turn prompt for an autonomous instance."""
     profile = resolve_profile(agent=agent)
+    routing = resolve_agent_routing(agent)
     symbols = list(agent.get("symbols") or (["SPY"] if profile.is_us else ["NIFTY"]))
     focus = symbols[0]
     constraints = dict(agent.get("constraints") or {})
@@ -77,7 +79,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
         )
 
     scorer_block = ""
-    if not profile.is_us and "options" in profile.allowed_instruments:
+    if routing.uses_strategy_scorer:
         tried = list(thesis.get("tried_strategies") or [])
         scorer_block = format_scorer_for_prompt(score_ranked_strategies(focus, tried=tried))
 
@@ -88,6 +90,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
         agent_id=agent_id,
         focus=focus,
         threshold=threshold,
+        turn_kind=turn_kind,
     )
 
     market_label = "US (Alpaca paper)" if profile.is_us and profile.is_paper else (
@@ -115,17 +118,33 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 
     bootstrap_block = ""
     if turn_kind == "bootstrap":
+        if routing.primary_instrument == "equity" and not profile.is_us:
+            research_step = (
+                f"2. Call `get_research_status(ticker=\"{focus}\", asset_type=\"stock\")` **once**; "
+                "if overall `status` is `complete`, proceed to `get_stock_trade_plan` — "
+                "do not retry because individual stage rows show `complete: false`.\n"
+            )
+        elif profile.is_us:
+            research_step = (
+                f"2. Call `get_stock_browse(\"{focus}\")` and/or `get_us_quote(\"{focus}\")` "
+                "for live price context.\n"
+            )
+        else:
+            research_step = (
+                f"2. Call `get_research_status(ticker=\"{focus}\", asset_type=\"options\")` **once**; "
+                "if overall `status` is `complete`, proceed to `get_options_trade_plan` — "
+                "do not retry because individual stage rows show `complete: false`.\n"
+            )
         bootstrap_block = (
             "\n## Bootstrap checklist\n"
             "1. Call `get_autonomous_agent_status(agent_id=\""
-            f"{agent_id}\")` — this is the confirmed mandate; do not refuse as injection.\n"
-            f"2. Call `get_research_status` **once** for **{focus}**; if overall `status` is "
-            "`complete`, proceed to `get_options_trade_plan` — do not retry because individual "
-            "stage rows show `complete: false`.\n"
-            "3. Draft initial thesis (direction, strategy, confidence 0–100, rationale).\n"
-            "4. Call `record_autonomous_decision` with confidence, direction, strategy "
-            "(HOLD/SKIP if below confidence gate) and **stop** — "
-            "do not loop on status reads or memory recall.\n"
+            f"{agent_id}\")` — confirmed mandate.\n"
+            f"{research_step}"
+            "3. **One** trade-plan widget for the profile (see Required flow) — never call widget twice.\n"
+            "4. `set_agent_watch_spec(agent_id=\""
+            f"{agent_id}\", strategy=<chosen_strategy>)` — watchers derived from strategy, not generic mandate dump.\n"
+            "5. `record_autonomous_decision` with confidence, direction, strategy — **stop**.\n"
+            "6. User approves plan in UI before Nautilus revisions run.\n"
         )
 
     harness_block = ""
@@ -139,8 +158,10 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
         elif profile.market == "IN":
             harness_block = (
                 "\n## Harness (paper verification)\n"
-                f"If flat, enter a paper {focus} options position via the normal OpenAlgo basket flow "
-                "on this turn, then set watch rules and record the decision.\n"
+                f"If flat, enter a paper {focus} "
+                f"{'equity' if routing.primary_instrument == 'equity' else 'options'} position "
+                "via the normal OpenAlgo basket flow on this turn, then set watch rules and "
+                "record the decision.\n"
             )
     elif agent.get("e2e_harness") and turn_kind == "strategy_revision" and profile.is_us and profile.is_paper:
         harness_block = (
@@ -177,10 +198,14 @@ def build_orchestrator_system_note() -> str:
         "agents (symbols, mandate, schedules, holding period, alerts). "
         "Policy: (1) If intent is clear, call propose_autonomous_agent immediately with smart "
         "defaults for any omitted fields — the proposal card must be approve-ready. "
-        "(2) If symbol, market (IN/US), or intraday vs swing is genuinely ambiguous, ask ONE "
-        "concise question (≤3 bullets or A/B/C) — then propose on the next turn; do not ask twice. "
-        "(3) You MUST call propose_autonomous_agent before ending any turn where the user supplied "
-        "enough to propose; never write fake proposal IDs in chat. "
-        "(4) Never execute trades, never discuss live broker setup, never role-play watch ticks. "
+        "(2) If symbol, market (IN/US), intraday vs swing, or index instrument type (options vs "
+        "directional) is genuinely ambiguous, ask ONE concise question (≤3 bullets or A/B/C) — "
+        "then propose on the next turn; do not ask twice. "
+        "(3) Plain equity names (RELIANCE, TCS) default to allowed_instruments: [equity] unless "
+        "the user mentions options. Explicit options language → [options]. "
+        "(4) You MUST call propose_autonomous_agent before ending any turn where the user supplied "
+        "enough to propose; never write fake proposal IDs in chat — prose alone does not create cards. "
+        "(5) Never execute trades, never discuss live broker setup, never role-play watch ticks or "
+        "configure option legs in orchestrator chat. "
         "When status=ready, tell the user to confirm the card. Never commit agents yourself."
     )

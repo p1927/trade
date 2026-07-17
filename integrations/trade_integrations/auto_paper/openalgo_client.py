@@ -3,34 +3,53 @@
 from __future__ import annotations
 
 import logging
-import os
-from datetime import date
+import time
 from typing import Any
 
-import requests
+from trade_integrations.env import ensure_openalgo_env
 
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_STATUS = {502, 503, 504}
 
 
 class OpenAlgoClient:
     def __init__(self, host: str | None = None, api_key: str | None = None) -> None:
-        self.host = (host or os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001")).rstrip("/")
-        self.api_key = (api_key or os.getenv("OPENALGO_API_KEY", "")).strip()
+        cfg = ensure_openalgo_env()
+        self.host = (host or cfg["host"]).rstrip("/")
+        self.api_key = (api_key or cfg["api_key"]).strip()
         if not self.api_key:
             raise RuntimeError("OPENALGO_API_KEY not configured")
 
     def _post(self, path: str, payload: dict[str, Any], *, timeout: int = 30) -> dict[str, Any]:
+        import requests
+
         url = f"{self.host}/api/v1/{path.lstrip('/')}"
-        try:
-            response = requests.post(url, json=payload, timeout=timeout)
-            body = response.json() if response.content else {}
-        except requests.RequestException as exc:
-            logger.warning("OpenAlgo %s failed: %s", path, exc)
-            raise RuntimeError(f"OpenAlgo request failed: {exc}") from exc
-        if not response.ok:
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                response = requests.post(url, json=payload, timeout=timeout)
+                body = response.json() if response.content else {}
+            except requests.RequestException as exc:
+                last_exc = exc
+                if attempt == 0:
+                    time.sleep(1.0)
+                    continue
+                logger.warning("OpenAlgo %s failed: %s", path, exc)
+                raise RuntimeError(f"OpenAlgo request failed: {exc}") from exc
+            if response.ok:
+                return body if isinstance(body, dict) else {"data": body}
             message = body.get("message") if isinstance(body, dict) else str(body)
+            code = body.get("error_code") if isinstance(body, dict) else None
+            if response.status_code in _TRANSIENT_STATUS and attempt == 0:
+                time.sleep(1.0)
+                continue
+            if code == "invalid_api_key":
+                raise RuntimeError(message or "Invalid OpenAlgo API key")
             raise RuntimeError(message or f"OpenAlgo {path} HTTP {response.status_code}")
-        return body if isinstance(body, dict) else {"data": body}
+        if last_exc is not None:
+            raise RuntimeError(f"OpenAlgo request failed: {last_exc}") from last_exc
+        raise RuntimeError(f"OpenAlgo {path} failed")
 
     def analyzer_status(self) -> bool:
         body = self._post("analyzer", {"apikey": self.api_key}, timeout=15)
@@ -94,6 +113,8 @@ class OpenAlgoClient:
         return []
 
     def is_trading_day(self) -> bool:
+        from datetime import date
+
         today = date.today().isoformat()
         body = self._post(
             "market/timings",

@@ -11,6 +11,7 @@ FlattenPolicy = Literal["session_close", "manual", "on_thesis_break", "on_max_lo
 ProductType = Literal["MIS", "NRML", "auto"]
 RevisionPolicy = Literal["re_rank_on_alert", "scheduled_only", "user_guidance_only"]
 StrategyStyle = Literal["event_vol", "directional", "income", "user_defined"]
+PrimaryInstrument = Literal["options", "equity"]
 
 
 @dataclass
@@ -319,6 +320,33 @@ def _infer_allowed_instruments(
     index_symbols = {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "BANKEX", "MIDCPNIFTY"}
     sym0 = (symbols[0] if symbols else "").upper()
 
+    equity_only_phrases = (
+        "stocks only",
+        "stock only",
+        "equity only",
+        "shares only",
+        "no options",
+        "not options",
+        "without options",
+        "no option",
+        "not option",
+    )
+    if any(p in text for p in equity_only_phrases):
+        return ["equity"]
+
+    options_phrases = (
+        "iron condor",
+        "straddle",
+        "strangle",
+        "option chain",
+        "credit spread",
+        "debit spread",
+        "sell otm",
+        "buy wings",
+    )
+    if any(p in text for p in options_phrases):
+        return ["options"]
+
     equity_signals = (
         "equity",
         "stock",
@@ -328,23 +356,12 @@ def _infer_allowed_instruments(
         "cnc",
         "cash market",
         "underlying stock",
-        "underlying",
-        "not options",
-        "no options",
-        "without options",
-        "not option",
     )
     options_signals = (
         "options",
         "option chain",
-        "option",
         "calls",
         "puts",
-        "straddle",
-        "strangle",
-        "iron condor",
-        "credit spread",
-        "debit spread",
     )
 
     has_equity = any(w in text for w in equity_signals)
@@ -361,8 +378,63 @@ def _infer_allowed_instruments(
     if has_options and not has_equity:
         return ["options"]
     if has_options and has_equity:
-        return ["options", "equity"]
+        if sym0 in index_symbols and not is_us:
+            return ["options"]
+        if is_us:
+            return ["equity"]
+        return ["equity"]
     return None
+
+
+def primary_instrument_from_mandate(
+    mc: MandateConfig,
+    *,
+    market: str,
+    mandate_text: str = "",
+    symbols: list[str] | None = None,
+) -> PrimaryInstrument:
+    """Choose primary instrument class when mandate lists both options and equity."""
+    allowed = {str(x).strip().lower() for x in (mc.allowed_instruments or []) if str(x).strip()}
+    if allowed == {"equity"} or (allowed and "options" not in allowed):
+        return "equity"
+    if allowed == {"options"} or (allowed and "equity" not in allowed):
+        return "options"
+
+    text = mandate_text.lower()
+    index_symbols = {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "BANKEX", "MIDCPNIFTY"}
+    sym0 = ((symbols or ["NIFTY"])[0] or "NIFTY").upper()
+
+    equity_only_phrases = (
+        "stocks only",
+        "stock only",
+        "equity only",
+        "shares only",
+        "no options",
+        "not options",
+        "without options",
+        "no option",
+    )
+    if any(p in text for p in equity_only_phrases):
+        return "equity"
+
+    options_phrases = (
+        "iron condor",
+        "straddle",
+        "strangle",
+        "option chain",
+        "credit spread",
+        "debit spread",
+    )
+    if any(p in text for p in options_phrases):
+        return "options"
+
+    if sym0 in index_symbols and market == "IN":
+        return "options"
+    if market == "US" and sym0 not in index_symbols:
+        return "equity"
+    if "equity" in allowed and "options" in allowed:
+        return "equity" if sym0 not in index_symbols else "options"
+    return "options"
 
 
 def resolve_mandate_config(
@@ -421,11 +493,81 @@ def resolve_mandate_config(
     if not cfg.watch_spec.get("rules"):
         cfg.watch_spec = to_watch_spec(cfg, symbols=sym_list)
 
+    explicit_from_stored: list[str] | None = None
+    if isinstance(stored, dict):
+        raw = stored.get("allowed_instruments")
+        if isinstance(raw, list) and raw:
+            explicit_from_stored = [str(x) for x in raw]
+
     inferred = _infer_allowed_instruments(mandate_text, sym_list, is_us=is_us)
     if inferred is not None:
         cfg.allowed_instruments = inferred
+    else:
+        resolved = resolve_allowed_instruments(
+            sym_list,
+            mandate_text,
+            execution_market="US" if is_us else "IN",
+            explicit=explicit_from_stored,
+        )
+        if resolved is not None:
+            cfg.allowed_instruments = resolved
 
     return cfg
+
+
+_INDEX_SYMBOLS = frozenset(
+    {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "BANKEX", "MIDCPNIFTY", "NIFTY50"}
+)
+
+
+def resolve_allowed_instruments(
+    symbols: list[str],
+    mandate_text: str = "",
+    *,
+    execution_market: str | None = None,
+    explicit: list[str] | None = None,
+) -> list[str] | None:
+    """Return allowed_instruments or None when index instrument type is ambiguous."""
+    if explicit:
+        normalized = [str(x).strip().lower() for x in explicit if str(x).strip()]
+        if normalized:
+            return normalized
+
+    sym_list = [str(s).strip().upper() for s in symbols if str(s).strip()]
+    sym0 = sym_list[0] if sym_list else ""
+    is_us = str(execution_market or "").upper() == "US"
+
+    inferred = _infer_allowed_instruments(mandate_text, sym_list, is_us=is_us)
+    if inferred is not None:
+        return inferred
+
+    if is_us:
+        return ["equity"]
+
+    if sym0 in _INDEX_SYMBOLS:
+        text = mandate_text.lower()
+        if any(w in text for w in ("equity", "stock", "shares", "etf", "not options", "no options")):
+            return ["equity"]
+        if any(
+            w in text
+            for w in (
+                "option",
+                "options",
+                "straddle",
+                "strangle",
+                "iron condor",
+                "intraday",
+                "event vol",
+                "directional",
+            )
+        ):
+            return ["options"]
+        return None
+
+    if sym0:
+        return ["equity"]
+
+    return ["equity"]
 
 
 def mandate_config_from_agent(agent: dict[str, Any]) -> MandateConfig:

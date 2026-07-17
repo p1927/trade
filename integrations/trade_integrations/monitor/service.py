@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from trade_integrations.context.hub import load_options_research_json, save_options_research
+from trade_integrations.context.hub import load_options_research_json, load_stock_research_json, save_options_research
 from trade_integrations.dataflows.options_research.aggregator import run_options_research
 from trade_integrations.monitor.config import is_monitor_enabled
 from trade_integrations.monitor.execution_ledger import (
@@ -25,15 +25,24 @@ class MonitorService:
     def is_enabled() -> bool:
         return is_monitor_enabled()
 
-    def evaluate_ticker(self, ticker: str) -> StalenessReport | None:
+    def evaluate_ticker(self, ticker: str, *, kind: str = "auto") -> StalenessReport | None:
         """Load hub doc, fetch live spot, and score staleness."""
         if not is_monitor_enabled():
             return None
 
-        doc = load_options_research_json(ticker)
+        symbol = ticker.strip().upper()
+        resolved_kind = kind
+        if resolved_kind not in ("stock", "options"):
+            resolved_kind = "options"
+
+        if resolved_kind == "stock":
+            doc = load_stock_research_json(symbol)
+        else:
+            doc = load_options_research_json(symbol)
+
         if doc is None:
             return StalenessReport(
-                ticker=ticker.upper(),
+                ticker=symbol,
                 status="broken",
                 as_of=None,
                 live_spot=None,
@@ -44,8 +53,16 @@ class MonitorService:
                 suggested_action="refresh",
             )
 
-        live_spot = fetch_underlying_ltp(ticker)
+        live_spot = fetch_underlying_ltp(symbol)
         return evaluate_plan_staleness(doc, live_spot=live_spot)
+
+    def evaluate_ticker_for_agent(self, ticker: str, agent: dict) -> StalenessReport | None:
+        """Instrument-aware staleness for autonomous agents."""
+        from trade_integrations.execution.routing_context import resolve_agent_routing
+
+        routing = resolve_agent_routing(agent)
+        kind = "stock" if routing.primary_instrument == "equity" else "options"
+        return self.evaluate_ticker(ticker, kind=kind)
 
     def evaluate_doc(self, doc) -> StalenessReport:
         """Score a research doc without loading from hub."""

@@ -71,3 +71,98 @@ class TestOrchestratorProposeFlow:
         old = load_proposal(first["proposal_id"])
         assert old is not None
         assert old.get("superseded") is True
+
+    def test_commit_latest_after_repropose(self, agents_hub, monkeypatch):
+        from trade_integrations.autonomous_agents import proposals
+        from trade_integrations.autonomous_agents.store import load_proposal
+
+        monkeypatch.setattr(
+            proposals,
+            "build_stack_health",
+            lambda: {"vibe_scheduler": "ok"},
+        )
+        monkeypatch.setattr(
+            "trade_integrations.auto_paper.mcp_actions.start_auto_paper",
+            lambda **k: None,
+        )
+
+        orch_sid = "orch_flow3"
+        first = proposals.propose_autonomous_agent(
+            symbols=["NIFTY"],
+            name="First",
+            mandate="Paper",
+            orchestrator_session_id=orch_sid,
+        )
+        second = proposals.propose_autonomous_agent(
+            symbols=["BANKNIFTY"],
+            name="Second",
+            mandate="Paper",
+            orchestrator_session_id=orch_sid,
+        )
+        first_id = first["proposal_id"]
+        second_id = second["proposal_id"]
+
+        class FakeSession:
+            def __init__(self, sid):
+                self.session_id = sid
+
+        class FakeStore:
+            def __init__(self):
+                from src.session.models import Session
+                from src.session.orchestrator_profile import SESSION_KIND_ORCHESTRATOR
+
+                self.session = Session(
+                    session_id=orch_sid,
+                    title="autonomous:orchestrator",
+                    config={"session_kind": SESSION_KIND_ORCHESTRATOR},
+                )
+
+            def update_session(self, session):
+                self.session = session
+
+            def append_message(self, msg):
+                pass
+
+        class FakeSvc:
+            def __init__(self):
+                self.store = FakeStore()
+
+            def get_session(self, sid):
+                from src.session.models import Session
+                from src.session.orchestrator_profile import SESSION_KIND_ORCHESTRATOR
+
+                if sid != orch_sid:
+                    return None
+                return Session(
+                    session_id=orch_sid,
+                    title="autonomous:orchestrator",
+                    config={"session_kind": SESSION_KIND_ORCHESTRATOR},
+                )
+
+            def create_session(self, title="", config=None):
+                return FakeSession("should_not_create")
+
+            class Bus:
+                def emit(self, *a, **k):
+                    pass
+
+            event_bus = Bus()
+
+        svc = FakeSvc()
+
+        with pytest.raises(ValueError, match="superseded"):
+            proposals.commit_autonomous_agent(
+                proposal_id=first_id,
+                consent_ack=True,
+                session_service=svc,
+                orchestrator_session_id=orch_sid,
+            )
+
+        result = proposals.commit_autonomous_agent(
+            proposal_id=second_id,
+            consent_ack=True,
+            session_service=svc,
+            orchestrator_session_id=orch_sid,
+        )
+        assert result["status"] == "ok"
+        assert load_proposal(first_id).get("superseded") is True

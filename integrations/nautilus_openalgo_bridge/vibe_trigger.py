@@ -325,6 +325,14 @@ async def dispatch_watch_alert(
     if agent.get("streaming"):
         return {"status": "skipped", "reason": "turn_in_flight"}
 
+    try:
+        from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+        if not is_plan_approved(agent):
+            return {"status": "skipped", "reason": "plan_not_approved"}
+    except ImportError:
+        pass
+
     prompt = build_alert_turn_prompt(agent=agent, alert=alert, quotes=quotes)
     caller = make_vibe_message_client(config)
 

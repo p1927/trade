@@ -27,6 +27,7 @@ class TestOrchestratorContext:
         prompt = builder.build_system_prompt()
         assert "autonomous-agent orchestrator" in prompt.lower()
         assert "propose_autonomous_agent" in prompt
+        assert "user sees no card" in prompt.lower() or "sees nothing" in prompt.lower()
         assert "Orchestrator workflow (preloaded)" in prompt
 
     def test_non_orchestrator_prompt_excludes_preloaded_skill(self):

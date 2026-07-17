@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+from contextvars import ContextVar
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -13,10 +17,21 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MCP_URL = "https://mcp.tapetide.com/mcp"
 REQUEST_TIMEOUT = 45
+PROFILE_CACHE_TTL_SEC = 15 * 60
+DISK_CACHE_DEFAULT_MINUTES = 60
+
+_profile_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_events_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_rate_limited_until: float = 0.0
+_batch_research: ContextVar[bool] = ContextVar("tapetide_batch_research", default=False)
 
 
 class TapetideNotConfiguredError(RuntimeError):
     """Raised when TAPETIDE_TOKEN is missing."""
+
+
+class TapetideRateLimitError(RuntimeError):
+    """Raised when Tapetide free-tier or hourly quota is exhausted."""
 
 
 def _token() -> str:
@@ -28,6 +43,23 @@ def _token() -> str:
     return token
 
 
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def is_enabled() -> bool:
+    """False when TAPETIDE_ENABLED=0|false|no|off."""
+    return _env_flag("TAPETIDE_ENABLED", default=True)
+
+
+def is_batch_enabled() -> bool:
+    """True when TAPETIDE_BATCH=1|true — allow Tapetide during Nifty batch refresh."""
+    return _env_flag("TAPETIDE_BATCH", default=False)
+
+
 def is_configured() -> bool:
     try:
         _token()
@@ -36,8 +68,124 @@ def is_configured() -> bool:
         return False
 
 
+def is_rate_limited() -> bool:
+    return time.monotonic() < _rate_limited_until
+
+
+def set_batch_research(active: bool) -> None:
+    """Mark the current context as Nifty/batch research (honours TAPETIDE_BATCH)."""
+    _batch_research.set(active)
+
+
+def is_batch_research() -> bool:
+    return _batch_research.get()
+
+
+def is_active(*, batch: bool | None = None) -> bool:
+    """Tapetide may be called when enabled, configured, not rate-limited, and batch policy allows."""
+    if not is_enabled() or not is_configured():
+        return False
+    in_batch = is_batch_research() if batch is None else batch
+    if in_batch and not is_batch_enabled():
+        return False
+    if is_rate_limited():
+        return False
+    return True
+
+
 def _mcp_url() -> str:
     return os.getenv("TAPETIDE_MCP_URL", DEFAULT_MCP_URL).rstrip("/")
+
+
+def _disk_cache_dir() -> Path:
+    from trade_integrations.context.hub import get_hub_dir
+
+    return get_hub_dir() / "_data" / "tapetide_cache"
+
+
+def _disk_cache_minutes() -> int:
+    try:
+        return max(0, int(os.getenv("TAPETIDE_CACHE_MINUTES", str(DISK_CACHE_DEFAULT_MINUTES))))
+    except ValueError:
+        return DISK_CACHE_DEFAULT_MINUTES
+
+
+def _disk_cache_path(tool: str, symbol: str) -> Path:
+    safe = symbol.strip().upper().replace("/", "_")
+    return _disk_cache_dir() / f"{safe}_{tool}.json"
+
+
+def _load_disk_cache(tool: str, symbol: str) -> dict[str, Any] | None:
+    minutes = _disk_cache_minutes()
+    if minutes <= 0:
+        return None
+    path = _disk_cache_path(tool, symbol)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    saved_at = payload.get("saved_at")
+    data = payload.get("data")
+    if not isinstance(data, dict) or not saved_at:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(saved_at))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+    except ValueError:
+        return None
+    if age_min > minutes:
+        return None
+    return data
+
+
+def _save_disk_cache(tool: str, symbol: str, data: dict[str, Any]) -> None:
+    minutes = _disk_cache_minutes()
+    if minutes <= 0 or not data:
+        return
+    path = _disk_cache_path(tool, symbol)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"saved_at": datetime.now(timezone.utc).isoformat(), "data": data},
+                indent=2,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.debug("Tapetide disk cache write failed for %s: %s", symbol, exc)
+
+
+def is_rate_limit_message(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "rate limit",
+            "free tier limit",
+            "quota exceeded",
+            "too many requests",
+        )
+    )
+
+
+def _mark_rate_limited(text: str = "") -> None:
+    global _rate_limited_until
+    _rate_limited_until = time.monotonic() + 3600.0
+    logger.warning("Tapetide rate limit detected; pausing MCP calls for 1 hour. %s", text[:120])
+
+
+def _check_response_rate_limit(response: requests.Response, combined_text: str = "") -> None:
+    if response.status_code == 429 or is_rate_limit_message(combined_text):
+        _mark_rate_limited(combined_text)
+        raise TapetideRateLimitError(combined_text or "Tapetide rate limit exceeded")
 
 
 def _parse_mcp_body(text: str) -> dict[str, Any]:
@@ -58,6 +206,9 @@ def _parse_mcp_body(text: str) -> dict[str, Any]:
 
 def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
     """Invoke one Tapetide MCP tool and return parsed result content."""
+    if is_rate_limited():
+        raise TapetideRateLimitError("Tapetide calls paused after rate limit (retry in ~1 hour).")
+
     response = requests.post(
         _mcp_url(),
         headers={
@@ -75,13 +226,16 @@ def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
     )
     if response.status_code == 401:
         raise TapetideNotConfiguredError("Tapetide token rejected (401). Generate a new token.")
+    if response.status_code == 429:
+        _check_response_rate_limit(response, response.text)
     response.raise_for_status()
     payload = _parse_mcp_body(response.text)
     if "error" in payload:
         err = payload["error"]
-        if isinstance(err, dict):
-            raise RuntimeError(err.get("message") or err.get("error_description") or str(err))
-        raise RuntimeError(str(err))
+        message = err.get("message") or err.get("error_description") or str(err) if isinstance(err, dict) else str(err)
+        if is_rate_limit_message(message):
+            _check_response_rate_limit(response, message)
+        raise RuntimeError(message)
     result = payload.get("result") or {}
     content = result.get("content") or []
     texts: list[str] = []
@@ -89,26 +243,82 @@ def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         if isinstance(block, dict) and block.get("type") == "text":
             texts.append(str(block.get("text") or ""))
     combined = "\n".join(t for t in texts if t).strip()
+    if is_rate_limit_message(combined):
+        _check_response_rate_limit(response, combined)
     if not combined:
         return result
     try:
-        return json.loads(combined)
+        parsed = json.loads(combined)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"raw": parsed}
     except json.JSONDecodeError:
         return {"raw_text": combined}
 
 
+def _cache_get(cache: dict[str, tuple[float, dict[str, Any]]], key: str) -> dict[str, Any] | None:
+    row = cache.get(key)
+    if not row:
+        return None
+    expires_at, payload = row
+    if time.monotonic() > expires_at:
+        cache.pop(key, None)
+        return None
+    return payload
+
+
+def _cache_set(cache: dict[str, tuple[float, dict[str, Any]]], key: str, payload: dict[str, Any]) -> None:
+    cache[key] = (time.monotonic() + PROFILE_CACHE_TTL_SEC, payload)
+
+
 def get_company_profile(symbol: str, *, include_peers: bool = True) -> dict[str, Any]:
-    include = ["peers"] if include_peers else []
+    symbol_upper = symbol.upper()
+    # One MCP profile call per symbol (always include peers); callers ignore peers when unused.
+    cache_key = f"{symbol_upper}:profile"
+    cached = _cache_get(_profile_cache, cache_key)
+    if cached is not None:
+        return cached
+
+    disk_cached = _load_disk_cache("profile_peers", symbol_upper)
+    if disk_cached is not None:
+        _cache_set(_profile_cache, cache_key, disk_cached)
+        return disk_cached
+
     data = call_tool(
         "get_company_profile",
-        {"symbol": symbol.upper(), "include": include},
+        {"symbol": symbol_upper, "include": ["peers"]},
     )
-    return data if isinstance(data, dict) else {"raw": data}
+    result = data if isinstance(data, dict) else {"raw": data}
+    if result.get("raw_text") and is_rate_limit_message(str(result["raw_text"])):
+        _mark_rate_limited(str(result["raw_text"]))
+        raise TapetideRateLimitError(str(result["raw_text"]))
+
+    _cache_set(_profile_cache, cache_key, result)
+    _save_disk_cache("profile_peers", symbol_upper, result)
+    return result
 
 
 def get_stock_events(symbol: str, *, limit: int = 20) -> dict[str, Any]:
+    symbol_upper = symbol.upper()
+    cache_key = f"{symbol_upper}:limit={limit}"
+    cached = _cache_get(_events_cache, cache_key)
+    if cached is not None:
+        return cached
+
+    disk_cached = _load_disk_cache("events", symbol_upper)
+    if disk_cached is not None:
+        _cache_set(_events_cache, cache_key, disk_cached)
+        return disk_cached
+
     data = call_tool(
         "get_stock_events",
-        {"symbol": symbol.upper(), "limit": limit},
+        {"symbol": symbol_upper, "limit": limit},
     )
-    return data if isinstance(data, dict) else {"raw": data}
+    result = data if isinstance(data, dict) else {"raw": data}
+    if result.get("raw_text") and is_rate_limit_message(str(result["raw_text"])):
+        _mark_rate_limited(str(result["raw_text"]))
+        raise TapetideRateLimitError(str(result["raw_text"]))
+
+    _cache_set(_events_cache, cache_key, result)
+    _save_disk_cache("events", symbol_upper, result)
+    return result

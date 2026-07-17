@@ -75,6 +75,8 @@ def _strategy_variants(doc: StockResearchDoc) -> dict[str, dict[str, Any]]:
         name = row.get("name")
         if not name or name in variants:
             continue
+        action = str(row.get("action", "BUY")).upper()
+        is_hold = name == "hold_cash" or action == "HOLD"
         rec = {
             "name": name,
             "score": row.get("score"),
@@ -83,9 +85,11 @@ def _strategy_variants(doc: StockResearchDoc) -> dict[str, dict[str, Any]]:
             "action": row.get("action"),
             "quantity": row.get("quantity"),
             "product": row.get("product"),
-            "target": row.get("target"),
-            "stop": row.get("stop"),
-            "legs": [
+            "target": None if is_hold else row.get("target"),
+            "stop": None if is_hold else row.get("stop"),
+            "legs": []
+            if is_hold
+            else [
                 {
                     "symbol": sym,
                     "side": row.get("action", "BUY"),
@@ -117,7 +121,9 @@ def _strategy_variants(doc: StockResearchDoc) -> dict[str, dict[str, Any]]:
                 "charge_source": charges.get("charge_source"),
             },
             "payoff_over_time": {"samples": _pnl_over_time_samples(row.get("payoff_over_time"))},
-            "implementation_steps": _stock_execute_steps(sym, row),
+            "implementation_steps": _stock_execute_steps(sym, row)
+            if not is_hold
+            else [{"step": 1, "action": "hold", "description": "Remain in cash"}],
         }
     return variants
 
@@ -136,6 +142,12 @@ def build_stock_trade_widget_from_doc(
     variants = _strategy_variants(doc)
     agent_recommended = rec.get("name") or (ranked[0].get("name") if ranked else "")
 
+    def _scenario_ok(sc: dict[str, Any]) -> bool:
+        trigger = str(sc.get("trigger") or "").lower()
+        bad = ("tapetide", "free tier", "rate limit", "quota")
+        return not any(b in trigger for b in bad)
+
+    filtered_scenarios = [s for s in (doc.scenarios or [])[:6] if _scenario_ok(s)]
     payload = {
         "type": "trade_plan.widget",
         "widget_id": widget_id,
@@ -152,7 +164,7 @@ def build_stock_trade_widget_from_doc(
         ),
         "prediction": doc.prediction or {},
         "events": doc.events[:12],
-        "scenarios": doc.scenarios[:6],
+        "scenarios": filtered_scenarios,
         "agent_recommended_strategy": agent_recommended,
         "strategy_variants": variants,
         "ranked_strategies": [

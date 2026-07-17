@@ -191,6 +191,50 @@ def _fetch_news_calendar_events(
     return events
 
 
+def _fetch_yfinance_earnings_events(normalized: NormalizedTicker) -> list[dict[str, Any]]:
+    """Lightweight earnings date from yfinance ticker.calendar."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        return []
+
+    try:
+        calendar = yf.Ticker(normalized.yfinance_symbol).calendar
+    except Exception as exc:
+        logger.info("yfinance calendar failed for %s: %s", normalized.base_symbol, exc)
+        return []
+
+    earnings_date: Any = None
+    if isinstance(calendar, dict):
+        earnings_date = calendar.get("Earnings Date")
+    elif calendar is not None and hasattr(calendar, "get"):
+        earnings_date = calendar.get("Earnings Date")
+
+    if earnings_date is None:
+        return []
+
+    if isinstance(earnings_date, (list, tuple)):
+        if not earnings_date:
+            return []
+        earnings_date = earnings_date[0]
+
+    event_date = _to_iso_date(earnings_date)
+    if not event_date:
+        return []
+
+    return [
+        {
+            "symbol": normalized.base_symbol.upper(),
+            "company": "",
+            "type": "earnings",
+            "purpose": "Earnings date",
+            "description": f"Earnings date (yfinance): {event_date}",
+            "date": event_date,
+            "source": "yfinance:calendar",
+        }
+    ]
+
+
 def _fetch_dalal_bse_calendar(symbol: str) -> list[dict[str, Any]]:
     scrip = resolve_bse_scrip_code(symbol)
     if not scrip:
@@ -277,6 +321,9 @@ def fetch_calendar_in(
             return events
         return _fetch_news_calendar_events(symbol, start=start, end=end)
 
+    def _yfinance_earnings() -> list[dict[str, Any]]:
+        return _fetch_yfinance_earnings_events(normalized)
+
     def _tapetide() -> list[dict[str, Any]]:
         return fetch_tapetide_calendar_events(symbol)
 
@@ -286,18 +333,42 @@ def fetch_calendar_in(
     source_jobs = [
         ("nselib", _nselib),
         ("bse_india", _bse_india),
+        ("yfinance", _yfinance_earnings),
         ("moneycontrol_rss", _rss),
     ]
-    from trade_integrations.clients.tapetide import is_configured as tapetide_configured
-
-    if tapetide_configured():
-        source_jobs.insert(1, ("tapetide", _tapetide))
     if resolve_bse_scrip_code(symbol):
         source_jobs.append(("dalal_bse", _dalal_bse))
-    else:
-        pass
 
     attempts = [_fetch_calendar_source(name, fn) for name, fn in source_jobs]
+
+    raw_events: list[dict[str, Any]] = []
+    for attempt in attempts:
+        if attempt.status == "ok":
+            raw_events.extend(attempt.data.get("events") or [])
+
+    from trade_integrations.clients.tapetide import (
+        is_active as tapetide_active,
+        is_batch_enabled,
+        is_batch_research,
+        is_configured,
+        is_enabled,
+    )
+
+    if tapetide_active() and not raw_events:
+        tapetide_attempt = _fetch_calendar_source("tapetide", _tapetide)
+        attempts.append(tapetide_attempt)
+        if tapetide_attempt.status == "ok":
+            raw_events.extend(tapetide_attempt.data.get("events") or [])
+    elif is_configured() and is_enabled() and is_batch_research() and not is_batch_enabled():
+        attempts.append(
+            SourceAttempt(
+                name="tapetide",
+                status="skipped",
+                error="tapetide_batch_disabled",
+                remediation=remediation_for("tapetide_batch_disabled"),
+            )
+        )
+
     if not resolve_bse_scrip_code(symbol):
         attempts.append(
             SourceAttempt(
@@ -307,11 +378,6 @@ def fetch_calendar_in(
                 remediation=remediation_for("bse_code_missing"),
             )
         )
-
-    raw_events: list[dict[str, Any]] = []
-    for attempt in attempts:
-        if attempt.status == "ok":
-            raw_events.extend(attempt.data.get("events") or [])
 
     events = merge_calendar_events(raw_events)
     ok_sources = [a.name for a in attempts if a.status == "ok"]

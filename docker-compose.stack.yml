@@ -4,11 +4,11 @@ services:
     container_name: tradingagents-searxng
     restart: unless-stopped
     ports:
-      - "5555:8080"
+      - "5556:8080"
     volumes:
       - ./stack/searxng:/etc/searxng:rw
     environment:
-      - SEARXNG_BASE_URL=http://localhost:5555/
+      - SEARXNG_BASE_URL=http://localhost:5556/
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
@@ -20,20 +20,32 @@ services:
     image: timescale/timescaledb:latest-pg16
     container_name: trade-hub-timescaledb
     restart: unless-stopped
+    init: true
+    # Allow checkpoint flush on graceful stop; avoid docker kill during WAL replay.
+    stop_grace_period: 120s
+    shm_size: 256mb
     ports:
       - "5433:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: tradehub
       POSTGRES_DB: trade_hub
+      # Optional overrides (defaults in stack/timescaledb/postgresql.custom.conf)
+      TIMESCALE_SHARED_BUFFERS: ${TIMESCALE_SHARED_BUFFERS:-}
+      TIMESCALE_MAX_WAL_SIZE: ${TIMESCALE_MAX_WAL_SIZE:-}
     volumes:
+      # Named volume (not bind mount) — avoids Docker Desktop bind-mount I/O thrash.
       - trade_hub_timescale_data:/var/lib/postgresql/data
+      - ./stack/timescaledb/entrypoint-wrapper.sh:/stack/timescaledb/entrypoint-wrapper.sh:ro
+      - ./stack/timescaledb/postgresql.custom.conf:/stack/timescaledb/postgresql.custom.conf:ro
+    entrypoint: ["/bin/bash", "/stack/timescaledb/entrypoint-wrapper.sh"]
+    command: ["postgres"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d trade_hub"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 12
+      start_period: 120s
 
   redis:
     image: redis:7-alpine
@@ -53,4 +65,6 @@ services:
 
 volumes:
   trade_hub_timescale_data:
+    name: trade_hub_timescale_data
   trade_hub_redis_data:
+    name: trade_hub_redis_data

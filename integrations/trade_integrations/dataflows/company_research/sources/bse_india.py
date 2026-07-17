@@ -56,6 +56,13 @@ def _in_window(event_date: str, *, start: date, end: date) -> bool:
     return start <= parsed <= end
 
 
+def _announcement_matches_calendar(row: dict[str, Any]) -> bool:
+    title = str(row.get("NEWSSUB") or row.get("HEADLINE") or "").strip()
+    more = str(row.get("MORE") or "").strip()
+    text = f"{title} {more}".strip()
+    return bool(text and _CALENDAR_KEYWORDS.search(text))
+
+
 def fetch_bse_calendar_events(
     symbol: str,
     *,
@@ -102,10 +109,10 @@ def fetch_bse_calendar_events(
             for row in payload.get("Table") or []:
                 if not isinstance(row, dict):
                     continue
-                title = str(row.get("NEWSSUB") or row.get("HEADLINE") or "").strip()
-                if not title:
+                if not _announcement_matches_calendar(row):
                     continue
-                if not (_CALENDAR_KEYWORDS.search(title)):
+                title = str(row.get("NEWSSUB") or row.get("HEADLINE") or row.get("MORE") or "").strip()
+                if not title:
                     continue
                 event_date = _parse_bse_date(row.get("NEWS_DT") or row.get("DT_TM"))
                 if not _in_window(event_date, start=start, end=end):
@@ -130,6 +137,9 @@ def fetch_bse_calendar_events(
 
             for row in actions:
                 if not isinstance(row, dict):
+                    continue
+                row_scrip = str(row.get("scrip_code") or row.get("SCRIP_CD") or "").strip()
+                if row_scrip and row_scrip != str(scrip).strip():
                     continue
                 purpose = str(row.get("Purpose") or "").strip()
                 if not purpose:

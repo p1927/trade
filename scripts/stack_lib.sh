@@ -41,6 +41,9 @@ stack_load_env() {
     source "$env_file"
     set +a
   fi
+  # shellcheck disable=SC1091
+  source "$root/scripts/stack_docker_lib.sh"
+  stack_ensure_docker_path
 }
 
 stack_openalgo_port() {
@@ -83,7 +86,11 @@ stack_wait_for_url() {
 
 stack_pid_alive() {
   local pid="${1:-}"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  local stat
+  stat="$(ps -p "$pid" -o stat= 2>/dev/null | tr -d ' ' || true)"
+  [[ -n "$stat" && "$stat" != *Z* ]]
 }
 
 stack_read_pid() {
@@ -343,8 +350,10 @@ stack_kill_port() {
 }
 
 stack_stop_vibe_stack() {
-  local log_dir api_port ui_port openalgo_port
+  local log_dir api_port ui_port openalgo_port stop_docker
   log_dir="$(stack_log_dir)"
+  stop_docker="${STACK_STOP_DOCKER:-1}"
+  stop_docker="$(_stack_lc "$stop_docker")"
   api_port="$(stack_vibe_api_port)"
   ui_port="$(stack_vibe_ui_port)"
   openalgo_port="$(stack_openalgo_port)"
@@ -360,8 +369,16 @@ stack_stop_vibe_stack() {
   stack_kill_port "$openalgo_port"
   stack_kill_port 8765
 
+  if [[ "$stop_docker" == "1" || "$stop_docker" == "true" || "$stop_docker" == "yes" || "$stop_docker" == "on" ]]; then
+    # shellcheck disable=SC1091
+    source "$(stack_root)/scripts/stack_docker_lib.sh"
+    stack_hub_docker_stop_graceful
+  fi
+
   sleep 1
 }
+
+_stack_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 stack_start_vibe_stack() {
   stack_ensure_vibe_stack

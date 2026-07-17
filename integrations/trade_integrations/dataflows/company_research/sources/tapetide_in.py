@@ -7,32 +7,32 @@ from typing import Any
 
 from trade_integrations.clients.tapetide import (
     TapetideNotConfiguredError,
+    TapetideRateLimitError,
     get_company_profile,
     get_stock_events,
-    is_configured,
+    is_active,
+    is_rate_limit_message,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _dig(data: dict[str, Any], *keys: str) -> Any:
-    cur: Any = data
-    for key in keys:
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(key)
-    return cur
-
-
 def fetch_tapetide_identity(symbol: str) -> dict[str, Any] | None:
-    if not is_configured():
+    if not is_active():
         return None
     try:
         profile = get_company_profile(symbol, include_peers=False)
     except TapetideNotConfiguredError:
         raise
+    except TapetideRateLimitError as exc:
+        logger.warning("Tapetide identity rate-limited for %s: %s", symbol, exc)
+        return None
     except Exception as exc:
         logger.warning("Tapetide identity failed for %s: %s", symbol, exc)
+        return None
+
+    if profile.get("raw_text") and is_rate_limit_message(str(profile["raw_text"])):
+        logger.warning("Tapetide identity rate-limited for %s", symbol)
         return None
 
     quote = profile.get("quote") or profile.get("current_quote") or {}
@@ -54,14 +54,21 @@ def fetch_tapetide_identity(symbol: str) -> dict[str, Any] | None:
 
 
 def fetch_tapetide_calendar_events(symbol: str) -> list[dict[str, Any]]:
-    if not is_configured():
+    if not is_active():
         return []
     try:
         payload = get_stock_events(symbol)
     except TapetideNotConfiguredError:
         raise
+    except TapetideRateLimitError as exc:
+        logger.warning("Tapetide events rate-limited for %s: %s", symbol, exc)
+        return []
     except Exception as exc:
         logger.warning("Tapetide events failed for %s: %s", symbol, exc)
+        return []
+
+    if payload.get("raw_text") and is_rate_limit_message(str(payload["raw_text"])):
+        logger.warning("Tapetide events rate-limited for %s", symbol)
         return []
 
     events: list[dict[str, Any]] = []
@@ -98,18 +105,15 @@ def fetch_tapetide_calendar_events(symbol: str) -> list[dict[str, Any]]:
         raw_text = str(payload.get("raw_text"))
         if any(
             marker in raw_text.lower()
-            for marker in ("mcp error", "validation error", "invalid input", "unauthorized")
+            for marker in (
+                "mcp error",
+                "validation error",
+                "invalid input",
+                "unauthorized",
+                "rate limit",
+                "free tier limit",
+                "quota exceeded",
+            )
         ):
             return []
-        events.append(
-            {
-                "symbol": symbol_upper,
-                "company": "",
-                "type": "tapetide_raw",
-                "purpose": "stock_events",
-                "description": str(payload.get("raw_text"))[:500],
-                "date": "",
-                "source": "tapetide:get_stock_events",
-            }
-        )
     return events

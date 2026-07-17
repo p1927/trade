@@ -87,6 +87,25 @@ Each scheduled ping:
 - ❌ Pending: consolidate all agent JSON I/O across bridge + store (M024 — design change).
 - ❌ Pending: persist halt state to Redis with new schema (M012 — infra/design).
 
+### Amendment I — Mandatory tick rules (2026-07-17) **NON-NEGOTIABLE**
+
+> User rule: every scheduler tick **must** document findings and **must** run a Fixer subagent that plans, then commits when very confident.
+
+| # | Mandatory | What happens if skipped |
+|---|-----------|-------------------------|
+| 1 | **Every issue → Issue log** in `.superpowers/master-todo.md` (Reviewer + any parent finding) | Tick **invalid** — do not mark tick complete |
+| 2 | **Two parallel Task subagents** every tick (Reviewer + Fixer) | Tick **invalid** |
+| 3 | **Fixer plans with superpowers** (systematic-debugging, TDD, verification-before-completion) before coding | Tick **invalid** |
+| 4 | **Fixer commits + pushes** each shipped fix (`master todo:`) when **≥80% confident** | Tick **invalid** if fixable open issues existed and none shipped without reason |
+| 5 | **Parent writes subagent output into master-todo** (not chat-only) | Tick **invalid** |
+| 6 | Major design → **`pending`** only; no commit | Required |
+
+**Fixer subagent is Planner + Executor:** read open issues → write fix strategy → implement targeted diff → test → Bugbot → commit → mark `fixed`.
+
+**Also mandatory:** log failing tests from suite runs as issues (e.g. M034+ with test name + brief cause).
+
+Cursor rule: `.cursor/rules/master-todo-ticker.mdc` enforces this on every tick ping.
+
 ### Amendment B — Timer model (2026-07-17)
 
 Simple background ping every 20m → **this chat executes the workflow**. No cron, launchd, or headless CLI agent. The ping is a reminder; **the agent turn is the work**.
@@ -115,6 +134,8 @@ Simple background ping every 20m → **this chat executes the workflow**. No cro
 | Did not launch parallel subagents | Every tick: Reviewer + Fixer Task subagents in parallel (Amendment G) |
 | Broad refactor shipped as “fix” | Amendment H: targeted only; major design → **pending** |
 | Fixer did not commit/push | Fixer must `master todo:` commit + push each shipped fix before reporting done |
+| Issues only in chat, not in master-todo | Amendment I #1 + #5: **mandatory** Issue log update |
+| Skipped Fixer subagent | Amendment I #2: **mandatory** parallel Fixer every tick |
 
 ---
 
@@ -135,20 +156,21 @@ Simple background ping every 20m → **this chat executes the workflow**. No cro
 | Fix scope | **Targeted** only — one issue per commit; major design → **pending** |
 | Regression | Targeted pytest before/after every fix; add regression test when bug could recur |
 | Subagent skills | **superpowers** for investigate, plan, TDD, verify, Bugbot before commit |
+| **Ticker rules** | Amendment **I** + `.cursor/rules/master-todo-ticker.mdc` — **mandatory** every ping |
 | Commit format | `master todo: <short imperative description>` — **one logical fix per commit** for easy revert |
 
 ---
 
 ## Per-tick workflow (20-minute window — **two parallel subagents**)
 
-**Step 0 (mandatory):** Parent re-reads **Prompts 1–2**, **Operating amendments** (A, F, G, **H**), **Confirmed setup**.
+**Step 0 (mandatory):** Parent re-reads **Prompts 1–2**, **Operating amendments** (A, F, G, H, **I**), **Confirmed setup**, **`.cursor/rules/master-todo-ticker.mdc`**.
 
-**Step 1 — Launch in parallel (same turn):**
+**Step 1 — Launch in parallel (same turn) — BOTH REQUIRED:**
 
-- **Subagent Reviewer:** Superpowers for investigation. Continue from **Review cursor**; line-by-line sweep; log issues with **targeted fix plan**; mark major design items as `pending` in plan column; **no commits**.
-- **Subagent Fixer:** Superpowers for debug → plan → TDD → verify → Bugbot. Pick open issues (critical first). **Targeted fix only**; pytest green before/after; **`master todo:` commit + push** when done; major design → **`pending`**, no commit.
+- **Subagent Reviewer (mandatory):** Superpowers investigation. Line-by-line from **Review cursor**. **Every finding → Issue log row** in master-todo format. No commits.
+- **Subagent Fixer (mandatory):** Superpowers plan → strategy for open issues → **targeted implement** when ≥80% confident → pytest → Bugbot → **`master todo:` commit + push** → mark `fixed`. Major design → **`pending`**, no commit. **Must attempt fixes** when confident issues exist.
 
-**Step 2 — Parent merge:** Update master-todo (issue log, cursor, package status, tick log, commit audit).
+**Step 2 — Parent merge (mandatory):** Write ALL subagent findings into `.superpowers/master-todo.md` — issue log, cursor, package status, tick log, commit audit. **Chat-only report without doc update = failed tick.**
 
 **Step 3 — Stop after tick 21** (scheduler stop).
 

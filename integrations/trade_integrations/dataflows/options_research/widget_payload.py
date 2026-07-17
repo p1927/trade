@@ -32,21 +32,7 @@ def _sample_spot(row: dict[str, Any]) -> float | None:
     return None
 
 
-def _resolve_doc_spot(doc: OptionsResearchDoc) -> float | None:
-    for val in (
-        doc.spot,
-        doc.chain_snapshot.get("underlying_ltp"),
-        doc.browse_summary.get("spot"),
-    ):
-        if val is None:
-            continue
-        try:
-            f = float(val)
-            if f > 0:
-                return f
-        except (TypeError, ValueError):
-            continue
-    return None
+from trade_integrations.monitor.doc_spot import resolve_doc_spot as _resolve_doc_spot
 
 
 def _payoff_samples(payoff: dict[str, Any] | None) -> list[dict[str, Any]]:

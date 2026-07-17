@@ -23,6 +23,7 @@ from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.macro_global import fetch_global_macro_snapshot
 from trade_integrations.dataflows.index_research.factor_store import upsert_daily_factors
 from trade_integrations.dataflows.index_research.models import ConstituentSignal, IndexResearchDoc, PredictionRecord
+from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.index_research.prediction_ledger import (
     append_prediction,
     build_prediction_metadata,
@@ -132,6 +133,34 @@ def _heavyweight_news(signals: list[ConstituentSignal]) -> bool:
     return any(sym in joined for sym in top_symbols)
 
 
+def _coerce_utc(value: datetime | str | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _concurrent_full_run_saved(
+    *,
+    disk_as_of_at_start: datetime | None,
+    existing: IndexResearchDoc | None,
+) -> bool:
+    """True when a full analysis saved to hub while this light refresh was running."""
+    if existing is None or disk_as_of_at_start is None:
+        return False
+    existing_as_of = _coerce_utc(getattr(existing, "as_of", None))
+    if existing_as_of is None or existing_as_of <= disk_as_of_at_start:
+        return False
+    pipeline_log = list(getattr(existing, "pipeline_log", None) or [])
+    return any(row.get("stage") == "done" for row in pipeline_log if isinstance(row, dict))
+
+
 def run_index_light_refresh(
     ticker: str = "NIFTY",
     *,
@@ -142,6 +171,7 @@ def run_index_light_refresh(
     sym = ticker.strip().upper()
     horizon = resolve_horizon(horizon_days)
     cached_doc = load_index_research_json(sym)
+    disk_as_of_at_start = _coerce_utc(getattr(cached_doc, "as_of", None) if cached_doc else None)
 
     previous_factors: dict[str, Any] = {}
     if cached_doc and cached_doc.global_factors:
@@ -221,11 +251,37 @@ def run_index_light_refresh(
     news_hit = bool(headlines) or _heavyweight_news(signals)
 
     if not force and cached_doc is not None and not macro_changed and not news_hit:
-        return cached_doc, "unchanged"
+        # Re-read hub so a concurrent full analysis save is not masked by the
+        # cached_doc snapshot taken at the start of this refresh.
+        fresh = load_index_research_json(sym)
+        return fresh or cached_doc, "unchanged"
 
     reason = "material_news" if news_hit else "macro_drift" if macro_changed else "forced"
+    log = PipelineLogger()
+    log.info(
+        "light_refresh",
+        f"Light refresh — horizon {horizon.days}d (profile {horizon.name}), trigger: {reason}",
+        ticker=sym,
+        reason=reason,
+    )
+    log.info(
+        "constituents",
+        f"Using {len(signals)} cached constituent signals (momentum on {momentum_count})",
+        count=len(signals),
+        momentum_count=momentum_count,
+    )
+    log.info(
+        "macro",
+        f"Macro snapshot: {len(macro_factors)} factors ({macro_stage.status})",
+        status=macro_stage.status,
+    )
 
     spot = _fetch_spot(sym)
+    log.info(
+        "spot",
+        f"Spot: {spot:.2f}" if spot > 0 else "Spot unavailable",
+        spot=spot,
+    )
     regime = classify_regime(
         india_vix=macro_factors.get("india_vix"),
         nifty_trend_20d=_nifty_trend_20d(),
@@ -241,6 +297,15 @@ def run_index_light_refresh(
         if spot > 0
         else {}
     )
+    if prediction:
+        ret = prediction.get("expected_return_pct")
+        ret_text = f"{ret:+.2f}%" if isinstance(ret, (int, float)) else "n/a"
+        log.info(
+            "predict",
+            f"Forecast: {prediction.get('view')} {ret_text}",
+            view=prediction.get("view"),
+            expected_return_pct=ret,
+        )
     attributed = attribute_constituents(signals, horizon_days=horizon.days)
     rollup = rollup_attribution(attributed)
     if prediction:
@@ -352,9 +417,23 @@ def run_index_light_refresh(
     except Exception as exc:
         logger.debug("light_refresh news_impact skipped: %s", exc)
 
+    refresh_at = _stage_now()
+    existing_on_disk = load_index_research_json(sym)
+    if _concurrent_full_run_saved(
+        disk_as_of_at_start=disk_as_of_at_start,
+        existing=existing_on_disk,
+    ):
+        logger.info(
+            "light_refresh skipped save for %s — full analysis saved during refresh",
+            sym,
+        )
+        return existing_on_disk, "superseded_by_full_run"
+
+    log.info("done", "Light refresh complete — saving hub artifact", reason=reason)
+
     doc = IndexResearchDoc(
         ticker=sym,
-        as_of=_stage_now(),
+        as_of=refresh_at,
         horizon={"name": horizon.name, "days": horizon.days},
         spot=spot or None,
         prediction=prediction,
@@ -384,6 +463,7 @@ def run_index_light_refresh(
         news_impact=news_impact,
         event_overlay=(prediction or {}).get("event_overlay") or {},
         news_shock_calibration=_overlay_summary(),
+        pipeline_log=log.to_dicts(),
         stages=stages,
     )
     save_index_research(doc)

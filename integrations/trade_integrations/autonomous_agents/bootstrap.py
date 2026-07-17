@@ -12,30 +12,38 @@ logger = logging.getLogger(__name__)
 
 
 def finalize_bootstrap_if_ready(agent_id: str) -> bool:
-    """Mark bootstrap done once the first decision is recorded."""
+    """Move to plan approval once bootstrap decision + watch_spec are recorded."""
     agent = get_agent(agent_id)
     if not agent or str(agent.get("bootstrap_status")) != "running":
         return False
     if not agent.get("last_decision"):
         return False
 
-    agent["bootstrap_status"] = "done"
-    agent["bootstrap_completed_at"] = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    agent["bootstrap_status"] = "awaiting_plan_approval"
+    agent["plan_approval_required"] = True
+    agent["bootstrap_completed_at"] = now
     agent.pop("bootstrap_error", None)
     save_agent(agent)
-
+    logger.info("agent %s awaiting plan approval", agent_id)
     try:
         import sys
-        from pathlib import Path
 
-        agent_src = Path(__file__).resolve().parents[3] / "vibetrading" / "agent"
-        if agent_src.is_dir() and str(agent_src) not in sys.path:
-            sys.path.insert(0, str(agent_src))
-        from src.scheduled_research.autonomous_agent_jobs import schedule_first_research_after_bootstrap
-
-        schedule_first_research_after_bootstrap(agent_id)
+        host = sys.modules.get("api_server") or sys.modules.get("agent.api_server")
+        svc = host._get_session_service() if host else None
+        session_id = str(agent.get("vibe_session_id") or "")
+        if svc and session_id:
+            svc.event_bus.emit(
+                session_id,
+                "autonomous_agent.plan_ready",
+                {
+                    "agent_id": agent_id,
+                    "bootstrap_status": "awaiting_plan_approval",
+                    "strategy": (agent.get("thesis") or {}).get("strategy"),
+                },
+            )
     except Exception as exc:
-        logger.debug("schedule first research after bootstrap failed for %s: %s", agent_id, exc)
+        logger.debug("plan_ready emit failed for %s: %s", agent_id, exc)
     return True
 
 
@@ -63,4 +71,4 @@ async def bootstrap_agent(agent_id: str) -> None:
         save_agent(latest)
         return
 
-    # bootstrap_status stays "running" until record_autonomous_decision + session finalize
+    # bootstrap_status stays "running" until record_autonomous_decision + finalize

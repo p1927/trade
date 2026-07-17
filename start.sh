@@ -17,6 +17,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STACK_ROOT="$ROOT"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/stack_docker_lib.sh"
 AGENTS_DIR="$ROOT/tradingagents"
 OPENALGO_DIR="$ROOT/openalgo"
 VIBE_DIR="$ROOT/vibetrading"
@@ -72,7 +75,7 @@ Usage: ./start.sh [options]
   --daemon          Start OpenAlgo + Vibe in background and exit
 
 Services:
-  SearXNG         http://localhost:5555        (Docker, news search)
+  SearXNG         http://localhost:5556        (Docker, news search)
   OpenAlgo        http://127.0.0.1:5001         (trading + broker UI)
   Vibe Trading    http://localhost:5899         (chat UI, default)
   Vibe API        http://localhost:8899         (backend)
@@ -93,6 +96,9 @@ log()  { echo "[stack] $*"; }
 ok()   { echo "  ✓ $*"; }
 warn() { echo "  ⚠ $*"; }
 fail() { echo "  ✗ $*" >&2; }
+
+# macOS /bin/bash is 3.2 — no ${var,,} lowercase expansion.
+_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 cleanup() {
   if [[ -f "$PID_FILE" ]]; then
@@ -156,7 +162,7 @@ http_ok() {
 }
 
 searxng_url() {
-  echo "${SEARXNG_BASE_URL:-http://localhost:5555}"
+  echo "${SEARXNG_BASE_URL:-http://localhost:5556}"
 }
 
 openalgo_url() {
@@ -307,7 +313,7 @@ check_searxng() {
 
 timescale_enabled() {
   local flag="${TIMESCALE_ENABLED:-}"
-  flag="${flag,,}"
+  flag="$(_lc "$flag")"
   [[ "$flag" == "1" || "$flag" == "true" || "$flag" == "yes" || "$flag" == "on" ]]
 }
 
@@ -360,18 +366,34 @@ ensure_timescale() {
   fi
 
   log "Starting TimescaleDB via Docker ..."
-  docker compose -f "$COMPOSE_FILE" up -d timescaledb
+  stack_timescale_start_container
 
-  local i
-  for i in $(seq 1 30); do
-    if probe_timescale; then
+  if stack_timescale_wait_ready probe_timescale 60 2; then
+    READY_TIMESCALE=1
+    return 0
+  fi
+
+  if stack_timescale_logs_indicate_stale_pid; then
+    warn "TimescaleDB has a stale postmaster.pid — attempting auto-repair ..."
+    if stack_timescale_repair_stale_pid; then
+      stack_timescale_start_container
+      if stack_timescale_wait_ready probe_timescale 60 2; then
+        ok "TimescaleDB recovered after stale postmaster.pid repair"
+        READY_TIMESCALE=1
+        return 0
+      fi
+    fi
+  elif stack_timescale_logs_indicate_recovery; then
+    warn "TimescaleDB still replaying WAL — extending wait (do not docker kill) ..."
+    if stack_timescale_wait_ready probe_timescale 180 2; then
+      ok "TimescaleDB ready after WAL recovery"
       READY_TIMESCALE=1
       return 0
     fi
-    sleep 2
-  done
+  fi
 
   fail "TimescaleDB did not become ready — check: docker compose -f docker-compose.stack.yml logs timescaledb"
+  fail "  repair: ./scripts/repair_timescale.sh"
   return 1
 }
 
@@ -391,7 +413,7 @@ redis_enabled() {
     return 1
   fi
   local watch="${NAUTILUS_WATCH_ENABLE:-1}"
-  watch="${watch,,}"
+  watch="$(_lc "$watch")"
   if [[ "$watch" == "0" || "$watch" == "false" || "$watch" == "no" || "$watch" == "off" ]]; then
     [[ -n "${NAUTILUS_REDIS_URL:-}" ]]
     return $?

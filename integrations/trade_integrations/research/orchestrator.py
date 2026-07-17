@@ -63,6 +63,23 @@ def _missing_required_fields(doc: Any, required: tuple[str, ...]) -> list[str]:
     return missing
 
 
+def _hub_doc_needs_data_refresh(doc: Any, kind: ResearchKind) -> bool:
+    """True when cached hub doc lacks trustworthy spot or chain failed."""
+    from trade_integrations.monitor.doc_spot import resolve_doc_spot
+
+    if doc is None:
+        return True
+    kind_str = "stock" if kind == ResearchKind.STOCK else "options"
+    if resolve_doc_spot(doc, kind=kind_str) is None:  # type: ignore[arg-type]
+        return True
+    if kind == ResearchKind.OPTIONS:
+        data = _doc_to_check_dict(doc)
+        for stage in data.get("stages") or []:
+            if isinstance(stage, dict) and stage.get("stage") == "chain" and stage.get("status") == "error":
+                return True
+    return False
+
+
 @dataclass
 class ResearchResult:
     status: ResearchStatus
@@ -200,10 +217,13 @@ def ensure_research_complete(
     use_cache = _is_hub_fresh(sym, resolved_kind, refresh=refresh)
     if use_cache:
         doc = _load_hub_doc(sym, resolved_kind)
-        if doc is not None:
+        if doc is not None and _hub_doc_needs_data_refresh(doc, resolved_kind):
+            use_cache = False
+            doc = None
+        elif doc is not None:
             stages_run.append(f"{contract.hub_subdir}:cache")
 
-    if doc is None or refresh:
+    if doc is None or refresh or not use_cache:
         try:
             from trade_integrations.hub_capture.channel import resolve_registered_entity, warm_entity_channel
 
@@ -233,6 +253,12 @@ def ensure_research_complete(
             )
 
     missing = _missing_required_fields(doc, contract.required_widget_fields)
+    from trade_integrations.monitor.doc_spot import resolve_doc_spot
+
+    kind_str = "stock" if resolved_kind == ResearchKind.STOCK else "options"
+    if resolve_doc_spot(doc, kind=kind_str) is None:  # type: ignore[arg-type]
+        if "spot" not in missing:
+            missing.append("spot")
 
     if debate_pending:
         status: ResearchStatus = "partial"
@@ -313,6 +339,21 @@ def get_research_status(
         }
         for s in contract.stages
     ]
+    staleness_block: dict[str, Any] = {}
+    try:
+        from trade_integrations.monitor.service import MonitorService
+
+        report = MonitorService().evaluate_ticker(sym, kind=resolved.value)
+        if report is not None:
+            staleness_block = {
+                "staleness_status": report.status,
+                "staleness_reasons": list(report.reasons or []),
+                "live_spot": report.live_spot,
+                "plan_spot": report.plan_spot,
+                "suggested_action": report.suggested_action,
+            }
+    except Exception:
+        pass
     return {
         "ticker": sym,
         "kind": resolved.value,
@@ -321,4 +362,5 @@ def get_research_status(
         "missing_fields": result.missing,
         "debate_pending": result.debate_pending,
         "error": result.error,
+        **staleness_block,
     }

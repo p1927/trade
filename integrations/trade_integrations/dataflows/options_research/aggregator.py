@@ -114,6 +114,16 @@ def run_options_research(
         strike_count=config.strike_count,
     )
     _apply_stage(doc, chain_result)
+    if (doc.spot is None or float(doc.spot or 0) <= 0) and chain_result.status == "error":
+        try:
+            from trade_integrations.monitor.live_quotes import fetch_underlying_ltp
+
+            fallback_spot = fetch_underlying_ltp(instrument.display_symbol)
+            if fallback_spot is not None and float(fallback_spot) > 0:
+                doc.spot = float(fallback_spot)
+                doc.meta.setdefault("spot_provenance", "quote_fallback")
+        except Exception:
+            pass
     doc.browse_summary = build_browse_summary(doc.chain_snapshot)
 
     prediction_signals: dict = {}

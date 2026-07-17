@@ -12,6 +12,7 @@ from trade_integrations.context.hub import (
     load_company_research_json,
     save_company_research,
 )
+from trade_integrations.clients.tapetide import set_batch_research
 from trade_integrations.dataflows.company_research.aggregator import run_company_research
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
@@ -137,7 +138,11 @@ def _research_one(
         doc = load_company_research_json(symbol)
         if doc is not None:
             return doc
-    doc = run_company_research(symbol, lookahead_days=lookahead_days)
+    set_batch_research(True)
+    try:
+        doc = run_company_research(symbol, lookahead_days=lookahead_days)
+    finally:
+        set_batch_research(False)
     save_company_research(doc)
     return doc
 

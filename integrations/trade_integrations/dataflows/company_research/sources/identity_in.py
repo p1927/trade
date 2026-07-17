@@ -170,11 +170,10 @@ def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
     except (VendorNotConfiguredError, ImportError):
         pass
 
-    from trade_integrations.clients.tapetide import is_configured as tapetide_configured
+    from trade_integrations.clients.tapetide import is_active as tapetide_active
 
-    if tapetide_configured():
-        insert_at = 1 if any(name == "openalgo" for name, _ in fetchers) else 0
-        fetchers.insert(insert_at, ("tapetide", lambda: fetch_tapetide_identity(normalized.base_symbol)))
+    if tapetide_active():
+        fetchers.append(("tapetide", lambda: fetch_tapetide_identity(normalized.base_symbol)))
 
     attempts = run_sources(fetchers)
     merged = merge_identity_fields(attempts)

@@ -233,6 +233,72 @@ def sync_alpaca_config(dry_run: bool = False) -> Path | None:
     return target
 
 
+def _openalgo_profile_from_env() -> str:
+    paper_mode = os.getenv("OPENALGO_PAPER_MODE", "true").strip().lower()
+    if paper_mode in ("0", "false", "no", "off"):
+        return "live-readonly"
+    return "paper"
+
+
+def sync_openalgo_config(dry_run: bool = False) -> Path | None:
+    """Write ~/.vibe-trading/openalgo.json from trade stack OPENALGO_* env vars."""
+    host = (os.getenv("OPENALGO_HOST") or "http://127.0.0.1:5001").rstrip("/")
+    api_key = os.getenv("OPENALGO_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    profile = _openalgo_profile_from_env()
+    payload = {
+        "host": host,
+        "api_key": api_key,
+        "profile": profile,
+        "timeout": 20.0,
+        "readonly": profile != "live",
+    }
+    target = vibe_home() / "openalgo.json"
+    if dry_run:
+        redacted = {**payload, "api_key": api_key[:4] + "***"}
+        print(json.dumps(redacted, indent=2))
+        return target
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    try:
+        target.chmod(0o600)
+    except OSError:
+        pass
+    return target
+
+
+def ensure_openalgo_profile_selected(dry_run: bool = False) -> Path | None:
+    """Persist OpenAlgo as the default connector when none has been chosen yet."""
+    target = vibe_home() / "trading-connections.json"
+    if target.is_file():
+        return None
+
+    api_key = os.getenv("OPENALGO_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    profile_id = (
+        "openalgo-live-sdk-readonly"
+        if _openalgo_profile_from_env() == "live-readonly"
+        else "openalgo-paper-sdk"
+    )
+    payload = {"selected_profile": profile_id}
+    if dry_run:
+        print(json.dumps(payload, indent=2))
+        return target
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    try:
+        target.chmod(0o600)
+    except OSError:
+        pass
+    return target
+
+
 def _patch_vibe_env_keys(target: Path, *, dry_run: bool = False) -> None:
     """Append trade-stack keys to an existing ~/.vibe-trading/.env when missing."""
     hub = hub_dir()
@@ -370,6 +436,8 @@ def main() -> int:
     skill_paths = sync_skills(dry_run=args.dry_run)
     env_path = sync_vibe_env(dry_run=args.dry_run, force=args.force_env)
     alpaca_path = sync_alpaca_config(dry_run=args.dry_run)
+    openalgo_path = sync_openalgo_config(dry_run=args.dry_run)
+    profile_path = ensure_openalgo_profile_selected(dry_run=args.dry_run)
 
     if args.dry_run:
         return 0
@@ -384,6 +452,10 @@ def main() -> int:
         print(f"Patched/kept {patched} (use --force-env to replace)")
     if alpaca_path:
         print(f"Wrote {alpaca_path}")
+    if openalgo_path:
+        print(f"Wrote {openalgo_path}")
+    if profile_path:
+        print(f"Wrote {profile_path}")
 
     ok, message = verify_openalgo_mcp()
     if ok:

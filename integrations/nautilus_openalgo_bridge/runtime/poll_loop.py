@@ -49,6 +49,7 @@ def _resolve_watch_spec(agent_id: str | None) -> WatchSpec:
         raw = load_agent_watch_spec(agent_id)
         if raw:
             return WatchSpec.from_dict(raw)
+        return WatchSpec.from_dict({})
     return _default_watch_spec()
 
 

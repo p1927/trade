@@ -243,3 +243,98 @@ def clear_india_registry_cache() -> None:
     global _registry_cache, _registry_loaded_at
     _registry_cache = None
     _registry_loaded_at = 0.0
+
+
+_CASH_INSTRUMENT_TYPES = frozenset({"EQ", "EQUITY", "BE", "BZ", "INDEX"})
+
+
+def search_india_symbols(query: str, *, limit: int = 5) -> list[dict[str, Any]]:
+    """Search India symbols by ticker or company name fragment."""
+    raw = (query or "").strip()
+    if not raw:
+        return []
+    cap = max(1, min(int(limit), 10))
+    q_upper = raw.upper()
+    matches: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    settings = _openalgo_search_settings()
+    if settings:
+        host, api_key = settings
+        try:
+            response = requests.post(
+                f"{host}/api/v1/search",
+                json={"apikey": api_key, "query": raw},
+                timeout=10,
+            )
+            body = response.json() if response.content else {}
+            if response.ok and body.get("status") == "success":
+                rows = body.get("data") or []
+                if isinstance(rows, list):
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        sym = str(row.get("symbol") or "").upper()
+                        exchange = str(row.get("exchange") or "").upper()
+                        if not sym or sym in seen:
+                            continue
+                        inst = str(row.get("instrumenttype") or "").upper()
+                        if exchange not in _CASH_EXCHANGES and exchange not in _FNO_EXCHANGES:
+                            continue
+                        if inst and inst not in _CASH_INSTRUMENT_TYPES and "FUT" in inst:
+                            continue
+                        seen.add(sym)
+                        matches.append(
+                            {
+                                "symbol": sym,
+                                "name": str(row.get("name") or row.get("brsymbol") or "").strip() or None,
+                                "exchange": exchange or "NSE",
+                                "instrumenttype": inst or None,
+                                "source": "openalgo",
+                            }
+                        )
+                        if len(matches) >= cap:
+                            return matches
+        except Exception as exc:
+            logger.debug("OpenAlgo symbol search failed for %r: %s", raw, exc)
+
+    registry = get_india_registry()
+    if registry:
+        for sym in sorted(registry.cash_symbols):
+            if q_upper not in sym and not sym.startswith(q_upper):
+                continue
+            if sym in seen:
+                continue
+            seen.add(sym)
+            matches.append(
+                {
+                    "symbol": sym,
+                    "name": None,
+                    "exchange": "NSE",
+                    "instrumenttype": "EQ",
+                    "source": "registry",
+                }
+            )
+            if len(matches) >= cap:
+                break
+
+    return matches
+
+
+def is_symbol_known_for_proposal(symbol: str) -> bool:
+    """True when symbol is recognized for India/US autonomous proposals."""
+    raw = (symbol or "").strip().upper()
+    if not raw:
+        return False
+    if raw in _LEGACY_INDEX_ALIASES or raw in ALL_INDEX_SYMBOLS:
+        return True
+    if is_india_listed_symbol(raw):
+        return True
+    try:
+        from trade_integrations.dataflows.company_research.us_symbols import is_us_known_symbol
+
+        if is_us_known_symbol(raw):
+            return True
+    except Exception:
+        pass
+    return False

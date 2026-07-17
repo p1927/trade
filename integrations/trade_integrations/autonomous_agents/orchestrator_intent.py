@@ -7,8 +7,8 @@ import os
 import re
 from typing import Any
 
-from trade_integrations.autonomous_agents.market import symbol_execution_market
-from trade_integrations.dataflows.company_research.market import india_index_tickers
+from trade_integrations.autonomous_agents.symbol_extract import extract_orchestrator_symbols
+from trade_integrations.dataflows.symbol_registry.openalgo_registry import search_india_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -36,22 +36,31 @@ _AMOUNT_RE = re.compile(
     re.I,
 )
 _WATCH_MIN_RE = re.compile(r"(?:watch|check|poll)\s+(?:every\s+)?(\d+)\s*min", re.I)
-_FOR_SYMBOL_RE = re.compile(r"\b(?:for|trade|on|symbol)\s+([A-Z]{2,5})\b", re.I)
-_COMMON_US_SYMBOLS = frozenset(
+_NAME_TOKEN_RE = re.compile(r"\b([a-z]{4,})\b")
+_NAME_SEARCH_SKIP = frozenset(
     {
-        "AAPL",
-        "AMD",
-        "AMZN",
-        "GOOG",
-        "GOOGL",
-        "INTC",
-        "META",
-        "MSFT",
-        "NVDA",
-        "QQQ",
-        "SPY",
-        "TSLA",
+        "agent",
+        "autonomous",
+        "budget",
+        "create",
+        "every",
+        "intraday",
+        "paper",
+        "please",
+        "start",
+        "swing",
+        "trade",
+        "watch",
+        "maximum",
+        "minimum",
     }
+)
+_TRADING_GOAL_RE = re.compile(
+    r"\b("
+    r"paper\s+trade|watch|swing|intraday|trade|invest|monitor|"
+    r"max\s+loss|budget|autonomous|agent"
+    r")\b",
+    re.I,
 )
 
 
@@ -92,32 +101,28 @@ def _extract_amounts(text: str) -> tuple[float | None, float | None]:
 
 
 def _extract_symbols(text: str) -> list[str]:
-    upper = text.upper()
-    found: list[str] = []
-    seen: set[str] = set()
+    found = extract_orchestrator_symbols(text)
+    if found:
+        return found
+    return _search_symbols_from_name_tokens(text)
 
-    for sym in sorted(india_index_tickers(), key=len, reverse=True):
-        base = sym.lstrip("^")
-        if re.search(rf"\b{re.escape(base)}\b", upper):
-            canonical = "NIFTY" if base in {"NIFTY", "NIFTY50", "^NSEI"} else base
-            if canonical not in seen:
-                seen.add(canonical)
-                found.append(canonical)
 
-    for sym in _COMMON_US_SYMBOLS:
-        if re.search(rf"\b{sym}\b", upper) and sym not in seen:
-            seen.add(sym)
-            found.append(sym)
-
-    for match in _FOR_SYMBOL_RE.finditer(upper):
-        token = match.group(1).upper()
-        if token in seen:
+def _search_symbols_from_name_tokens(text: str) -> list[str]:
+    lower = (text or "").lower()
+    for match in _NAME_TOKEN_RE.finditer(lower):
+        token = match.group(1)
+        if token in _NAME_SEARCH_SKIP:
             continue
-        if symbol_execution_market(token) == "US":
-            seen.add(token)
-            found.append(token)
+        hits = search_india_symbols(token, limit=1)
+        if hits:
+            sym = str(hits[0].get("symbol") or "").upper()
+            if sym:
+                return [sym]
+    return []
 
-    return found
+
+def _has_trading_goal(text: str) -> bool:
+    return bool(_TRADING_GOAL_RE.search(text))
 
 
 def _has_create_intent(text: str) -> bool:
@@ -126,6 +131,11 @@ def _has_create_intent(text: str) -> bool:
         or _PAPER_TRADE_RE.search(text)
         or (_AUTONOMOUS_RE.search(text) and re.search(r"\b(agent|trade|watch)\b", text, re.I))
     )
+
+
+def _has_symbol_plus_goal_intent(text: str) -> bool:
+    """Symbol + trading goal without explicit 'create agent' phrasing."""
+    return bool(_extract_symbols(text) and _has_trading_goal(text))
 
 
 def _has_adjust_intent(text: str) -> bool:
@@ -178,11 +188,12 @@ def build_auto_propose_kwargs(
             logger.debug("latest proposal lookup failed", exc_info=True)
 
     create_intent = _has_create_intent(user_message)
+    symbol_goal_intent = _has_symbol_plus_goal_intent(user_message)
     adjust_intent = _has_adjust_intent(user_message)
     hallucinated = _assistant_hallucinated_proposal_id(assistant_text)
 
     if not symbols:
-        if create_intent or hallucinated:
+        if create_intent or symbol_goal_intent or hallucinated:
             default_sym = _default_symbol(text=text)
             if default_sym:
                 symbols = [default_sym]
@@ -192,7 +203,7 @@ def build_auto_propose_kwargs(
     if not symbols:
         return None
 
-    if not (create_intent or adjust_intent or hallucinated):
+    if not (create_intent or symbol_goal_intent or adjust_intent or hallucinated):
         return None
 
     budget, max_loss = _extract_amounts(user_message)
@@ -252,7 +263,8 @@ def maybe_auto_propose_after_orchestrator_turn(
     """Server fallback: persist + return a proposal when the LLM skipped the tool."""
     if not orchestrator_auto_propose_enabled():
         return None
-    if _PROPOSE_TOOL in set(tools_called):
+    called = {str(t) for t in tools_called}
+    if any(_PROPOSE_TOOL in name or name == _PROPOSE_TOOL for name in called):
         return None
 
     kwargs = build_auto_propose_kwargs(

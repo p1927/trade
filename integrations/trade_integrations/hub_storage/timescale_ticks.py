@@ -71,7 +71,16 @@ def ensure_schema() -> None:
             )
             cur.execute(
                 """
-                SELECT create_hypertable('market_ticks', 'ts', if_not_exists => TRUE);
+                SELECT create_hypertable(
+                    'market_ticks', 'ts',
+                    chunk_time_interval => INTERVAL '1 day',
+                    if_not_exists => TRUE
+                );
+                """
+            )
+            cur.execute(
+                """
+                SELECT set_chunk_time_interval('market_ticks', INTERVAL '1 day');
                 """
             )
             cur.execute(
@@ -263,12 +272,36 @@ def timescale_health() -> dict[str, Any]:
                 count = cur.fetchone()[0]
                 cur.execute("SELECT MAX(ts) FROM market_ticks")
                 latest = cur.fetchone()[0]
-        return {
+                cur.execute("SELECT pg_is_in_recovery()")
+                in_recovery = bool(cur.fetchone()[0])
+                chunk_count = None
+                try:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM timescaledb_information.chunks
+                        WHERE hypertable_name = 'market_ticks'
+                        """
+                    )
+                    chunk_count = int(cur.fetchone()[0] or 0)
+                except Exception:
+                    pass
+        out: dict[str, Any] = {
             "enabled": True,
-            "ok": True,
+            "ok": not in_recovery,
             "row_count": int(count or 0),
             "latest_ts": latest.isoformat() if latest else None,
             "database": urlparse(timescale_database_url()).path.lstrip("/"),
+            "in_recovery": in_recovery,
         }
+        if chunk_count is not None:
+            out["chunk_count"] = chunk_count
+            if chunk_count > 50:
+                out["chunk_warning"] = (
+                    f"{chunk_count} chunks — consider larger chunk interval or export/prune"
+                )
+        if in_recovery:
+            out["reason"] = "wal_recovery_in_progress"
+        return out
     except Exception as exc:
         return {"enabled": True, "ok": False, "error": str(exc)}

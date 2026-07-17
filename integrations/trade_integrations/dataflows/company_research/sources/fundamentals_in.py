@@ -194,13 +194,10 @@ def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
     except ImportError:
         pass
 
-    from trade_integrations.clients.tapetide import is_configured as tapetide_configured
+    from trade_integrations.clients.tapetide import is_active as tapetide_active
 
-    if tapetide_configured():
-        fetchers.insert(1 if fetchers and fetchers[0][0] == "dalal_bse" else 0, (
-            "tapetide",
-            lambda: _fetch_tapetide(normalized.base_symbol),
-        ))
+    if tapetide_active():
+        fetchers.append(("tapetide", lambda: _fetch_tapetide(normalized.base_symbol)))
 
     attempts = run_sources(fetchers)
     merged = _merge_fundamentals(attempts)

@@ -27,3 +27,11 @@ def load_trade_env(*, root: Path | None = None) -> Path | None:
         if key:
             os.environ.setdefault(key, value)
     return env_file
+
+
+def ensure_openalgo_env(*, root: Path | None = None) -> dict[str, str]:
+    """Load trade .env and return OpenAlgo host + api key (may be empty strings)."""
+    load_trade_env(root=root)
+    host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
+    api_key = os.getenv("OPENALGO_API_KEY", "").strip()
+    return {"host": host, "api_key": api_key}

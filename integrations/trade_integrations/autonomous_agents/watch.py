@@ -278,9 +278,9 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
 
     feedback: dict[str, Any] = {}
     try:
-        from trade_integrations.auto_paper.market_feedback import build_market_feedback
+        from trade_integrations.auto_paper.market_feedback import build_agent_market_feedback
 
-        feedback = build_market_feedback(ticker=focus)
+        feedback = build_agent_market_feedback(agent_id=agent_id, ticker=focus)
     except Exception as exc:
         logger.warning("watch feedback failed for %s: %s", agent_id, exc)
         feedback = {"alerts": [f"feedback_error:{exc}"], "requires_action": False}
@@ -322,6 +322,20 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
     agent = get_agent(agent_id)
     if not agent or str(agent.get("status")) != "running":
         return False
+
+    if turn_kind in {"strategy_revision", "research"}:
+        try:
+            from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+            if not is_plan_approved(agent):
+                logger.info(
+                    "skip %s turn for %s: plan not yet approved",
+                    turn_kind,
+                    agent_id,
+                )
+                return False
+        except ImportError:
+            pass
 
     if turn_kind == "research" and _research_turn_recently_ran(agent):
         logger.info("skip research turn for %s: recent full reasoning within cooldown", agent_id)

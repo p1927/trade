@@ -8,4 +8,4 @@ source "$ROOT/scripts/stack_lib.sh"
 
 STACK_ROOT="$ROOT"
 stack_stop_vibe_stack
-echo "[stack] stopped OpenAlgo + Vibe services"
+echo "[stack] stopped OpenAlgo + Vibe services (hub Docker: graceful stop unless STACK_STOP_DOCKER=0)"

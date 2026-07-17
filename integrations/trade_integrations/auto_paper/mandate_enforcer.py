@@ -70,6 +70,8 @@ def assert_can_execute(
     cfg: AutoPaperConfig | None = None,
     mandate: MandateConfig | None = None,
     confidence: int | None = None,
+    ticker: str | None = None,
+    research_kind: str | None = None,
 ) -> None:
     """Guard ENTER/ADJUST basket execution."""
     if not session.get("enabled"):
@@ -96,6 +98,22 @@ def assert_can_execute(
             "confidence_below_threshold",
             f"Confidence {confidence} below threshold {mandate.confidence_threshold}",
         )
+
+    symbol = (ticker or session.get("primary_ticker") or "").strip().upper()
+    if symbol and research_kind in ("options", "stock"):
+        try:
+            from trade_integrations.monitor.service import MonitorService
+            from trade_integrations.research.preflight import evaluate_research_preflight, preflight_blocks_enter
+
+            report = MonitorService().evaluate_ticker(symbol, kind=research_kind)
+            preflight = evaluate_research_preflight(symbol, kind=research_kind, staleness=report)
+            if preflight_blocks_enter(preflight):
+                reasons = ", ".join(preflight.get("blocking_reasons") or [])
+                raise MandateViolation("research_preflight_failed", f"Hub/data preflight failed: {reasons}")
+        except MandateViolation:
+            raise
+        except Exception:
+            pass
 
 
 def validate_decision(

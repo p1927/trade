@@ -233,4 +233,22 @@ def format_research_report(doc: CompanyResearchDoc) -> str:
         "",
         _source_health_table(doc.stages),
     ]
+    if doc.market == "IN":
+        sections.extend(["", _india_data_sources_footer()])
     return "\n".join(sections)
+
+
+def _india_data_sources_footer() -> str:
+    from .source_registry import STAGE_SOURCE_ORDER
+
+    lines = [
+        "## India Data Dependencies",
+        "_Full matrix: `list_factor_catalog()[\"india_data_sources\"]` or "
+        "`company_research/source_registry.py`._",
+        "",
+        "| Stage | Source order (first wins for peers; others merge) |",
+        "|-------|--------------------------------------------------|",
+    ]
+    for stage, order in STAGE_SOURCE_ORDER.items():
+        lines.append(f"| {stage} | {' → '.join(order)} |")
+    return "\n".join(lines) + "\n"

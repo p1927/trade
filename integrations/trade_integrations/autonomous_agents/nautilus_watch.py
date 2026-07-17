@@ -147,15 +147,17 @@ def is_agent_in_registry(agent_id: str) -> bool:
 def _agent_market_and_symbols(agent_id: str) -> tuple[str, list[str]]:
     try:
         from trade_integrations.autonomous_agents.store import get_agent
-        from trade_integrations.execution.profile import resolve_profile
+        from trade_integrations.execution.routing_context import resolve_agent_routing
 
         agent = get_agent(agent_id) or {}
-        profile = resolve_profile(agent=agent)
-        market = profile.market
-        symbols = [str(s).upper() for s in (agent.get("symbols") or ["NIFTY"])]
-        return market, symbols
-    except Exception:
-        return "IN", ["NIFTY"]
+        if not agent:
+            logger.error("Nautilus registry bind skipped — agent %s not found", agent_id)
+            return "IN", []
+        routing = resolve_agent_routing(agent)
+        return routing.market, list(routing.watch_symbols)
+    except Exception as exc:
+        logger.error("Nautilus registry bind failed for %s: %s", agent_id, exc)
+        return "IN", []
 
 
 def add_agent_to_registry(agent_id: str) -> dict[str, Any]:
@@ -166,6 +168,8 @@ def add_agent_to_registry(agent_id: str) -> dict[str, Any]:
     agents: list[dict[str, Any]] = list(registry.get("agents") or [])
     old_ids = sorted(get_registry_agent_ids())
     market, symbols = _agent_market_and_symbols(agent_id)
+    if not symbols:
+        raise ValueError(f"cannot bind agent {agent_id} to Nautilus registry — missing agent or watch symbols")
     now = datetime.now(timezone.utc).isoformat()
     replaced = False
     for row in agents:
@@ -215,6 +219,23 @@ def remove_agent_from_registry(agent_id: str) -> dict[str, Any]:
     if not agents:
         registry["node_pid"] = None
     return save_registry(registry)
+
+
+def stop_nautilus_watch_completely() -> dict[str, Any]:
+    """Stop the detached Nautilus watch process and clear the agent registry."""
+    reconcile_stale_watch_pid()
+    had_pid = _read_pid() is not None
+    _stop_existing()
+    registry = load_registry()
+    cleared_agents = len(registry.get("agents") or [])
+    registry["agents"] = []
+    registry["node_pid"] = None
+    save_registry(registry)
+    return {
+        "stopped": True,
+        "had_process": had_pid,
+        "registry_agents_cleared": cleared_agents,
+    }
 
 
 def reconcile_stale_watch_pid() -> bool:

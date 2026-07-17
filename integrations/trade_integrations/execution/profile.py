@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from trade_integrations.autonomous_agents.market import agent_execution_market
-from trade_integrations.auto_paper.mandate_config import MandateConfig, mandate_config_from_agent
+from trade_integrations.auto_paper.mandate_config import MandateConfig, mandate_config_from_agent, primary_instrument_from_mandate
 
 MarketCode = Literal["IN", "US"]
 ModeCode = Literal["paper", "live"]
@@ -42,7 +41,14 @@ def _instruments_tuple(mc: MandateConfig) -> tuple[str, ...]:
     return tuple(items or ("options",))
 
 
-def _prompt_fragment_id(*, market: MarketCode, mode: ModeCode, instruments: tuple[str, ...]) -> str:
+def _prompt_fragment_id(
+    *,
+    market: MarketCode,
+    mode: ModeCode,
+    instruments: tuple[str, ...],
+    mandate_text: str = "",
+    symbols: tuple[str, ...] = (),
+) -> str:
     has_options = "options" in instruments
     has_equity = "equity" in instruments
     if market == "US":
@@ -51,11 +57,22 @@ def _prompt_fragment_id(*, market: MarketCode, mode: ModeCode, instruments: tupl
         return "us_equity_paper" if mode == "paper" else "us_equity_live"
     if has_equity and not has_options:
         return "in_equity_paper" if mode == "paper" else "in_equity_live"
+    mc = MandateConfig(allowed_instruments=list(instruments))
+    primary = primary_instrument_from_mandate(
+        mc,
+        market=market,
+        mandate_text=mandate_text,
+        symbols=list(symbols) or ["NIFTY"],
+    )
+    if primary == "equity":
+        return "in_equity_paper" if mode == "paper" else "in_equity_live"
     return "in_options_paper" if mode == "paper" else "in_options_live"
 
 
 def resolve_profile(*, agent: dict[str, Any], mode: str | None = None) -> ExecutionProfile:
     """Resolve execution profile from agent record (stored market + mandate)."""
+    from trade_integrations.autonomous_agents.market import agent_execution_market
+
     market = agent_execution_market(agent)
     constraints = dict(agent.get("constraints") or {})
     agent_mode = str(mode or constraints.get("mode") or "paper").lower()
@@ -63,7 +80,14 @@ def resolve_profile(*, agent: dict[str, Any], mode: str | None = None) -> Execut
         agent_mode = "paper"
     mc = mandate_config_from_agent(agent)
     instruments = _instruments_tuple(mc)
-    fragment = _prompt_fragment_id(market=market, mode=agent_mode, instruments=instruments)  # type: ignore[arg-type]
+    sym_tuple = tuple(str(s).upper() for s in (agent.get("symbols") or ["NIFTY"]) if str(s).strip())
+    fragment = _prompt_fragment_id(
+        market=market,
+        mode=agent_mode,  # type: ignore[arg-type]
+        instruments=instruments,
+        mandate_text=str(agent.get("mandate") or ""),
+        symbols=sym_tuple or ("NIFTY",),
+    )
 
     if market == "US":
         return ExecutionProfile(

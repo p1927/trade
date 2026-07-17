@@ -731,9 +731,51 @@ def _index_doc_from_json(payload: dict):
     )
 
 
+def _coerce_hub_datetime(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _is_light_refresh_only_log(entries: list) -> bool:
+    if not entries:
+        return False
+    stages = {str(row.get("stage") or "") for row in entries if isinstance(row, dict)}
+    return "light_refresh" in stages and "start" not in stages
+
+
 def save_index_research(doc) -> Path:
     """Write latest index research markdown + JSON under the shared hub."""
     from trade_integrations.dataflows.index_research.format import format_index_report
+
+    incoming_log = list(getattr(doc, "pipeline_log", None) or [])
+    existing = load_index_research_json(doc.ticker)
+    if not incoming_log:
+        # Light refresh and other partial writers leave pipeline_log empty — keep
+        # the last full-run trace from disk instead of wiping it.
+        if existing:
+            doc.pipeline_log = list(getattr(existing, "pipeline_log", None) or [])
+    elif existing and _is_light_refresh_only_log(incoming_log):
+        existing_as_of = _coerce_hub_datetime(getattr(existing, "as_of", None))
+        incoming_as_of = _coerce_hub_datetime(getattr(doc, "as_of", None))
+        existing_log = list(getattr(existing, "pipeline_log", None) or [])
+        if (
+            existing_as_of
+            and incoming_as_of
+            and existing_as_of > incoming_as_of
+            and any(row.get("stage") == "done" for row in existing_log if isinstance(row, dict))
+        ):
+            # A newer full-run artifact is already on disk — do not clobber it.
+            return _index_research_dir(doc.ticker) / "latest.json"
 
     if not (getattr(doc, "news_impact", None) or {}).get("items"):
         try:

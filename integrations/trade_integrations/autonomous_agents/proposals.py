@@ -21,6 +21,7 @@ from trade_integrations.autonomous_agents.market import symbol_execution_market
 from trade_integrations.autonomous_agents.market_resolve import resolve_proposal_symbols
 from trade_integrations.auto_paper.mandate_config import (
     MandateConfig,
+    resolve_allowed_instruments,
     resolve_mandate_config,
 )
 from trade_integrations.autonomous_agents.runtime_status import build_stack_health
@@ -95,14 +96,18 @@ def _build_mandate_config(
     *,
     mandate_text: str | None = None,
     execution_market: str | None = None,
+    allowed_instruments: list[str] | None = None,
 ) -> MandateConfig:
     sym_list = list(draft.get("symbols") or ["NIFTY"])
     primary = sym_list[0] if sym_list else "NIFTY"
     market = execution_market or symbol_execution_market(primary)
+    stored = draft.get("mandate_config") if isinstance(draft.get("mandate_config"), dict) else {}
+    if allowed_instruments:
+        stored = {**stored, "allowed_instruments": allowed_instruments}
     return resolve_mandate_config(
         symbols=sym_list,
         mandate_text=mandate_text or str(draft.get("mandate") or ""),
-        stored=draft.get("mandate_config") if isinstance(draft.get("mandate_config"), dict) else None,
+        stored=stored or None,
         budget_inr=float(draft.get("budget_inr") or DEFAULT_BUDGET_INR),
         max_daily_loss_inr=float(draft.get("max_daily_loss_inr") or DEFAULT_MAX_DAILY_LOSS_INR),
         confidence_threshold=int(draft.get("confidence_threshold") or DEFAULT_CONFIDENCE_THRESHOLD),
@@ -154,9 +159,34 @@ def validate_proposal_routing(proposal: dict[str, Any]) -> list[str]:
     routing_warnings = proposal.get("routing_warnings") or []
     for msg in routing_warnings:
         text = str(msg)
-        if "invalid" in text.lower():
+        if "invalid" in text.lower() or "unknown symbol" in text.lower():
             errors.append(text)
 
+    return errors
+
+
+def validate_proposal_symbols(symbols: list[str]) -> list[str]:
+    """Return blocking errors when symbols are not recognized."""
+    from trade_integrations.dataflows.symbol_registry.openalgo_registry import (
+        is_symbol_known_for_proposal,
+        search_india_symbols,
+    )
+
+    errors: list[str] = []
+    for sym in symbols:
+        raw = str(sym or "").strip().upper()
+        if not raw:
+            continue
+        if is_symbol_known_for_proposal(raw):
+            continue
+        suggestions = search_india_symbols(raw, limit=3)
+        if suggestions:
+            opts = ", ".join(str(row.get("symbol") or "") for row in suggestions if row.get("symbol"))
+            errors.append(f"Unknown symbol {raw} — did you mean: {opts}?")
+        else:
+            errors.append(
+                f"Unknown symbol {raw} — verify the NSE/BSE ticker or use search_india_symbol."
+            )
     return errors
 
 
@@ -174,10 +204,27 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
 
     primary_symbol = draft["symbols"][0] if draft["symbols"] else "NIFTY"
     exec_market = resolution.market
+    explicit_instruments = kwargs.get("allowed_instruments")
+    if isinstance(explicit_instruments, str):
+        explicit_instruments = [explicit_instruments]
+    if not isinstance(explicit_instruments, list):
+        explicit_instruments = None
+
+    mandate_text = str(kwargs.get("mandate") or draft.get("mandate") or "")
+    resolved_instruments = resolve_allowed_instruments(
+        draft["symbols"],
+        mandate_text,
+        execution_market=exec_market,
+        explicit=explicit_instruments,
+    )
+    if resolved_instruments is None and "allowed_instruments" not in missing:
+        missing.append("allowed_instruments")
+
     mandate_cfg = _build_mandate_config(
         draft,
-        mandate_text=str(kwargs.get("mandate") or draft.get("mandate") or ""),
+        mandate_text=mandate_text,
         execution_market=exec_market,
+        allowed_instruments=resolved_instruments,
     )
     profile = resolve_profile(
         agent={
@@ -227,6 +274,12 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     }
 
     routing_errors = validate_proposal_routing(proposal)
+    symbol_errors = validate_proposal_symbols(symbols)
+    if symbol_errors:
+        routing_errors = list(routing_errors) + symbol_errors
+        if "symbols" not in missing:
+            missing.append("symbols")
+        proposal["missing_fields"] = missing
     proposal["routing_errors"] = routing_errors
     if routing_errors:
         proposal["status"] = "incomplete"
@@ -316,6 +369,9 @@ def commit_autonomous_agent(
                 "already_committed": True,
             }
         raise ValueError("proposal already committed")
+
+    if proposal.get("superseded"):
+        raise ValueError("proposal superseded — confirm the latest proposal card")
 
     expires_at = int(proposal.get("expires_at_ms") or 0)
     if expires_at and int(time.time() * 1000) > expires_at:
@@ -510,10 +566,13 @@ def commit_autonomous_agent(
             watch_spec = dict(mc["watch_spec"])
         if watch_spec.get("rules") and profile.uses_nautilus_watch:
             sync_watch_spec_to_handoff(agent_id, watch_spec)
-    except Exception:
+    except Exception as exc:
         import logging
 
-        logging.getLogger(__name__).debug("initial handoff on commit skipped", exc_info=True)
+        logging.getLogger(__name__).warning(
+            "initial handoff on commit failed for %s: %s", agent_id, exc
+        )
+        paper_session_warnings.append(f"watch_spec handoff sync failed: {exc}")
 
     proposal["committed_agent_id"] = agent_id
     proposal["committed_at"] = now
@@ -603,3 +662,170 @@ def delete_autonomous_agent(agent_id: str) -> dict[str, Any]:
 
     delete_agent(agent_id)
     return {"status": "ok", "deleted": agent_id}
+
+
+_INR_CLOSE_STRATEGIES = (
+    "auto_paper",
+    "nautilus_bridge",
+    "vibe_bridge_intent",
+    "vibe_exit",
+    "autonomous_cleanup",
+)
+
+
+def _flatten_all_positions(agents: list[dict[str, Any]]) -> dict[str, Any]:
+    """Best-effort flatten for OpenAlgo (India) and Alpaca (US) before agent teardown."""
+    result: dict[str, Any] = {"openalgo": None, "alpaca": []}
+
+    try:
+        from nautilus_openalgo_bridge.config import is_bridge_market_open
+        from nautilus_openalgo_bridge.execute import execute_intent
+        from nautilus_openalgo_bridge.models import ExecutionIntent, IntentAction
+        from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
+        from nautilus_openalgo_bridge.reconcile import open_positions_from_book
+
+        client = get_openalgo_client()
+        remaining = open_positions_from_book(client.get_position_book())
+        if remaining:
+            first = agents[0] if agents else {}
+            agent_id = str(first.get("id") or "cleanup")
+            underlying = str((first.get("symbols") or ["NIFTY"])[0]).upper()
+            exit_result = execute_intent(
+                ExecutionIntent(
+                    action=IntentAction.EXIT,
+                    agent_id=agent_id,
+                    rationale="Clear all autonomous agents",
+                    underlying=underlying,
+                    strategy="autonomous_cleanup",
+                ),
+                client=client,
+                skip_preflight=not is_bridge_market_open(),
+            )
+            remaining = open_positions_from_book(client.get_position_book())
+            if remaining:
+                for strat in _INR_CLOSE_STRATEGIES:
+                    if not remaining:
+                        break
+                    try:
+                        client.close_all_positions(strategy=strat)
+                    except Exception:
+                        pass
+                    remaining = open_positions_from_book(client.get_position_book())
+            result["openalgo"] = {
+                "status": exit_result.get("status"),
+                "remaining_positions": len(remaining),
+            }
+        else:
+            result["openalgo"] = {"status": "no_positions", "remaining_positions": 0}
+    except Exception as exc:
+        result["openalgo"] = {"status": "error", "error": str(exc)}
+
+    us_symbols: set[str] = set()
+    try:
+        from trade_integrations.execution.profile import resolve_profile
+
+        for agent in agents:
+            if resolve_profile(agent=agent).is_us:
+                for sym in agent.get("symbols") or []:
+                    us_symbols.add(str(sym).upper())
+    except Exception:
+        pass
+
+    for sym in sorted(us_symbols):
+        row: dict[str, Any] = {"symbol": sym}
+        try:
+            from trade_integrations.dataflows.alpaca import close_alpaca_position, list_alpaca_positions
+
+            positions = list_alpaca_positions()
+            open_rows = [p for p in positions if str(p.get("symbol") or "").upper() == sym]
+            if not open_rows:
+                row["status"] = "no_positions"
+            else:
+                close_alpaca_position(sym)
+                row["status"] = "closed"
+        except Exception as exc:
+            row["status"] = "error"
+            row["error"] = str(exc)
+        result["alpaca"].append(row)
+
+    return result
+
+
+def _clear_bridge_artifacts() -> dict[str, int]:
+    from trade_integrations.context.hub import get_hub_dir
+
+    hub = get_hub_dir() / "_data"
+    counts = {"proposals": 0, "nautilus_handoffs": 0, "nautilus_intents": 0}
+
+    proposals_dir = hub / "autonomous_agents" / "proposals"
+    if proposals_dir.is_dir():
+        for path in proposals_dir.glob("aap_*.json"):
+            path.unlink(missing_ok=True)
+            counts["proposals"] += 1
+
+    for sub in ("nautilus_handoffs", "nautilus_intents"):
+        artifact_dir = hub / sub
+        if artifact_dir.is_dir():
+            for path in artifact_dir.glob("*.json"):
+                path.unlink(missing_ok=True)
+                counts[sub] += 1
+
+    return counts
+
+
+def clear_all_autonomous_agents() -> dict[str, Any]:
+    """Stop Nautilus watch, flatten positions, stop/delete every agent, clear bridge artifacts."""
+    agents = list_agents()
+    agent_ids = [str(a.get("id") or "") for a in agents if a.get("id")]
+
+    flatten = _flatten_all_positions(agents)
+
+    stopped: list[str] = []
+    deleted: list[str] = []
+    errors: list[dict[str, str]] = []
+
+    for agent_id in agent_ids:
+        try:
+            stop_autonomous_agent(agent_id)
+            stopped.append(agent_id)
+        except Exception as exc:
+            errors.append({"agent_id": agent_id, "phase": "stop", "error": str(exc)})
+
+    for agent_id in agent_ids:
+        try:
+            delete_autonomous_agent(agent_id)
+            deleted.append(agent_id)
+        except Exception as exc:
+            errors.append({"agent_id": agent_id, "phase": "delete", "error": str(exc)})
+
+    auto_paper_stopped = False
+    try:
+        from trade_integrations.auto_paper.mcp_actions import stop_auto_paper
+
+        stop_auto_paper(unregister_scheduler=True)
+        auto_paper_stopped = True
+    except Exception:
+        pass
+
+    artifacts = _clear_bridge_artifacts()
+
+    nautilus: dict[str, Any] = {}
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import stop_nautilus_watch_completely
+
+        nautilus = stop_nautilus_watch_completely()
+    except Exception as exc:
+        nautilus = {"error": str(exc)}
+
+    remaining = list_agents()
+    return {
+        "status": "ok" if not remaining else "partial",
+        "stopped": stopped,
+        "deleted": deleted,
+        "remaining_count": len(remaining),
+        "flatten": flatten,
+        "auto_paper_stopped": auto_paper_stopped,
+        "artifacts_cleared": artifacts,
+        "nautilus": nautilus,
+        "errors": errors,
+    }

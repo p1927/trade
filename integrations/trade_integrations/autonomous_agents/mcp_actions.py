@@ -236,16 +236,54 @@ def mcp_record_decision(
     }
 
 
-def mcp_set_watch_spec(agent_id: str, watch_spec: dict[str, Any]) -> dict[str, Any]:
+def mcp_set_watch_spec(
+    agent_id: str,
+    watch_spec: dict[str, Any] | None = None,
+    *,
+    strategy: str | None = None,
+    spot: float | None = None,
+    target: float | None = None,
+    stop: float | None = None,
+) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent:
         return {"status": "error", "error": f"agent not found: {agent_id}"}
     profile = resolve_profile(agent=agent)
+
+    strategy_name = strategy or (watch_spec or {}).get("strategy") or (agent.get("thesis") or {}).get("strategy")
+    if strategy_name:
+        from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+        from trade_integrations.autonomous_agents.strategy_watch_spec import (
+            build_watch_spec_for_strategy,
+            format_watch_spec_summary,
+        )
+
+        mc = mandate_config_from_agent(agent)
+        symbols = list(agent.get("symbols") or ["NIFTY"])
+        watch_spec = build_watch_spec_for_strategy(
+            strategy=str(strategy_name),
+            mandate=mc,
+            symbols=symbols,
+            spot=spot,
+            target=target,
+            stop=stop,
+        )
+    elif not watch_spec:
+        return {"status": "error", "error": "provide strategy name or explicit watch_spec"}
+
     agent["watch_spec"] = watch_spec
-    mc = dict(agent.get("mandate_config") or {})
-    mc["watch_spec"] = watch_spec
-    agent["mandate_config"] = mc
+    mc_dict = dict(agent.get("mandate_config") or {})
+    mc_dict["watch_spec"] = watch_spec
+    agent["mandate_config"] = mc_dict
     save_agent(agent)
+
+    summary = ""
+    try:
+        from trade_integrations.autonomous_agents.strategy_watch_spec import format_watch_spec_summary
+
+        summary = format_watch_spec_summary(watch_spec)
+    except Exception:
+        pass
 
     handoff = None
     if profile.uses_nautilus_watch:
@@ -259,12 +297,43 @@ def mcp_set_watch_spec(agent_id: str, watch_spec: dict[str, Any]) -> dict[str, A
                 sync_handoff_from_position_book(agent_id, underlying=str(agent.get("symbols", ["NIFTY"])[0]))
             except Exception:
                 pass
+
+    _maybe_post_watchers_system_message(agent, summary)
+
     return {
         "status": "ok",
         "agent_id": agent_id,
         "watch_spec": watch_spec,
+        "watch_summary": summary,
         "handoff_synced": handoff is not None,
     }
+
+
+def _maybe_post_watchers_system_message(agent: dict[str, Any], summary: str) -> None:
+    if not summary:
+        return
+    session_id = str(agent.get("vibe_session_id") or "").strip()
+    if not session_id:
+        return
+    try:
+        import sys
+
+        host = sys.modules.get("api_server") or sys.modules.get("agent.api_server")
+        svc = host._get_session_service() if host else None
+        if not svc:
+            return
+        symbols = list(agent.get("symbols") or [])
+        focus = symbols[0] if symbols else "?"
+        msg = f"[autonomous_watchers] {focus} — {summary}"
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(svc.send_message(session_id, msg, role="system"))
+        else:
+            loop.run_until_complete(svc.send_message(session_id, msg, role="system"))
+    except Exception:
+        pass
 
 
 def mcp_get_quant_monitor_status(agent_id: str) -> dict[str, Any]:

@@ -32,6 +32,17 @@ REMEDIATION_HINTS: dict[str, str] = {
         "Set TAPETIDE_TOKEN from https://tapetide.com/settings/tokens for "
         "identity, calendar, and peer enrichment."
     ),
+    "tapetide_rate_limited": (
+        "Tapetide free-tier quota exhausted. Unset TAPETIDE_TOKEN, set TAPETIDE_ENABLED=false, "
+        "or wait for reset. Peers/calendar fall back to screener.in, BSE, and yfinance."
+    ),
+    "vendor_rate_limited": (
+        "Upstream vendor rate-limited this request (often yfinance). Retry later or rely on "
+        "OpenAlgo, dalal BSE, BSE, and screener.in fallbacks."
+    ),
+    "tapetide_batch_disabled": (
+        "Tapetide skipped for Nifty batch (TAPETIDE_BATCH=false). Set TAPETIDE_BATCH=true to include."
+    ),
     "no_data": "Source responded but returned no rows for this ticker/date window.",
     "weekend_trade_date": (
         "nselib pe_ratio needs a valid NSE trading date; retry on a market day."
@@ -65,6 +76,10 @@ def classify_error(exc: Exception | str) -> str:
         return "nse_403"
     if "tapetide" in text and ("token" in text or "401" in text or "authentication" in text):
         return "tapetide_not_configured"
+    if "free tier limit" in text or "tapetideratelimit" in text.replace(" ", ""):
+        return "tapetide_rate_limited"
+    if "rate limit" in text or "too many requests" in text:
+        return "vendor_rate_limited"
     if "not configured" in text or "openalgo_api_key" in text or (
         "openalgo" in text and ("apikey" in text or "api key" in text)
     ):
@@ -173,5 +188,33 @@ def load_bse_code_map() -> dict[str, str]:
     }
 
 
-def resolve_bse_scrip_code(symbol: str) -> str | None:
-    return load_bse_code_map().get(symbol.strip().upper())
+_bse_scrip_auto_cache: dict[str, str | None] = {}
+
+
+def _lookup_bse_scrip_via_api(symbol: str) -> str | None:
+    symbol_upper = symbol.strip().upper()
+    if symbol_upper in _bse_scrip_auto_cache:
+        return _bse_scrip_auto_cache[symbol_upper]
+    try:
+        from bse import BSE
+    except ImportError:
+        _bse_scrip_auto_cache[symbol_upper] = None
+        return None
+    scrip: str | None = None
+    try:
+        with BSE("./") as client:
+            scrip = str(client.getScripCode(symbol_upper) or "").strip() or None
+    except Exception as exc:
+        logger.info("BSE auto scrip lookup failed for %s: %s", symbol_upper, exc)
+    _bse_scrip_auto_cache[symbol_upper] = scrip
+    return scrip
+
+
+def resolve_bse_scrip_code(symbol: str, *, auto_lookup: bool = True) -> str | None:
+    symbol_upper = symbol.strip().upper()
+    mapped = load_bse_code_map().get(symbol_upper)
+    if mapped:
+        return mapped
+    if auto_lookup:
+        return _lookup_bse_scrip_via_api(symbol_upper)
+    return None

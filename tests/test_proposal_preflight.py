@@ -78,3 +78,23 @@ def test_nvda_proposal_routes_us(agents_hub) -> None:
     prop = result["proposal"]
     assert prop["execution_market"] == "US"
     assert prop["execution_backend"] == "alpaca"
+
+
+def test_reliance_proposal_defaults_equity(agents_hub, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.proposals.build_stack_health",
+        lambda: {"vibe_scheduler": "ok"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.market_resolve.is_india_listed_symbol",
+        lambda sym: str(sym).upper() == "RELIANCE",
+    )
+    result = propose_autonomous_agent(
+        symbols=["RELIANCE"],
+        mandate="Paper trade Reliance intraday ₹50k",
+        user_text="Reliance paper trade",
+        execution_market="IN",
+    )
+    assert result["status"] == "ready"
+    instruments = result["proposal"]["mandate_config"]["allowed_instruments"]
+    assert instruments == ["equity"]

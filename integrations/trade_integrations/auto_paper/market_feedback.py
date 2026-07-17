@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 from trade_integrations.auto_paper.config import get_auto_paper_config
 from trade_integrations.auto_paper.engine import is_market_session_open
 from trade_integrations.auto_paper.session_store import load_session, save_session
-from trade_integrations.context.hub import load_options_research_json
+from trade_integrations.context.hub import load_options_research_json, load_stock_research_json
+from trade_integrations.monitor.doc_spot import resolve_doc_spot
 from trade_integrations.monitor.execution_ledger import (
     fetch_position_book,
     list_open_entries_live,
@@ -138,7 +139,7 @@ def _spot_drift_pct(plan_spot: float | None, live_spot: float | None) -> float |
     return round(abs(live_spot - plan_spot) / plan_spot * 100.0, 2)
 
 
-def build_market_feedback(*, ticker: str | None = None) -> dict[str, Any]:
+def build_market_feedback(*, ticker: str | None = None, kind: str = "options") -> dict[str, Any]:
     """Snapshot what changed in the market since the last agent turn."""
     cfg = get_auto_paper_config()
     session = load_session()
@@ -154,13 +155,10 @@ def build_market_feedback(*, ticker: str | None = None) -> dict[str, Any]:
 
     for symbol in symbols:
         live_spot = fetch_underlying_ltp(symbol)
-        doc = load_options_research_json(symbol)
-        plan_spot = None
+        doc = load_stock_research_json(symbol) if kind == "stock" else load_options_research_json(symbol)
+        plan_spot = resolve_doc_spot(doc, kind="stock" if kind == "stock" else "options") if doc else None
         prediction_view = None
         if doc is not None:
-            plan_spot = getattr(doc, "spot", None)
-            if plan_spot is None and isinstance(doc, dict):
-                plan_spot = doc.get("spot")
             pred = getattr(doc, "prediction", None) or (doc.get("prediction") if isinstance(doc, dict) else {})
             if isinstance(pred, dict):
                 prediction_view = pred.get("view")
@@ -169,7 +167,7 @@ def build_market_feedback(*, ticker: str | None = None) -> dict[str, Any]:
             float(plan_spot) if plan_spot is not None else None,
             live_spot,
         )
-        staleness = MonitorService().evaluate_ticker(symbol)
+        staleness = MonitorService().evaluate_ticker(symbol, kind=kind)
         since = MonitorService._news_since(symbol)
         news = check_material_news(symbol, since)
 
@@ -179,8 +177,9 @@ def build_market_feedback(*, ticker: str | None = None) -> dict[str, Any]:
             "plan_spot": plan_spot,
             "spot_drift_pct": drift,
             "prediction_view": prediction_view,
-            "plan_status": staleness.status if staleness else None,
+            "staleness_status": staleness.status if staleness else None,
             "plan_staleness_reasons": list(staleness.reasons or []) if staleness else [],
+            "plan_status": staleness.status if staleness else None,
             "material_news_count": len(news),
             "material_news_headlines": [h.get("title") for h in news[:3] if isinstance(h, dict)],
         }
@@ -296,6 +295,21 @@ def _feedback_summary(
     if alerts:
         parts.append("Alerts: " + "; ".join(alerts[:5]))
     return " | ".join(parts)
+
+
+def build_agent_market_feedback(*, agent_id: str, ticker: str | None = None) -> dict[str, Any]:
+    """Instrument-aware market feedback for autonomous agent turns."""
+    from trade_integrations.autonomous_agents.store import get_agent
+    from trade_integrations.execution.routing_context import resolve_agent_routing
+
+    agent = get_agent(agent_id) or {}
+    routing = resolve_agent_routing(agent)
+    focus = ticker or (routing.trade_symbols[0] if routing.trade_symbols else "NIFTY")
+    kind = "stock" if routing.primary_instrument == "equity" else "options"
+    feedback = build_market_feedback(ticker=focus, kind=kind)
+    feedback["instrument_mode"] = routing.primary_instrument
+    feedback["research_asset_type"] = routing.research_asset_type
+    return feedback
 
 
 def format_feedback_for_prompt(feedback: dict[str, Any]) -> str:

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from trade_integrations.monitor.config import get_monitor_config, is_monitor_enabled
+from trade_integrations.monitor.doc_spot import resolve_doc_spot
 
 StalenessStatus = Literal["fresh", "stale", "broken"]
 SuggestedAction = Literal["none", "refresh", "re_recommend"]
@@ -65,8 +66,8 @@ def evaluate_plan_staleness(
     now: datetime | None = None,
 ) -> StalenessReport:
     """Score a hub research doc against live spot and age thresholds."""
-    ticker = str(_get_attr(doc, "underlying", "") or "").upper()
-    plan_spot = _get_attr(doc, "spot")
+    ticker = str(_get_attr(doc, "underlying", "") or _get_attr(doc, "ticker", "") or "").upper()
+    plan_spot = resolve_doc_spot(doc)
     as_of = _parse_as_of(_get_attr(doc, "as_of"))
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
@@ -131,6 +132,8 @@ def evaluate_plan_staleness(
             reasons.append("spot_drift")
     else:
         reasons.append("live_spot_unavailable")
+        if age_minutes > 5.0:
+            spot_stale = True
 
     if age_stale:
         reasons.append("age_exceeded")

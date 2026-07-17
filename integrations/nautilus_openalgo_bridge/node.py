@@ -151,7 +151,9 @@ def build_trading_node_config(
 
     actors: list[ImportableActorConfig] = []
     for aid in ids or [None]:
+        actor_suffix = (aid or "default").replace("_", "-")
         actor_cfg = {
+            "component_id": f"WatchActor-{actor_suffix}",
             "agent_id": aid,
             "trigger_vibe": trigger_vibe,
             "alert_cooldown_sec": cfg.alert_cooldown_sec,
@@ -169,7 +171,11 @@ def build_trading_node_config(
             ImportableActorConfig(
                 actor_path="nautilus_openalgo_bridge.bridge_signal_actor:BridgeSignalActor",
                 config_path="nautilus_openalgo_bridge.bridge_signal_actor:BridgeSignalActorConfig",
-                config={"agent_id": aid, "trigger_vibe": trigger_vibe},
+                config={
+                    "component_id": f"BridgeSignalActor-{actor_suffix}",
+                    "agent_id": aid,
+                    "trigger_vibe": trigger_vibe,
+                },
             )
         )
 
@@ -190,7 +196,9 @@ def build_trading_node_config(
             continue
         seen_risk.add(aid)
         market = _agent_market(aid) if aid else "IN"
+        risk_suffix = aid.replace("_", "-")
         risk_cfg = {
+            "component_id": f"RiskActor-{risk_suffix}",
             "agent_id": aid,
             "market": market,
             "max_daily_loss_inr": max_daily_loss_for_agent(aid),

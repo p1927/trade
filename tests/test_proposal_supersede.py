@@ -57,3 +57,32 @@ class TestProposalSupersede:
         latest = load_latest_proposal_for_orchestrator(orch)
         assert latest is not None
         assert latest.get("proposal_id") == "aap_second"
+
+    def test_commit_rejects_superseded_proposal(self, agents_hub, monkeypatch):
+        from trade_integrations.autonomous_agents import proposals
+
+        save_proposal(
+            {
+                "proposal_id": "aap_old",
+                "orchestrator_session_id": "orch_commit_sup",
+                "status": "ready",
+                "symbols": ["NIFTY"],
+                "name": "Old",
+                "mandate": "Paper",
+                "constraints": {"mode": "paper", "budget_inr": 20000},
+                "expires_at_ms": 9999999999999,
+                "superseded": True,
+                "superseded_by": "aap_new",
+            }
+        )
+
+        class FakeSvc:
+            pass
+
+        with pytest.raises(ValueError, match="superseded"):
+            proposals.commit_autonomous_agent(
+                proposal_id="aap_old",
+                consent_ack=True,
+                session_service=FakeSvc(),
+                orchestrator_session_id="orch_commit_sup",
+            )

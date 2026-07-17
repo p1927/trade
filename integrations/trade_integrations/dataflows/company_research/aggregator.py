@@ -133,7 +133,7 @@ def run_company_research(
         )
         from trade_integrations.hub_capture.channel import resolve_registered_entity
 
-        capture_entity = resolve_registered_entity(normalized)
+        capture_entity = resolve_registered_entity(normalized.base_symbol)
         _apply_stage(
             doc,
             fetch_sentiment(
@@ -166,7 +166,7 @@ def run_company_research(
         )
         from trade_integrations.hub_capture.channel import resolve_registered_entity
 
-        capture_entity = resolve_registered_entity(normalized)
+        capture_entity = resolve_registered_entity(normalized.base_symbol)
         _apply_stage(
             doc,
             fetch_sentiment(

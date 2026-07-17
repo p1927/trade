@@ -57,13 +57,14 @@ def test_finalize_bootstrap_requires_last_decision(hub_tmp: Path):
     assert agent["bootstrap_status"] == "running"
 
 
-def test_finalize_bootstrap_marks_done(hub_tmp: Path):
+def test_finalize_bootstrap_marks_awaiting_plan_approval(hub_tmp: Path):
     agent = _agent()
     agent["last_decision"] = {"decision": "HOLD", "at": "2026-07-16T20:00:00+00:00"}
     save_agent(agent)
     assert finalize_bootstrap_if_ready("aa_boot") is True
     updated = get_agent("aa_boot")
-    assert updated["bootstrap_status"] == "done"
+    assert updated["bootstrap_status"] == "awaiting_plan_approval"
+    assert updated.get("plan_approval_required") is True
     assert updated.get("bootstrap_completed_at")
 
 
