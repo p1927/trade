@@ -1,19 +1,15 @@
 """India company_research data sources — what we depend on and fallback order.
 
-Consumed by factor_catalog (UI/API) and agent context. Keep in sync when adding
-or reordering fetchers under sources/*.py.
-
-Core sources are always fetched; stage status and errors depend on them only.
-Optional sources are best-effort enrichment — failures are skipped silently.
+Only sources marked ``used_in_pipeline: true`` are wired into stage fetchers.
+Fragile endpoints are documented but never merged into research output.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# reliability: high | partial | fragile | optional
-# cost: free | freemium | broker
-# tier: core | optional  (core = drives stage status; optional = silent skip on failure)
+# reliability: high | fragile | freemium
+# used_in_pipeline: if false, documented only — no data merged from this source
 
 INDIA_COMPANY_DATA_SOURCES: tuple[dict[str, Any], ...] = (
     {
@@ -21,121 +17,108 @@ INDIA_COMPANY_DATA_SOURCES: tuple[dict[str, Any], ...] = (
         "label": "OpenAlgo (INDmoney / Zerodha / …)",
         "stages": ["identity"],
         "priority": 1,
-        "tier": "core",
         "env": ["OPENALGO_HOST", "OPENALGO_API_KEY"],
         "package": "openalgo (local)",
         "provides": ["ltp", "volume", "bid", "ask", "ohlc", "oi"],
-        "limits": "Broker API rate limits (~5 req/s for INDmoney quotes)",
         "reliability": "high",
+        "used_in_pipeline": True,
         "cost": "broker",
-        "notes": "Live execution authority; quotes only — no sector, peers, or fundamentals.",
+        "notes": "Live quotes when broker session + API key configured.",
     },
     {
         "key": "yfinance",
         "label": "Yahoo Finance (.NS / .BO)",
         "stages": ["identity", "fundamentals", "calendar", "peers"],
         "priority": 2,
-        "tier": "core",
         "env": [],
         "package": "yfinance",
         "provides": ["sector", "industry", "market_cap", "pe_ratio", "ratios", "earnings_date"],
-        "limits": "Informal Yahoo throttling on heavy batch use",
         "reliability": "high",
+        "used_in_pipeline": True,
         "cost": "free",
-        "notes": "Always-on baseline for identity, fundamentals, and earnings calendar.",
+        "notes": "Identity, fundamentals, earnings calendar, peer sector context.",
     },
     {
         "key": "dalal_bse",
-        "label": "dalal (BSE routes)",
-        "stages": ["identity", "fundamentals", "filings"],
+        "label": "dalal (BSE meta + fundamentals)",
+        "stages": ["identity", "fundamentals"],
         "priority": 3,
-        "tier": "core",
         "env": ["TRADINGAGENTS_BSE_CODE_MAP"],
         "package": "dalal>=0.2.1",
         "provides": ["sector", "industry", "pe_ratio", "fundamentals_table"],
-        "limits": "Requires BSE scrip code; announcements feed often empty (use bse package for calendar)",
         "reliability": "high",
+        "used_in_pipeline": True,
         "cost": "free",
-        "notes": "Identity/fundamentals via dalal.meta + dalal.fundamentals (no user API key). NSE routes 403.",
+        "notes": "meta + fundamentals only. dalal.announcements() not wired (returns empty).",
     },
     {
         "key": "bse_india",
         "label": "BSE India API (bse package)",
         "stages": ["calendar", "filings"],
         "priority": 1,
-        "tier": "core",
         "env": [],
         "package": "bse>=3.3.0",
         "provides": ["corporate_announcements", "corporate_actions"],
-        "limits": "Scrape/API courtesy; 7-day lookback in calendar_in",
         "reliability": "high",
+        "used_in_pipeline": True,
         "cost": "free",
-        "notes": "Primary calendar and filings source (bse pip). No user API key — public BSE API.",
+        "notes": "Calendar and filings via public BSE API (7-day lookback).",
     },
     {
         "key": "screener_in",
         "label": "Screener.in (screenercli)",
         "stages": ["peers"],
         "priority": 1,
-        "tier": "core",
         "env": [],
         "package": "screenercli>=0.1.2",
         "provides": ["peer_comparison", "sector", "industry", "peer_market_cap"],
-        "limits": "HTML scrape; add delays for batch; respect screener.in ToS",
         "reliability": "high",
+        "used_in_pipeline": True,
         "cost": "free",
-        "notes": "Primary peer list (≥5 peers typical). Fetcher name in code: screener.",
-    },
-    {
-        "key": "nselib",
-        "label": "nselib (NSE public data)",
-        "stages": ["identity", "fundamentals", "calendar", "peers", "macro"],
-        "priority": 4,
-        "tier": "optional",
-        "env": [],
-        "package": "nselib>=2.0",
-        "provides": ["pe_ratio", "quarterly_results", "event_calendar", "nifty50_list", "india_vix"],
-        "limits": "NSE-side fragility; calendar/financials APIs often return empty",
-        "reliability": "fragile",
-        "cost": "free",
-        "notes": "Optional enrichment only; failures do not affect stage status.",
+        "notes": "Primary peer list. Fetcher name in code: screener.",
     },
     {
         "key": "tapetide",
         "label": "Tapetide MCP",
         "stages": ["identity", "peers", "fundamentals", "calendar"],
         "priority": 99,
-        "tier": "optional",
-        "env": [
-            "TAPETIDE_TOKEN",
-            "TAPETIDE_MCP_URL",
-            "TAPETIDE_BATCH",
-            "TAPETIDE_CACHE_MINUTES",
-        ],
+        "env": ["TAPETIDE_TOKEN", "TAPETIDE_MCP_URL", "TAPETIDE_BATCH", "TAPETIDE_CACHE_MINUTES"],
         "package": "requests (remote MCP)",
         "provides": ["company_profile", "peers", "key_ratios", "stock_events"],
-        "limits": "Free tier ~4,000 MCP calls/day; skipped in Nifty batch unless TAPETIDE_BATCH=true",
-        "reliability": "optional",
+        "reliability": "freemium",
+        "used_in_pipeline": True,
         "cost": "freemium",
-        "notes": "Always attempted when TAPETIDE_TOKEN is set. Free tier quota may rate-limit; disk cache used when available.",
+        "notes": "Always attempted when TAPETIDE_TOKEN set; merged only on successful response.",
+    },
+    {
+        "key": "nselib",
+        "label": "nselib (NSE public data)",
+        "stages": ["macro"],
+        "priority": 4,
+        "env": [],
+        "package": "nselib>=2.0",
+        "provides": ["pe_ratio", "quarterly_results", "event_calendar", "india_vix"],
+        "reliability": "fragile",
+        "used_in_pipeline": False,
+        "cost": "free",
+        "notes": "Not wired into company_research — calendar/financials APIs too unreliable.",
     },
     {
         "key": "moneycontrol_rss",
         "label": "Moneycontrol RSS",
-        "stages": ["calendar"],
+        "stages": [],
         "priority": 5,
-        "tier": "optional",
         "env": [],
-        "package": "feedparser (via moneycontrol_rss)",
+        "package": "feedparser",
         "provides": ["results_news"],
-        "limits": "Sparse coverage",
         "reliability": "fragile",
+        "used_in_pipeline": False,
         "cost": "free",
-        "notes": "Optional calendar enrichment; RSS parse failures are ignored.",
+        "notes": "Not wired — RSS parse failures and sparse coverage.",
     },
 )
 
-# Fetcher names as used in sources/*.py (may differ from registry keys).
+# Fetcher names as used in sources/*.py
 STAGE_CORE_SOURCES: dict[str, tuple[str, ...]] = {
     "identity": ("openalgo", "yfinance", "dalal_bse"),
     "peers": ("screener", "yfinance"),
@@ -144,51 +127,56 @@ STAGE_CORE_SOURCES: dict[str, tuple[str, ...]] = {
     "filings": ("bse_india",),
 }
 
-STAGE_OPTIONAL_SOURCES: dict[str, tuple[str, ...]] = {
-    "identity": ("nselib", "tapetide"),
-    "peers": ("nselib", "tapetide"),
-    "calendar": ("nselib", "moneycontrol_rss", "dalal_bse", "tapetide"),
-    "fundamentals": ("nselib", "tapetide"),
-    "filings": ("dalal_bse",),
+# Enrichment: always attempted when configured; merged only on status=ok
+STAGE_ENRICHMENT_SOURCES: dict[str, tuple[str, ...]] = {
+    "identity": ("tapetide",),
+    "peers": ("tapetide",),
+    "calendar": ("tapetide",),
+    "fundamentals": ("tapetide",),
+    "filings": (),
 }
 
 STAGE_SOURCE_ORDER: dict[str, list[str]] = {
-    "identity": ["openalgo", "yfinance", "dalal_bse", "nselib", "tapetide"],
-    "peers": ["screener_in", "yfinance", "tapetide", "nselib"],
-    "calendar": ["bse_india", "yfinance", "nselib", "moneycontrol_rss", "dalal_bse", "tapetide"],
-    "fundamentals": ["yfinance", "dalal_bse", "nselib", "tapetide"],
-    "filings": ["bse_india", "dalal_bse"],
+    "identity": ["openalgo", "yfinance", "dalal_bse", "tapetide"],
+    "peers": ["screener_in", "yfinance", "tapetide"],
+    "calendar": ["bse_india", "yfinance", "tapetide"],
+    "fundamentals": ["yfinance", "dalal_bse", "tapetide"],
+    "filings": ["bse_india"],
 }
 
 
 def core_source_names(stage: str) -> frozenset[str]:
-    """Core fetcher names for a pipeline stage (drive status + errors)."""
     return frozenset(STAGE_CORE_SOURCES.get(stage, ()))
 
 
+def enrichment_source_names(stage: str) -> frozenset[str]:
+    return frozenset(STAGE_ENRICHMENT_SOURCES.get(stage, ()))
+
+
 def optional_source_names(stage: str) -> frozenset[str]:
-    """Optional fetcher names — failures become skipped, not errors."""
-    return frozenset(STAGE_OPTIONAL_SOURCES.get(stage, ()))
+    """Alias for enrichment sources — failures are skipped, never merged."""
+    return enrichment_source_names(stage)
 
 
 def list_india_company_data_sources() -> dict[str, Any]:
-    """Return dependency matrix for India company_research stages."""
+    active = [row for row in INDIA_COMPANY_DATA_SOURCES if row.get("used_in_pipeline")]
+    excluded = [row["key"] for row in INDIA_COMPANY_DATA_SOURCES if not row.get("used_in_pipeline")]
     return {
         "market": "IN",
         "sources": [dict(row) for row in INDIA_COMPANY_DATA_SOURCES],
+        "active_sources": [row["key"] for row in active],
+        "excluded_from_pipeline": excluded,
         "stage_source_order": STAGE_SOURCE_ORDER,
         "stage_core_sources": {k: list(v) for k, v in STAGE_CORE_SOURCES.items()},
-        "stage_optional_sources": {k: list(v) for k, v in STAGE_OPTIONAL_SOURCES.items()},
+        "stage_enrichment_sources": {k: list(v) for k, v in STAGE_ENRICHMENT_SOURCES.items()},
         "tapetide_policy": {
-            "enabled": "always (when TAPETIDE_TOKEN set)",
-            "batch_default": "included (TAPETIDE_BATCH defaults true)",
-            "calendar": "always attempted alongside BSE/yfinance",
+            "enabled": "always when TAPETIDE_TOKEN set",
+            "merge": "only on successful response",
         },
     }
 
 
 def sources_for_stage(stage: str) -> list[dict[str, Any]]:
-    """Sources that feed a pipeline stage, in priority order."""
     order = STAGE_SOURCE_ORDER.get(stage, [])
     by_key = {row["key"]: row for row in INDIA_COMPANY_DATA_SOURCES}
-    return [by_key[key] for key in order if key in by_key]
+    return [by_key[key] for key in order if key in by_key and by_key[key].get("used_in_pipeline")]

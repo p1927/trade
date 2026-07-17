@@ -156,7 +156,7 @@ def run_sources(
 
 def merge_identity_fields(attempts: list[SourceAttempt]) -> dict[str, Any]:
     """Merge identity payloads; later sources fill gaps only."""
-    priority = ("openalgo", "tapetide", "yfinance", "dalal_bse", "nselib")
+    priority = ("openalgo", "tapetide", "yfinance", "dalal_bse")
     ordered = sorted(
         [a for a in attempts if a.status == "ok" and a.data],
         key=lambda a: priority.index(a.name) if a.name in priority else 99,

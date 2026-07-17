@@ -74,49 +74,6 @@ def _fetch_yfinance_peers(normalized: NormalizedTicker, *, max_peers: int) -> di
     }
 
 
-def _fetch_nselib_peers(symbol: str, *, industry: str, max_peers: int) -> dict[str, Any] | None:
-    if not industry:
-        return None
-    try:
-        from nselib import capital_market
-    except ImportError:
-        return None
-    try:
-        frame = capital_market.nifty50_equity_list()
-    except Exception as exc:
-        logger.info("nselib nifty50 failed: %s", exc)
-        return None
-    if frame is None or getattr(frame, "empty", True):
-        return None
-    industry_col = "Industry" if "Industry" in frame.columns else None
-    symbol_col = "Symbol" if "Symbol" in frame.columns else None
-    name_col = "Company Name" if "Company Name" in frame.columns else None
-    if not industry_col or not symbol_col:
-        return None
-    needle = industry.strip().lower()
-    subset = frame[
-        frame[industry_col].astype(str).str.lower().str.contains(needle.split()[0], na=False)
-    ]
-    peers = []
-    for _, row in subset.iterrows():
-        sym = str(row[symbol_col]).upper()
-        if sym == symbol.upper():
-            continue
-        peers.append(
-            {
-                "symbol": sym,
-                "name": str(row[name_col]) if name_col else sym,
-                "sector": str(row[industry_col]),
-                "source": "nselib:nifty50",
-            }
-        )
-        if len(peers) >= max_peers:
-            break
-    if not peers:
-        return None
-    return {"peers": peers, "primary_source": "nselib"}
-
-
 def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> StageResult:
     """Return sector peers for an India equity ticker."""
     config = get_research_config()
@@ -130,17 +87,6 @@ def fetch_peers_in(normalized: NormalizedTicker, *, industry_hint: str = "") -> 
     if tapetide_configured():
         fetchers.append(
             ("tapetide", lambda: _fetch_tapetide_peers(normalized.base_symbol, max_peers=max_peers)),
-        )
-
-    industry = industry_hint
-    if industry:
-        fetchers.append(
-            (
-                "nselib",
-                lambda: _fetch_nselib_peers(
-                    normalized.base_symbol, industry=industry, max_peers=max_peers
-                ),
-            ),
         )
 
     fetchers.append(("yfinance", lambda: _fetch_yfinance_peers(normalized, max_peers=max_peers)))

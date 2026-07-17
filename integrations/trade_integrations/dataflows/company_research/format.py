@@ -255,8 +255,8 @@ def format_research_report(doc: CompanyResearchDoc) -> str:
         _stage_table(doc.stages),
         "",
         "## Data Source Health",
-        "_Core sources (OpenAlgo, yfinance, BSE, screener.in, dalal BSE) drive stage status. "
-        "Optional sources (nselib, RSS, Tapetide) are omitted when skipped._",
+        "_Only reliable sources are wired; enrichment (Tapetide) merges on success only. "
+        "Fragile sources (nselib, RSS, dalal announcements) are excluded — see source_registry._",
         "",
         _source_health_table(doc.stages),
     ]

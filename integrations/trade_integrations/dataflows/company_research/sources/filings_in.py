@@ -1,4 +1,4 @@
-"""India corporate filings and announcements."""
+"""India corporate filings and announcements — BSE India only."""
 
 from __future__ import annotations
 
@@ -8,13 +8,11 @@ from typing import Any
 
 from ..market import NormalizedTicker
 from ..models import StageResult
-from ..source_registry import optional_source_names
 from .bse_india import fetch_bse_calendar_events
 from .resilience import (
     SourceAttempt,
     classify_error,
     remediation_for,
-    resolve_bse_scrip_code,
     stage_errors,
     stage_status_from_attempts,
     _record_source_failure,
@@ -36,44 +34,6 @@ def _normalize_filing(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _fetch_dalal_bse_filings(symbol: str) -> list[dict[str, Any]]:
-    scrip = resolve_bse_scrip_code(symbol)
-    if not scrip:
-        return []
-    try:
-        import dalal  # type: ignore[import-untyped]
-    except ImportError:
-        return []
-
-    filings: list[dict[str, Any]] = []
-    try:
-        rows = dalal.announcements(scrip, exchange="BSE") or []
-    except Exception as exc:
-        logger.info("dalal announcements failed for %s: %s", symbol, exc)
-        return filings
-
-    for row in rows[:15]:
-        if isinstance(row, dict):
-            title = row.get("HEADLINE") or row.get("headline") or row.get("subject") or ""
-            event_date = row.get("NEWS_DT") or row.get("date") or ""
-        else:
-            title = str(row)
-            event_date = ""
-        if not title:
-            continue
-        filings.append(
-            _normalize_filing(
-                {
-                    "date": str(event_date)[:10] if event_date else "",
-                    "description": title,
-                    "type": "bse_announcement",
-                    "source": "dalal_bse:announcements",
-                }
-            )
-        )
-    return filings
-
-
 def _fetch_bse_filings(symbol: str, *, lookback_days: int) -> list[dict[str, Any]]:
     start = date.today() - timedelta(days=lookback_days)
     end = date.today()
@@ -86,48 +46,32 @@ def fetch_filings_in(
     *,
     lookback_days: int = 30,
 ) -> StageResult:
-    """Recent corporate announcements and filings for India equities."""
+    """Recent corporate announcements and filings from BSE India only."""
     symbol = normalized.base_symbol
-    optional = optional_source_names("filings")
     attempts: list[SourceAttempt] = []
     all_filings: list[dict[str, Any]] = []
 
-    for name, fetcher in (
-        ("bse_india", lambda: _fetch_bse_filings(symbol, lookback_days=lookback_days)),
-        ("dalal_bse", lambda: _fetch_dalal_bse_filings(symbol)),
-    ):
-        is_optional = name in optional
-        try:
-            rows = fetcher()
-            if rows:
-                all_filings.extend(rows)
-                attempts.append(SourceAttempt(name=name, status="ok", data={"filings": rows}))
-            else:
-                attempts.append(
-                    _record_source_failure(
-                        name,
-                        error="no data",
-                        remediation=remediation_for("no_data"),
-                        optional=is_optional,
-                    )
-                )
-        except Exception as exc:
+    try:
+        rows = _fetch_bse_filings(symbol, lookback_days=lookback_days)
+        if rows:
+            all_filings.extend(rows)
+            attempts.append(SourceAttempt(name="bse_india", status="ok", data={"filings": rows}))
+        else:
             attempts.append(
                 _record_source_failure(
-                    name,
-                    error=str(exc),
-                    remediation=remediation_for(classify_error(exc)),
-                    optional=is_optional,
+                    "bse_india",
+                    error="no data",
+                    remediation=remediation_for("no_data"),
+                    optional=False,
                 )
             )
-
-    if not resolve_bse_scrip_code(symbol):
+    except Exception as exc:
         attempts.append(
-            SourceAttempt(
-                name="dalal_bse",
-                status="skipped",
-                error="bse_code_missing",
-                remediation=remediation_for("bse_code_missing"),
+            _record_source_failure(
+                "bse_india",
+                error=str(exc),
+                remediation=remediation_for(classify_error(exc)),
+                optional=False,
             )
         )
 

@@ -48,7 +48,6 @@ class TestResilience:
         attempts = [
             SourceAttempt(name="bse_india", status="ok", data={"events": []}),
             SourceAttempt(name="yfinance", status="ok", data={"events": []}),
-            SourceAttempt(name="nselib", status="skipped", error="no data"),
         ]
         assert stage_status_from_attempts(attempts, has_output=True, stage="calendar") == "ok"
         assert stage_errors(attempts, stage="calendar") == []

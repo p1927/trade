@@ -1,4 +1,4 @@
-"""India market fundamentals — dalal BSE, yfinance, Tapetide, nselib."""
+"""India market fundamentals — dalal BSE + yfinance; Tapetide enrichment when configured."""
 
 from __future__ import annotations
 
@@ -118,27 +118,6 @@ def _fetch_tapetide(symbol: str) -> dict[str, Any] | None:
     }
 
 
-def _fetch_nselib_financials(normalized: NormalizedTicker) -> dict[str, Any] | None:
-    from datetime import timedelta
-
-    from nselib import capital_market
-
-    end = datetime.now().date()
-    start = end - timedelta(days=730)
-    frame = capital_market.financial_results_for_equity(
-        from_date=start.strftime("%d-%m-%Y"),
-        to_date=end.strftime("%d-%m-%Y"),
-        fin_period="Quarterly",
-    )
-    if frame is None or frame.empty or "symbol" not in frame.columns:
-        return None
-    subset = frame[frame["symbol"].astype(str).str.upper() == normalized.base_symbol]
-    if subset.empty:
-        return None
-    rows = subset.head(4).to_dict(orient="records")
-    return {"source": "nselib", "quarterly_results": rows}
-
-
 _RATIO_KEYS = frozenset(
     {
         "pe_ratio",
@@ -188,13 +167,6 @@ def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
     ]
     if resolve_bse_scrip_code(normalized.base_symbol):
         fetchers.insert(0, ("dalal_bse", lambda: _fetch_dalal_bse(normalized)))
-
-    try:
-        import nselib  # noqa: F401
-
-        fetchers.append(("nselib", lambda: _fetch_nselib_financials(normalized)))
-    except ImportError:
-        pass
 
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
 

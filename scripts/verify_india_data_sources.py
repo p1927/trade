@@ -51,12 +51,17 @@ def check_registry() -> Check:
         len(reg["sources"]) >= 8
         and "screener_in" in reg["stage_source_order"]["peers"]
         and "india_data_sources" in cat
+        and "nselib" in reg.get("excluded_from_pipeline", [])
+        and "moneycontrol_rss" in reg.get("excluded_from_pipeline", [])
     )
     return Check(
         "source_registry + factor_catalog",
         "pass" if ok else "fail",
-        f"{len(reg['sources'])} sources documented",
-        {"peer_order": reg["stage_source_order"]["peers"]},
+        f"{len(reg['sources'])} sources; active={len(reg.get('active_sources', []))}",
+        {
+            "peer_order": reg["stage_source_order"]["peers"],
+            "excluded": reg.get("excluded_from_pipeline"),
+        },
     )
 
 
@@ -323,7 +328,6 @@ def main() -> int:
         check_registry(),
         check_tapetide_calendar_clean(),
         check_batch_includes_tapetide(),
-        check_nselib_calendar(),
     ]
 
     for sym in SYMBOLS:

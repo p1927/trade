@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from tradingagents.dataflows.errors import VendorNotConfiguredError
@@ -93,32 +93,6 @@ def _fetch_dalal_bse(normalized: NormalizedTicker) -> dict[str, Any] | None:
     }
 
 
-def _fetch_nselib_pe(normalized: NormalizedTicker) -> dict[str, Any] | None:
-    from nselib import capital_market
-
-    for offset in range(0, 6):
-        trade_day = (datetime.now() - timedelta(days=offset)).strftime("%d-%m-%Y")
-        try:
-            frame = capital_market.pe_ratio(trade_date=trade_day)
-        except Exception:
-            continue
-        if frame is None or frame.empty or "symbol" not in frame.columns:
-            continue
-        row = frame[frame["symbol"].astype(str).str.upper() == normalized.base_symbol]
-        if row.empty:
-            continue
-        record = row.iloc[0].to_dict()
-        return {
-            "pe_ratio": record.get("pe") or record.get("PE"),
-            "sector": record.get("industry") or record.get("Industry") or "",
-            "industry": record.get("industry") or "",
-            "exchange": "NSE",
-            "source": "nselib",
-            "trade_date": trade_day,
-        }
-    return None
-
-
 def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
     """Resolve company identity using every available India source."""
     base = {
@@ -141,13 +115,6 @@ def fetch_identity_in(normalized: NormalizedTicker) -> StageResult:
         _openalgo_settings()
         fetchers.insert(0, ("openalgo", lambda: _fetch_openalgo(normalized)))
     except (VendorNotConfiguredError, ImportError):
-        pass
-
-    try:
-        import nselib  # noqa: F401
-
-        fetchers.append(("nselib", lambda: _fetch_nselib_pe(normalized)))
-    except ImportError:
         pass
 
     from trade_integrations.clients.tapetide import is_configured as tapetide_configured
