@@ -63,11 +63,16 @@ def test_run_agent_debate_hub_wrapper_accepts_asset_type_keyword():
     ):
         from trade_integrations.bridge.agent_debate import run_agent_debate
 
-        payload = run_agent_debate("NIFTY", asset_type="options")
+        payload = run_agent_debate(
+            "NIFTY",
+            asset_type="options",
+            trade_date="2026-07-16",
+        )
 
     assert graph_calls == [
-        {"company": "^NSEI", "date": payload["trade_date"], "asset_type": "options"}
+        {"company": "^NSEI", "date": "2026-07-16", "asset_type": "options"}
     ]
+    assert payload["trade_date"] == "2026-07-16"
     assert payload["ticker"] == "NIFTY"
     assert payload["asset_type"] == "options"
     save_debate.assert_called_once()
