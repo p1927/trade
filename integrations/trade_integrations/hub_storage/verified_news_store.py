@@ -113,6 +113,14 @@ def _record_to_row(record: dict[str, Any]) -> dict[str, Any]:
     story_id = str(record.get("canonical_story_id") or "").strip()
     now = _now_iso()
     sources = _normalize_sources(record.get("sources"))
+    htd_raw = record.get("horizon_trading_days")
+    try:
+        if htd_raw is None or pd.isna(htd_raw):
+            horizon_days = None
+        else:
+            horizon_days = int(htd_raw) or None
+    except (TypeError, ValueError):
+        horizon_days = None
     return {
         "canonical_story_id": story_id,
         "ticker": str(record.get("ticker") or "NIFTY").upper(),
@@ -127,7 +135,7 @@ def _record_to_row(record: dict[str, Any]) -> dict[str, Any]:
         "predicted_impact_json": _json_dumps(record.get("predicted_impact")),
         "actual_impact_json": _json_dumps(record.get("actual_impact")),
         "maturity_date": str(record.get("maturity_date") or "")[:10] or None,
-        "horizon_trading_days": int(record.get("horizon_trading_days") or 0) or None,
+        "horizon_trading_days": horizon_days,
         "tagged_factors_json": _json_dumps(record.get("tagged_factors")),
         "tags_json": _json_dumps(record.get("tags")),
         "first_seen_at": str(record.get("first_seen_at") or now),
@@ -190,6 +198,71 @@ def _coerce_records_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _is_distillation_leak(text: str | None) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return (
+        "<think" in lowered
+        or "redacted_thinking" in lowered
+        or lowered.startswith("the user wants me to")
+    )
+
+
+def _should_replace_summary(
+    existing: str,
+    incoming: str,
+    *,
+    incoming_structured: dict[str, Any] | None = None,
+) -> bool:
+    if not incoming:
+        return False
+    if not existing or _is_distillation_leak(existing):
+        return True
+    event_meta = ((incoming_structured or {}).get("event_meta") or {})
+    if event_meta.get("distilled_by") == "minimax":
+        return True
+    return len(incoming) > len(existing)
+
+
+def patch_verified_event_meta(
+    updates: list[tuple[str, dict[str, Any]]],
+    *,
+    min_rows: int | None = None,
+) -> int:
+    """Batch-update structured_summary.event_meta for story ids without full re-ingest."""
+    if not updates:
+        return 0
+    frame = _load_records_frame()
+    if frame.empty:
+        return 0
+    before = len(frame)
+    if min_rows is not None and before < min_rows:
+        raise RuntimeError(f"refusing patch: row count {before} below guard {min_rows}")
+    patched = 0
+    for story_id, event_meta in updates:
+        sid = str(story_id or "").strip()
+        if not sid:
+            continue
+        mask = frame["canonical_story_id"].astype(str) == sid
+        if not mask.any():
+            continue
+        idx = frame.index[mask][0]
+        structured = _json_loads(frame.at[idx, "structured_summary_json"], {})
+        if not isinstance(structured, dict):
+            structured = {}
+        structured["event_meta"] = event_meta
+        frame.at[idx, "structured_summary_json"] = _json_dumps(structured)
+        frame.at[idx, "updated_at"] = _now_iso()
+        patched += 1
+    if patched:
+        after = len(frame)
+        if after != before:
+            raise RuntimeError(f"refusing patch: row count changed {before} -> {after}")
+        write_dataframe(_coerce_records_frame(frame), verified_records_path())
+    return patched
+
+
 def upsert_verified_record(record: dict[str, Any]) -> None:
     """Insert or merge a canonical story record in hub parquet."""
     story_id = str(record.get("canonical_story_id") or "").strip()
@@ -208,7 +281,12 @@ def upsert_verified_record(record: dict[str, Any]) -> None:
         )
         existing_summary = str(existing.get("content_summary") or "")
         incoming_summary = str(incoming.get("content_summary") or "")
-        if len(incoming_summary) > len(existing_summary):
+        incoming_structured = _json_loads(incoming.get("structured_summary_json"), {})
+        if _should_replace_summary(
+            existing_summary,
+            incoming_summary,
+            incoming_structured=incoming_structured,
+        ):
             existing["content_summary"] = incoming_summary
         if incoming.get("structured_summary_json"):
             existing["structured_summary_json"] = incoming["structured_summary_json"]
@@ -246,6 +324,31 @@ def upsert_verified_record(record: dict[str, Any]) -> None:
         frame = pd.concat([frame, new_row], ignore_index=True)
 
     write_dataframe(_coerce_records_frame(frame), verified_records_path())
+
+
+def remove_verified_records(story_ids: set[str] | list[str]) -> int:
+    """Drop rows by canonical_story_id; returns removed count."""
+    ids = {str(s).strip() for s in story_ids if str(s).strip()}
+    if not ids:
+        return 0
+    frame = _load_records_frame()
+    if frame.empty:
+        return 0
+    before = len(frame)
+    frame = frame[~frame["canonical_story_id"].astype(str).isin(ids)]
+    removed = before - len(frame)
+    if removed:
+        write_dataframe(_coerce_records_frame(frame), verified_records_path())
+    return removed
+
+
+def count_verified_records(*, ticker: str | None = None) -> int:
+    frame = _load_records_frame()
+    if frame.empty:
+        return 0
+    if ticker and "ticker" in frame.columns:
+        frame = frame[frame["ticker"].astype(str).str.upper() == ticker.strip().upper()]
+    return int(len(frame))
 
 
 def get_verified_record(story_id: str) -> dict[str, Any] | None:
@@ -430,6 +533,16 @@ def build_snapshot_from_hub(
         1 for i in items if (i.get("actual_impact") or i.get("actual") or {}).get("nifty_points") is not None
     )
     total_reconciled = len(reconciled_items)
+    staging_pending = 0
+    try:
+        from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+        from trade_integrations.hub_storage.news_staging_store import staging_queue_stats
+
+        items = union_headlines_with_staging(items, ticker=ticker, limit=limit)
+        staging_pending = int(staging_queue_stats(ticker=ticker).get("queued") or 0)
+    except Exception:
+        pass
+    staging_live = sum(1 for i in items if i.get("provenance") == "staging")
     return {
         "status": "ok",
         "as_of": _now_iso(),
@@ -443,7 +556,8 @@ def build_snapshot_from_hub(
                 for i in items
                 if (i.get("actual_impact") or i.get("actual") or {}).get("nifty_points") is None
             ),
-            "pending_count": 0,
+            "pending_count": staging_pending,
+            "staging_live_count": staging_live,
             "reconciled_count": reconciled,
             "reconciled_total": total_reconciled,
             "approved_count": sum(1 for i in items if i.get("verification_status") == "approved"),

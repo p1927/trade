@@ -116,6 +116,44 @@ def _sources_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
     return [_source_entry(row)]
 
 
+_BULLISH_THEMES = frozenset({"rally", "recovery", "record_high"})
+_BEARISH_THEMES = frozenset({"crash", "selloff", "record_low"})
+
+
+def _market_direction(themes: list[str]) -> str:
+    bulls = [theme for theme in themes if theme in _BULLISH_THEMES]
+    bears = [theme for theme in themes if theme in _BEARISH_THEMES]
+    if bulls and bears:
+        return "mixed"
+    if bears:
+        return "bearish"
+    if bulls:
+        return "bullish"
+    if "flat" in themes:
+        return "flat"
+    if "volatility_spike" in themes:
+        return "volatile"
+    return "neutral"
+
+
+def semantic_cluster_key(row: dict[str, Any], *, ticker: str = "NIFTY") -> str:
+    """Cluster key from publish day + topic + market direction + primary factor."""
+    tags = _tags_from_row(row, ticker=ticker)
+    day = str(tags.get("publish_day") or "").strip()
+    if not day:
+        day = publish_day_from_value(str(row.get("published_at") or ""))
+    if not day:
+        return ""
+
+    topics = sorted(tags.get("topics") or [])
+    if not topics:
+        return ""
+
+    direction = _market_direction(list(tags.get("themes") or []))
+    primary_factor = str((tags.get("factors") or ["index_sentiment"])[0])
+    return f"sem:{day}:{topics[0]}:{direction}:{primary_factor}"
+
+
 def _tags_from_row(row: dict[str, Any], *, ticker: str = "NIFTY") -> dict[str, Any]:
     existing = row.get("tags")
     if isinstance(existing, dict) and any(
@@ -139,6 +177,7 @@ def merge_raw_headlines(rows: list[dict[str, Any]], *, ticker: str = "NIFTY") ->
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     title_to_key: dict[str, str] = {}
+    semantic_to_key: dict[str, str] = {}
 
     for row in rows:
         title = str(row.get("title") or "").strip()
@@ -153,9 +192,15 @@ def merge_raw_headlines(rows: list[dict[str, Any]], *, ticker: str = "NIFTY") ->
             continue
 
         title_norm = normalize_title(title)
-        if title_norm and title_norm in title_to_key:
+        sem_key = semantic_cluster_key(row, ticker=ticker)
+        if sem_key and sem_key in semantic_to_key:
+            key = semantic_to_key[sem_key]
+        elif title_norm and title_norm in title_to_key:
             key = title_to_key[title_norm]
-        elif title_norm:
+
+        if sem_key:
+            semantic_to_key[sem_key] = key
+        if title_norm:
             title_to_key[title_norm] = key
 
         src_entries = _sources_from_row(row)

@@ -25,8 +25,10 @@ def read_dataframe(path: Path) -> pd.DataFrame:
 def write_dataframe(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     csv_path = path.with_suffix(".csv")
+    tmp = path.with_suffix(".parquet.tmp")
     try:
-        df.to_parquet(path, index=False)
+        df.to_parquet(tmp, index=False)
+        tmp.replace(path)
     except ImportError:
         df.to_csv(csv_path, index=False)
         return

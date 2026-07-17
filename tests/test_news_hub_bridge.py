@@ -20,9 +20,11 @@ def test_ingest_news_articles_upserts_hub(hub_tmp, monkeypatch):
     from trade_integrations.dataflows.news_hub_bridge import ingest_news_articles
     from trade_integrations.dataflows.index_research import news_impact_engine as engine
     from trade_integrations.hub_storage import verified_news_store as store
+    from trade_integrations.hub_storage import news_staging_store as staging_store
 
     monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(engine, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(
         engine,
@@ -46,9 +48,14 @@ def test_ingest_news_articles_upserts_hub(hub_tmp, monkeypatch):
         )
     ]
     stats = ingest_news_articles(articles, ticker="NIFTY", collection_day="2026-07-16")
-    assert stats.get("verified", 0) >= 1 or stats.get("cache_hits", 0) >= 0
+    assert stats.get("queued", 0) >= 1 or stats.get("verified", 0) >= 1
+    from trade_integrations.hub_storage.news_staging_store import list_pending_refs
+
+    pending = list_pending_refs(ticker="NIFTY", limit=20)
     recs = store.list_verified_records(ticker="NIFTY", limit=5, include_rejected=True)
-    assert any("FII selling" in str(r.get("title") or "") for r in recs)
+    assert any("FII selling" in str(r.get("title") or "") for r in pending) or any(
+        "FII selling" in str(r.get("title") or "") for r in recs
+    )
 
 
 @pytest.fixture

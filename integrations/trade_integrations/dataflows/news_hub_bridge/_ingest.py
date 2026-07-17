@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -127,6 +128,13 @@ def searxng_result_to_hub_row(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _sync_distill_limit() -> int:
+    try:
+        return max(0, int(os.getenv("HUB_NEWS_SYNC_DISTILL_LIMIT", "0")))
+    except ValueError:
+        return 0
+
+
 def ingest_rows_to_hub(
     rows: list[dict[str, Any]],
     *,
@@ -138,11 +146,49 @@ def ingest_rows_to_hub(
     try:
         from trade_integrations.dataflows.index_research.news_dedup import merge_raw_headlines
         from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headline_rows
+        from trade_integrations.hub_storage.news_staging_store import (
+            enqueue_raw_ref,
+            is_entity_pipeline_enabled,
+        )
 
         hub_sym = hub_ticker_for_symbol(ticker)
         merged = merge_raw_headlines([r for r in rows if str(r.get("title") or "").strip()], ticker=hub_sym)
         if not merged:
             return {"ingested": 0, "cache_hits": 0, "verified": 0}
+
+        if is_entity_pipeline_enabled():
+            from trade_integrations.dataflows.index_research.news_entity_worker import (
+                process_staging_batch,
+                schedule_staging_processing,
+            )
+            from trade_integrations.dataflows.index_research.news_tags import build_article_tags
+
+            queued = 0
+            for row in merged:
+                tagged = build_article_tags(
+                    str(row.get("title") or ""),
+                    str(row.get("summary") or ""),
+                    ticker=hub_sym,
+                    published_at=str(row.get("published_at") or ""),
+                ).to_dict()
+                row["tags"] = tagged
+                enqueue_raw_ref(row, ticker=hub_sym)
+                queued += 1
+            sync_limit = _sync_distill_limit()
+            sync_stats: dict[str, Any] = {}
+            if sync_limit > 0:
+                sync_stats = process_staging_batch(ticker=hub_sym, limit=sync_limit)
+            schedule_staging_processing(ticker=hub_sym, limit=20)
+            return {
+                "ingested": queued,
+                "queued": queued,
+                "cache_hits": 0,
+                "verified": int(sync_stats.get("processed") or 0),
+                "created": int(sync_stats.get("created") or 0),
+                "updated": int(sync_stats.get("updated") or 0),
+                "distill": "sync" if sync_limit > 0 else "deferred",
+            }
+
         return ingest_headline_rows(
             merged,
             ticker=hub_sym,

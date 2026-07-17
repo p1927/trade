@@ -155,7 +155,9 @@ def record_chain_snapshot(
     )
     if not rows:
         return {"status": "empty", "reason": "no_chain_rows"}
-    pcr = _aggregate_pcr(rows)
+    pcr = chain_data.get("pcr")
+    if pcr is None:
+        pcr = _aggregate_pcr(rows)
     summary_row = {
         "entity_id": entity_id.upper(),
         "captured_at": captured_at or _now_iso(),
@@ -174,12 +176,14 @@ def record_chain_snapshot(
         rows,
         dedupe_keys=("captured_at", "strike", "option_type", "source"),
     )
-    pcr_result = _append_rows(
-        entity_id,
-        "derivatives_chain",
-        [summary_row],
-        dedupe_keys=("captured_at", "series", "source"),
-    )
+    pcr_result: dict[str, Any] = {"status": "skipped", "reason": "pcr_unavailable"}
+    if pcr is not None and not (isinstance(pcr, float) and pd.isna(pcr)):
+        pcr_result = _append_rows(
+            entity_id,
+            "derivatives_chain",
+            [summary_row],
+            dedupe_keys=("captured_at", "series", "source"),
+        )
     return {
         "status": "ok",
         "chain": chain_result,

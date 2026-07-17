@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from trade_integrations.dataflows.company_research.market import _IN_INDEX_TICKERS
+from trade_integrations.dataflows.company_research.india_symbols import india_index_tickers
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc
 from trade_integrations.dataflows.company_research.format import format_research_report
 from trade_integrations.dataflows.options_research.models import OptionsResearchDoc
@@ -55,7 +55,7 @@ def is_company_research_eligible(ticker: str, *, asset_type: str = "stock") -> b
     raw = ticker.strip().upper()
     if not raw:
         return False
-    if raw in _IN_INDEX_TICKERS or raw.startswith("^"):
+    if raw in india_index_tickers() or raw.startswith("^"):
         return False
     return True
 

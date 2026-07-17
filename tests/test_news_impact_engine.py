@@ -133,6 +133,34 @@ def test_merge_raw_headlines_dedupes_sources():
     assert "3,000 crore" in merged[0]["summary"]
 
 
+def test_merge_raw_headlines_clusters_semantic_outcomes():
+    from trade_integrations.dataflows.index_research.news_dedup import merge_raw_headlines
+
+    merged = merge_raw_headlines(
+        [
+            {
+                "title": "FII selling drags Nifty lower by 120 points",
+                "summary": "Foreign investors sold Rs 2,500 crore on Thursday.",
+                "url": "https://news.example.com/fii-sell",
+                "source": "rss",
+                "published_at": "2026-02-17",
+            },
+            {
+                "title": "Markets fall as foreign funds exit Indian equities",
+                "summary": "Heavy outflows from overseas investors weighed on benchmarks.",
+                "url": "https://other.example.com/outflow",
+                "source": "aggregator",
+                "published_at": "2026-02-17",
+            },
+        ]
+    )
+    assert len(merged) == 1
+    assert len(merged[0]["sources"]) == 2
+    topics = merged[0]["tags"]["topics"]
+    assert "fii" in topics
+    assert merged[0]["tags"]["themes"] == ["selloff"] or "selloff" in merged[0]["tags"]["themes"]
+
+
 def test_ingest_cache_hit_skips_reverify(hub_tmp, monkeypatch):
     from trade_integrations.dataflows.index_research import news_impact_engine as engine
     from trade_integrations.hub_storage import verified_news_store as store

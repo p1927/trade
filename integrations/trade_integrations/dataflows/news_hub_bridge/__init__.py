@@ -41,6 +41,8 @@ __all__ = [
     "sync_news_impact_to_index_doc",
     "save_news_impact",
     "tag_inventory",
+    "process_staging_batch",
+    "staging_queue_stats",
 ]
 
 
@@ -129,8 +131,9 @@ def query_verified_news(
 ) -> list[dict[str, Any]]:
     """Filter hub SSOT records by date and tags."""
     from trade_integrations.hub_storage.verified_news_store import list_verified_records
+    from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
 
-    return list_verified_records(
+    records = list_verified_records(
         ticker=ticker,
         status=status,
         since=since,
@@ -143,6 +146,22 @@ def query_verified_news(
         limit=limit,
         include_rejected=include_rejected,
     )
+    return union_headlines_with_staging(records, ticker=ticker, limit=limit)
+
+
+def process_staging_batch(*, ticker: str = "NIFTY", limit: int = 20) -> dict[str, Any]:
+    """Process queued staging refs into distilled hub events."""
+    from trade_integrations.dataflows.index_research.news_entity_worker import (
+        process_staging_batch as _fn,
+    )
+
+    return _fn(ticker=ticker, limit=limit)
+
+
+def staging_queue_stats(*, ticker: str = "NIFTY") -> dict[str, int]:
+    from trade_integrations.hub_storage.news_staging_store import staging_queue_stats as _fn
+
+    return _fn(ticker=ticker)
 
 
 def resolve_news_impact(

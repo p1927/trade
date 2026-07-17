@@ -291,6 +291,12 @@ def process_and_upsert_headline(
         ticker=ticker,
         publish_day=publish_day,
     )
+    preset_structured = row.get("structured_summary")
+    if isinstance(preset_structured, dict) and preset_structured.get("event_meta"):
+        record["structured_summary"] = {
+            **(record.get("structured_summary") or {}),
+            **preset_structured,
+        }
     upsert_verified_record(record)
 
     if is_approved_status(verification.status):
@@ -452,29 +458,49 @@ def resolve_news_impact(
             report = build_snapshot_from_hub(ticker=sym, limit=limit)
 
     items = list(report.get("items") or [])[:limit]
+    try:
+        from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+
+        items = union_headlines_with_staging(items, ticker=sym, limit=limit)
+    except Exception:
+        pass
     if hydrate_from_hub:
         items = [hydrate_news_item_from_hub(row, ticker=sym) for row in items]
-    report["items"] = items
+    report["items"] = items[:limit]
+    if report.get("summary") is None:
+        report["summary"] = {}
+    try:
+        from trade_integrations.hub_storage.news_staging_store import staging_queue_stats
+
+        report["summary"]["pending_count"] = int(staging_queue_stats(ticker=sym).get("queued") or 0)
+    except Exception:
+        pass
     return report
 
 
 def list_recent_verified_headlines(*, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
     """Recent approved/partial headlines regardless of calendar day (playground fallback)."""
+    from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+
     rows = list_verified_records(
         status=["approved", "partial"],
         limit=limit,
         ticker=ticker,
     )
+    rows = union_headlines_with_staging(rows, ticker=ticker, limit=limit)
     return [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
 
 
 def list_approved_for_date(day: str, *, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
+    from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+
     rows = list_verified_records(
         status=["approved", "partial"],
         publish_day=day[:10],
         limit=limit,
         ticker=ticker,
     )
+    rows = union_headlines_with_staging(rows, ticker=ticker, limit=limit)
     return [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
 
 

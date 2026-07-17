@@ -75,6 +75,33 @@ def test_same_headline_not_material_second_time(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_scan_material_news_does_not_mark_seen(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPTIONS_REALTIME_MONITOR_ENABLED", "true")
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+
+    from trade_integrations.monitor.news_watcher import scan_material_news
+
+    article = NewsArticle(
+        title="FII inflows lift Nifty to fresh highs",
+        link="https://example.com/fii-inflow",
+        pub_date=datetime(2026, 7, 17, 9, 0, tzinfo=timezone.utc),
+    )
+    since = datetime(2026, 7, 17, 8, 0, tzinfo=timezone.utc)
+
+    with patch(
+        "trade_integrations.monitor.news_watcher._fetch_ticker_articles",
+        return_value=[article],
+    ):
+        first = scan_material_news("NIFTY", since)
+        second = scan_material_news("NIFTY", since)
+
+    assert len(first) == 1
+    assert len(second) == 1
+    seen_path = tmp_path / "_data" / "news_seen" / "NIFTY.json"
+    assert not seen_path.is_file()
+
+
+@pytest.mark.unit
 def test_scheduler_skipped_when_monitor_disabled(monkeypatch):
     monkeypatch.setenv("OPTIONS_REALTIME_MONITOR_ENABLED", "false")
     monkeypatch.setenv("OPTIONS_MONITOR_ENABLE_SCHEDULER", "true")

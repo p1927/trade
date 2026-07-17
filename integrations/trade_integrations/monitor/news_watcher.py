@@ -22,9 +22,21 @@ MATERIAL_KEYWORDS: tuple[str, ...] = (
     "rbi",
     "budget",
     "fii",
+    "fpi",
     "vix",
     "merger",
     "circuit",
+    "nifty",
+    "sensex",
+    "bank nifty",
+    "market",
+    "inflow",
+    "outflow",
+    "tariff",
+    "fed",
+    "geopolit",
+    "crude",
+    "rupee",
 )
 
 _TITLE_LINE_RE = re.compile(r"^### (.+?)(?:\s+\(source:.*\))?$", re.MULTILINE)
@@ -189,18 +201,10 @@ def _persist_material_to_hub(symbol: str, material: list[MaterialHeadline]) -> N
         return
 
 
-def check_material_news(ticker: str, since: datetime) -> list[MaterialHeadline]:
-    """Return unseen material headlines for a ticker since the given timestamp."""
-    if not is_monitor_enabled():
-        return []
-
-    symbol = ticker.strip().upper()
-    if not symbol:
-        return []
-
-    seen = _load_seen_fingerprints(symbol)
-    material: list[MaterialHeadline] = []
-
+def _collect_material_candidates(
+    symbol: str,
+    since: datetime,
+) -> list[tuple[str, str, datetime | None, tuple[str, ...]]]:
     try:
         articles = _fetch_ticker_articles(symbol, since)
     except Exception:
@@ -217,8 +221,58 @@ def check_material_news(ticker: str, since: datetime) -> list[MaterialHeadline]:
             keywords = _matched_keywords(title)
             if keywords:
                 candidates.append((title, url, None, keywords))
+    return candidates
 
-    for title, url, pub_date, keywords in candidates:
+
+def scan_material_news(
+    ticker: str,
+    since: datetime,
+    *,
+    exclude_seen: bool = False,
+) -> list[MaterialHeadline]:
+    """Return material headlines since ``since`` without mutating seen state by default."""
+    if not is_monitor_enabled():
+        return []
+
+    symbol = ticker.strip().upper()
+    if not symbol:
+        return []
+
+    seen = _load_seen_fingerprints(symbol) if exclude_seen else set()
+    material: list[MaterialHeadline] = []
+
+    for title, url, pub_date, keywords in _collect_material_candidates(symbol, since):
+        fingerprint = headline_fingerprint(title, url)
+        if exclude_seen and fingerprint in seen:
+            continue
+        material.append(
+            MaterialHeadline(
+                title=title,
+                url=url,
+                fingerprint=fingerprint,
+                matched_keywords=keywords,
+                pub_date=pub_date,
+            )
+        )
+
+    return material
+
+
+def count_material_headlines_since(ticker: str, since: datetime) -> int:
+    """Read-only count for UI — does not mark headlines as seen."""
+    return len(scan_material_news(ticker, since, exclude_seen=False))
+
+
+def check_material_news(ticker: str, since: datetime) -> list[MaterialHeadline]:
+    """Return unseen material headlines for a ticker since the given timestamp."""
+    symbol = ticker.strip().upper()
+    if not symbol or not is_monitor_enabled():
+        return []
+
+    seen = _load_seen_fingerprints(symbol)
+    material: list[MaterialHeadline] = []
+
+    for title, url, pub_date, keywords in _collect_material_candidates(symbol, since):
         fingerprint = headline_fingerprint(title, url)
         if fingerprint in seen:
             continue
