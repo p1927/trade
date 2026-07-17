@@ -312,6 +312,120 @@ def _quote_from_hub_latest(entity_id: str, *, max_age_seconds: float) -> dict[st
         return None
 
 
+def _normalize_quote_request(row: dict[str, str]) -> tuple[str, str] | None:
+    if not isinstance(row, dict):
+        return None
+    symbol = row.get("symbol")
+    exchange = row.get("exchange")
+    if not symbol or not exchange:
+        return None
+    return str(symbol).upper(), str(exchange).upper()
+
+
+def _quote_l1_key(symbol: str, exchange: str) -> str:
+    return f"{symbol}:{exchange}:quote"
+
+
+def get_multi_quotes(
+    requests: list[dict[str, str]],
+    fetch_fn: Callable[[list[dict[str, str]]], dict[str, Any]],
+    *,
+    policy: FreshnessPolicy = FreshnessPolicy.WATCH,
+) -> dict[str, dict[str, Any]]:
+    """Batch live quotes with per-(symbol, exchange) L1 dedupe."""
+    from trade_integrations.openalgo.market_data import parse_multi_quotes_payload
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in requests:
+        pair = _normalize_quote_request(row)
+        if pair is None or pair in seen:
+            continue
+        seen.add(pair)
+        symbol, exchange = pair
+        normalized.append({"symbol": symbol, "exchange": exchange})
+
+    if not normalized:
+        return {}
+
+    max_age = int(ttl_seconds(policy))
+    result: dict[str, dict[str, Any]] = {}
+    pending: list[dict[str, str]] = []
+
+    if policy == FreshnessPolicy.LIVE:
+        pending = normalized
+    else:
+        for req in normalized:
+            symbol, exchange = req["symbol"], req["exchange"]
+            l1_key = _quote_l1_key(symbol, exchange)
+            cached_l1 = _l1_cache.get(l1_key)
+            if cached_l1 is not None:
+                record_channel_stat("l1_hit", "quotes")
+                result[f"{symbol}@{exchange}"] = cached_l1
+                continue
+
+            if policy == FreshnessPolicy.NORMAL:
+                entity = resolve_registered_entity(symbol)
+                if entity is not None:
+                    hub_quote = _quote_from_hub_latest(entity, max_age_seconds=float(max_age))
+                    if hub_quote is not None:
+                        record_channel_stat("hub_hit", "quotes")
+                        _l1_cache.set(l1_key, hub_quote, ttl_seconds=max_age)
+                        result[f"{symbol}@{exchange}"] = hub_quote
+                        continue
+
+            pending.append(req)
+
+    if pending:
+        payload = fetch_fn(pending)
+        record_channel_stat("vendor_fetch", "quotes")
+        parsed = parse_multi_quotes_payload(payload)
+        for req in pending:
+            symbol, exchange = req["symbol"], req["exchange"]
+            row_key = f"{symbol}@{exchange}"
+            row = parsed.get(row_key)
+            if row is None:
+                continue
+            l1_key = _quote_l1_key(symbol, exchange)
+            if policy != FreshnessPolicy.LIVE and max_age > 0:
+                _l1_cache.set(l1_key, row, ttl_seconds=max_age)
+            entity = resolve_registered_entity(symbol)
+            if entity is not None and should_capture(entity, "derivatives_chain"):
+                record_quote_snapshot(entity, row, source=str(row.get("source") or "openalgo"))
+            result[row_key] = row
+
+    return result
+
+
+def get_history(
+    symbol: str,
+    start: str,
+    end: str,
+    interval: str,
+    fetch_fn: Callable[..., pd.DataFrame],
+    *,
+    policy: FreshnessPolicy = FreshnessPolicy.NORMAL,
+) -> pd.DataFrame:
+    """OHLCV history with L1 dedupe (v1: vendor fetch; hub parquet read deferred)."""
+    sym = symbol.strip().upper()
+    start_key = start[:10]
+    end_key = end[:10]
+    cache_key = f"{sym}:{start_key}:{end_key}:{interval}:history"
+    max_age = int(ttl_seconds(policy))
+
+    if policy != FreshnessPolicy.LIVE and max_age > 0:
+        cached = _l1_cache.get(cache_key)
+        if cached is not None:
+            record_channel_stat("l1_hit", "ohlcv_daily")
+            return cached.copy()
+
+    frame = fetch_fn(symbol, start, end, interval=interval)
+    record_channel_stat("vendor_fetch", "ohlcv_daily")
+    if policy != FreshnessPolicy.LIVE and max_age > 0:
+        _l1_cache.set(cache_key, frame.copy(), ttl_seconds=max_age)
+    return frame
+
+
 def get_quote(
     symbol: str,
     fetch_fn: Callable[[str], dict[str, Any] | None],

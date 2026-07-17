@@ -209,3 +209,97 @@ def test_watch_get_chain_second_call_within_ttl_skips_fetch(hub_tmp, monkeypatch
     stats = channel_stats_today()
     assert stats.get("l1_hits", 0) >= 1
     assert stats.get("vendor_fetches", 0) == 1
+
+
+def test_watch_get_multi_quotes_second_call_within_ttl_skips_fetch(hub_tmp, monkeypatch):
+    from trade_integrations.hub_capture import channel as channel_mod
+    from trade_integrations.hub_capture.channel import channel_stats_today, get_multi_quotes
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
+
+    with channel_mod._l1_cache._lock:
+        channel_mod._l1_cache._entries.clear()
+
+    calls = {"n": 0}
+
+    def fake_multi_quotes(requests):
+        calls["n"] += 1
+        return {
+            "quotes": [
+                {
+                    "symbol": row["symbol"],
+                    "exchange": row["exchange"],
+                    "ltp": 24500.0,
+                    "source": "mock_vendor",
+                }
+                for row in requests
+            ]
+        }
+
+    requests = [
+        {"symbol": "NIFTY", "exchange": "NSE_INDEX"},
+        {"symbol": "RELIANCE", "exchange": "NSE"},
+    ]
+
+    monkeypatch.setenv("OPENALGO_WATCH_QUOTE_TTL_SECONDS", "30")
+
+    first = get_multi_quotes(requests, fake_multi_quotes, policy=FreshnessPolicy.WATCH)
+    assert calls["n"] == 1
+    assert first["NIFTY@NSE_INDEX"]["ltp"] == 24500.0
+    assert first["RELIANCE@NSE"]["ltp"] == 24500.0
+
+    second = get_multi_quotes(requests, fake_multi_quotes, policy=FreshnessPolicy.WATCH)
+    assert calls["n"] == 1
+    assert second["NIFTY@NSE_INDEX"]["ltp"] == 24500.0
+
+    stats = channel_stats_today()
+    assert stats.get("l1_hits", 0) >= 1
+    assert stats.get("vendor_fetches", 0) == 1
+
+
+def test_get_history_l1_dedupe_within_ttl(monkeypatch):
+    from trade_integrations.hub_capture import channel as channel_mod
+    from trade_integrations.hub_capture.channel import get_history
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
+    import pandas as pd
+
+    with channel_mod._l1_cache._lock:
+        channel_mod._l1_cache._entries.clear()
+
+    calls = {"n": 0}
+
+    def fake_history(symbol, start, end, *, interval="D"):
+        calls["n"] += 1
+        return pd.DataFrame(
+            {
+                "Date": pd.to_datetime([start]),
+                "Open": [100.0],
+                "High": [101.0],
+                "Low": [99.0],
+                "Close": [100.5],
+                "Volume": [1000],
+            }
+        )
+
+    monkeypatch.setenv("TRADINGAGENTS_OPTIONS_CACHE_MINUTES", "30")
+
+    first = get_history(
+        "NIFTY",
+        "2026-01-01",
+        "2026-01-31",
+        "D",
+        fake_history,
+        policy=FreshnessPolicy.NORMAL,
+    )
+    assert calls["n"] == 1
+    assert len(first) == 1
+
+    second = get_history(
+        "NIFTY",
+        "2026-01-01",
+        "2026-01-31",
+        "D",
+        fake_history,
+        policy=FreshnessPolicy.NORMAL,
+    )
+    assert calls["n"] == 1
+    assert len(second) == 1

@@ -137,6 +137,43 @@ def fetch_quote_raw(symbol: str) -> dict | None:
     }
 
 
+def _extract_multiquote_rows(payload: dict[str, Any] | list[Any] | None) -> list[dict[str, Any]]:
+    if not payload:
+        return []
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload.get("quotes"), list):
+        return [row for row in payload["quotes"] if isinstance(row, dict)]
+    if isinstance(payload.get("data"), list):
+        return [row for row in payload["data"] if isinstance(row, dict)]
+    if isinstance(payload.get("results"), list):
+        return [row for row in payload["results"] if isinstance(row, dict)]
+    return []
+
+
+def parse_multi_quotes_payload(payload: dict[str, Any] | list[Any]) -> dict[str, dict[str, Any]]:
+    """Normalize multiquotes response to ``symbol@exchange`` -> quote row."""
+    rows = _extract_multiquote_rows(payload if isinstance(payload, dict) else {"data": payload})
+    if not rows and isinstance(payload, dict):
+        if payload and all(isinstance(value, dict) for value in payload.values()):
+            out: dict[str, dict[str, Any]] = {}
+            for raw_key, row in payload.items():
+                symbol = str(row.get("symbol") or raw_key).upper()
+                exchange = str(row.get("exchange") or "NSE").upper()
+                out[f"{symbol}@{exchange}"] = row
+            return out
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or row.get("tradingsymbol") or "").upper()
+        if not symbol:
+            continue
+        exchange = str(row.get("exchange") or "NSE").upper()
+        out[f"{symbol}@{exchange}"] = row
+    return out
+
+
 def fetch_multi_quotes_raw(requests: list[dict[str, str]]) -> dict[str, Any]:
     """Batch quote fetch via OpenAlgo multiquotes endpoint."""
     normalized = [
