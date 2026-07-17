@@ -8,6 +8,48 @@ server:
 
 search:
   safe_search: 0
+  autocomplete: google
   formats:
     - html
     - json
+
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 15.0
+
+categories_as_tabs:
+  general: General
+  finance: Finance
+
+engines:
+  # Working metasearch engines also serve the Finance tab (site: scoping is in Python queries).
+  - name: duckduckgo
+    engine: duckduckgo
+    categories:
+      - general
+      - web
+      - finance
+
+  - name: bing
+    engine: bing
+    categories:
+      - general
+      - finance
+
+  - name: brave
+    engine: brave
+    categories:
+      - general
+      - finance
+
+  - name: mojeek
+    engine: mojeek
+    categories:
+      - general
+      - finance
+
+  - name: qwant
+    engine: qwant
+    categories:
+      - general
+      - finance

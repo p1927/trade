@@ -6,7 +6,7 @@ import pytest
 
 from typing import Any
 
-from tradingagents.dataflows.errors import NoMarketDataError
+from trade_integrations.dataflows.errors import NoMarketDataError
 
 
 def test_normalize_option_chain_adds_pcr():

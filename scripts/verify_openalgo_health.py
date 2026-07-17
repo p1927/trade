@@ -23,6 +23,9 @@ def _ok(msg: str) -> None:
 
 
 def main() -> int:
+    from trade_integrations.env import ensure_vibe_stack_heal
+
+    ensure_vibe_stack_heal()
     cfg = ensure_openalgo_env(root=trade_repo_root())
     host = cfg["host"]
     api_key = cfg["api_key"]
@@ -62,6 +65,38 @@ def main() -> int:
         hint = " (re-login broker in OpenAlgo UI)" if "apikey" in str(msg).lower() or code else ""
         _fail(f"quotes HTTP {quotes.status_code}: {msg}{hint}")
     _ok("NIFTY quotes (broker session live)")
+
+    from datetime import date, timedelta
+
+    start = (date.today() - timedelta(days=10)).isoformat()
+    end = date.today().isoformat()
+    try:
+        history = requests.post(
+            f"{host}/api/v1/history",
+            json={
+                "apikey": api_key,
+                "symbol": "NIFTY",
+                "exchange": "NSE_INDEX",
+                "interval": "D",
+                "start_date": start,
+                "end_date": end,
+            },
+            timeout=30,
+        )
+        hbody = history.json() if history.content else {}
+    except Exception as exc:
+        _fail(f"history probe failed: {exc}")
+
+    if not history.ok:
+        msg = hbody.get("message") if isinstance(hbody, dict) else str(hbody)
+        _fail(f"history HTTP {history.status_code}: {msg}")
+    rows = hbody.get("data") or []
+    if not rows:
+        _fail("history returned no rows for NIFTY")
+    last_ts = rows[-1].get("timestamp")
+    if not last_ts or int(last_ts) < 1_000_000_000:
+        _fail(f"history timestamp looks invalid: {last_ts}")
+    _ok(f"NIFTY daily history ({len(rows)} bars, last ts={last_ts})")
 
     agent_json = Path.home() / ".vibe-trading" / "agent.json"
     if agent_json.is_file():

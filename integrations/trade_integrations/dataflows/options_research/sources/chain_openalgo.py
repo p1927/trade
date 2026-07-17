@@ -9,7 +9,7 @@ from typing import Any
 from trade_integrations.dataflows.openalgo import fetch_option_chain
 from trade_integrations.openalgo.market_data import fetch_option_expiry_dates
 from trade_integrations.openalgo.symbols import normalize_openalgo_expiry
-from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError
+from trade_integrations.dataflows.errors import NoMarketDataError, VendorNotConfiguredError
 
 from ..market import OptionsInstrument
 from ..models import StageResult

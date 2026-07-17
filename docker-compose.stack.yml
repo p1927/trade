@@ -8,6 +8,7 @@ services:
       - "${SEARXNG_HOST_PORT}:${SEARXNG_CONTAINER_PORT}"
     volumes:
       - ./stack/searxng:/etc/searxng:rw
+    entrypoint: ["/bin/sh", "/etc/searxng/entrypoint-wrapper.sh"]
     environment:
       - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
     healthcheck:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from trade_integrations.hub_capture.channel import get_multi_quotes
 from trade_integrations.openalgo.freshness import FreshnessPolicy
 from trade_integrations.openalgo.market_data import fetch_multi_quotes_raw
 
@@ -98,12 +97,9 @@ class OpenAlgoQuoteFeed:
             logger.debug("OpenAlgo WS feed unavailable", exc_info=True)
 
         try:
-            rows_by_key = get_multi_quotes(
-                requests,
-                fetch_multi_quotes_raw,
-                policy=FreshnessPolicy.WATCH,
-            )
-            payload = {"quotes": list(rows_by_key.values())}
+            payload = fetch_multi_quotes_raw(requests)
+            if not isinstance(payload, dict):
+                payload = {}
         except RuntimeError as exc:
             logger.warning("OpenAlgo multiquotes failed: %s", exc)
             return self._poll_fallback(watch_symbols)

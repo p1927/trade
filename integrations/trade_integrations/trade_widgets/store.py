@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-_WIDGET_ID_RE = re.compile(r"^(?:tp|ts|ti)_[A-Z][A-Z0-9]*_[0-9a-f]{12}$")
+_WIDGET_ID_RE = re.compile(r"^(?:tp|ts|ti|ns)_[A-Z][A-Z0-9]*_[0-9a-f]{12}$")
 
 
 def trade_widget_dir() -> Path:

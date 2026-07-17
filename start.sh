@@ -424,6 +424,19 @@ wait_for_openalgo() {
 }
 
 start_openalgo() {
+  if [[ -f "$ROOT/scripts/stack_lib.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/stack_lib.sh"
+    STACK_ROOT="$ROOT"
+    stack_load_env
+    if stack_start_openalgo; then
+      READY_OPENALGO=1
+      return 0
+    fi
+    fail "OpenAlgo failed to start — see $(stack_log_dir)/openalgo.log"
+    return 1
+  fi
+
   if [[ ! -d "$OPENALGO_DIR" ]]; then
     fail "Missing openalgo/ submodule — run: git submodule update --init --recursive"
     return 1
@@ -642,9 +655,25 @@ start_vibe_web() {
   fi
 
   if daemon_vibe_running; then
-    warn "Vibe stack already running on ports ${backend_port}/${frontend_port}"
-    warn "Open http://localhost:${frontend_port} — use 'trade restart' to restart background services"
-    exit 0
+    if (( DEV_UI_ONLY )) || [[ "${STACK_DEV_FOREGROUND_VIBE:-0}" == "1" ]]; then
+      log "Stopping background Vibe tier before dev foreground start ..."
+      # shellcheck disable=SC1091
+      source "$ROOT/scripts/stack_lib.sh"
+      STACK_ROOT="$ROOT"
+      stack_load_env
+      local log_dir api_port ui_port
+      log_dir="$(stack_log_dir)"
+      api_port="$(stack_vibe_api_port)"
+      ui_port="$(stack_vibe_ui_port)"
+      stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$ui_port"
+      stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$api_port"
+      stack_wait_port_free "$ui_port" 15 || true
+      stack_wait_port_free "$api_port" 15 || true
+    else
+      warn "Vibe stack already running on ports ${backend_port}/${frontend_port}"
+      warn "Open http://localhost:${frontend_port} — use 'trade restart' to restart background services"
+      exit 0
+    fi
   fi
 
   log "Launching Vibe Trading Web UI ..."
@@ -681,8 +710,14 @@ start_vibe_web() {
       # shellcheck disable=SC1091
       source "$ROOT/scripts/stack_lib.sh"
       STACK_ROOT="$ROOT"
-      stack_stop_claimed "OpenAlgo" "openalgo" "$(stack_log_dir)/openalgo.pid" "$(stack_openalgo_port)"
-      stack_kill_port 8765
+      local log_dir api_port ui_port
+      log_dir="$(stack_log_dir)"
+      api_port="$(stack_vibe_api_port)"
+      ui_port="$(stack_vibe_ui_port)"
+      stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$ui_port"
+      stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$api_port"
+      stack_kill_openalgo_ws_proxy
+      stack_clear_stack_mode
     fi
     cleanup
   }

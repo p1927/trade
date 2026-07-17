@@ -59,3 +59,47 @@ def ensure_openalgo_env(*, root: Path | None = None) -> dict[str, str]:
     host = openalgo_host(root=root)
     api_key = os.getenv("OPENALGO_API_KEY", "").strip()
     return {"host": host, "api_key": api_key}
+
+
+def _stack_auto_heal_enabled() -> bool:
+    return os.getenv("STACK_AUTO_HEAL", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
+    """Heal dead OpenAlgo/Vibe processes via ``trade restart`` when unreachable."""
+    if not _stack_auto_heal_enabled():
+        return False
+
+    base = root or trade_repo_root()
+    cfg = ensure_openalgo_env(root=base)
+    host = cfg["host"].rstrip("/")
+
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{host}/", timeout=3) as resp:
+            return 200 <= getattr(resp, "status", 200) < 500
+    except Exception:
+        pass
+
+    trade_cli = base / "trade"
+    if not trade_cli.is_file():
+        return False
+
+    import subprocess
+
+    subprocess.run(
+        [str(trade_cli), "heal"],
+        cwd=str(base),
+        timeout=180,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{host}/", timeout=20) as resp:
+            return 200 <= getattr(resp, "status", 200) < 500
+    except Exception:
+        return False

@@ -233,6 +233,10 @@ __marimo__/
 .env.enterprise
 reports/
 stack/vibe-upstream/
+# Host-specific MITM CA for SearXNG Docker (export via scripts/export_searxng_ca.sh)
+stack/searxng/certs/*.crt
+stack/searxng/certs/*.pem
+!stack/searxng/certs/.gitkeep
 
 # NSE data repository — track parquet + manifest; raw downloads local only
 data/nse/raw/

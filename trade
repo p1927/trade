@@ -14,11 +14,12 @@ Usage:
 
 Stack (one lifecycle — use these):
   up                    Start background stack (preflight + heal)
+  heal                  Heal missing services only (no preflight noise)
   down [--all]          Stop OpenAlgo + Vibe ( --all: + hub Docker + tunnels )
   restart [--force]     Heal missing services ( --force: full stop + start )
   status                Vibe + hub Docker health
   doctor                Preflight checks before start (no start)
-  dev                   Dev mode: auto-reload API/UI + OpenAlgo debug
+  dev                   Dev mode: auto-reload API/UI + OpenAlgo debug (exclusive Vibe tier)
   reload [target]       Reload after code/env change (app|env|nautilus|hub|all)
   start [mode]          Legacy foreground modes (prefer trade up / trade dev)
                         Modes: vibe | openalgo | cli | full | daemon | nautilus-watch
@@ -53,16 +54,29 @@ Maintenance:
 
 Examples:
   trade up                          # background stack (recommended)
+  trade heal                        # start only what's down (quiet heal)
   trade doctor && trade up          # verify deps, then start
   trade restart                     # heal — start only what's down
   trade restart --force             # full stop + preflight + start
   trade down                        # stop background stack
-  trade dev                         # dev mode with auto-reload
+  trade dev                         # dev mode with auto-reload (blocks trade up)
+  trade reload app                  # reload daemon after code edit
   trade start openalgo              # OpenAlgo only (webhook setup)
   trade start nautilus-watch --agent-id aa_abc123
   trade tunnel quick                # expose OpenAlgo to the internet
   trade status                      # is everything up?
   trade research RELIANCE
+
+Approved channels (do not kill stack ports ad hoc):
+  Start/heal background stack   trade up | trade heal
+  Full reset                    trade restart --force
+  Heal missing only             trade restart
+  Stop everything               trade down
+  Dev with HMR                  trade dev
+  Reload after code (daemon)    trade reload app
+  Reload after .env             trade reload env
+  Reload Nautilus only          trade reload nautilus
+  OpenAlgo only (background)    trade start openalgo
 
 Legacy: ./start.sh (foreground), make start-daemon → trade up
 EOF
@@ -117,6 +131,10 @@ case "$cmd" in
     exec "$ROOT/scripts/stack_ctl.sh" up "$@"
     ;;
 
+  heal)
+    exec "$ROOT/scripts/stack_ctl.sh" ensure "$@"
+    ;;
+
   down)
     exec "$ROOT/scripts/stack_ctl.sh" down "$@"
     ;;
@@ -126,7 +144,7 @@ case "$cmd" in
     shift || true
     case "$mode" in
       vibe|default)     exec "$ROOT/start.sh" "$@" ;;
-      openalgo)         exec "$ROOT/start.sh" --openalgo-only "$@" ;;
+      openalgo)         exec "$ROOT/start.sh" --openalgo-only --daemon "$@" ;;
       cli|agents)       exec "$ROOT/start.sh" --cli "$@" ;;
       full)             exec "$ROOT/start.sh" "$@" ;;
       daemon)

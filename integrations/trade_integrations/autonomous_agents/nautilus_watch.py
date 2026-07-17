@@ -204,6 +204,10 @@ def add_agent_to_registry(agent_id: str) -> dict[str, Any]:
                 new_ids,
             )
             _stop_existing()
+            try:
+                _launch_watch(use_registry=True)
+            except Exception:
+                logger.exception("failed to relaunch Nautilus watch after registry change")
     return saved
 
 

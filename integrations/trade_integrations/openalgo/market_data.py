@@ -10,12 +10,34 @@ import pandas as pd
 
 from trade_integrations.openalgo.rest_client import get_rest_client, openalgo_settings
 from trade_integrations.openalgo.symbols import normalize_openalgo_expiry, resolve_openalgo_symbol
-from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError
-from tradingagents.dataflows.stockstats_utils import _clean_dataframe
+from trade_integrations.dataflows.errors import NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError
 
 logger = logging.getLogger(__name__)
 
 _MIN_INDEX_CHAIN_STRIKES = 3
+
+
+def _ensure_date_column(data: pd.DataFrame) -> pd.DataFrame:
+    if "Date" in data.columns:
+        return data
+    for candidate in ("index", "Datetime", "date"):
+        if candidate in data.columns:
+            return data.rename(columns={candidate: "Date"})
+    return data
+
+
+def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
+    """Normalize OHLCV rows for downstream indicators (no TradingAgents import)."""
+    data = _ensure_date_column(data)
+    data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+    data = data.dropna(subset=["Date"])
+
+    price_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in data.columns]
+    data[price_cols] = data[price_cols].apply(pd.to_numeric, errors="coerce")
+    data = data.dropna(subset=["Close"])
+    data[price_cols] = data[price_cols].ffill().bfill()
+
+    return data
 
 
 def _chain_strike_count(chain: dict[str, Any] | None) -> int:

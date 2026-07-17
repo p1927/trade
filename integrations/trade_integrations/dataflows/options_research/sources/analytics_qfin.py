@@ -126,12 +126,18 @@ def simple_analytics_fallback(chain_snapshot: dict[str, Any]) -> dict[str, Any]:
             if iv:
                 ivs.append(float(iv))
     atm_iv = sum(ivs) / len(ivs) if ivs else None
-    expected_move_pct = (atm_iv or 15) * 0.4 if atm_iv else 2.0
-    return {
-        "expected_move_pct": round(expected_move_pct, 2),
+    payload: dict[str, Any] = {
         "pcr": pcr,
         "atm_strike": atm,
         "atm_iv": atm_iv,
-        "iv_regime": "high" if (atm_iv or 0) >= 20 else "moderate" if (atm_iv or 0) >= 14 else "low",
         "source": "fallback",
     }
+    if atm_iv is not None:
+        payload["expected_move_pct"] = round(atm_iv * 0.4, 2)
+        payload["iv_regime"] = (
+            "high" if atm_iv >= 20 else "moderate" if atm_iv >= 14 else "low"
+        )
+    else:
+        payload["expected_move_pct"] = None
+        payload["iv_regime"] = None
+    return payload

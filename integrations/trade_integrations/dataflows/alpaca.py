@@ -20,7 +20,7 @@ import requests
 from dateutil.relativedelta import relativedelta
 
 from trade_integrations.dataflows.company_research.market import Market, detect_market
-from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError
+from trade_integrations.dataflows.errors import NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError
 from tradingagents.dataflows.stockstats_utils import _assert_ohlcv_not_stale, _clean_dataframe
 from tradingagents.dataflows.y_finance import get_stock_stats_indicators_window
 

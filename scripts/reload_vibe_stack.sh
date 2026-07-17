@@ -37,7 +37,7 @@ _reload_app_inner() {
   stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$(stack_vibe_ui_port)"
   stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$(stack_vibe_api_port)"
   stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$(stack_openalgo_port)"
-  stack_kill_port 8765
+  stack_kill_openalgo_ws_proxy
   stack_start_openalgo || ok=1
   stack_start_vibe_api || ok=1
   stack_start_vibe_ui || ok=1

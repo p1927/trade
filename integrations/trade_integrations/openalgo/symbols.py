@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tradingagents.dataflows.errors import NoMarketDataError
+from trade_integrations.dataflows.errors import NoMarketDataError
 
 # Yahoo / TradingAgents aliases -> OpenAlgo (symbol, exchange)
 # Index symbols use NSE_INDEX per OpenAlgo docs (docs.openalgo.in/symbol-format)

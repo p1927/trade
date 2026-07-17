@@ -12,12 +12,26 @@ export STACK_DEV_RELOAD=1
 export STACK_DEV_FLASK_DEBUG=1
 export STACK_PORTS_STRICT=1
 
+stack_dev_prepare_inner() {
+  local log_dir
+  log_dir="$(stack_log_dir)"
+  echo "[stack] dev mode — stopping daemon app tier (OpenAlgo + Vibe API + UI) ..."
+  stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$(stack_vibe_ui_port)"
+  stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$(stack_vibe_api_port)"
+  stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$(stack_openalgo_port)"
+  stack_kill_openalgo_ws_proxy
+  stack_wait_port_free "$(stack_vibe_ui_port)" 15 || true
+  stack_wait_port_free "$(stack_vibe_api_port)" 15 || true
+  stack_wait_port_free "$(stack_openalgo_port)" 15 || true
+  stack_set_stack_mode "dev"
+}
+
 stack_load_env
 stack_print_ports_summary
 
 echo "[stack] dev mode — code + .env changes:"
 echo "  Vibe API     uvicorn --reload (integrations/, vibetrading/agent/)"
-echo "  Vibe UI      Vite HMR"
+echo "  Vite UI      Vite HMR"
 echo "  OpenAlgo     FLASK_DEBUG=1 (openalgo/)"
 echo "  Env change   trade reload env"
 echo "  Nautilus     trade reload nautilus (manual restart required)"
@@ -26,13 +40,17 @@ echo ""
 if ! stack_validate_ports_registry; then
   exit 1
 fi
-stack_check_port_listeners || exit 1
 
 stack_ensure_hub_docker || true
 stack_ensure_hub_storage || true
 stack_ensure_vibe_config || true
 
-# OpenAlgo + Vibe API in background with reload; Vite foreground via start.sh handoff.
+# Stop daemon app tier before strict port check (otherwise ports look "foreign").
+stack_with_lock stack_dev_prepare_inner
+
+stack_check_port_listeners || exit 1
+
+# OpenAlgo in background with FLASK_DEBUG; Vite + reload API via start.sh handoff.
 if ! stack_start_openalgo; then
   echo "[stack] OpenAlgo failed to start" >&2
   exit 1

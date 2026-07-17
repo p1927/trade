@@ -31,6 +31,37 @@ stack_log_dir() {
   echo "$(stack_root)/log"
 }
 
+stack_mode_file() {
+  echo "$(stack_log_dir)/stack.mode"
+}
+
+stack_stack_mode() {
+  local file
+  file="$(stack_mode_file)"
+  [[ -f "$file" ]] && tr -d '[:space:]' <"$file" || true
+}
+
+stack_dev_mode_active() {
+  [[ "$(stack_stack_mode)" == "dev" ]]
+}
+
+stack_set_stack_mode() {
+  local mode="$1"
+  mkdir -p "$(stack_log_dir)"
+  printf '%s\n' "$mode" >"$(stack_mode_file)"
+}
+
+stack_clear_stack_mode() {
+  rm -f "$(stack_mode_file)"
+}
+
+stack_refuse_if_dev_mode() {
+  if stack_dev_mode_active; then
+    echo "[stack] dev mode active — stop with Ctrl+C in trade dev, or: trade down" >&2
+    exit 1
+  fi
+}
+
 stack_load_env() {
   local root env_file
   root="$(stack_root)"
@@ -461,6 +492,23 @@ stack_service_up() {
   stack_http_ok "http://127.0.0.1:${port}/"
 }
 
+stack_wait_for_service_port() {
+  local port="$1" attempts="${2:-20}"
+  local i listener
+  for ((i = 1; i <= attempts; i++)); do
+    if stack_service_up "$port"; then
+      return 0
+    fi
+    listener="$(stack_port_listener_pid "$port")"
+    if [[ -n "$listener" ]] && stack_pid_alive "$listener"; then
+      sleep 1
+      continue
+    fi
+    return 1
+  done
+  stack_service_up "$port"
+}
+
 # Start a detached process; writes the child PID to pidfile and claims it (STACK_LAUNCH_SERVICE).
 stack_launch_detached() {
   local pidfile="$1" logfile="$2" workdir="$3"
@@ -493,7 +541,18 @@ stack_launch_detached() {
       echo "[stack] already running (pid $existing)"
       return 0
     fi
-    echo "[stack] pid $existing alive but :${expect_port} down — replacing ..."
+    if [[ -n "$expect_port" ]]; then
+      stack_sync_pidfile_from_port "$pidfile" "$expect_port"
+      existing="$(stack_read_pid "$pidfile")"
+      if [[ -n "$existing" ]] && stack_wait_for_service_port "$expect_port" 20; then
+        if [[ -n "$service" ]]; then
+          stack_write_claim "$service" "$existing" "$expect_port" "$*"
+        fi
+        echo "[stack] synced pid $existing from :${expect_port} — already listening"
+        return 0
+      fi
+    fi
+    echo "[stack] pid $existing alive but :${expect_port} still down after wait — replacing ..."
     kill "$existing" 2>/dev/null || true
     sleep 0.5
     stack_pid_alive "$existing" && kill -9 "$existing" 2>/dev/null || true
@@ -656,8 +715,14 @@ stack_start_openalgo() {
   base="${base%/}"
 
   if stack_adopt_running_service "openalgo" "$port" "$pidfile" "$base/"; then
-    echo "[stack] OpenAlgo already up at $base (pid $(stack_claim_pid openalgo))"
-    return 0
+    if [[ "${STACK_DEV_FLASK_DEBUG:-0}" == "1" || "${STACK_DEV_FLASK_DEBUG:-}" == "true" ]]; then
+      echo "[stack] OpenAlgo running without dev reload — restarting with FLASK_DEBUG ..."
+      stack_stop_claimed "OpenAlgo" "openalgo" "$pidfile" "$port"
+      stack_wait_port_free "$port" 15 || true
+    else
+      echo "[stack] OpenAlgo already up at $base (pid $(stack_claim_pid openalgo))"
+      return 0
+    fi
   fi
 
   if ! stack_assert_port_for_start "openalgo" "$port"; then
@@ -789,28 +854,55 @@ stack_start_vibe_ui() {
   stack_write_claim "vibe-ui" "$(stack_read_pid "$pidfile")" "$port" "vite"
 }
 
-stack_kill_port() {
+stack_kill_unclaimed_port() {
   local port="$1"
-  local pids waited=0
-  pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-  if [[ -z "$pids" ]]; then
+  local pid other pids=() skipped=()
+  for pid in $(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true); do
+    other="$(stack_service_for_pid "$pid" 2>/dev/null || true)"
+    if [[ -n "$other" ]]; then
+      skipped+=("$pid:$other")
+      continue
+    fi
+    pids+=("$pid")
+  done
+  if ((${#skipped[@]} > 0)); then
+    echo "[stack] skip :$port — claimed listener(s): ${skipped[*]}"
+  fi
+  if ((${#pids[@]} == 0)); then
     return 0
   fi
-  echo "[stack] stopping listener(s) on :$port (pids: $pids) ..."
-  # shellcheck disable=SC2086
-  kill $pids 2>/dev/null || true
+  echo "[stack] stopping unclaimed listener(s) on :$port (pids: ${pids[*]}) ..."
+  local waited=0
+  # shellcheck disable=SC2068
+  kill ${pids[@]} 2>/dev/null || true
   while (( waited < 15 )); do
-    pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-    [[ -z "$pids" ]] && return 0
+    pids=()
+    for pid in $(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true); do
+      other="$(stack_service_for_pid "$pid" 2>/dev/null || true)"
+      [[ -z "$other" ]] && pids+=("$pid")
+    done
+    ((${#pids[@]} == 0)) && return 0
     sleep 1
     waited=$((waited + 1))
   done
-  pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-  if [[ -n "$pids" ]]; then
-    echo "[stack] force-killing listener(s) on :$port (pids: $pids) ..."
-    # shellcheck disable=SC2086
-    kill -9 $pids 2>/dev/null || true
+  pids=()
+  for pid in $(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true); do
+    other="$(stack_service_for_pid "$pid" 2>/dev/null || true)"
+    [[ -z "$other" ]] && pids+=("$pid")
+  done
+  if ((${#pids[@]} > 0)); then
+    echo "[stack] force-killing unclaimed listener(s) on :$port (pids: ${pids[*]}) ..."
+    # shellcheck disable=SC2068
+    kill -9 ${pids[@]} 2>/dev/null || true
   fi
+}
+
+stack_kill_port() {
+  stack_kill_unclaimed_port "$1"
+}
+
+stack_kill_openalgo_ws_proxy() {
+  stack_kill_unclaimed_port 8765
 }
 
 stack_stop_vibe_stack() {
@@ -834,8 +926,8 @@ stack_stop_vibe_stack() {
   stack_stop_claimed "vibe-trading (legacy)" "vibe-trading" "$log_dir/vibe-trading.pid"
   stack_stop_nautilus_watch
   stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
-
-  stack_kill_port 8765
+  stack_kill_openalgo_ws_proxy
+  stack_clear_stack_mode
   stack_clear_instance_manifest
 
   # shellcheck disable=SC1091
@@ -1047,6 +1139,44 @@ PY
     hub_ok=1
   fi
   if (( ok && hub_ok )); then return 0; fi
+  if [[ "${STACK_AUTO_HEAL:-1}" != "0" && "${STACK_AUTO_HEAL:-}" != "false" ]]; then
+    echo "[stack] auto-healing dead services (STACK_AUTO_HEAL=1) ..."
+    if stack_ensure_vibe_stack; then
+      stack_reconcile_stale_claims
+      echo "══════════════════════════════════════════════════════════"
+      echo "  Vibe stack status (after auto-heal)"
+      echo "══════════════════════════════════════════════════════════"
+      ok=1
+      for svc in "OpenAlgo:openalgo:$openalgo_port:$log_dir/openalgo.pid" \
+                 "Vibe API:vibe-api:$api_port:$log_dir/vibe-api.pid" \
+                 "Vibe UI:vibe-ui:$ui_port:$log_dir/vibe-ui.pid"; do
+        local name service port pidfile pid http_code alive="dead"
+        name="${svc%%:*}"
+        service="${svc#*:}"; service="${service%%:*}"
+        port="${svc#*:}"; port="${port#*:}"; port="${port%%:*}"
+        pidfile="${svc##*:}"
+        pid="$(stack_read_pid "$pidfile")"
+        http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 5 "http://127.0.0.1:${port}/" 2>/dev/null || true)"
+        [[ -z "$http_code" ]] && http_code="000"
+        local listener
+        listener="$(stack_port_listener_pid "$port")"
+        if [[ -n "$listener" ]] && kill -0 "$listener" 2>/dev/null; then
+          alive="alive"
+          pid="$listener"
+        elif stack_pid_alive "$pid"; then
+          alive="alive"
+        fi
+        if [[ "$http_code" == "200" ]]; then
+          echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid:-?} ($alive)"
+        else
+          echo "  ✗ $name  :$port  HTTP $http_code  pid=${pid:-none} ($alive)"
+          ok=0
+        fi
+      done
+      echo "══════════════════════════════════════════════════════════"
+      (( ok && hub_ok )) && return 0
+    fi
+  fi
   echo "  Fix: trade restart   (starts only what's down)"
   echo "  Full reset: trade restart --force"
   echo "  Full stop: trade stop --all"
@@ -1110,6 +1240,11 @@ stack_start_nautilus_watch() {
     bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
   fi
   if stack_pid_alive "$existing"; then
+    if [[ -f "$log_dir/nautilus-watch.agents.json" ]] && [[ -n "$(stack_read_pid "$pidfile")" ]]; then
+      stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch --registry"
+      echo "[stack] Nautilus watch already running (pid $existing, registry mode)"
+      return 0
+    fi
     if [[ -n "$agent_id" && -n "$bound_agent" && "$bound_agent" != "$agent_id" ]]; then
       echo "[stack] Nautilus watch bound to $bound_agent — restarting for $agent_id ..."
       stack_stop_nautilus_watch

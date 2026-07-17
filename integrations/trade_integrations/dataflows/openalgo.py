@@ -31,9 +31,7 @@ from trade_integrations.openalgo.market_data import (
 )
 from trade_integrations.openalgo.rest_client import openalgo_settings as _openalgo_settings
 from trade_integrations.openalgo.symbols import normalize_openalgo_expiry, resolve_openalgo_symbol
-from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError
-from tradingagents.dataflows.stockstats_utils import _assert_ohlcv_not_stale
-from tradingagents.dataflows.y_finance import get_stock_stats_indicators_window
+from trade_integrations.dataflows.errors import NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +122,7 @@ def _fetch_yfinance_history_india(symbol: str, start_date: str, end_date: str) -
     if frame["Date"].dt.tz is not None:
         frame["Date"] = frame["Date"].dt.tz_localize(None)
     frame = frame.dropna(subset=["Date"])
-    from tradingagents.dataflows.stockstats_utils import _clean_dataframe
+    from trade_integrations.openalgo.market_data import _clean_dataframe
 
     return _clean_dataframe(frame)
 
@@ -280,6 +278,8 @@ def get_openalgo_stock_data(
 
     oa_symbol, exchange = resolve_openalgo_symbol(symbol)
     data = _fetch_history(symbol, start_date, end_date)
+    from tradingagents.dataflows.stockstats_utils import _assert_ohlcv_not_stale
+
     _assert_ohlcv_not_stale(data, end_date, symbol, f"{oa_symbol}@{exchange}")
 
     for col in ("Open", "High", "Low", "Close"):
@@ -316,6 +316,8 @@ def _load_openalgo_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     oa_symbol, exchange = resolve_openalgo_symbol(symbol)
     data = _fetch_history(symbol, start, end)
     data = data[data["Date"] <= curr_dt]
+    from tradingagents.dataflows.stockstats_utils import _assert_ohlcv_not_stale
+
     _assert_ohlcv_not_stale(data, curr_date, symbol, f"{oa_symbol}@{exchange}")
     return data
 
@@ -328,6 +330,7 @@ def get_openalgo_indicators(
 ) -> str:
     """Technical indicators computed from OpenAlgo daily history + stockstats."""
     from . import stockstats_utils
+    from tradingagents.dataflows.y_finance import get_stock_stats_indicators_window
 
     original_loader = stockstats_utils.load_ohlcv
     try:

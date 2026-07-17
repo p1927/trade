@@ -39,6 +39,7 @@ stack_ctl_up() {
 }
 
 stack_ctl_up_inner() {
+  stack_refuse_if_dev_mode
   echo "[stack] starting background stack ..."
   stack_preflight_start || {
     echo "[stack] fix issues above, then: trade doctor" >&2
@@ -72,6 +73,9 @@ stack_ctl_restart() {
 
 stack_ctl_restart_inner() {
   local force="${1:-0}"
+  if (( ! force )); then
+    stack_refuse_if_dev_mode
+  fi
   if (( force )); then
     echo "[stack] full restart (--force): stop then preflight + start ..."
     stack_stop_vibe_stack
@@ -102,6 +106,7 @@ stack_ctl_ensure() {
 }
 
 stack_ctl_ensure_inner() {
+  stack_refuse_if_dev_mode
   echo "[stack] ensuring stack (no full preflight) ..."
   if ! stack_ensure_vibe_stack; then
     echo "[stack] ensure failed — try: trade up" >&2
