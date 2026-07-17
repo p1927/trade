@@ -42,6 +42,7 @@ def format_research_context_for_agent(
     *,
     index_artifact: dict[str, Any] | None = None,
     widget_intent: str = "none",
+    session_config: dict[str, Any] | None = None,
 ) -> str:
     """Build a hidden context block injected into the Vibe chat agent prompt."""
     parts: list[str] = [f"[widget_intent: {widget_intent}]"]
@@ -51,6 +52,9 @@ def format_research_context_for_agent(
         parts.append(_format_index_research_context(index_artifact, widget_intent=widget_intent))
     elif artifact and artifact.get("asset_type") == "index":
         parts.append(_format_index_research_context(artifact, widget_intent=widget_intent))
+    news_block = format_news_scenario_context(session_config)
+    if news_block:
+        parts.append(news_block)
     paper_block = _format_paper_calibration_context()
     if paper_block:
         parts.append(paper_block)
@@ -308,6 +312,35 @@ def _format_index_research_context(
             "For F&O strategy legs, call get_options_trade_widget(ticker) only when "
             "presenting ranked strategy options from the options hub plan."
         )
+    return "\n".join(lines)
+
+
+def format_news_scenario_context(session_config: dict[str, Any] | None) -> str:
+    """Inject news-scenario session binding for Prediction tab advisor."""
+    if not session_config:
+        return ""
+    if str(session_config.get("session_kind") or "") != "news_scenario_advisor":
+        return ""
+    lines = ["[news_scenario_context]"]
+    for key in (
+        "pipeline_as_of",
+        "pipeline_ticker",
+        "horizon_days",
+        "date_range",
+        "active_draft_id",
+        "active_scenario_id",
+        "selected_outcome_id",
+    ):
+        val = session_config.get(key)
+        if val is not None and val != "":
+            lines.append(f"{key}: {val}")
+    lines.extend(
+        [
+            "policy: use pipeline MCP tools only; never refresh index research; "
+            "call save_news_scenario_draft then run_news_event_scenario then get_news_scenario_widget",
+            "[/news_scenario_context]",
+        ]
+    )
     return "\n".join(lines)
 
 

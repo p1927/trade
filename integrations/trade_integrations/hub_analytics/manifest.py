@@ -48,6 +48,7 @@ def _symbol_artifacts(hub: Path, symbol_dir: Path) -> dict[str, Any]:
         "stock_research",
         "index_research",
         "agent_debate",
+        "news_event_scenarios",
     ):
         latest = symbol_dir / kind / "latest.json"
         history_dir = symbol_dir / kind / "history"
