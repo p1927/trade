@@ -140,3 +140,13 @@ def test_execute_exit_records_outcome_ledger():
     reconcile_mock.assert_called_once()
     kwargs = reconcile_mock.call_args.kwargs
     assert kwargs.get("net_pnl_inr") == -120.5
+
+
+def test_process_intent_file_invalid_json(tmp_path: Path):
+    from nautilus_openalgo_bridge.execute import process_intent_file
+
+    bad = tmp_path / "bad-intent.json"
+    bad.write_text("{not json", encoding="utf-8")
+    result = process_intent_file(str(bad))
+    assert result["status"] == "error"
+    assert "path" in result

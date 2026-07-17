@@ -161,8 +161,12 @@ def process_intent_file(path: str, **kwargs: Any) -> dict[str, Any]:
     import json
     from pathlib import Path
 
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    intent = ExecutionIntent.from_dict(payload)
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        intent = ExecutionIntent.from_dict(payload)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+        logger.warning("skip invalid intent file %s: %s", path, exc)
+        return {"status": "error", "error": str(exc), "path": path}
     result = execute_intent(intent, **kwargs)
     logger.info("intent %s → %s", intent.intent_id or path, result.get("status"))
     return result
