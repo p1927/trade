@@ -75,35 +75,11 @@ def _company_history_path(symbol: str, day: str) -> Path:
 
 def _bottom_up_from_archives(day: str, *, horizon_days: int) -> float | None:
     """Replay bottom-up attribution when archived company_research/history exists."""
-    from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
+    from trade_integrations.dataflows.index_research.constituent_backtest import (
+        bottom_up_return_from_archives,
+    )
 
-    signals: list[ConstituentSignal] = []
-    for row in load_nifty50_constituents():
-        path = _company_history_path(row.symbol, day)
-        if not path.is_file():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        sentiment = (payload.get("sentiment") or {}).get("score")
-        try:
-            sentiment_f = float(sentiment) if sentiment is not None else None
-        except (TypeError, ValueError):
-            sentiment_f = None
-        signals.append(
-            ConstituentSignal(
-                symbol=row.symbol,
-                weight=row.weight,
-                sector=row.sector,
-                sentiment_score=sentiment_f,
-            )
-        )
-    if len(signals) < _MIN_HYBRID_CONSTITUENTS:
-        return None
-    attributed = attribute_constituents(signals, horizon_days=horizon_days)
-    rollup = rollup_attribution(attributed)
-    return float(rollup["total_contribution_pct"])
+    return bottom_up_return_from_archives(day, horizon_days=horizon_days)
 
 
 def _backtest_report_path(ticker: str = "NIFTY") -> Path:
@@ -394,22 +370,24 @@ def run_walk_forward_backtest(
         )
 
         close = float(row["close"])
-        raw_macro = predict_macro_delta_gated(factors_today, horizon, artifact)
+        day_str = str(row["date"])[:10]
         scenario_anchor = None
         try:
             scenarios = build_index_scenarios([], factors_today, spot=close, horizon_days=horizon.days)
             scenario_anchor = scenario_weighted_return_pct(scenarios, spot=close)
         except Exception:
             scenario_anchor = None
-        macro = shrink_macro_delta(raw_macro, scenario_anchor)
-        try:
-            from trade_integrations.dataflows.index_research.event_overlay import merge_overlay_into_macro
+        from trade_integrations.dataflows.index_research.macro_forecast import compute_macro_only_return
 
-            macro, _overlay = merge_overlay_into_macro(macro, factors_today, as_of_day=day_str)
-        except Exception:
-            _overlay = {}
+        macro, _macro_prov = compute_macro_only_return(
+            factors_today,
+            horizon,
+            artifact,
+            scenario_anchor=scenario_anchor,
+            as_of_day=day_str,
+        )
+        _overlay = {"return_pct": _macro_prov.get("event_overlay_pct")}
         predicted = macro  # macro-only backtest (no historical constituent research)
-        day_str = str(row["date"])[:10]
         regime_label = resolve_regime_label(factors_today)
         from trade_integrations.dataflows.index_research.flow_regime_buckets import (
             flow_regime_bucket,
@@ -454,7 +432,7 @@ def run_walk_forward_backtest(
                 "regime_label": regime_label,
                 "flow_regime_bucket": flow_bucket,
                 "macro_delta_pct": round(macro, 3),
-                "macro_raw_pct": round(raw_macro, 3),
+                "macro_raw_pct": round(_macro_prov.get("raw_macro_delta_pct") or 0.0, 3),
                 "event_overlay_pct": round(_overlay.get("return_pct") or 0.0, 3) if _overlay else None,
                 "bottom_up_return_pct": round(bottom_up, 3) if bottom_up is not None else None,
                 "hybrid_predicted_return_pct": round(hybrid_predicted, 3)

@@ -27,11 +27,16 @@ from trade_integrations.dataflows.index_research.prediction_ledger import (
     compute_accuracy_metrics,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
-from trade_integrations.dataflows.index_research.predictor import load_stored_model_artifact, predict_nifty
+from trade_integrations.dataflows.index_research.predictor import (
+    finalize_index_prediction,
+    load_stored_model_artifact,
+    predict_nifty,
+)
 from trade_integrations.dataflows.index_research.regime import classify_regime
 from trade_integrations.dataflows.index_research.scenarios import (
     build_index_scenarios,
     reconcile_prediction_with_scenarios,
+    scenario_weighted_return_pct,
 )
 from trade_integrations.context.hub import load_index_research_json
 from trade_integrations.dataflows.index_research.constituent_snapshot import signals_from_cached_doc
@@ -138,11 +143,12 @@ def run_index_research(
         "data_completeness",
         "Checking flow-factor coverage (FII/DII/PCR gate)…",
     )
+    completeness: dict[str, Any] = {"passes_gate": True, "after": {"min_pct": 100.0}}
+    from trade_integrations.dataflows.index_research.data_completeness import (
+        GATE_FAIL_MACRO_TRUST_MULTIPLIER,
+        ensure_factor_data_complete,
+    )
     try:
-        from trade_integrations.dataflows.index_research.data_completeness import (
-            ensure_factor_data_complete,
-        )
-
         completeness = ensure_factor_data_complete(
             enrich=refresh_constituents,
             allow_live_fetch=False,
@@ -156,6 +162,10 @@ def run_index_research(
         )
     except Exception as exc:
         logger.debug("data completeness check skipped: %s", exc)
+
+    macro_trust_multiplier = (
+        GATE_FAIL_MACRO_TRUST_MULTIPLIER if not completeness.get("passes_gate") else 1.0
+    )
 
     constituent_mode = "full_refresh" if refresh_constituents else "cached_snapshot"
     if refresh_constituents:
@@ -352,6 +362,19 @@ def run_index_research(
         trend_20d=trend,
     )
 
+    log.info("scenarios", "Building event scenarios (earnings, RBI, expiry, budget)…")
+    scenarios = build_index_scenarios(
+        signals,
+        macro_factors,
+        spot=spot,
+        horizon_days=horizon.days,
+    ) if spot > 0 else []
+    log.info("scenarios", f"{len(scenarios)} scenarios built", events=[s.get("event") for s in scenarios])
+
+    scenario_anchor = (
+        scenario_weighted_return_pct(scenarios, spot=spot) if spot > 0 and scenarios else None
+    )
+
     log.info("predict", "Running hybrid predictor (bottom-up + macro Ridge + direction head)…")
     prediction = predict_nifty(
         spot=spot,
@@ -359,7 +382,22 @@ def run_index_research(
         macro_factors=macro_factors,
         horizon=horizon,
         as_of_day=now.date().isoformat(),
+        scenario_anchor_return_pct=scenario_anchor,
+        macro_trust_multiplier=macro_trust_multiplier,
     ) if spot > 0 else {}
+    if prediction and not completeness.get("passes_gate"):
+        after = completeness.get("after") or {}
+        prediction["data_quality_warning"] = {
+            "gate": "flow_coverage",
+            "min_pct": after.get("min_pct"),
+            "threshold_pct": after.get("gate_threshold_pct", 90.0),
+            "message": "FII/DII/PCR coverage below gate — macro Ridge down-weighted",
+            "macro_trust_multiplier": macro_trust_multiplier,
+        }
+        prediction["flow_coverage"] = {
+            "passes_gate": completeness.get("passes_gate"),
+            "min_pct": after.get("min_pct"),
+        }
     if prediction:
         prediction["momentum_coverage"] = momentum_coverage_stats(signals)
         try:
@@ -386,6 +424,16 @@ def run_index_research(
             expected_return_pct=prediction.get("expected_return_pct"),
         )
 
+    pre_reconcile_snapshot = (
+        None
+    )
+    if spot > 0 and prediction:
+        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
+            snapshot_pre_reconcile_prediction,
+        )
+
+        pre_reconcile_snapshot = snapshot_pre_reconcile_prediction(prediction)
+
     log.info("attribution", "Attributing constituent contributions to index…")
     attributed = attribute_constituents(signals, horizon_days=horizon.days)
     rollup = rollup_attribution(attributed)
@@ -397,15 +445,6 @@ def run_index_research(
             f"Top driver: {top.get('symbol')} ({top.get('contribution_to_index_pct'):+.2f}%)",
             top_drivers=rollup.get("top_drivers", [])[:3],
         )
-
-    log.info("scenarios", "Building event scenarios (earnings, RBI, expiry, budget)…")
-    scenarios = build_index_scenarios(
-        signals,
-        macro_factors,
-        spot=spot,
-        horizon_days=horizon.days,
-    ) if spot > 0 else []
-    log.info("scenarios", f"{len(scenarios)} scenarios built", events=[s.get("event") for s in scenarios])
 
     if spot > 0 and prediction and scenarios:
         artifact = load_stored_model_artifact()
@@ -425,6 +464,21 @@ def run_index_research(
                 before=before,
                 after=after,
             )
+        prediction = finalize_index_prediction(
+            prediction,
+            spot=spot,
+            mae_pct=mae_pct,
+            macro_factors=macro_factors,
+            scenario_anchor_return_pct=scenario_anchor,
+        )
+
+    legacy_prediction = None
+    if spot > 0 and prediction:
+        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
+            snapshot_legacy_prediction,
+        )
+
+        legacy_prediction = snapshot_legacy_prediction(prediction)
 
     from trade_integrations.context.hub import load_agent_debate_json
     from trade_integrations.research.debate_synthesis import (
@@ -436,6 +490,15 @@ def run_index_research(
     debate_struct = extract_structured_debate(debate_raw)
     if debate_struct and prediction:
         prediction = merge_index_prediction(debate_struct, prediction)
+        artifact = load_stored_model_artifact()
+        mae_pct = float(artifact.mae if artifact else 1.5)
+        prediction = finalize_index_prediction(
+            prediction,
+            spot=spot,
+            mae_pct=mae_pct,
+            macro_factors=macro_factors,
+            scenario_anchor_return_pct=scenario_anchor,
+        )
         stages.append(
             StageResult(
                 stage="debate_synthesis",
@@ -449,6 +512,27 @@ def run_index_research(
             "debate",
             f"Merged agent debate view: {debate_struct.get('view')}",
             debate_view=debate_struct.get("view"),
+        )
+
+    if spot > 0 and prediction:
+        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
+            attach_forecast_lab,
+        )
+
+        prediction = attach_forecast_lab(
+            prediction,
+            ticker=sym,
+            spot=spot,
+            horizon_days=horizon.days,
+            macro_factors=macro_factors,
+            signals=signals,
+            scenarios=scenarios,
+            scenario_anchor=scenario_anchor,
+            as_of_day=now.date().isoformat(),
+            macro_trust_multiplier=macro_trust_multiplier,
+            debate_payload=debate_raw if debate_struct else None,
+            pre_reconcile_snapshot=pre_reconcile_snapshot,
+            legacy_prediction=legacy_prediction,
         )
 
     factor_bundle: dict[str, Any] = {}

@@ -59,6 +59,9 @@ def build_prediction_metadata(
         "scenario_anchor_return_pct": prediction.get("scenario_anchor_return_pct"),
         "reconciled_with_scenarios": prediction.get("reconciled_with_scenarios"),
         "raw_expected_return_pct": prediction.get("raw_expected_return_pct"),
+        "flow_coverage": prediction.get("flow_coverage"),
+        "data_quality_warning": prediction.get("data_quality_warning"),
+        "sign_conflict": prediction.get("sign_conflict"),
         "global_factors": factor_map,
     }
     if regime:
@@ -77,6 +80,18 @@ def build_prediction_metadata(
             for s in scenarios[:6]
             if isinstance(s, dict)
         ]
+    tracks = prediction.get("forecast_tracks")
+    if isinstance(tracks, dict) and tracks:
+        meta["forecast_tracks_summary"] = {
+            tid: {
+                "expected_return_pct": row.get("expected_return_pct"),
+                "view": row.get("view"),
+            }
+            for tid, row in tracks.items()
+            if isinstance(row, dict)
+        }
+    if prediction.get("cause_stress_index") is not None:
+        meta["cause_stress_index"] = prediction.get("cause_stress_index")
     return meta
 
 

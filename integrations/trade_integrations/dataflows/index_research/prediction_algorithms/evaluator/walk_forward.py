@@ -1,0 +1,297 @@
+"""Walk-forward track backtest — per-track eval rows + scoreboard."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import pandas as pd
+
+from trade_integrations.dataflows.index_research.backtest_runner import (
+    _forward_return_pct,
+    load_aligned_factor_history,
+)
+from trade_integrations.dataflows.index_research.constituent_backtest import (
+    load_constituent_signals_for_day,
+)
+from trade_integrations.dataflows.index_research.horizon import resolve_horizon
+from trade_integrations.dataflows.index_research.prediction_algorithms.combiners import run_combiner
+from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.legacy_replay import (
+    replay_legacy_headline,
+)
+from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.scoreboard import (
+    normalize_scoreboard_report,
+    save_scoreboard,
+    summarize_track_metrics,
+)
+from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import evaluate_promotion
+from trade_integrations.dataflows.index_research.prediction_algorithms.registry import run_all_tracks
+from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
+    BACKTEST_COMBINER_IDS,
+    BACKTEST_TRACK_IDS,
+    CANONICAL_TRACK_IDS,
+    SCOREBOARD_SCHEMA_VERSION,
+    TRACK_BACKTEST_ELIGIBLE,
+)
+from trade_integrations.dataflows.index_research.prediction_algorithms.context_builder import build_track_context
+
+logger = logging.getLogger(__name__)
+
+_WALK_FORWARD_TRACK_IDS = BACKTEST_TRACK_IDS
+_COMBINER_IDS = BACKTEST_COMBINER_IDS
+
+
+def _row_factor_dict(row: pd.Series, feature_cols: list[str]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for col in feature_cols:
+        val = row.get(col)
+        if pd.notna(val):
+            try:
+                out[col] = float(val)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _append_eval_row(
+    eval_rows: list[dict[str, Any]],
+    *,
+    day_str: str,
+    track_id: str,
+    predicted_pct: float,
+    actual_f: float,
+    close: float,
+) -> None:
+    err = predicted_pct - actual_f
+    eval_rows.append(
+        {
+            "date": day_str,
+            "track_id": track_id,
+            "predicted_pct": round(predicted_pct, 4),
+            "actual_pct": round(actual_f, 4),
+            "error_pct": round(err, 4),
+            "direction_hit": (predicted_pct > 0) == (actual_f > 0),
+            "close": round(close, 2),
+        }
+    )
+
+
+def run_track_walk_forward(
+    *,
+    ticker: str = "NIFTY",
+    days: int = 365,
+    horizon_days: int | None = None,
+    min_train_rows: int = 40,
+    eval_step: int = 5,
+) -> dict[str, Any]:
+    """Nested walk-forward per track using aligned factor history."""
+    try:
+        from sklearn.linear_model import Ridge  # noqa: F401
+    except ImportError:
+        return {"status": "error", "message": "sklearn required for track backtest"}
+
+    horizon = resolve_horizon(horizon_days)
+    frame = load_aligned_factor_history(days=days)
+    if frame is None or frame.empty:
+        return {"status": "error", "message": "no_factor_history"}
+
+    frame = frame.sort_values("date").reset_index(drop=True)
+    frame["target"] = _forward_return_pct(frame["close"].astype(float), horizon.days)
+    closes = frame["close"].astype(float)
+    frame["realized_1d_pct"] = (closes - closes.shift(1)) / closes.shift(1) * 100.0
+    nifty_series = [
+        {
+            "date": str(row["date"])[:10],
+            "close": round(float(row["close"]), 2),
+            "realized_1d_pct": round(float(row["realized_1d_pct"]), 3)
+            if pd.notna(row["realized_1d_pct"])
+            else None,
+        }
+        for _, row in frame.iterrows()
+    ]
+    history_start = str(frame["date"].iloc[0])[:10]
+    history_end = str(frame["date"].iloc[-1])[:10]
+
+    feature_cols = [
+        c
+        for c in frame.columns
+        if c not in {"date", "close", "target"}
+        and pd.api.types.is_numeric_dtype(frame[c])
+    ]
+
+    from trade_integrations.dataflows.index_research.predictor import train_macro_ridge
+    from trade_integrations.dataflows.index_research.scenarios import (
+        build_index_scenarios,
+        scenario_weighted_return_pct,
+    )
+
+    max_i = len(frame) - horizon.days - 1
+    indices = list(range(min_train_rows, max_i + 1, max(1, eval_step)))
+    eval_rows: list[dict[str, Any]] = []
+    hybrid_eval_dates = 0
+
+    for i in indices:
+        train = frame.iloc[:i].copy()
+        row = frame.iloc[i]
+        actual = row.get("target")
+        if pd.isna(actual):
+            continue
+
+        day_str = str(row["date"])[:10]
+        close = float(row["close"])
+        factors_today = _row_factor_dict(row, feature_cols)
+        actual_f = float(actual)
+
+        try:
+            artifact = train_macro_ridge(train, horizon)
+        except (ValueError, ImportError) as exc:
+            logger.debug("track backtest skip train at %s: %s", i, exc)
+            continue
+
+        scenarios = []
+        scenario_anchor = None
+        try:
+            signals_for_scenarios = load_constituent_signals_for_day(day_str, factors_today)
+            scenarios = build_index_scenarios(
+                signals_for_scenarios,
+                factors_today,
+                spot=close,
+                horizon_days=horizon.days,
+            )
+            scenario_anchor = scenario_weighted_return_pct(scenarios, spot=close)
+        except Exception:
+            scenarios = []
+
+        signals = load_constituent_signals_for_day(day_str, factors_today)
+        if signals and signals[0].symbol != "_INDEX_SENTIMENT":
+            hybrid_eval_dates += 1
+
+        legacy_pred = replay_legacy_headline(
+            spot=close,
+            signals=signals,
+            macro_factors=factors_today,
+            scenarios=scenarios,
+            scenario_anchor=scenario_anchor,
+            horizon=horizon,
+            model_artifact=artifact,
+            as_of_day=day_str,
+        )
+
+        ctx = build_track_context(
+            ticker=ticker,
+            spot=close,
+            horizon_days=horizon.days,
+            macro_factors=factors_today,
+            signals=signals,
+            scenarios=scenarios,
+            scenario_anchor=scenario_anchor,
+            as_of_day=day_str,
+            legacy_prediction=legacy_pred,
+        )
+        ctx.model_artifact = artifact
+
+        tracks = run_all_tracks(ctx, track_ids=list(_WALK_FORWARD_TRACK_IDS))
+
+        for track_id, track in tracks.items():
+            if not track.available:
+                continue
+            _append_eval_row(
+                eval_rows,
+                day_str=day_str,
+                track_id=track_id,
+                predicted_pct=float(track.expected_return_pct),
+                actual_f=actual_f,
+                close=close,
+            )
+
+        mae_by_track = {
+            tid: summarize_track_metrics(
+                [r for r in eval_rows if r["date"] < day_str],
+                tid,
+            ).get("mae_pct")
+            or 1.0
+            for tid in _WALK_FORWARD_TRACK_IDS
+        }
+        cause_stress = None
+        try:
+            from trade_integrations.dataflows.index_research.prediction_algorithms.causes.cause_stress_index import (
+                compute_cause_stress_index,
+            )
+
+            cause_stress = compute_cause_stress_index(factors_today).get("cause_stress_index")
+        except Exception:
+            cause_stress = None
+
+        for combiner_id in _COMBINER_IDS:
+            combined = run_combiner(
+                combiner_id,
+                tracks,
+                mae_by_track=mae_by_track,
+                cause_stress_index=cause_stress,
+            )
+            _append_eval_row(
+                eval_rows,
+                day_str=day_str,
+                track_id=f"combiner:{combiner_id}",
+                predicted_pct=float(combined.expected_return_pct),
+                actual_f=actual_f,
+                close=close,
+            )
+
+    primary_dates = {
+        r["date"]
+        for r in eval_rows
+        if not str(r.get("track_id", "")).startswith("combiner:")
+    }
+
+    track_summary = {tid: summarize_track_metrics(eval_rows, tid) for tid in CANONICAL_TRACK_IDS}
+    for tid, row in track_summary.items():
+        row["backtest_eligible"] = TRACK_BACKTEST_ELIGIBLE.get(tid, False)
+        if tid == "debate_numeric":
+            row["live_only"] = True
+            row.setdefault("note", "No historical debate archive — live hub only")
+    combiner_summary = {
+        cid: summarize_track_metrics(eval_rows, f"combiner:{cid}") for cid in _COMBINER_IDS
+    }
+
+    from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.chart_series import (
+        build_track_chart_payload,
+    )
+
+    chart = build_track_chart_payload(
+        eval_rows,
+        nifty_series=nifty_series,
+        horizon_days=horizon.days,
+    )
+
+    report = {
+        "status": "ok",
+        "schema_version": SCOREBOARD_SCHEMA_VERSION,
+        "ticker": ticker.strip().upper(),
+        "horizon_days": horizon.days,
+        "history_days": days,
+        "history_start": history_start,
+        "history_end": history_end,
+        "history_rows": len(frame),
+        "eval_count": len(primary_dates),
+        "hybrid_eval_count": hybrid_eval_dates,
+        "tracks": track_summary,
+        "combiners": combiner_summary,
+        "daily_evaluations": eval_rows,
+        "nifty_series": nifty_series[-400:],
+        "chart": chart,
+        "promotion": evaluate_promotion(
+            {
+                "eval_count": len(primary_dates),
+                "tracks": track_summary,
+                "combiners": combiner_summary,
+            }
+        ),
+        "limitations": [],
+    }
+    if hybrid_eval_dates == 0:
+        report["limitations"].append(
+            "bottom_up uses index_sentiment proxy when company_research/history archives are sparse"
+        )
+    save_scoreboard(ticker, normalize_scoreboard_report(report))
+    return normalize_scoreboard_report(report)
