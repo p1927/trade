@@ -340,6 +340,11 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
         "routing_warnings": list(routing_warnings),
     }
 
+    orch_sid = str(proposal.get("orchestrator_session_id") or draft.get("orchestrator_session_id") or "").strip()
+    if orch_sid:
+        proposal["orchestrator_session_id"] = orch_sid
+        proposal["session_id"] = orch_sid
+
     routing_errors = validate_proposal_routing(proposal)
     symbol_errors = validate_proposal_symbols(symbols)
     if symbol_errors:
@@ -351,7 +356,6 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     if routing_errors:
         proposal["status"] = "incomplete"
 
-    orch_sid = str(proposal.get("orchestrator_session_id") or "").strip()
     if orch_sid:
         mark_superseded_proposals(orch_sid, except_proposal_id=proposal_id)
 

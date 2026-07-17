@@ -147,11 +147,12 @@ def load_latest_proposal_for_orchestrator(orchestrator_session_id: str) -> dict[
         if created >= best_created:
             best = data
             best_created = created
-    if best is not None and str(best.get("orchestrator_session_id") or "") != orch:
-        best["session_id"] = orch
-    elif best is not None:
-        best.setdefault("session_id", orch)
-    return best
+    if best is None:
+        return None
+    out = dict(best)
+    out.setdefault("orchestrator_session_id", orch)
+    out.setdefault("session_id", orch)
+    return out
 
 
 def mark_superseded_proposals(orchestrator_session_id: str, *, except_proposal_id: str) -> int:

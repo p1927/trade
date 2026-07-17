@@ -312,6 +312,9 @@ def maybe_auto_propose_after_orchestrator_turn(
     if isinstance(proposal, dict):
         proposal["session_id"] = orchestrator_session_id
         proposal["auto_proposed"] = True
+        from trade_integrations.autonomous_agents.store import save_proposal
+
+        save_proposal(proposal)
         result["proposal"] = proposal
         logger.info(
             "orchestrator auto-propose fallback created proposal %s for session %s",
