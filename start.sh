@@ -38,6 +38,7 @@ START_REDIS=1
 DO_BOOTSTRAP=1
 STATUS_ONLY=0
 DAEMON=0
+DEV_UI_ONLY=0
 
 # Readiness flags (0/1)
 READY_SEARXNG=0
@@ -59,8 +60,12 @@ for arg in "$@"; do
     --no-bootstrap) DO_BOOTSTRAP=0 ;;
     --status) STATUS_ONLY=1 ;;
     --daemon) DAEMON=1 ;;
+    --dev-ui) DEV_UI_ONLY=1; START_SEARXNG=0; START_TIMESCALE=0; START_REDIS=0; START_OPENALGO=0 ;;
     -h|--help)
-      cat <<'EOF'
+      # shellcheck disable=SC1091
+      source "$ROOT/scripts/stack_ports.sh"
+      stack_ensure_ports_env 2>/dev/null || true
+      cat <<EOF
 Usage: ./start.sh [options]
 
   (default)         Bootstrap, start SearXNG + OpenAlgo, launch Vibe Web UI
@@ -74,11 +79,11 @@ Usage: ./start.sh [options]
   --status          Check readiness of all services and exit
   --daemon          Start OpenAlgo + Vibe in background and exit
 
-Services:
-  SearXNG         http://localhost:5556        (Docker, news search)
-  OpenAlgo        http://127.0.0.1:5001         (trading + broker UI)
-  Vibe Trading    http://localhost:5899         (chat UI, default)
-  Vibe API        http://localhost:8899         (backend)
+Services (from stack/ports.yaml):
+  SearXNG         ${SEARXNG_BASE_URL:-run: python scripts/sync_stack_ports.py --apply}
+  OpenAlgo        ${OPENALGO_HOST:-run: python scripts/sync_stack_ports.py --apply}
+  Vibe Trading    ${VIBE_FRONTEND_URL:-run: python scripts/sync_stack_ports.py --apply}
+  Vibe API        ${VIBE_BACKEND_URL:-run: python scripts/sync_stack_ports.py --apply}
   TradingAgents   interactive CLI (--cli)
 EOF
       exit 0
@@ -120,6 +125,9 @@ else
 fi
 
 load_env() {
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/stack_ports.sh"
+  stack_ensure_ports_env || true
   if [[ -f "$ROOT/.env" ]]; then
     set -a
     # shellcheck disable=SC1091
@@ -162,11 +170,11 @@ http_ok() {
 }
 
 searxng_url() {
-  echo "${SEARXNG_BASE_URL:-http://localhost:5556}"
+  echo "${SEARXNG_BASE_URL}"
 }
 
 openalgo_url() {
-  echo "${OPENALGO_HOST:-http://127.0.0.1:5001}"
+  echo "${OPENALGO_HOST}"
 }
 
 wait_for_url() {
@@ -206,6 +214,11 @@ bootstrap_tradingagents() {
     "$ROOT/.venv/bin/pip" install -q -e "$AGENTS_DIR"
     "$ROOT/.venv/bin/pip" install -q -e "$ROOT"
     "$vpy" -c "import trade_integrations"
+  fi
+
+  if "$vpy" -c "import trade_integrations; import tradingagents" 2>/dev/null; then
+    "$ROOT/.venv/bin/pip" install -q pyyaml 2>/dev/null || true
+    "$vpy" "$ROOT/scripts/sync_stack_ports.py" --apply 2>/dev/null || true
   fi
 
   if (( START_VIBE )) && [[ ! -d "$VIBE_DIR" ]]; then
@@ -263,48 +276,20 @@ probe_searxng() {
 }
 
 ensure_searxng() {
-  local base
-  base="$(searxng_url)"
-
-  if probe_searxng; then
+  if stack_probe_searxng; then
     READY_SEARXNG=1
     return 0
   fi
-
-  if [[ ! -f "$COMPOSE_FILE" ]]; then
-    fail "SearXNG not reachable and $COMPOSE_FILE missing"
-    return 1
-  fi
-
-  if ! command -v docker >/dev/null 2>&1; then
-    ensure_docker_path
-  fi
-  if ! command -v docker >/dev/null 2>&1; then
-    fail "SearXNG not running and Docker is not installed"
-    warn "News search will fall back to yfinance/alpha_vantage only"
-    return 0
-  fi
-
-  if ! docker info >/dev/null 2>&1; then
-    fail "Docker daemon is not running — start Docker Desktop, then retry"
-    warn "Continuing without SearXNG"
-    return 0
-  fi
-
-  log "Starting SearXNG via Docker ..."
-  docker compose -f "$COMPOSE_FILE" up -d searxng
-
-  if wait_for_url "SearXNG" "${base%/}/" 45; then
+  stack_ensure_searxng || true
+  if stack_probe_searxng; then
     READY_SEARXNG=1
     return 0
   fi
-
-  fail "SearXNG did not become ready — check: docker compose -f docker-compose.stack.yml logs searxng"
   return 1
 }
 
 check_searxng() {
-  if probe_searxng; then
+  if stack_probe_searxng; then
     READY_SEARXNG=1
   fi
 }
@@ -318,7 +303,7 @@ timescale_enabled() {
 }
 
 timescale_url() {
-  echo "${TIMESCALE_DATABASE_URL:-postgresql://postgres:tradehub@localhost:5433/trade_hub}"
+  echo "${TIMESCALE_DATABASE_URL}"
 }
 
 probe_timescale() {
@@ -339,61 +324,15 @@ ensure_timescale() {
   if ! timescale_enabled; then
     return 0
   fi
-
-  if probe_timescale; then
+  if stack_probe_timescale; then
     READY_TIMESCALE=1
     return 0
   fi
-
-  if [[ ! -f "$COMPOSE_FILE" ]]; then
-    fail "TimescaleDB enabled but $COMPOSE_FILE missing"
-    return 1
-  fi
-
-  if ! command -v docker >/dev/null 2>&1; then
-    ensure_docker_path
-  fi
-  if ! command -v docker >/dev/null 2>&1; then
-    fail "TimescaleDB enabled but Docker is not installed"
-    warn "Hot tick recording will be skipped until TimescaleDB is available"
-    return 0
-  fi
-
-  if ! docker info >/dev/null 2>&1; then
-    fail "TimescaleDB enabled but Docker daemon is not running"
-    warn "Start Docker Desktop, then retry — hot ticks disabled until then"
-    return 0
-  fi
-
-  log "Starting TimescaleDB via Docker ..."
-  stack_timescale_start_container
-
-  if stack_timescale_wait_ready probe_timescale 60 2; then
+  stack_ensure_timescale || true
+  if stack_probe_timescale; then
     READY_TIMESCALE=1
     return 0
   fi
-
-  if stack_timescale_logs_indicate_stale_pid; then
-    warn "TimescaleDB has a stale postmaster.pid — attempting auto-repair ..."
-    if stack_timescale_repair_stale_pid; then
-      stack_timescale_start_container
-      if stack_timescale_wait_ready probe_timescale 60 2; then
-        ok "TimescaleDB recovered after stale postmaster.pid repair"
-        READY_TIMESCALE=1
-        return 0
-      fi
-    fi
-  elif stack_timescale_logs_indicate_recovery; then
-    warn "TimescaleDB still replaying WAL — extending wait (do not docker kill) ..."
-    if stack_timescale_wait_ready probe_timescale 180 2; then
-      ok "TimescaleDB ready after WAL recovery"
-      READY_TIMESCALE=1
-      return 0
-    fi
-  fi
-
-  fail "TimescaleDB did not become ready — check: docker compose -f docker-compose.stack.yml logs timescaledb"
-  fail "  repair: ./scripts/repair_timescale.sh"
   return 1
 }
 
@@ -401,7 +340,7 @@ check_timescale() {
   if ! timescale_enabled; then
     return 0
   fi
-  if probe_timescale; then
+  if stack_probe_timescale; then
     READY_TIMESCALE=1
   fi
 }
@@ -422,7 +361,7 @@ redis_enabled() {
 }
 
 redis_url() {
-  echo "${NAUTILUS_REDIS_URL:-redis://127.0.0.1:6379/0}"
+  echo "${NAUTILUS_REDIS_URL}"
 }
 
 probe_redis() {
@@ -438,7 +377,9 @@ try:
     import redis
 except ImportError:
     raise SystemExit(1)
-url = os.getenv("NAUTILUS_REDIS_URL", "redis://127.0.0.1:6379/0")
+url = os.getenv("NAUTILUS_REDIS_URL")
+if not url:
+    raise SystemExit(1)
 client = redis.from_url(url, socket_connect_timeout=2)
 client.ping()
 PY
@@ -448,38 +389,12 @@ ensure_redis() {
   if ! redis_enabled; then
     return 0
   fi
-
-  if probe_redis; then
-    READY_REDIS=1
-    return 0
-  fi
-
-  if [[ ! -f "$COMPOSE_FILE" ]]; then
-    warn "Redis needed for Nautilus watch but $COMPOSE_FILE missing"
-    return 0
-  fi
-
-  if ! command -v docker >/dev/null 2>&1; then
-    ensure_docker_path
-  fi
-  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    warn "Redis needed for Nautilus watch — start Docker or: brew services start redis"
-    return 0
-  fi
-
-  log "Starting Redis via Docker ..."
-  docker compose -f "$COMPOSE_FILE" up -d redis
-
-  local i
-  for i in $(seq 1 20); do
-    if probe_redis; then
+  if stack_ensure_redis_docker; then
+    if stack_probe_redis; then
       READY_REDIS=1
-      return 0
     fi
-    sleep 1
-  done
-
-  warn "Redis did not become ready — Nautilus watch may fail to start"
+    return 0
+  fi
   return 0
 }
 
@@ -487,7 +402,7 @@ check_redis() {
   if ! redis_enabled; then
     return 0
   fi
-  if probe_redis; then
+  if stack_probe_redis; then
     READY_REDIS=1
   fi
 }
@@ -565,8 +480,8 @@ check_vibe_ready() {
 }
 
 probe_vibe_http() {
-  local api="${VIBE_BACKEND_PORT:-8899}"
-  local ui="${VIBE_FRONTEND_PORT:-5899}"
+  local api="${VIBE_BACKEND_PORT}"
+  local ui="${VIBE_FRONTEND_PORT}"
   http_ok "http://127.0.0.1:${api}/" && http_ok "http://127.0.0.1:${ui}/"
 }
 
@@ -633,12 +548,12 @@ print_status() {
   fi
 
   if probe_vibe_http; then
-    local vibe_ui="${VIBE_FRONTEND_PORT:-5899}"
-    local vibe_api="${VIBE_BACKEND_PORT:-8899}"
+    local vibe_ui="${VIBE_FRONTEND_PORT}"
+    local vibe_api="${VIBE_BACKEND_PORT}"
     ok "Vibe Trading   Web UI http://localhost:${vibe_ui}  (API :${vibe_api}) — running"
   elif (( READY_VIBE )); then
-    local vibe_ui="${VIBE_FRONTEND_PORT:-5899}"
-    local vibe_api="${VIBE_BACKEND_PORT:-8899}"
+    local vibe_ui="${VIBE_FRONTEND_PORT}"
+    local vibe_api="${VIBE_BACKEND_PORT}"
     fail "Vibe Trading   installed but not running — use: trade start daemon"
     warn "               (Web UI :${vibe_ui}, API :${vibe_api})"
   elif (( START_VIBE )); then
@@ -706,8 +621,8 @@ ensure_vibe_frontend() {
 start_vibe_web() {
   local frontend backend_port frontend_port vibe_bin
   frontend="$(vibe_frontend_dir)"
-  backend_port="${VIBE_BACKEND_PORT:-8899}"
-  frontend_port="${VIBE_FRONTEND_PORT:-5899}"
+  backend_port="${VIBE_BACKEND_PORT}"
+  frontend_port="${VIBE_FRONTEND_PORT}"
   vibe_bin="$ROOT/.venv/bin/vibe-trading"
 
   if [[ ! -x "$vibe_bin" ]]; then
@@ -736,19 +651,62 @@ start_vibe_web() {
   log "  Chat UI:  http://localhost:${frontend_port}"
   log "  API:      http://localhost:${backend_port}"
   log "  OpenAlgo MCP is wired via ~/.vibe-trading/agent.json"
-  log "  Tip: for a persistent background stack use: trade start daemon"
+  if (( DEV_UI_ONLY )) || [[ "${STACK_DEV_RELOAD:-0}" == "1" ]]; then
+    log "  Dev reload: Vite HMR + Vibe API --reload + OpenAlgo FLASK_DEBUG (if trade dev)"
+    log "  After .env change: trade reload env"
+  else
+    log "  Tip: for dev with auto-reload use: trade dev"
+    log "  Tip: for background stack use: trade start daemon"
+  fi
   cd "$ROOT"
-  # OpenAlgo was started above; do not leave .stack.pids behind for `trade status` to kill later.
-  trap - EXIT INT TERM
-  rm -f "$PID_FILE"
-  exec "$vibe_bin" dev \
+
+  local vibe_pid dev_args=()
+  if (( DEV_UI_ONLY )) || [[ "${STACK_DEV_RELOAD:-0}" == "1" ]]; then
+    dev_args+=(--reload-api)
+  fi
+  "$vibe_bin" dev \
     --port "$backend_port" \
     --frontend-port "$frontend_port" \
-    --frontend-dir "$frontend"
+    --frontend-dir "$frontend" \
+    "${dev_args[@]}" &
+  vibe_pid=$!
+
+  cleanup_with_vibe() {
+    if kill -0 "$vibe_pid" 2>/dev/null; then
+      log "Stopping Vibe (pid $vibe_pid)..."
+      kill "$vibe_pid" 2>/dev/null || true
+      wait "$vibe_pid" 2>/dev/null || true
+    fi
+    if (( DEV_UI_ONLY )); then
+      # shellcheck disable=SC1091
+      source "$ROOT/scripts/stack_lib.sh"
+      STACK_ROOT="$ROOT"
+      stack_stop_pidfile "OpenAlgo" "$(stack_log_dir)/openalgo.pid" "openalgo.*app.py"
+      stack_kill_port "$(stack_openalgo_port)"
+      stack_kill_port 8765
+    fi
+    cleanup
+  }
+  trap cleanup_with_vibe EXIT INT TERM
+
+  wait "$vibe_pid"
 }
 
 main() {
   load_env
+
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/stack_ports.sh"
+  stack_validate_ports_registry || true
+  if (( ! DEV_UI_ONLY && ! STATUS_ONLY )); then
+    stack_check_port_listeners || true
+  fi
+
+  if (( DEV_UI_ONLY )); then
+    check_vibe_ready || { fail "Vibe not ready"; exit 1; }
+    start_vibe_web
+    exit 0
+  fi
 
   if (( DO_BOOTSTRAP )); then
     bootstrap_tradingagents || true
@@ -777,6 +735,8 @@ main() {
     check_redis
   fi
 
+  stack_ensure_hub_storage || true
+
   if (( STATUS_ONLY )); then
     check_openalgo
   elif (( START_OPENALGO && ! DAEMON )); then
@@ -792,11 +752,20 @@ main() {
   print_status
 
   if (( STATUS_ONLY )); then
-    local vibe_ok=1
+    local vibe_ok=1 hub_ok=1
     if (( START_VIBE )) && ! probe_vibe_http; then
       vibe_ok=0
     fi
-    if (( READY_SEARXNG && READY_OPENALGO && READY_AGENTS && ( ! START_VIBE || vibe_ok ) )); then
+    if (( START_SEARXNG )) && ! (( READY_SEARXNG )); then
+      hub_ok=0
+    fi
+    if timescale_enabled && ! (( READY_TIMESCALE )); then
+      hub_ok=0
+    fi
+    if redis_enabled && ! (( READY_REDIS )); then
+      hub_ok=0
+    fi
+    if (( READY_OPENALGO && READY_AGENTS && hub_ok && ( ! START_VIBE || vibe_ok ) )); then
       exit 0
     fi
     exit 1

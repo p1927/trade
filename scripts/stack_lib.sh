@@ -35,6 +35,9 @@ stack_load_env() {
   local root env_file
   root="$(stack_root)"
   env_file="$root/.env"
+  # shellcheck disable=SC1091
+  source "$root/scripts/stack_ports.sh"
+  stack_ensure_ports_env || true
   if [[ -f "$env_file" ]]; then
     set -a
     # shellcheck disable=SC1090
@@ -47,25 +50,32 @@ stack_load_env() {
 }
 
 stack_openalgo_port() {
-  local url="${OPENALGO_HOST:-http://127.0.0.1:5001}"
+  local url="${OPENALGO_HOST}"
   url="${url#*://}"
   url="${url%%/*}"
   echo "${url##*:}"
 }
 
 stack_vibe_api_port() {
-  echo "${VIBE_BACKEND_PORT:-8899}"
+  echo "${VIBE_BACKEND_PORT}"
 }
 
 stack_vibe_ui_port() {
-  echo "${VIBE_FRONTEND_PORT:-5899}"
+  echo "${VIBE_FRONTEND_PORT}"
 }
 
 stack_api_index_prediction_ok() {
   local port="${1:-$(stack_vibe_api_port)}"
-  curl -sf -H "Accept: application/json" \
+  curl -sf -m 10 -H "Accept: application/json" \
     "http://127.0.0.1:${port}/trade/index-prediction?ticker=NIFTY" 2>/dev/null \
     | grep -q '"status":"ok"'
+}
+
+stack_vibe_api_listener_alive() {
+  local port="${1:-$(stack_vibe_api_port)}"
+  local listener
+  listener="$(stack_port_listener_pid "$port")"
+  [[ -n "$listener" ]] && stack_pid_alive "$listener"
 }
 
 stack_http_ok() {
@@ -245,13 +255,18 @@ stack_start_openalgo() {
 
   echo "[stack] starting OpenAlgo on :$port ..."
   STACK_LAUNCH_EXPECT_PORT="$port"
+  local -a launch_cmd=()
   if [[ -x "$root/openalgo/.venv/bin/python" ]]; then
-    stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" \
-      "$root/openalgo/.venv/bin/python" app.py
+    launch_cmd=("$root/openalgo/.venv/bin/python" app.py)
   else
     runner="$(stack_pick_openalgo_cmd)"
-    # shellcheck disable=SC2086
-    stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" bash -lc "exec $runner"
+    launch_cmd=(bash -lc "exec $runner")
+  fi
+  if [[ "${STACK_DEV_FLASK_DEBUG:-0}" == "1" || "${STACK_DEV_FLASK_DEBUG:-}" == "true" ]]; then
+    echo "[stack] OpenAlgo FLASK_DEBUG=1 (code auto-reload)"
+    stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" env FLASK_DEBUG=1 "${launch_cmd[@]}"
+  else
+    stack_launch_detached "$pidfile" "$logfile" "$root/openalgo" "${launch_cmd[@]}"
   fi
   unset STACK_LAUNCH_EXPECT_PORT
   stack_wait_for_url "OpenAlgo" "$base/" 90
@@ -275,6 +290,13 @@ stack_start_vibe_api() {
     return 0
   fi
 
+  # Root responds but index probe failed — often a busy worker (SSE analysis), not a dead API.
+  if stack_http_ok "$base/" && stack_vibe_api_listener_alive "$port"; then
+    stack_sync_pidfile_from_port "$pidfile" "$port"
+    echo "[stack] Vibe API on :$port is busy but listening — leaving it running"
+    return 0
+  fi
+
   if stack_http_ok "$base/"; then
     echo "[stack] Vibe API on :$port is stale (missing /trade/index-prediction) — restarting ..."
   fi
@@ -287,10 +309,15 @@ stack_start_vibe_api() {
   fi
 
   echo "[stack] starting Vibe API on :$port ..."
+  local -a serve_args=(serve --port "$port")
+  if [[ "${STACK_DEV_RELOAD:-0}" == "1" || "${STACK_DEV_RELOAD:-}" == "true" ]]; then
+    serve_args+=(--reload)
+    echo "[stack] Vibe API auto-reload enabled (integrations + agent code)"
+  fi
   STACK_LAUNCH_EXPECT_PORT="$port"
   stack_launch_detached \
     "$pidfile" "$logfile" "$agent_dir" \
-    "$py" -m cli._legacy serve --port "$port"
+    "$py" -m cli._legacy "${serve_args[@]}"
   unset STACK_LAUNCH_EXPECT_PORT
   stack_wait_for_url "Vibe API" "$base/" 60
   stack_sync_pidfile_from_port "$pidfile" "$port"
@@ -335,22 +362,36 @@ stack_start_vibe_ui() {
 
 stack_kill_port() {
   local port="$1"
-  local pids
+  local pids waited=0
+  pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+  echo "[stack] stopping listener(s) on :$port (pids: $pids) ..."
+  # shellcheck disable=SC2086
+  kill $pids 2>/dev/null || true
+  while (( waited < 15 )); do
+    pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    [[ -z "$pids" ]] && return 0
+    sleep 1
+    waited=$((waited + 1))
+  done
   pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
   if [[ -n "$pids" ]]; then
+    echo "[stack] force-killing listener(s) on :$port (pids: $pids) ..."
     # shellcheck disable=SC2086
-    kill $pids 2>/dev/null || true
-    sleep 0.5
-    pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-    if [[ -n "$pids" ]]; then
-      # shellcheck disable=SC2086
-      kill -9 $pids 2>/dev/null || true
-    fi
+    kill -9 $pids 2>/dev/null || true
   fi
 }
 
 stack_stop_vibe_stack() {
-  local log_dir api_port ui_port openalgo_port stop_docker
+  local log_dir api_port ui_port openalgo_port stop_docker stop_all=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all|-a) stop_all=1 ;;
+    esac
+    shift
+  done
   log_dir="$(stack_log_dir)"
   stop_docker="${STACK_STOP_DOCKER:-1}"
   stop_docker="$(_stack_lc "$stop_docker")"
@@ -369,9 +410,17 @@ stack_stop_vibe_stack() {
   stack_kill_port "$openalgo_port"
   stack_kill_port 8765
 
-  if [[ "$stop_docker" == "1" || "$stop_docker" == "true" || "$stop_docker" == "yes" || "$stop_docker" == "on" ]]; then
-    # shellcheck disable=SC1091
-    source "$(stack_root)/scripts/stack_docker_lib.sh"
+  # shellcheck disable=SC1091
+  source "$(stack_root)/scripts/stack_docker_lib.sh"
+  if (( stop_all )); then
+    stack_docker_stop_all
+    local exposure_stop
+    exposure_stop="$(stack_root)/exposure/start.sh"
+    if [[ -x "$exposure_stop" ]]; then
+      echo "[stack] stopping exposure tunnels ..."
+      "$exposure_stop" stop 2>/dev/null || true
+    fi
+  elif [[ "$stop_docker" == "1" || "$stop_docker" == "true" || "$stop_docker" == "yes" || "$stop_docker" == "on" ]]; then
     stack_hub_docker_stop_graceful
   fi
 
@@ -415,28 +464,31 @@ PY
 }
 
 stack_ensure_redis() {
-  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
-    if [[ -z "${NAUTILUS_REDIS_URL:-}" ]]; then
-      return 0
-    fi
-  fi
-  local url="${NAUTILUS_REDIS_URL:-redis://127.0.0.1:6379/0}"
-  if command -v redis-cli >/dev/null 2>&1 && redis-cli -u "$url" ping 2>/dev/null | grep -q PONG; then
-    return 0
-  fi
-  local root compose
+  stack_ensure_redis_docker
+}
+
+stack_ensure_vibe_config() {
+  local root py
   root="$(stack_root)"
-  compose="$root/docker-compose.stack.yml"
-  if [[ -f "$compose" ]] && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    echo "[stack] starting Redis (Nautilus watch cache) ..."
-    docker compose -f "$compose" up -d redis >/dev/null 2>&1 || true
-    sleep 2
-    if command -v redis-cli >/dev/null 2>&1 && redis-cli -u "$url" ping 2>/dev/null | grep -q PONG; then
-      return 0
-    fi
+  py="$(stack_pick_python)"
+  if [[ -x "$root/scripts/setup_vibe.py" ]]; then
+    echo "[stack] syncing Vibe operator config ..."
+    "$py" "$root/scripts/setup_vibe.py" 2>/dev/null || true
   fi
-  echo "[stack] Redis not reachable at $url — Nautilus watch may fail (brew services start redis)" >&2
-  return 0
+}
+
+stack_ensure_vibe_stack() {
+  local ok=0
+  stack_validate_ports_registry || ok=1
+  stack_check_port_listeners || true
+  stack_ensure_hub_docker || ok=1
+  stack_ensure_hub_storage || true
+  stack_ensure_vibe_config || true
+  stack_start_openalgo || ok=1
+  stack_start_vibe_api || ok=1
+  stack_start_vibe_ui || ok=1
+  stack_ensure_nautilus_watch || true
+  return "$ok"
 }
 
 stack_ensure_nautilus_watch() {
@@ -449,15 +501,6 @@ stack_ensure_nautilus_watch() {
     echo "[stack] Nautilus watch not started — bootstrap poll ticks still run via Vibe scheduler" >&2
     return 0
   }
-}
-
-stack_ensure_vibe_stack() {
-  local ok=0
-  stack_start_openalgo || ok=1
-  stack_start_vibe_api || ok=1
-  stack_start_vibe_ui || ok=1
-  stack_ensure_nautilus_watch || true
-  return "$ok"
 }
 
 stack_print_ready() {
@@ -557,9 +600,14 @@ PY
   fi
 
   echo "══════════════════════════════════════════════════════════"
-  if (( ok )); then return 0; fi
+  local hub_ok=0
+  if stack_status_hub_docker; then
+    hub_ok=1
+  fi
+  if (( ok && hub_ok )); then return 0; fi
   echo "  Fix: trade restart   (starts only what's down)"
   echo "  Full reset: trade restart --force"
+  echo "  Full stop: trade stop --all"
   echo "══════════════════════════════════════════════════════════"
   return 1
 }
