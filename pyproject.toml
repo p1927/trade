@@ -52,7 +52,6 @@ nse-browser = [
 ]
 nse-browser-agent = [
     "trade-stack[nse-browser]",
-    "skyvern>=0.2.0",
 ]
 nautilus = [
     "nautilus_trader>=1.228",

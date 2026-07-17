@@ -66,11 +66,6 @@ def openalgo_mcp_wrapper() -> Path:
     return (ROOT / "scripts" / "run_openalgo_mcp.sh").resolve()
 
 
-def skyvern_mcp_wrapper() -> Path:
-    """Return the stdio wrapper that launches Skyvern MCP."""
-    return (ROOT / "scripts" / "run_skyvern_mcp.sh").resolve()
-
-
 def verify_openalgo_mcp() -> tuple[bool, str]:
     """Check that OpenAlgo MCP can import its SDK from openalgo/.venv."""
     wrapper = openalgo_mcp_wrapper()
@@ -117,9 +112,6 @@ def _redact_agent_json(payload: dict) -> dict:
         args = server.get("args") or []
         if len(args) >= 2 and isinstance(args[1], str) and args[1] not in ("REPLACE_ME", ""):
             args[1] = "***"
-        env = server.get("env") or {}
-        if isinstance(env.get("SKYVERN_API_KEY"), str) and env["SKYVERN_API_KEY"] not in ("", "REPLACE_ME"):
-            env["SKYVERN_API_KEY"] = "***"
     return redacted
 
 
@@ -132,25 +124,10 @@ def render_agent_json() -> dict:
             file=sys.stderr,
         )
     template = TEMPLATE.read_text(encoding="utf-8")
-    skyvern_key = os.getenv("SKYVERN_API_KEY", "").strip()
-    if not skyvern_key:
-        try:
-            sys.path.insert(0, str(ROOT / "integrations"))
-            from trade_integrations.nse_browser.skyvern_local import read_local_skyvern_api_key
-
-            skyvern_key = read_local_skyvern_api_key()
-        except Exception:
-            skyvern_key = ""
-    skyvern_base = (os.getenv("SKYVERN_BASE_URL") or "http://localhost:8010").rstrip("/")
-    skyvern_prefix = os.getenv("SKYVERN_API_PREFIX", "/v1").strip() or "/v1"
     rendered = (
         template.replace("{{OPENALGO_MCP_WRAPPER}}", str(openalgo_mcp_wrapper()))
         .replace("{{OPENALGO_API_KEY}}", api_key or "REPLACE_ME")
         .replace("{{OPENALGO_HOST}}", host)
-        .replace("{{SKYVERN_MCP_WRAPPER}}", str(skyvern_mcp_wrapper()))
-        .replace("{{SKYVERN_API_KEY}}", skyvern_key or "REPLACE_ME")
-        .replace("{{SKYVERN_BASE_URL}}", skyvern_base)
-        .replace("{{SKYVERN_API_PREFIX}}", skyvern_prefix)
     )
     return json.loads(rendered)
 

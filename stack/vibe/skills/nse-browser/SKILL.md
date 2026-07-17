@@ -1,6 +1,6 @@
 ---
 name: nse-browser
-description: Route web research between preset NSE/NSDL data tools, Skyvern agentic browse, and hub cache.
+description: Route web research between preset NSE/NSDL data tools and local nodriver + MiniMax fallback.
 ---
 
 # NSE Browser & Web Research
@@ -20,22 +20,21 @@ For FII/DII flows, NSDL FPI, bulk deals, delivery, PE/PB:
 | Delivery % | `delivery` |
 | Index PE/PB | `pe_pb` |
 
-Fetch tiers: HTTP → nodriver → **Skyvern** → MiniMax fallback.
+Fetch tiers: HTTP → nodriver deterministic → **MiniMax operator** → MiniMax extract.
 
 ## Ad-hoc web research
 
-For RBI/SEBI filings, event pages, macro, company announcements, non-preset URLs:
+For RBI/SEBI filings, event pages, macro, company announcements:
 
-- `run_browser_task(goal, start_urls, output_schema)` — Skyvern agentic extract
-- Or use native **skyvern** MCP tools when configured
+- `run_browser_task(goal, start_urls)` — local nodriver + MiniMax operator/extract
 
-Always pass `output_schema` when you need structured JSON for hub or trade plans.
+Always pass `output_schema` when you need structured JSON for hub or trade plans (best-effort via MiniMax extract).
 
 ## CAPTCHA / bot blocks
 
 1. `get_nse_browser_data(..., refresh_cookies=True)` for NSE
 2. Ensure `NSE_BROWSER_HEADLESS=0` (headed Chrome)
-3. Check `get_nse_browser_status` → `rescue.skyvern.reachable`
+3. Check `get_nse_browser_status` → `rescue.minimax.configured`
 
 ## Never
 
@@ -44,5 +43,4 @@ Always pass `output_schema` when you need structured JSON for hub or trade plans
 
 ## Env
 
-- `MINIMAX_API_KEY` — powers Skyvern brain (via `scripts/sync_skyvern_env.sh`) and direct fallback
-- Local Skyvern API auth — auto from `.skyvern-data/.skyvern/credentials.toml` after `scripts/start_skyvern.sh`
+- `MINIMAX_API_KEY` — powers nodriver operator loop and page extract fallback

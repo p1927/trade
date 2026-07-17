@@ -149,9 +149,7 @@ activemq-data/
 
 # Environments
 .env
-.env.skyvern
 .envrc
-.skyvern-data/
 .venv
 .venv-*/
 .venv-nautilus/
