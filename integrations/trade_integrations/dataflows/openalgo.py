@@ -151,11 +151,20 @@ def load_india_ohlcv(
             cached, cache_meta = read_cached_bars(symbol, start, end)
             provenance.update(cache_meta)
             if not cached.empty and len(cached) >= 5:
-                frame = to_index_research_frame(cached)
-                if not frame.empty:
-                    provenance["used_cache"] = True
-                    provenance["final_rows"] = len(frame)
-                    return (frame, provenance) if return_provenance else frame
+                cached_dates = cached["date"].astype(str).str[:10]
+                cache_start = str(cached_dates.min())
+                cache_end = str(cached_dates.max())
+                requested_span = max(
+                    1, (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+                )
+                span_ok = cache_start <= start and cache_end >= end
+                enough_bars = len(cached) >= max(5, requested_span // 3)
+                if span_ok or enough_bars:
+                    frame = to_index_research_frame(cached)
+                    if not frame.empty:
+                        provenance["used_cache"] = True
+                        provenance["final_rows"] = len(frame)
+                        return (frame, provenance) if return_provenance else frame
         except Exception as exc:
             logger.debug("ohlcv hub cache read failed for %s: %s", symbol, exc)
 

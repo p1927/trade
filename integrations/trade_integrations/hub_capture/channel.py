@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -231,6 +232,11 @@ def _chain_from_hub_latest(
     if not chain_snap.get("chain"):
         return _capture_chain_fallback(entity_id, policy=policy)
 
+    from trade_integrations.openalgo.market_data import chain_is_usable
+
+    if not chain_is_usable(chain_snap):
+        return _capture_chain_fallback(entity_id, policy=policy)
+
     result = dict(chain_snap)
     result.setdefault("underlying", entity_id.upper())
     result["channel"] = "hub_latest"
@@ -265,6 +271,8 @@ def _patch_options_latest(entity_id: str, chain_data: dict[str, Any], quote: dic
 
 def _write_through_chain(entity_id: str, chain_data: dict[str, Any], *, vendor: str = "openalgo") -> None:
     source = str(chain_data.get("source") or vendor)
+    from trade_integrations.openalgo.market_data import chain_is_usable
+
     record_chain_snapshot(
         entity_id,
         chain_data,
@@ -272,7 +280,8 @@ def _write_through_chain(entity_id: str, chain_data: dict[str, Any], *, vendor: 
         vendor=vendor,
         captured_at=_now_iso(),
     )
-    _patch_options_latest(entity_id, chain_data)
+    if chain_is_usable(chain_data):
+        _patch_options_latest(entity_id, chain_data)
 
 
 def get_chain(
@@ -306,7 +315,9 @@ def get_chain(
             return cached_l1
 
     cached, fresh = _chain_from_hub_latest(entity, max_age_seconds=max_age, policy=policy)
-    if fresh and cached and cached.get("chain"):
+    from trade_integrations.openalgo.market_data import chain_is_usable
+
+    if fresh and cached and chain_is_usable(cached):
         record_channel_stat("hub_hit", "derivatives_chain")
         if policy == FreshnessPolicy.WATCH:
             _l1_cache.set(l1_key, cached, ttl_seconds=int(max_age))
@@ -541,7 +552,7 @@ def get_quote(
 
 
 def read_captured_pcr(entity_id: str = "NIFTY", *, day: str | None = None) -> float | None:
-    """Latest PCR summary from capture ledger."""
+    """Latest valid PCR summary from capture ledger (skips NaN / partial captures)."""
     target_day = (day or _today())[:10]
     path = capture_base_dir(entity_id) / "derivatives_chain" / f"{target_day}.parquet"
     frame = read_dataframe(path)
@@ -550,11 +561,17 @@ def read_captured_pcr(entity_id: str = "NIFTY", *, day: str | None = None) -> fl
     summaries = frame[frame["series"] == "pcr_summary"]
     if summaries.empty:
         return None
-    val = summaries.iloc[-1].get("nifty_pcr")
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
+    for raw in reversed(summaries["nifty_pcr"].tolist()):
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(value):
+            continue
+        return value
+    return None
 
 
 def warm_entity_channel(entity_id: str, *, kind: str = "options") -> dict[str, Any]:

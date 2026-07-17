@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 import pandas as pd
@@ -13,6 +14,72 @@ from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfigure
 from tradingagents.dataflows.stockstats_utils import _clean_dataframe
 
 logger = logging.getLogger(__name__)
+
+_MIN_INDEX_CHAIN_STRIKES = 3
+
+
+def _chain_strike_count(chain: dict[str, Any] | None) -> int:
+    if not chain:
+        return 0
+    legs = chain.get("chain") or []
+    return len(legs) if isinstance(legs, list) else 0
+
+
+def _chain_oi_totals(chain: dict[str, Any]) -> tuple[float, float]:
+    ce_oi = chain.get("total_call_oi")
+    pe_oi = chain.get("total_put_oi")
+    if ce_oi is not None and pe_oi is not None:
+        try:
+            return float(ce_oi), float(pe_oi)
+        except (TypeError, ValueError):
+            pass
+    ce_total = pe_total = 0.0
+    for leg in chain.get("chain") or []:
+        if not isinstance(leg, dict):
+            continue
+        ce = leg.get("ce") if isinstance(leg.get("ce"), dict) else {}
+        pe = leg.get("pe") if isinstance(leg.get("pe"), dict) else {}
+        try:
+            ce_total += float(ce.get("oi") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            pe_total += float(pe.get("oi") or 0)
+        except (TypeError, ValueError):
+            pass
+    return ce_total, pe_total
+
+
+def chain_is_usable(chain: dict[str, Any] | None, *, min_strikes: int = _MIN_INDEX_CHAIN_STRIKES) -> bool:
+    """Reject sparse chains (single PE-only leg) that produce NaN PCR."""
+    if not chain:
+        return False
+    legs = chain.get("chain") or []
+    if not isinstance(legs, list) or not legs:
+        return False
+    ce_oi, pe_oi = _chain_oi_totals(chain)
+    if ce_oi <= 0 or pe_oi <= 0:
+        return False
+    if len(legs) < min_strikes:
+        return False
+    pcr = chain.get("pcr")
+    if pcr is not None:
+        try:
+            if math.isnan(float(pcr)):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def resolve_default_option_expiry(underlying: str, exchange: str) -> str | None:
+    """Nearest listed expiry from OpenAlgo (required for reliable INDstocks chains)."""
+    try:
+        expiries = fetch_option_expiry_dates(underlying, exchange)
+    except Exception as exc:
+        logger.debug("expiry lookup failed for %s@%s: %s", underlying, exchange, exc)
+        return None
+    return expiries[0] if expiries else None
 
 
 def openalgo_configured() -> bool:
@@ -232,17 +299,35 @@ def fetch_option_chain_raw(
     strike_count: int | None = None,
 ) -> dict[str, Any]:
     """Direct OpenAlgo option chain fetch (no hub channel)."""
-    body: dict[str, Any] = {
-        "underlying": underlying.upper(),
-        "exchange": exchange.upper(),
-    }
-    normalized_expiry = normalize_openalgo_expiry(expiry_date) if expiry_date else None
-    if normalized_expiry:
-        body["expiry_date"] = normalized_expiry
+    effective_expiry = expiry_date or resolve_default_option_expiry(underlying, exchange)
+    normalized_expiry = normalize_openalgo_expiry(effective_expiry) if effective_expiry else None
+
+    def _request(*, include_strike_count: bool) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "underlying": underlying.upper(),
+            "exchange": exchange.upper(),
+        }
+        if normalized_expiry:
+            body["expiry_date"] = normalized_expiry
+        if include_strike_count and strike_count is not None:
+            body["strike_count"] = strike_count
+        parsed = openalgo_post("optionchain", body)
+        return normalize_option_chain_response(parsed, underlying, normalized_expiry or effective_expiry)
+
     if strike_count is not None:
-        body["strike_count"] = strike_count
-    parsed = openalgo_post("optionchain", body)
-    return normalize_option_chain_response(parsed, underlying, normalized_expiry or expiry_date)
+        try:
+            limited = _request(include_strike_count=True)
+            if chain_is_usable(limited, min_strikes=min(strike_count, _MIN_INDEX_CHAIN_STRIKES)):
+                return limited
+        except Exception as exc:
+            logger.debug(
+                "OpenAlgo limited chain failed for %s (strike_count=%s): %s",
+                underlying,
+                strike_count,
+                exc,
+            )
+
+    return _request(include_strike_count=False)
 
 
 def fetch_option_expiry_dates(
@@ -411,19 +496,34 @@ def fetch_option_chain_with_fallback(
     is_index: bool = True,
 ) -> dict[str, Any]:
     """Fetch option chain from OpenAlgo; fall back to nselib only when OpenAlgo fails."""
+    resolved_expiry = expiry_date or resolve_default_option_expiry(underlying, exchange)
     try:
         chain = fetch_option_chain_raw(
             underlying,
             exchange,
-            expiry_date=expiry_date,
+            expiry_date=resolved_expiry,
             strike_count=strike_count,
         )
-        if chain.get("chain"):
+        if chain_is_usable(chain):
             return chain
+        if chain.get("chain"):
+            logger.debug(
+                "OpenAlgo chain for %s sparse (%s strikes); retrying without strike_count",
+                underlying,
+                _chain_strike_count(chain),
+            )
+            chain = fetch_option_chain_raw(
+                underlying,
+                exchange,
+                expiry_date=resolved_expiry,
+                strike_count=None,
+            )
+            if chain_is_usable(chain):
+                return chain
     except Exception as exc:
         logger.debug("OpenAlgo option chain failed for %s: %s", underlying, exc)
 
-    fallback = _fetch_nselib_chain(underlying, expiry_date, is_index=is_index)
+    fallback = _fetch_nselib_chain(underlying, resolved_expiry, is_index=is_index)
     if fallback:
         return fallback
 

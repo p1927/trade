@@ -23,17 +23,24 @@ def hub_tmp(tmp_path, monkeypatch):
 
 
 def _fake_chain(underlying, exchange, *, expiry_date=None, strike_count=None):
+    n = max(3, int(strike_count or 3))
+    base = 24500
+    legs = []
+    for i in range(n):
+        strike = base + (i - n // 2) * 50
+        legs.append(
+            {
+                "strike": strike,
+                "ce": {"ltp": 100.0 + i, "oi": 500 + i * 10},
+                "pe": {"ltp": 95.0 + i, "oi": 600 + i * 10},
+            }
+        )
     return {
         "underlying": underlying.upper(),
         "underlying_ltp": 24500.0,
         "expiry_date": expiry_date or "16JUL26",
-        "chain": [
-            {
-                "strike": 24500,
-                "ce": {"ltp": 100.0, "oi": 500},
-                "pe": {"ltp": 95.0, "oi": 600},
-            }
-        ],
+        "chain": legs,
+        "pcr": 1.2,
         "source": "mock_vendor",
     }
 

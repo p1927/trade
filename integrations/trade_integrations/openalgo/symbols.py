@@ -15,6 +15,8 @@ _OPENALGO_ALIASES: dict[str, tuple[str, str]] = {
     "FINNIFTY": ("FINNIFTY", "NSE_INDEX"),
     "MIDCPNIFTY": ("MIDCPNIFTY", "NSE_INDEX"),
     "SENSEX": ("SENSEX", "BSE_INDEX"),
+    "^INDIAVIX": ("INDIAVIX", "NSE_INDEX"),
+    "INDIAVIX": ("INDIAVIX", "NSE_INDEX"),
 }
 
 
