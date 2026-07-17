@@ -43,6 +43,14 @@ def load_trade_env(*, root: Path | None = None) -> Path | None:
     return env_file
 
 
+def openalgo_watch_quote_ttl_seconds() -> int:
+    """Return hub channel WATCH policy TTL in seconds (``OPENALGO_WATCH_QUOTE_TTL_SECONDS``, default 5)."""
+    try:
+        return max(0, int(os.getenv("OPENALGO_WATCH_QUOTE_TTL_SECONDS", "5")))
+    except ValueError:
+        return 5
+
+
 def ensure_openalgo_env(*, root: Path | None = None) -> dict[str, str]:
     """Load trade .env and return OpenAlgo host + api key (may be empty strings)."""
     load_trade_env(root=root)
