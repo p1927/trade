@@ -89,6 +89,14 @@ class OpenAlgoQuoteFeed:
         requests = multiquote_requests(watch_symbols)
         if not requests:
             return {}
+
+        try:
+            from trade_integrations.openalgo.ws_client import ensure_ws_feed
+
+            ensure_ws_feed(requests)
+        except Exception:
+            logger.debug("OpenAlgo WS feed unavailable", exc_info=True)
+
         try:
             rows_by_key = get_multi_quotes(
                 requests,

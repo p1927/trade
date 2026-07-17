@@ -58,6 +58,7 @@ nautilus = [
     "nautilus_trader>=1.228",
     "redis>=5.0",
     "requests>=2.31",
+    "websocket-client>=1.8",
 ]
 
 [tool.setuptools.packages.find]
