@@ -192,17 +192,16 @@ Committed in `c070e1d`, `a9b47ac`, and related tests. Push to remote and reload 
 
 ---
 
-### Task 2: Hub-read-only news impact — ⚠️ PARTIAL
+### Task 2: Hub-read-only news impact — ✅ DONE
 
 **Done:**
-- [x] `aggregator.py` uses `resolve_news_impact` when `refresh_constituents=False`
-- [x] `resolve_news_impact` reads embedded → snapshot → hub (no ingest)
+- [x] `resolve_news_impact` returns `status: hub_empty` when no hub rows (no live collect)
+- [x] `build_news_impact_snapshot` returns `hub_empty` when `refresh_ingest=False` and empty
+- [x] `headlines_for_day` skips `collect_headlines_for_day` unless `allow_live_collect=True`
+- [x] API default load uses `resolve_news_impact` only (removed empty-path `refresh_news_impact`)
+- [x] Tests block live collect on normal resolve paths
 
-**Remaining:**
-- [ ] Remove or gate `headlines_for_day` fallback to `collect_headlines_for_day` when called from normal run paths
-- [ ] Return explicit `status: "hub_empty"` instead of silent tiered collect
-- [ ] Add test: `collect_headlines_for_day` not called during normal `run_index_research`
-- [ ] Review `get_index_prediction_news_impact` empty-path — ensure `refresh_ingest=False` never hits tiered sources
+**Remaining:** none for Task 2 core scope
 
 ---
 
@@ -217,27 +216,24 @@ Committed in `c070e1d`, `a9b47ac`, and related tests. Push to remote and reload 
 
 ---
 
-### Task 4: News Impact panel semantics — ⚠️ PARTIAL
+### Task 4: News Impact panel semantics — ✅ DONE
 
 **Done:**
-- [x] Empty-state copy in `NewsImpactPanel.tsx`
-- [x] Panel Refresh → `refresh=true` on API
-
-**Remaining:**
-- [ ] Handle API `status: "hub_empty"` distinctly in UI
-- [ ] Update empty-state copy to mention Refresh all 50 **and** index-level Ingest
-- [ ] OpenAPI comment on `get_index_prediction_news_impact` refresh semantics
+- [x] Empty-state copy mentions Refresh all 50 + Ingest new (index-only)
+- [x] Handles `hub_empty` status from API
+- [x] Shows staging `pending_count` when queued refs exist
+- [x] OpenAPI/doc comment on news-impact route refresh semantics
 
 ---
 
-### Task 5: E2E verification — ❌ NOT STARTED (after Tasks 1–2)
+### Task 5: E2E verification — ⚠️ PARTIAL
 
-- [ ] `pytest tests/test_constituent_news_ingest.py tests/test_news_impact_engine.py -q`
-- [ ] `trade reload app`
+- [x] `pytest tests/test_constituent_news_ingest.py tests/test_news_impact_engine.py -q` (19 passed)
+- [x] Push commits to `origin/main`
+- [ ] `trade reload app` after deploy
 - [ ] Run without Refresh all 50: no Tapetide/AV in logs
 - [ ] Run with Refresh all 50: staging queue grows per symbol
 - [ ] Live poll 3×: <25s, `light_refresh` log only
-- [ ] Push commits to `origin/main`
 
 ---
 
@@ -286,8 +282,8 @@ No coef edits without walk-forward OOS gate (+3 pp). Wire hub-tagged factors onl
 | Poll never batch research | ✅ Shipped |
 | Normal run no constituent re-research | ✅ Shipped (stricter than original plan) |
 | Hub ingest on Refresh all 50 only | ✅ Task 1 |
-| Normal run hub-read-only news impact | ⚠️ Task 2 remainder |
-| News Impact panel | ⚠️ Task 4 remainder |
+| Normal run hub-read-only news impact | ✅ Task 2 |
+| News Impact panel | ✅ Task 4 |
 | Distilled entity SSOT | ⚠️ Phase 3 partial |
 
 ---
@@ -296,7 +292,7 @@ No coef edits without walk-forward OOS gate (+3 pp). Wire hub-tagged factors onl
 
 **Prerequisite 0 is complete locally.** Phase 2 reduces to **Tasks 1, 2 (remainder), 4 (remainder), 5**.
 
-**Recommended next step:** Task 2 remainder (hub-read-only guards) + Task 5 E2E verification after `trade reload app`.
+**Phase 2 core complete.** Optional Task 3 (staleness UI) and Task 5 manual E2E remain.
 
 **Execution options:**
 1. **Subagent-Driven (recommended)** — one task per subagent with review gate

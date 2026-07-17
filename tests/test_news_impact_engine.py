@@ -351,3 +351,64 @@ def test_resolve_news_impact_prefers_snapshot_and_hydrates_tags(hub_tmp, monkeyp
     tags = (report["items"][0].get("tags") or {})
     assert "us_markets" in tags.get("topics", [])
     assert "sp500" in tags.get("factors", [])
+
+
+def test_resolve_news_impact_returns_hub_empty_without_live_collect(hub_tmp, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from trade_integrations.dataflows.index_research import news_impact_engine as engine
+    from trade_integrations.hub_storage import verified_news_store as store
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(engine, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(
+        engine,
+        "collect_headlines_for_day",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("collect forbidden")),
+    )
+
+    report = engine.resolve_news_impact(ticker="NIFTY", doc=None, limit=8)
+    assert report.get("status") == "hub_empty"
+    assert report.get("items") == []
+    assert "Refresh all 50" in str((report.get("summary") or {}).get("hint") or "")
+
+
+def test_headlines_for_day_skips_live_collect_by_default(hub_tmp, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from trade_integrations.dataflows.index_research import news_impact_engine as engine
+    from trade_integrations.hub_storage import verified_news_store as store
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(engine, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(engine, "list_approved_for_date", lambda *a, **k: [])
+
+    called: list[int] = []
+    monkeypatch.setattr(
+        engine,
+        "collect_headlines_for_day",
+        lambda *a, **k: called.append(1) or [],
+    )
+
+    rows = engine.headlines_for_day("2026-07-17", ticker="NIFTY", ingest_if_missing=False)
+    assert rows == []
+    assert called == []
+
+
+def test_build_news_impact_snapshot_hub_empty_when_no_ingest(hub_tmp, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from trade_integrations.dataflows.index_research import news_impact_engine as engine
+    from trade_integrations.hub_storage import verified_news_store as store
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(engine, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(
+        engine,
+        "ingest_headlines_for_day",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("ingest forbidden")),
+    )
+
+    report = engine.build_news_impact_snapshot(ticker="NIFTY", refresh_ingest=False)
+    assert report.get("status") == "hub_empty"
+    assert report.get("items") == []

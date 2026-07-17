@@ -357,6 +357,23 @@ def ingest_headlines_for_day(
     )
 
 
+def _apply_hub_empty_status(report: dict[str, Any]) -> dict[str, Any]:
+    """Mark empty hub reads explicitly — no silent live-fetch fallback."""
+    items = list(report.get("items") or [])
+    if items:
+        report["status"] = str(report.get("status") or "ok")
+        return report
+    report["status"] = "hub_empty"
+    summary = dict(report.get("summary") or {})
+    summary.setdefault(
+        "hint",
+        "Run analysis with Refresh all 50 constituents checked, or click Ingest new for index-level news.",
+    )
+    report["summary"] = summary
+    report["items"] = []
+    return report
+
+
 def build_news_impact_snapshot(
     *,
     ticker: str = "NIFTY",
@@ -391,6 +408,8 @@ def build_news_impact_snapshot(
     report["debate_summary"] = _debate_summary(ticker)
     items = [hydrate_news_item_from_hub(row, ticker=ticker) for row in (report.get("items") or [])]
     report["items"] = items
+    if not items:
+        return _apply_hub_empty_status(report)
     return report
 
 
@@ -475,7 +494,7 @@ def resolve_news_impact(
         report["summary"]["pending_count"] = int(staging_queue_stats(ticker=sym).get("queued") or 0)
     except Exception:
         pass
-    return report
+    return _apply_hub_empty_status(report)
 
 
 def list_recent_verified_headlines(*, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
@@ -680,11 +699,16 @@ def headlines_for_day(
     ticker: str = "NIFTY",
     limit: int = 6,
     ingest_if_missing: bool = True,
+    allow_live_collect: bool = False,
     horizon_days: int = 14,
     spot: float | None = None,
     macro_factors: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Tagged verified headlines for a calendar day (hub SSOT, ingest on cache miss)."""
+    """Tagged verified headlines for a calendar day (hub SSOT).
+
+    When ``allow_live_collect`` is false (default), empty hub returns [] without
+    calling ``collect_headlines_for_day`` — use explicit ingest paths instead.
+    """
     sym = ticker.strip().upper()
     target = day[:10]
     rows = list_approved_for_date(target, ticker=sym, limit=limit)
@@ -698,7 +722,7 @@ def headlines_for_day(
             headline_limit=max(limit, 12),
         )
         rows = list_approved_for_date(target, ticker=sym, limit=limit)
-    if not rows:
+    if not rows and allow_live_collect:
         raw = merge_raw_headlines(
             collect_headlines_for_day(target, ticker=sym, limit=limit),
             ticker=sym,
