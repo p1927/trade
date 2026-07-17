@@ -27,6 +27,12 @@ status-hub:
 doctor:
 	./scripts/stack_doctor.sh
 
+dev:
+	./trade dev
+
+reload:
+	./scripts/reload_vibe_stack.sh
+
 vibe:
 	./start.sh --vibe-only
 

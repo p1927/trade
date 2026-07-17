@@ -134,11 +134,6 @@ def check_port_listeners(*, root: Path | None = None, allow_pids: set[int] | Non
     reg = load_ports_registry(root=str(root) if root else None)
     allow = allow_pids or set()
     errors: list[str] = []
-    docker_names = {
-        "tradingagents-searxng",
-        "trade-hub-timescaledb",
-        "trade-hub-redis",
-    }
     import subprocess
 
     for name, spec in reg["services"].items():
@@ -157,10 +152,12 @@ def check_port_listeners(*, root: Path | None = None, allow_pids: set[int] | Non
                     check=False,
                 )
                 comm = (ps.stdout or "").strip()
+                comm_base = comm.rsplit("/", 1)[-1]
             except OSError:
                 comm = "?"
-            # Docker-published ports show as com.docker.backend on macOS
-            if comm in {"com.docker.backend", "docker-proxy", "Docker"}:
+                comm_base = comm
+            # Docker-published ports show as com.docker.backend / docker-proxy on macOS/Linux.
+            if comm_base in {"com.docker.backend", "docker-proxy", "Docker", "docker"}:
                 continue
             try:
                 full = subprocess.run(
@@ -171,11 +168,11 @@ def check_port_listeners(*, root: Path | None = None, allow_pids: set[int] | Non
                 )
                 args = (full.stdout or "").strip()
             except OSError:
-                args = comm
-            if any(dn in args for dn in docker_names):
+                args = comm_base
+            if "docker" in args.lower() and "compose" in args.lower():
                 continue
             errors.append(
-                f"{name} needs port {port} but pid {pid} ({comm or 'unknown'}) is listening"
+                f"{name} needs port {port} but pid {pid} ({comm_base or 'unknown'}) is listening"
             )
             break
     return errors

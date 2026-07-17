@@ -89,6 +89,37 @@ def vibe_post(path: str, payload: dict[str, Any] | None = None, *, timeout: int 
         return json.loads(resp.read().decode("utf-8"))
 
 
+def vibe_delete(path: str, *, timeout: int = 30) -> Any:
+    url = f"{_vibe_base()}{path}"
+    req = urllib.request.Request(url, headers=_headers(), method="DELETE")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode("utf-8")
+        return json.loads(body) if body.strip() else {}
+
+
+def cleanup_test_agent(agent_id: str, *, label: str = "test agent") -> None:
+    """Stop scheduler/Nautilus watch and remove hub agent record."""
+    if not agent_id:
+        return
+    try:
+        vibe_post(f"/autonomous-agents/{agent_id}/stop")
+        _log(f"stop {label}", agent_id)
+    except Exception:
+        pass
+    try:
+        vibe_delete(f"/autonomous-agents/{agent_id}")
+        _log(f"delete {label}", agent_id)
+    except Exception:
+        pass
+    try:
+        from trade_integrations.autonomous_agents.store import delete_agent
+
+        if delete_agent(agent_id):
+            _log(f"removed hub record {label}", agent_id)
+    except Exception as exc:
+        _log(f"hub cleanup {label}", str(exc), ok=False)
+
+
 def precheck() -> bool:
     print("\n── 1. Prechecks ──", flush=True)
     ok = True
@@ -598,11 +629,7 @@ def verify_us_alpaca_short_turn(*, timeout_sec: int = 240) -> bool:
         return False
     finally:
         if agent_id:
-            try:
-                vibe_post(f"/autonomous-agents/{agent_id}/stop")
-                _log("stop spy agent", agent_id)
-            except Exception:
-                pass
+            cleanup_test_agent(agent_id, label="spy agent")
 
 
 def main() -> int:
@@ -658,11 +685,7 @@ def main() -> int:
         ok_node = ok_alert = ok_us = False
     finally:
         if agent_id:
-            try:
-                vibe_post(f"/autonomous-agents/{agent_id}/stop")
-                _log("stop india agent", agent_id)
-            except Exception:
-                pass
+            cleanup_test_agent(agent_id, label="india agent")
 
     print("\n══════════════════════════════════════════════════════════", flush=True)
     if FAILURES:

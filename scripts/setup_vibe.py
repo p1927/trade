@@ -35,6 +35,39 @@ PROVIDER_BASE_URL_ENV = {
     "deepseek": ("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
 }
 
+# Synced from trade root .env into ~/.vibe-trading/.env for hub + scheduler wiring.
+HUB_SCHEDULER_ENV_KEYS = (
+    "VIBE_TRADING_ENABLE_SCHEDULER",
+    "HUB_CALIBRATION_ENABLE_SCHEDULER",
+    "HUB_CALIBRATION_UNIFIED",
+    "HUB_MORNING_CALIBRATION_CRON",
+    "HUB_EVENING_MAINTENANCE_CRON",
+    "INDEX_RESEARCH_ENABLE_SCHEDULER",
+    "AUTONOMOUS_AGENTS_ENABLE_SCHEDULER",
+    "TIMESCALE_ENABLED",
+    "TIMESCALE_DATABASE_URL",
+    "NAUTILUS_WATCH_ENABLE",
+    "NAUTILUS_REDIS_URL",
+    "NAUTILUS_AGENT_ID",
+)
+
+
+def _hub_scheduler_env_from_trade() -> dict[str, str]:
+    """Build hub/scheduler env map from trade root .env (with stack defaults)."""
+    out: dict[str, str] = {}
+    for key in HUB_SCHEDULER_ENV_KEYS:
+        value = os.getenv(key, "").strip()
+        if value:
+            out[key] = value
+    if "VIBE_TRADING_ENABLE_SCHEDULER" not in out:
+        out["VIBE_TRADING_ENABLE_SCHEDULER"] = "1"
+    return out
+
+
+def _append_env_lines(lines: list[str], mapping: dict[str, str]) -> None:
+    for key, value in mapping.items():
+        lines.append(f"{key}={value}")
+
 
 def _load_trade_env() -> None:
     env_file = ROOT / ".env"
@@ -334,6 +367,8 @@ def _patch_vibe_env_keys(target: Path, *, dry_run: bool = False) -> None:
         if value:
             required[env_name] = value
 
+    required.update(_hub_scheduler_env_from_trade())
+
     existing = target.read_text(encoding="utf-8") if target.is_file() else ""
     present = {
         line.split("=", 1)[0].strip()
@@ -405,6 +440,8 @@ def sync_vibe_env(dry_run: bool = False, force: bool = False) -> Path | None:
         value = os.getenv(env_name, "").strip()
         if value:
             lines.append(f"{env_name}={value}")
+
+    _append_env_lines(lines, _hub_scheduler_env_from_trade())
 
     if dry_run:
         print("\n".join(lines))

@@ -178,22 +178,86 @@ def check_nselib_calendar() -> Check:
         return Check("nselib_calendar", "warn", str(exc)[:120])
 
 
-def check_tapetide_guard() -> Check:
-    os.environ["TAPETIDE_ENABLED"] = "false"
+def check_tapetide_calendar_clean() -> Check:
+    """Tapetide is always attempted; rate-limit text must never land in merged events."""
+    if not tt.is_configured():
+        return Check("tapetide_calendar_clean", "skip", "TAPETIDE_TOKEN not set")
+    cal = fetch_calendar_in(normalize_ticker("RELIANCE", market_hint=Market.IN), lookahead_days=30, lookback_days=7)
+    attempts = _attempts_summary(cal)
+    names = [a.get("name") for a in attempts]
+    bad = any(
+        "free tier limit" in str(e.get("description", "")).lower()
+        for e in (cal.data.get("events") or [])
+    )
+    if bad:
+        return Check("tapetide_calendar_clean", "fail", "rate-limit garbage in calendar events")
+    if "tapetide" not in names:
+        return Check("tapetide_calendar_clean", "fail", "tapetide not in source_attempts")
+    return Check(
+        "tapetide_calendar_clean",
+        "pass",
+        f"tapetide attempted; status={next(a for a in attempts if a.get('name')=='tapetide').get('status')}",
+    )
+
+
+def check_batch_includes_tapetide() -> Check:
+    if not tt.is_configured():
+        return Check("batch_tapetide_included", "skip", "TAPETIDE_TOKEN not set")
+    tt.set_batch_research(True)
     try:
         active = tt.is_active()
-        cal = fetch_calendar_in(normalize_ticker("RELIANCE", market_hint=Market.IN), lookahead_days=30)
-        bad = any(
-            "free tier limit" in str(e.get("description", "")).lower()
-            for e in (cal.data.get("events") or [])
+        return Check(
+            "batch_tapetide_included",
+            "pass" if active else "fail",
+            "Tapetide active during batch (default TAPETIDE_BATCH=true)",
         )
-        if active:
-            return Check("tapetide_disabled", "fail", "is_active() still true")
-        if bad:
-            return Check("tapetide_disabled", "fail", "rate-limit garbage in calendar")
-        return Check("tapetide_disabled", "pass", "Tapetide skipped; calendar clean")
     finally:
-        os.environ.pop("TAPETIDE_ENABLED", None)
+        tt.set_batch_research(False)
+
+
+def check_raw_source_proof(symbol: str) -> Check:
+    """Independent raw-library probe — proves data exists outside our pipeline merge."""
+    from datetime import timedelta
+
+    from trade_integrations.dataflows.company_research.sources.bse_india import fetch_bse_calendar_events
+    from trade_integrations.dataflows.company_research.sources.screener_in import fetch_screener_peers
+
+    proof: dict = {}
+    try:
+        import dalal
+
+        from trade_integrations.dataflows.company_research.sources.resilience import resolve_bse_scrip_code
+
+        scrip = resolve_bse_scrip_code(symbol)
+        meta = dalal.meta(scrip) if scrip else {}
+        fund = dalal.fundamentals(scrip) if scrip else {}
+        proof["dalal_meta_sector"] = meta.get("Sector")
+        proof["dalal_fund_rows"] = len((fund or {}).get("resultinCr") or [])
+        proof["dalal_announcements"] = len(dalal.announcements(scrip, exchange="BSE") or []) if scrip else 0
+    except Exception as exc:
+        proof["dalal_error"] = str(exc)[:120]
+
+    start = date.today() - timedelta(days=7)
+    end = date.today() + timedelta(days=60)
+    bse_events = fetch_bse_calendar_events(symbol, start=start, end=end)
+    proof["bse_calendar_events"] = len(bse_events)
+    if bse_events:
+        proof["bse_sample_date"] = bse_events[0].get("date")
+
+    screener = fetch_screener_peers(symbol, max_peers=8) or {}
+    proof["screener_peer_count"] = len(screener.get("peers") or [])
+
+    ok = (
+        proof.get("dalal_fund_rows", 0) >= 1
+        and proof.get("bse_calendar_events", 0) >= 1
+        and proof.get("screener_peer_count", 0) >= 3
+    )
+    return Check(
+        f"raw_source_proof_{symbol}",
+        "pass" if ok else "fail",
+        f"dalal_rows={proof.get('dalal_fund_rows')} bse_ev={proof.get('bse_calendar_events')} screener_peers={proof.get('screener_peer_count')}",
+        proof,
+    )
 
 
 def check_stage(symbol: str, stage_fn, *, min_peers: int = 0, min_events: int = 0) -> Check:
@@ -225,36 +289,45 @@ def check_stage(symbol: str, stage_fn, *, min_peers: int = 0, min_events: int = 
         else:
             return Check(stage_fn, "skip", "unknown stage")
         attempts = _attempts_summary(r)
+        core_errors = list(r.errors or [])
+        proof = {
+            "stage_status": r.status,
+            "core_errors": core_errors,
+            "data_ok": ok,
+        }
+        if stage_fn == "identity":
+            proof["sector"] = r.data.get("sector")
+            proof["last_price"] = r.data.get("last_price")
+        elif stage_fn == "peers":
+            proof["peer_count"] = len(r.data.get("peers") or [])
+        elif stage_fn == "calendar":
+            proof["event_count"] = len(r.data.get("events") or [])
+        elif stage_fn == "fundamentals":
+            proof["ratio_keys"] = list((r.data.get("ratios") or {}).keys())[:8]
+        status = "pass" if ok else "warn"
+        if ok and core_errors:
+            status = "pass"  # data proven; core_errors are informational (e.g. OpenAlgo down, yfinance ok)
         return Check(
             f"stage_{stage_fn}_{symbol}",
-            "pass" if ok else "warn",
+            status,
             detail,
-            {"status": r.status, "attempts": attempts},
+            {"status": r.status, "attempts": attempts, "proof": proof},
         )
     except Exception as exc:
         return Check(f"stage_{stage_fn}_{symbol}", "fail", traceback.format_exc()[-300:])
 
 
-def check_batch_skips_tapetide() -> Check:
-    os.environ["TAPETIDE_BATCH"] = "false"
-    if not tt.is_configured():
-        return Check("batch_tapetide_skip", "skip", "TAPETIDE_TOKEN not set")
-    tt.set_batch_research(True)
-    try:
-        active = tt.is_active()
-        return Check(
-            "batch_tapetide_skip",
-            "pass" if not active else "fail",
-            "Tapetide inactive during batch when TAPETIDE_BATCH=false",
-        )
-    finally:
-        tt.set_batch_research(False)
-
 
 def main() -> int:
-    checks: list[Check] = [check_registry(), check_tapetide_guard(), check_batch_skips_tapetide(), check_nselib_calendar()]
+    checks: list[Check] = [
+        check_registry(),
+        check_tapetide_calendar_clean(),
+        check_batch_includes_tapetide(),
+        check_nselib_calendar(),
+    ]
 
     for sym in SYMBOLS:
+        checks.append(check_raw_source_proof(sym))
         checks.extend(
             [
                 check_openalgo(sym),
@@ -277,6 +350,13 @@ def main() -> int:
         rows.append({"name": c.name, "status": c.status, "detail": c.detail, "data": c.data})
 
     report = {"summary": summary, "checks": rows}
+    proof_rows = [
+        r for r in rows
+        if r["name"].startswith("stage_") and isinstance((r.get("data") or {}).get("proof"), dict)
+    ]
+    report["proof"] = {
+        r["name"]: r["data"]["proof"] for r in proof_rows
+    }
     print(json.dumps(report, indent=2, default=str))
 
     fails = [r for r in rows if r["status"] == "fail"]
