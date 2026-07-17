@@ -28,14 +28,64 @@ You can use a scheduled task instead of cron job as well — but the execution m
 
 > These notes translate the prompts into what actually must happen each tick. When execution drifts (timer fires but no work, skipped tests, stale cursor), **update this section** — do not add more prompt copies.
 
-### Amendment A — What “working” means (2026-07-17)
+### Amendment A — What “working” means (2026-07-17, amended)
 
-A tick is **failed** if it only updates markdown without touching code or tests. A tick **succeeds** when:
+A tick is a **20-minute window**, not “one bug and stop”. Run **two parallel tracks** until time runs out or inventory for the window is exhausted:
 
-1. At least **one file** is reviewed (log in **Issue log**, even “no issues ≥80%”).
-2. **Targeted pytest** runs for the file/package under review.
-3. **Review cursor** advances to the next file.
-4. If a fix ships: **Bugbot** on diff → `master todo:` commit → push → SHA in audit table.
+| Track | Purpose | Output |
+|-------|---------|--------|
+| **A — Discovery** | Review code **line by line** from cursor forward; do **not** stop after first finding | New rows in **Issue log** (brief issue + proposed fix plan); cursor advances file-by-file |
+| **B — Execution** | For issues already logged (or found this tick) where fix strategy is clear and **≥80%** confident | Regression test → Bugbot → `master todo:` commit → push → SHA in audit |
+
+A tick **succeeds** when Track A reviewed multiple files (or finished a whole package section) **and** Track B shipped at least one fix when confident issues existed — or explicitly logged “no fixable issues this window”.
+
+Do **not** end a tick after a single commit if review time remains; keep reading the next file and filling the list.
+
+### Amendment F — Dual-track 20-minute window (2026-07-17, amended)
+
+When the ping fires, the **parent session** launches **two subagents in parallel** (Task tool) for the full 20-minute window:
+
+| Subagent | Role | Scope | Writes to |
+|----------|------|-------|-----------|
+| **Reviewer** | Line-by-line review; **superpowers** for investigation; log issues + **targeted fix plan** | Full inventory from cursor; major design flagged `pending` in plan | **Issue log** (`open`); advance cursor |
+| **Fixer** | Read **Issue log**; use **superpowers** to plan; ship **targeted** fixes; commit + push when done | Open issues (bugs/crashes first); **≥80%** confident, **no regression** | Code + tests + **`master todo:` commits**; mark `fixed` / `pending` |
+
+**Parent duties:** Re-read mandate → launch both subagents **same tick** → merge results into master-todo → push commits Fixer made → update tick log.
+
+**Scope mistake to avoid:** Do NOT treat a tick as “review `hub_paths.py` only”. The inventory is the full stack; cursor tracks how far review has progressed across **all** listed files.
+
+### Amendment G — Subagent launch (2026-07-17, amended)
+
+Each scheduled ping:
+
+1. Parent reads `.superpowers/master-todo.md` (Step 0).
+2. **`Task` subagent #1 — Reviewer (`explore`):** Use **superpowers:systematic-debugging** / **requesting-code-review** mindset for investigation. Review from cursor through as many inventory files as possible; log issues with **targeted fix plan** each; **no commits**.
+3. **`Task` subagent #2 — Fixer (`generalPurpose`):** Use **superpowers:systematic-debugging**, **test-driven-development**, **verification-before-completion**, **requesting-code-review** (Bugbot). Pick open issues; **one targeted fix per commit**; regression test **must pass** before commit; **`master todo:` commit + push** when done; mark issue `fixed`.
+4. Run **#1 and #2 in parallel** (single message, two Task calls).
+5. Parent merges reports into master-todo (issue log, cursor, tick log, audit SHAs).
+
+**Subagent prompt must include:** read `.superpowers/master-todo.md`; follow Operating amendments H + fix rules below.
+
+### Amendment H — Fix quality rules (2026-07-17)
+
+**Every subagent uses superpowers** for investigation and planning — do not wing fixes from memory.
+
+| Rule | Requirement |
+|------|-------------|
+| **Targeted** | One clear problem → one minimal diff. No drive-by refactors in the same commit. |
+| **No regression** | Run targeted pytest (+ related suite) **before and after** fix; add regression test when the bug could recur. |
+| **Functionality** | Fix must improve correctness, stability, predictions, autonomous loop, or execution path — not style-only churn. |
+| **≥80% confident** | Ship only when sure the fix is correct and bounded. |
+| **Major design change** | Multi-file architecture, new abstractions, behavior change needing product call → mark **`pending`** in issue log; **do not commit**. |
+| **Commit discipline** | Fixer **commits and pushes** each shipped fix: `master todo: <imperative>` — one logical unit per commit for easy revert. |
+| **Review before commit** | Bugbot (or code-review subagent) on the diff; fix Critical/Important before commit. |
+
+**Examples**
+
+- ✅ Targeted: filter `position_rows_to_legs` by underlying + test with multi-symbol book (M006).
+- ✅ Targeted: try/except on corrupt intent JSON + test (shipped `bdf9a8f`).
+- ❌ Pending: consolidate all agent JSON I/O across bridge + store (M024 — design change).
+- ❌ Pending: persist halt state to Redis with new schema (M012 — infra/design).
 
 ### Amendment B — Timer model (2026-07-17)
 
@@ -61,7 +111,10 @@ Simple background ping every 20m → **this chat executes the workflow**. No cro
 | Timer printed pings; no agent work | Each ping = full workflow in chat (Amendment A) |
 | Skipped Bugbot before commit (tick 3) | Step 6 is mandatory before any commit |
 | Stale inventory (`context/` marked not started) | Update package status when tier completes |
-| `is_stock_cache_fresh` wrong path | Fixed M002 — pattern: cache helpers must match save path |
+| Reviewed one file then stopped | Reviewer subagent must sweep **entire inventory** from cursor until window ends |
+| Did not launch parallel subagents | Every tick: Reviewer + Fixer Task subagents in parallel (Amendment G) |
+| Broad refactor shipped as “fix” | Amendment H: targeted only; major design → **pending** |
+| Fixer did not commit/push | Fixer must `master todo:` commit + push each shipped fix before reporting done |
 
 ---
 
@@ -79,28 +132,25 @@ Simple background ping every 20m → **this chat executes the workflow**. No cro
 | Doc location | `.superpowers/master-todo.md` |
 | Stop condition | After **21 ticks** (7h ÷ 20m) |
 | Confidence gate | Fix only when **≥80%** confident; else mark **pending for review** |
-| Review skill | Use `/review-bugbot` (Bugbot subagent) on changed code before commit |
+| Fix scope | **Targeted** only — one issue per commit; major design → **pending** |
+| Regression | Targeted pytest before/after every fix; add regression test when bug could recur |
+| Subagent skills | **superpowers** for investigate, plan, TDD, verify, Bugbot before commit |
 | Commit format | `master todo: <short imperative description>` — **one logical fix per commit** for easy revert |
 
 ---
 
-## Per-tick workflow
+## Per-tick workflow (20-minute window — **two parallel subagents**)
 
-**Step 0 (mandatory):** Re-read **Prompts 1–2**, skim **Operating amendments**, check **Confirmed setup**, then continue.
+**Step 0 (mandatory):** Parent re-reads **Prompts 1–2**, **Operating amendments** (A, F, G, **H**), **Confirmed setup**.
 
-**Step 1 — Orient:** Review cursor + issue log. Note tick number (target: complete through tick 21).
+**Step 1 — Launch in parallel (same turn):**
 
-**Step 2 — Review:** Open next file(s) in inventory order. For each: brief issue + fix plan → **Issue log**.
+- **Subagent Reviewer:** Superpowers for investigation. Continue from **Review cursor**; line-by-line sweep; log issues with **targeted fix plan**; mark major design items as `pending` in plan column; **no commits**.
+- **Subagent Fixer:** Superpowers for debug → plan → TDD → verify → Bugbot. Pick open issues (critical first). **Targeted fix only**; pytest green before/after; **`master todo:` commit + push** when done; major design → **`pending`**, no commit.
 
-**Step 3 — Verify:** Run targeted pytest for that package (start services only if needed for that file).
+**Step 2 — Parent merge:** Update master-todo (issue log, cursor, package status, tick log, commit audit).
 
-**Step 4 — Fix:** Ship only when ≥80% confident. Add regression test. Run Bugbot on diff before commit.
-
-**Step 5 — Ship:** `master todo: …` → push → record SHA in audit table.
-
-**Step 6 — Update doc:** Advance cursor, package status, tick log. If process broke down, **amend Operating amendments** (not Prompts 1–4).
-
-**Stop:** After tick 21.
+**Step 3 — Stop after tick 21** (scheduler stop).
 
 ---
 
@@ -112,12 +162,12 @@ Review alphabetically within each package; cursor tracks exact path.
 
 | Package | Files | Status |
 |---------|-------|--------|
-| `integrations/nautilus_openalgo_bridge/` | 28 | **in progress** (tick 4+) |
-| `integrations/trade_integrations/autonomous_agents/` | 12 | not started |
+| `integrations/nautilus_openalgo_bridge/` | 36 | **done** (tick 5 reviewer) |
+| `integrations/trade_integrations/autonomous_agents/` | 18 | **done** (tick 6 reviewer) |
 | `integrations/trade_integrations/bridge/` | 6 | **done** (tick 2) |
 | `integrations/trade_integrations/context/` | 2 | **done** (tick 3) |
 | `integrations/trade_integrations/dataflows/` | ~120 | not started |
-| `integrations/trade_integrations/execution/` | 4 | not started |
+| `integrations/trade_integrations/execution/` | 6 | **done** (tick 6 reviewer) |
 | `integrations/trade_integrations/hub_analytics/` | 6 | not started |
 | `integrations/trade_integrations/hub_storage/` | 4 | not started |
 | `integrations/trade_integrations/monitor/` | 2 | not started |
@@ -148,8 +198,9 @@ Full sorted list: run `find integrations -type f -name '*.py' | sort` (337 paths
 
 ## Review cursor
 
-- **Next file:** `integrations/nautilus_openalgo_bridge/hub_paths.py`
-- **Tick:** 4 / 21 complete (manual verification run — full workflow)
+- **Next file:** `integrations/trade_integrations/dataflows/` (alphabetical first `.py` in package)
+- **Inventory scope:** ALL tiers — autonomous_agents + execution complete; dataflows next
+- **Tick:** 6 / 21 complete (dual subagent model)
 
 ---
 
@@ -157,9 +208,41 @@ Full sorted list: run `find integrations -type f -name '*.py' | sort` (337 paths
 
 | ID | File | Issue (brief) | Plan | Status | Commit |
 |----|------|---------------|------|--------|--------|
-| M003 | `nautilus_openalgo_bridge/handoff.py` | Hub shell hardcoded `flatten_at_close=True`; ignored manual/multi-day mandate | Use `mandate_config_from_agent` like store path | **fixed** | `97f09c4` |
-| M002 | `context/hub.py` | `is_stock_cache_fresh` checked `company_research/` not `stock_research/` | Point freshness at `_stock_research_dir` | **fixed** | `c94dd80` |
-| M001 | `tests/test_agent_debate_wrapper.py` | Flaky date: graph gets `datetime.now()` but payload uses fake `final_state.trade_date` | Pass explicit `trade_date=` to `run_agent_debate` in test | **fixed** | `3faf0b4` |
+| M033 | `execution/prompt_fragments.py` | Scheduled research prompt disabled but env can still dispatch | Align scheduler + prompt policy | **pending** | — |
+| M032 | `execution/bridge_intent.py` | `legs_from_widget` stops at first `execute_basket` step | Collect all basket steps or assert single-step | open | — |
+| M031 | `execution/bridge_intent.py` | `submit_exit_intent` sync `process_pending_intents` in MCP | Queue via `submit_intent` only (see M013) | open | — |
+| M030 | `execution/bridge_intent.py` | Ledger/outcome hardcode `execution_mode="paper"` | Derive from mandate/profile.mode | open | — |
+| M029 | `execution/bridge_intent.py` | `requires_action` tied to `streaming` not alerts | Map alerts/handoff/bridge state | open | — |
+| M028 | `execution/prompt_fragments.py` | Bootstrap fallback returns unformatted `{agent_id}` placeholders | `.format(...)` on `_FRAGMENTS` fallback | open | — |
+| M027 | `autonomous_agents/watch.py` | No debounce on `strategy_revision` dispatch | Revision cooldown or alert dedupe | open | — |
+| M026 | `autonomous_agents/watch.py` | Send failure leaves `last_full_reasoning_at` set | Roll back timestamps with streaming | open | — |
+| M025 | `autonomous_agents/watch.py` | Private `_get_session_service` (same as M023) | Shared public session helper | open | — |
+| M024 | `autonomous_agents/store.py` | Duplicate agent JSON I/O vs `hub_paths` | Consolidate writers | **pending** | — |
+| M023 | `autonomous_agents/bootstrap.py` | Private `api_server._get_session_service` access | Public event API | open | — |
+| M022 | `handoff.py` | `enqueue_intent` misleading docstring | Rename or fix semantics | open | — |
+| M021 | `vibe_trigger.py` | US exit dispatch missing running/plan guards | Align with watch alert path | open | — |
+| M020 | `watch_actor.py` | Flatten timer hour borrow when close_m &lt; 10 | Use timedelta | open | — |
+| M019 | `reconcile.py` | EXIT claims handoff cleared without verify | Assert clear after EXIT | open | — |
+| M018 | `preflight.py` | Paper EXIT bypasses exit-window check | Gate or env opt-in | open | — |
+| M015 | `watch_actor.py` | Spot-move baselines frozen at first tick | Refresh on reload | open | — |
+| M014 | `risk_actor.py` | `max_daily_loss_inr` on US USD P&L | Currency-aware limits | open | — |
+| M013 | `signal_actions.py` | Sync execute blocks Nautilus actor thread | Queue via submit_intent | open | — |
+| M012 | `risk_state.py` | Halt/dedupe in-memory only — lost on restart | Persist hub/Redis | **pending** | — |
+| M011 | `handoff.py` | `sync_watch_spec_to_handoff` needs store — breaks Nautilus venv | Hub JSON fallback | open | — |
+| M010 | `watch_eval.py` | OI/volume rules reuse baseline_ltp | Add baseline_oi/volume fields | open | — |
+| M009 | `execute.py` | Exit ledger uses pre-exit unrealized as net P&L | Post-exit realized P&L | open | — |
+| M008 | `intent_queue.py` | Halted intents never archived — blocks queue head | Archive halted_skipped | open | — |
+| M007 | `reconcile.py` | Handoff sync mirrors whole OpenAlgo book | Fix with M006 + agent scope | open | — |
+| M006 | `instruments.py` | `position_rows_to_legs` ignores underlying filter | Filter by underlying/strategy | **fixed** | `d920711` |
+| M005 | `config.py` | `_parse_hhmm` unguarded int parse crashes market gate | try/except + defaults | **fixed** | `5ca93d6` |
+| M004 | `hub_paths.py` | Missing `Any` import for type hints | Add typing import | **fixed** | `cdfb8a3` |
+| M003 | `nautilus_openalgo_bridge/handoff.py` | Hub shell hardcoded flatten_at_close | mandate_config_from_agent | **fixed** | `97f09c4` |
+| M002 | `context/hub.py` | Stock cache checked wrong hub path | `_stock_research_dir` | **fixed** | `c94dd80` |
+| M001 | `tests/test_agent_debate_wrapper.py` | Flaky trade_date in debate test | Explicit trade_date= | **fixed** | `3faf0b4` |
+| — | `execute.py` | Corrupt intent JSON crashed process_intent_file | try/except + test | **fixed** | `bdf9a8f` |
+| — | `test_nautilus_vibe_trigger.py` | Tests missing plan_approved_at after gate | Fixture update | **fixed** | `c8bc148` |
+
+_Status values: `open` | `fixing` | `fixed` | `pending` | `wontfix`_
 
 ---
 
@@ -167,7 +250,9 @@ Full sorted list: run `find integrations -type f -name '*.py' | sort` (337 paths
 
 | ID | Topic | Why pending |
 |----|-------|-------------|
-| — | — | — |
+| M033 | Research scheduler vs prompt policy | `AUTONOMOUS_RESEARCH_ON_SCHEDULE` can dispatch research while prompt tells agent research is disabled — needs product call on alert-only vs scheduled research |
+| M024 | Duplicate agent JSON I/O (`store` vs `hub_paths`) | Multi-file consolidation — design change per Amendment H |
+| M012 | Halt/dedupe in-memory only | Persist hub/Redis — infra/design; not targeted fix |
 
 ---
 
@@ -175,8 +260,9 @@ Full sorted list: run `find integrations -type f -name '*.py' | sort` (337 paths
 
 | Tick | Time (UTC) | Files reviewed | Fixes committed | Notes |
 |------|------------|----------------|-----------------|-------|
-| 1 | 2026-07-17 | `agent_debate.py`, `test_agent_debate_wrapper.py` | M001 | Flaky test fix + doc setup |
-| 4 | 2026-07-17 | `handoff.py` | M003 | Bugbot OK; 9 handoff tests pass; pushed `97f09c4` |
+| 6 | 2026-07-17 | **7 files** (`watch.py` + full `execution/`) + Fixer M004–M006 | M004–M006 `cdfb8a3`, `5ca93d6`, `d920711`; M025–M033 logged | Reviewer + Fixer; M012/M024 pending design |
+| 5 | 2026-07-17 | **41 files** (full bridge + partial autonomous_agents) | M004–M024 logged; `bdf9a8f`, `c8bc148` | Dual subagents: Reviewer + Fixer parallel |
+| 4 | 2026-07-17 | `handoff.py` | M003 | Bugbot OK; 9 handoff tests pass |
 | 3 | 2026-07-17 | `context/hub.py` | M002 | Stock cache path bug + regression test |
 | 2 | 2026-07-17 | `hub_context.py`, `quant_review.py` | — | 10 hub_context tests pass; no bugs found ≥80% confidence |
 
@@ -187,8 +273,9 @@ Full sorted list: run `find integrations -type f -name '*.py' | sort` (337 paths
 | Item | Value |
 |------|-------|
 | Scheduler | Background ping loop (PID in terminal 200912), every 20m, ticks 2→21 |
-| Ticks completed with agent work | 1, 2, 3, 4 |
-| `master todo:` commits | 5 code fixes (see audit table) |
+| Ticks completed with agent work | 1–6 |
+| Open issues (Fixer backlog) | M007–M011, M013–M023, M025–M033 (**M007 next after M006 ✅**) |
+| `master todo:` commits | 10 (see audit table) |
 
 ---
 
@@ -198,6 +285,11 @@ Track SHAs here for easy revert audit.
 
 | SHA | Message | Submodule? |
 |-----|---------|--------------|
+| cdfb8a3 | master todo: add missing Any import in hub_paths | parent |
+| 5ca93d6 | master todo: guard _parse_hhmm against corrupt env values | parent |
+| d920711 | master todo: filter position_rows_to_legs by underlying | parent |
+| bdf9a8f | master todo: guard process_intent_file against corrupt JSON | parent |
+| c8bc148 | master todo: align vibe trigger tests with plan approval gate | parent |
 | 97f09c4 | master todo: honor mandate flatten policy in hub handoff shell | parent |
 | c94dd80 | master todo: fix stock cache freshness checking wrong hub path | parent |
 | 9549c94 | master todo: record first tick commits in master-todo log | parent |
