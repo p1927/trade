@@ -120,10 +120,11 @@ def test_get_quote_routes_through_channel_not_sdk(hub_tmp, monkeypatch):
     save_registry({"entities": []})
     update_entity("NIFTY", {"capture_enabled": True, "factor_groups": ["derivatives"]})
 
-    vendor_calls = {"n": 0}
+    vendor_calls = {"n": 0, "exchange": None}
 
-    def counting_quote(symbol):
+    def counting_quote(symbol, *, exchange=None):
         vendor_calls["n"] += 1
+        vendor_calls["exchange"] = exchange
         return {"ltp": 24500.0, "source": "mock_vendor"}
 
     monkeypatch.setattr(
@@ -136,6 +137,7 @@ def test_get_quote_routes_through_channel_not_sdk(hub_tmp, monkeypatch):
     payload = json.loads(raw)
 
     assert vendor_calls["n"] == 1
+    assert vendor_calls["exchange"] == "NSE_INDEX"
     assert mcp._sdk_calls["quotes"] == 0
     assert payload["ltp"] == 24500.0
 

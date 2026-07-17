@@ -121,10 +121,10 @@ def _quote_data(oa_symbol: str, exchange: str) -> dict | None:
         return None
 
 
-def fetch_quote_raw(symbol: str) -> dict | None:
+def fetch_quote_raw(symbol: str, *, exchange: str | None = None) -> dict | None:
     """Direct OpenAlgo quote fetch (no hub channel)."""
-    oa_symbol, exchange = resolve_openalgo_symbol(symbol)
-    data = _quote_data(oa_symbol, exchange)
+    oa_symbol, resolved_exchange = resolve_openalgo_symbol(symbol)
+    data = _quote_data(oa_symbol, exchange or resolved_exchange)
     if not data:
         return None
     return {
