@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from trade_integrations.env import ensure_openalgo_env
+from trade_integrations.openalgo.rest_client import get_rest_client
 
 logger = logging.getLogger(__name__)
-
-_TRANSIENT_STATUS = {502, 503, 504}
 
 
 class OpenAlgoClient:
@@ -22,34 +20,9 @@ class OpenAlgoClient:
             raise RuntimeError("OPENALGO_API_KEY not configured")
 
     def _post(self, path: str, payload: dict[str, Any], *, timeout: int = 30) -> dict[str, Any]:
-        import requests
-
-        url = f"{self.host}/api/v1/{path.lstrip('/')}"
-        last_exc: Exception | None = None
-        for attempt in range(2):
-            try:
-                response = requests.post(url, json=payload, timeout=timeout)
-                body = response.json() if response.content else {}
-            except requests.RequestException as exc:
-                last_exc = exc
-                if attempt == 0:
-                    time.sleep(1.0)
-                    continue
-                logger.warning("OpenAlgo %s failed: %s", path, exc)
-                raise RuntimeError(f"OpenAlgo request failed: {exc}") from exc
-            if response.ok:
-                return body if isinstance(body, dict) else {"data": body}
-            message = body.get("message") if isinstance(body, dict) else str(body)
-            code = body.get("error_code") if isinstance(body, dict) else None
-            if response.status_code in _TRANSIENT_STATUS and attempt == 0:
-                time.sleep(1.0)
-                continue
-            if code == "invalid_api_key":
-                raise RuntimeError(message or "Invalid OpenAlgo API key")
-            raise RuntimeError(message or f"OpenAlgo {path} HTTP {response.status_code}")
-        if last_exc is not None:
-            raise RuntimeError(f"OpenAlgo request failed: {last_exc}") from last_exc
-        raise RuntimeError(f"OpenAlgo {path} failed")
+        return get_rest_client(host=self.host, api_key=self.api_key).post(
+            path, payload, timeout=timeout
+        )
 
     def analyzer_status(self) -> bool:
         body = self._post("analyzer", {"apikey": self.api_key}, timeout=15)
