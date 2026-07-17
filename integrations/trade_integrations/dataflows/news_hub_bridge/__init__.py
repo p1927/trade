@@ -43,6 +43,8 @@ __all__ = [
     "tag_inventory",
     "process_staging_batch",
     "staging_queue_stats",
+    "get_distilled_event",
+    "distillation_queue_stats",
 ]
 
 
@@ -132,12 +134,14 @@ def query_verified_news(
     include_rejected: bool = False,
 ) -> list[dict[str, Any]]:
     """Filter hub SSOT records by date and tags."""
-    from trade_integrations.hub_storage.verified_news_store import list_verified_records
+    from trade_integrations.hub_storage.news_events_store import (
+        distilled_event_to_headline_dict,
+        query_events,
+    )
     from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
 
-    records = list_verified_records(
+    events = query_events(
         ticker=ticker,
-        status=status,
         since=since,
         until=until,
         publish_day=publish_day,
@@ -148,7 +152,25 @@ def query_verified_news(
         limit=limit,
         include_rejected=include_rejected,
     )
+    if status is not None:
+        statuses = {status} if isinstance(status, str) else set(status)
+        events = [e for e in events if str(e.get("verification_status") or "") in statuses]
+    records = [distilled_event_to_headline_dict(event) for event in events]
     return union_headlines_with_staging(records, ticker=ticker, limit=limit)
+
+
+def get_distilled_event(event_id: str) -> dict[str, Any] | None:
+    """Fetch one distilled hub event by id."""
+    from trade_integrations.hub_storage.news_events_store import get_event
+
+    return get_event(event_id)
+
+
+def distillation_queue_stats(*, ticker: str = "NIFTY") -> dict[str, Any]:
+    """Staging queue depth plus entity pipeline pause status."""
+    from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status
+
+    return pipeline_pause_status(ticker=ticker)
 
 
 def process_staging_batch(*, ticker: str = "NIFTY", limit: int = 20) -> dict[str, Any]:

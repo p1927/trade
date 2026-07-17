@@ -95,7 +95,7 @@ def _day_window(end_day: str, *, lookback: int) -> list[str]:
     return [(end - timedelta(days=offset)).isoformat() for offset in range(lookback, -1, -1)]
 
 
-def _load_hub_records(*, ticker: str = "NIFTY") -> list[dict[str, Any]]:
+def _load_hub_events(*, ticker: str = "NIFTY") -> list[dict[str, Any]]:
     from trade_integrations.hub_storage.verified_news_store import list_verified_records
 
     return list_verified_records(limit=10000, ticker=ticker, include_rejected=False)
@@ -130,7 +130,7 @@ def compute_news_features_for_day(
 ) -> dict[str, float]:
     """T0-safe rolling news intensities for a single calendar day."""
     if by_day is None:
-        by_day = _index_records_by_day(_load_hub_records(ticker=ticker))
+        by_day = _index_records_by_day(_load_hub_events(ticker=ticker))
 
     window_days = _day_window(day, lookback=_LOOKBACK_DAYS)
     prior_days = _day_window(
@@ -201,7 +201,7 @@ def backfill_news_event_features(
             return {"status": "error", "message": "no nifty history", "days_written": 0}
         trading_dates = nifty["date"].astype(str).str[:10].tolist()
 
-    records = _load_hub_records(ticker=ticker)
+    records = _load_hub_events(ticker=ticker)
     by_day = _index_records_by_day(records)
     days_written = 0
     for day in trading_dates:
@@ -213,7 +213,7 @@ def backfill_news_event_features(
     return {
         "status": "ok",
         "days_written": days_written,
-        "hub_records": len(records),
+        "hub_events": len(records),
         "coverage": coverage,
     }
 
@@ -233,7 +233,7 @@ def audit_news_feature_coverage(
         trading_dates = nifty["date"].astype(str).str[:10].tolist() if not nifty.empty else []
 
     if by_day is None:
-        by_day = _index_records_by_day(_load_hub_records(ticker=ticker))
+        by_day = _index_records_by_day(_load_hub_events(ticker=ticker))
 
     total = len(trading_dates)
     with_material = 0

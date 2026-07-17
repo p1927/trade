@@ -57,7 +57,19 @@ def _fetch_rss_headlines(url: str, *, limit: int = 8) -> list[dict[str, str]]:
             continue
         pub = (item.findtext("pubDate") or "").strip()
         source = (item.findtext("source") or "google_news").strip()
-        rows.append({"title": title[:500], "published": pub[:80], "source": source[:80]})
+        link = (item.findtext("link") or "").strip()
+        if not link:
+            guid = (item.findtext("guid") or "").strip()
+            if guid and (guid.startswith("http://") or "://" in guid):
+                link = guid
+        rows.append(
+            {
+                "title": title[:500],
+                "published": pub[:80],
+                "source": source[:80],
+                "url": link[:2000],
+            }
+        )
         if len(rows) >= limit:
             break
     return rows

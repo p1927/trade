@@ -1,7 +1,12 @@
-"""Match incoming refs to existing hub news events — rule-based, no ML deps."""
+"""Match incoming refs to existing hub news events — rule-based, no ML deps.
+
+Similarity threshold defaults to 0.72 via ``HUB_NEWS_DEDUP_SUMMARY_THRESHOLD``.
+Legacy ``HUB_NEWS_MATCH_THRESHOLD`` is honored when set.
+"""
 
 from __future__ import annotations
 
+import os
 import re
 from difflib import SequenceMatcher
 from typing import Any
@@ -16,11 +21,23 @@ _BULLISH = frozenset({"rally", "recovery", "record_high"})
 _BEARISH = frozenset({"crash", "selloff", "record_low"})
 _INDEX_SYMBOLS = frozenset({"NIFTY", "SENSEX", "BANKNIFTY", "NIFTYMID", "NIFTY50"})
 
-_DEFAULT_THRESHOLD = float(__import__("os").getenv("HUB_NEWS_MATCH_THRESHOLD", "0.68"))
-
 _EARNINGS_TICKER = re.compile(r"\(([A-Z0-9-]+)\.(?:NS|BO|BL)\)", re.IGNORECASE)
 _EARNINGS_QUARTER = re.compile(r"\bQ([1-4])\s+(\d{2}/\d{2})\b", re.IGNORECASE)
 _TRANSCRIPT = re.compile(r"\bearnings call transcript\b", re.IGNORECASE)
+
+
+def match_threshold() -> float:
+    """Configured summary-similarity cutoff for entity merge decisions."""
+    legacy = os.getenv("HUB_NEWS_MATCH_THRESHOLD", "").strip()
+    if legacy:
+        try:
+            return float(legacy)
+        except ValueError:
+            pass
+    try:
+        return float(os.getenv("HUB_NEWS_DEDUP_SUMMARY_THRESHOLD", "0.72"))
+    except ValueError:
+        return 0.72
 
 
 def _normalize_text(text: str) -> str:
@@ -130,7 +147,7 @@ def find_matching_event(
     threshold: float | None = None,
 ) -> dict[str, Any] | None:
     """Return best matching hub event for a staging ref, or None."""
-    cut = threshold if threshold is not None else _DEFAULT_THRESHOLD
+    cut = threshold if threshold is not None else match_threshold()
     ref_day = publish_day_from_value(str(ref.get("published_at") or ""))
     ref_tags = tags_from_dict(ref.get("tags")).to_dict() if ref.get("tags") else {}
     if not ref_tags.get("topics"):
@@ -190,11 +207,9 @@ def find_matching_event(
         }
         event_bucket = event_bucket_key(event_row, ticker=ticker) if ref_bucket else ""
         bucket_match = bool(ref_bucket and event_bucket == ref_bucket)
-        if bucket_match:
-            sim = max(sim, cut)
-            if title_sim >= 0.25:
-                sim = max(sim, cut + 0.05)
-            elif title_sim < 0.20 and ref_symbols and event_symbols and not (ref_symbols & event_symbols):
+        if bucket_match and sim >= cut - 0.1:
+            sim = min(1.0, sim + 0.05)
+            if title_sim < 0.20 and ref_symbols and event_symbols and not (ref_symbols & event_symbols):
                 continue
 
         if sim >= cut and sim > best_score:

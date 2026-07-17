@@ -103,9 +103,42 @@ def _pick_best_summary(a: str, b: str) -> str:
     return a
 
 
+def _parse_published_dt(value: str) -> datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if "T" in text and text[4] == "-" and text[7] == "-":
+        try:
+            normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+            dt = datetime.fromisoformat(normalized)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (TypeError, ValueError, OverflowError):
+            return None
+    try:
+        if text[4] == "-":
+            dt = datetime.fromisoformat(f"{text[:10]}T09:00:00+00:00")
+            return dt
+        dt = parsedate_to_datetime(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (TypeError, ValueError, OverflowError, IndexError):
+        return None
+
+
 def _pick_best_published(a: str, b: str) -> str:
     a = (a or "").strip()
     b = (b or "").strip()
+    if not a:
+        return b
+    if not b:
+        return a
+    dt_a = _parse_published_dt(a)
+    dt_b = _parse_published_dt(b)
+    if dt_a and dt_b:
+        return b if dt_b >= dt_a else a
     return b or a
 
 
@@ -177,7 +210,6 @@ def merge_raw_headlines(rows: list[dict[str, Any]], *, ticker: str = "NIFTY") ->
     merged: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     title_to_key: dict[str, str] = {}
-    semantic_to_key: dict[str, str] = {}
 
     for row in rows:
         title = str(row.get("title") or "").strip()
@@ -192,14 +224,9 @@ def merge_raw_headlines(rows: list[dict[str, Any]], *, ticker: str = "NIFTY") ->
             continue
 
         title_norm = normalize_title(title)
-        sem_key = semantic_cluster_key(row, ticker=ticker)
-        if sem_key and sem_key in semantic_to_key:
-            key = semantic_to_key[sem_key]
-        elif title_norm and title_norm in title_to_key:
+        if title_norm and title_norm in title_to_key:
             key = title_to_key[title_norm]
 
-        if sem_key:
-            semantic_to_key[sem_key] = key
         if title_norm:
             title_to_key[title_norm] = key
 

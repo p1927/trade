@@ -14,6 +14,7 @@ from trade_integrations.dataflows.index_research.news_entity_worker import load_
 from trade_integrations.hub_storage.news_staging_store import (
     is_entity_pipeline_enabled,
     list_pending_refs,
+    pipeline_pause_status,
     staging_queue_stats,
 )
 from trade_integrations.hub_storage.verified_news_store import count_verified_records, list_verified_records
@@ -88,23 +89,17 @@ def _normalize_news_item_for_hub(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _recent_news_inventory(*, ticker: str, limit: int = 40) -> dict[str, Any]:
-    """Union of distilled hub records + staging pending refs for the Hub page."""
+    """Union of distilled hub events + staging pending refs for the Hub page."""
+    from trade_integrations.dataflows.news_hub_bridge import query_verified_news
     from trade_integrations.hub_storage.news_staging_store import (
         list_pending_refs,
         staging_queue_stats,
-        staging_ref_to_headline,
     )
-    from trade_integrations.hub_storage.verified_news_store import list_verified_records
 
     sym = ticker.strip().upper()
     pending_stats = staging_queue_stats(ticker=sym)
 
-    staging_queue: list[dict[str, Any]] = []
-    for ref in list_pending_refs(ticker=sym, limit=min(limit, 80)):
-        headline = staging_ref_to_headline(ref)
-        staging_queue.append(_normalize_news_item_for_hub({**headline, **ref}))
-
-    distilled_raw = list_verified_records(
+    union_raw = query_verified_news(
         ticker=sym,
         status=["approved", "partial"],
         limit=max(limit, 50),
@@ -112,9 +107,30 @@ def _recent_news_inventory(*, ticker: str, limit: int = 40) -> dict[str, Any]:
     )
     distilled_items = [
         _normalize_news_item_for_hub(row)
-        for row in distilled_raw
-        if str(row.get("title") or "").strip()
+        for row in union_raw
+        if str(row.get("title") or "").strip() and row.get("provenance") != "staging"
     ]
+    staging_queue = [
+        _normalize_news_item_for_hub(row)
+        for row in union_raw
+        if row.get("provenance") == "staging"
+    ]
+    if not staging_queue:
+        from trade_integrations.hub_storage.news_staging_store import (
+            collect_distilled_urls,
+            filter_staging_refs_not_in_urls,
+            staging_ref_to_headline,
+        )
+
+        seen_urls = collect_distilled_urls(union_raw)
+        staging_refs = filter_staging_refs_not_in_urls(
+            list_pending_refs(ticker=sym, limit=min(limit, 80)),
+            seen_urls,
+        )
+        staging_queue = [
+            _normalize_news_item_for_hub({**staging_ref_to_headline(ref), **ref})
+            for ref in staging_refs
+        ]
 
     staging_cap = min(len(staging_queue), max(20, limit // 2))
     items = staging_queue[:staging_cap] + distilled_items[: max(0, limit - staging_cap)]
@@ -147,6 +163,8 @@ def _staging_by_ticker(*, limit: int = 10) -> list[dict[str, Any]]:
 
 
 def _verified_breakdown(tickers: list[str]) -> dict[str, Any]:
+    from trade_integrations.hub_storage.news_events_store import count_events
+
     out: dict[str, Any] = {}
     for ticker in tickers:
         sym = ticker.strip().upper()
@@ -156,6 +174,7 @@ def _verified_breakdown(tickers: list[str]) -> dict[str, Any]:
             status_counts[str(row.get("verification_status") or "unknown")] += 1
         out[sym] = {
             "total": count_verified_records(ticker=sym),
+            "events_count": count_events(ticker=sym),
             "by_status": dict(status_counts),
         }
     return out
@@ -215,7 +234,13 @@ def _hub_paths() -> dict[str, str]:
     paths = {
         "hub_root": _hub_relative(hub),
         "news_staging_pending": _hub_relative(hub / "_data" / "news_staging" / "pending.jsonl"),
-        "news_verified_records": _hub_relative(hub / "_data" / "news_verified" / "records.parquet"),
+        "news_events": _hub_relative(hub / "_data" / "news_events" / "events.parquet"),
+        "news_events_migration_state": _hub_relative(
+            hub / "_data" / "news_events" / "migration_state.json"
+        ),
+        "news_verified_records_archived": _hub_relative(
+            hub / "_data" / "news_verified" / "records.parquet"
+        ),
         "index_research_latest": _hub_relative(hub / "NIFTY" / "index_research" / "latest.json"),
         "capture_registry": _hub_relative(hub / "_data" / "capture_registry.json"),
         "worker_last": _hub_relative(hub / "_data" / "news_staging" / "worker_last.json"),
@@ -249,6 +274,21 @@ def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
         if symbol and symbol not in sample_tickers:
             sample_tickers.append(symbol)
 
+    pause = pipeline_pause_status(ticker=sym)
+    migration_state: dict[str, Any] = {}
+    try:
+        from trade_integrations.hub_storage.news_migrations import (
+            load_migration_state,
+            needs_news_migration,
+        )
+
+        migration_state = {
+            "needed": needs_news_migration(ticker=sym),
+            "state": load_migration_state(),
+        }
+    except Exception as exc:
+        migration_state = {"error": str(exc)}
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "entity_id": sym,
@@ -256,11 +296,15 @@ def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
         "paths": _hub_paths(),
         "news_staging": {
             "entity_pipeline_enabled": is_entity_pipeline_enabled(),
+            "pipeline_paused": bool(pause.get("pipeline_paused")),
+            "pause_reason": str(pause.get("pause_reason") or ""),
+            "minimax_configured": bool(pause.get("minimax_configured")),
             **staging_queue_stats(ticker=None),
             "by_ticker": _staging_by_ticker(limit=12),
             "worker_last": load_worker_last_summary(),
         },
         "news_inventory": _recent_news_inventory(ticker=sym, limit=50),
+        "news_events_migration": migration_state,
         "verified_news": _verified_breakdown(sample_tickers),
         "index_research": _index_research_summary(sym),
         "constituent_cache": _constituent_cache_stats(),

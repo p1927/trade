@@ -11,9 +11,11 @@ from trade_integrations.hub_storage import verified_news_store as store
 
 @pytest.fixture
 def hub_tmp(tmp_path, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+
     hub = tmp_path / "hub"
     hub.mkdir()
-    monkeypatch.setattr(store, "get_hub_dir", lambda: hub)
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub)
     return hub
 
 
@@ -102,5 +104,5 @@ def test_build_snapshot_from_hub(hub_tmp):
         }
     )
     snap = store.build_snapshot_from_hub(ticker="NIFTY", horizon_days=14, spot=25000)
-    assert snap["summary"]["source"] == "hub_records"
+    assert snap["summary"]["source"] == "hub_events"
     assert len(snap["items"]) == 1

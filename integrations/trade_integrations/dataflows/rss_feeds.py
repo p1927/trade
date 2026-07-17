@@ -64,6 +64,36 @@ def _label_from_url(url: str) -> str:
     return host.removeprefix("www.")
 
 
+def _atom_entry_link(entry: ET.Element) -> str:
+    """Prefer alternate article URL; fall back to first link href."""
+    fallback = ""
+    for link_el in entry.findall("atom:link", _ATOM_NS):
+        href = (link_el.get("href") or "").strip()
+        if not href:
+            continue
+        rel = (link_el.get("rel") or "alternate").strip().lower()
+        if rel == "alternate":
+            return href
+        if not fallback:
+            fallback = href
+    return fallback
+
+
+def _rss_item_link(item: ET.Element) -> str:
+    link_el = item.find("link")
+    if link_el is not None:
+        text = (link_el.text or "").strip()
+        if text:
+            return text
+    guid_el = item.find("guid")
+    if guid_el is not None:
+        guid = (guid_el.text or "").strip()
+        if guid and not guid.startswith("http://") and "://" not in guid:
+            return ""
+        return guid
+    return ""
+
+
 def _parse_feed_entries(raw_xml: bytes, limit: int) -> list[dict]:
     root = ET.fromstring(raw_xml)
     entries: list[dict] = []
@@ -87,6 +117,7 @@ def _parse_feed_entries(raw_xml: bytes, limit: int) -> list[dict]:
                 or (updated_el.text if updated_el is not None else None)
             ),
             "summary": _strip_html(body),
+            "url": _atom_entry_link(entry),
         })
 
     if entries:
@@ -104,6 +135,7 @@ def _parse_feed_entries(raw_xml: bytes, limit: int) -> list[dict]:
             "title": (title_el.text if title_el is not None else "") or "",
             "date": _parse_pub_date(pub_el.text if pub_el is not None else None),
             "summary": _strip_html(desc_el.text if desc_el is not None else ""),
+            "url": _rss_item_link(item),
         })
     return entries
 

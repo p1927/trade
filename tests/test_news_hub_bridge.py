@@ -21,10 +21,12 @@ def test_ingest_news_articles_upserts_hub(hub_tmp, monkeypatch):
     from trade_integrations.dataflows.index_research import news_impact_engine as engine
     from trade_integrations.hub_storage import verified_news_store as store
     from trade_integrations.hub_storage import news_staging_store as staging_store
+    from trade_integrations.hub_storage import news_events_store as events_store
 
     monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(events_store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(engine, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(
         engine,
@@ -37,6 +39,9 @@ def test_ingest_news_articles_upserts_hub(hub_tmp, monkeypatch):
         "trade_integrations.dataflows.index_research.news_verification",
         fromlist=["VerifiedClaim", "_approval_from_claims"],
     )._approval_from_claims([]))
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(worker, "schedule_staging_processing", lambda **k: None)
 
     articles = [
         NewsArticle(
@@ -58,8 +63,108 @@ def test_ingest_news_articles_upserts_hub(hub_tmp, monkeypatch):
     )
 
 
+def test_rss_entries_use_per_article_urls():
+    from trade_integrations.dataflows.index_research.news_dedup import canonical_story_id, merge_raw_headlines
+    from trade_integrations.dataflows.news_hub_bridge._ingest import rss_entry_to_hub_row
+
+    feed_url = "https://feeds.example.com/market.rss"
+    rows = [
+        rss_entry_to_hub_row(
+            {"title": "Story A", "summary": "A body", "date": "2026-07-16", "url": "https://news.example.com/a"},
+            label="example",
+            feed_url=feed_url,
+        ),
+        rss_entry_to_hub_row(
+            {"title": "Story B", "summary": "B body", "date": "2026-07-16", "url": "https://news.example.com/b"},
+            label="example",
+            feed_url=feed_url,
+        ),
+    ]
+    assert canonical_story_id(rows[0]["title"], rows[0]["url"]) != canonical_story_id(
+        rows[1]["title"], rows[1]["url"]
+    )
+    merged = merge_raw_headlines(rows, ticker="NIFTY")
+    assert len(merged) == 2
+
+
+def test_ingest_reports_pipeline_paused_without_minimax(hub_tmp, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from trade_integrations.dataflows.news_hub_bridge._ingest import ingest_rows_to_hub
+    from trade_integrations.hub_storage import news_staging_store as staging_store
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(staging_store, "is_entity_pipeline_enabled", lambda: True)
+    monkeypatch.setattr(staging_store, "minimax_configured", lambda: False)
+
+    stats = ingest_rows_to_hub(
+        [
+            {
+                "title": "Test headline for paused pipeline",
+                "summary": "Body",
+                "url": "https://example.com/paused-test",
+                "source": "test",
+                "published_at": "2026-07-16",
+            },
+            {
+                "title": "Duplicate paused headline",
+                "summary": "Body",
+                "url": "https://example.com/paused-test",
+                "source": "test",
+                "published_at": "2026-07-16",
+            },
+        ],
+        ticker="NIFTY",
+    )
+    assert stats.get("pipeline_paused") is True
+    assert stats.get("queued", 0) == 1
+    assert stats.get("ingested", 0) == 1
+    assert "MINIMAX" in str(stats.get("pause_reason") or "")
+
+
+def test_query_verified_news_reads_events_ssot(hub_tmp, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from trade_integrations.dataflows.news_hub_bridge import query_verified_news
+    from trade_integrations.hub_storage import news_events_store as events_store
+    from trade_integrations.hub_storage import news_staging_store as staging_store
+    from trade_integrations.hub_storage.news_event_models import DistilledNewsEvent
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(events_store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
+
+    events_store.upsert_event(
+        DistilledNewsEvent(
+            event_id="evt:distilled1",
+            ticker="NIFTY",
+            title="Distilled FII story",
+            content="Foreign investors sold heavily.",
+            publish_day="2026-04-28",
+            published_at="2026-04-28",
+            verification_status="approved",
+        )
+    )
+    staging_store.enqueue_raw_ref(
+        {
+            "title": "Pending staging headline",
+            "summary": "Not yet distilled",
+            "url": "https://example.com/staging-only",
+            "published_at": "2026-04-28",
+        },
+        ticker="NIFTY",
+    )
+
+    rows = query_verified_news(ticker="NIFTY", publish_day="2026-04-28", limit=10)
+    titles = {str(r.get("title") or "") for r in rows}
+    assert "Distilled FII story" in titles
+    assert "Pending staging headline" in titles
+
+
 @pytest.fixture
 def hub_tmp(tmp_path, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+
     hub = tmp_path / "hub"
     hub.mkdir()
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub)
     return hub

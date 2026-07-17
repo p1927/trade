@@ -20,7 +20,7 @@ _INDEX_ALIASES: dict[str, str] = {
 
 
 def hub_ticker_for_symbol(symbol: str, *, kind: str = "ticker") -> str:
-    """Map agent/market symbol to hub ``records.parquet`` ticker partition."""
+    """Map agent/market symbol to hub events ticker partition."""
     if kind == "global":
         return "NIFTY"
     raw = (symbol or "").strip().upper()
@@ -84,17 +84,18 @@ def rss_entry_to_hub_row(
 ) -> dict[str, Any]:
     day = str(entry.get("date") or "").strip()
     published = f"{day}T09:00:00+00:00" if day and day != "?" else _now_iso()
+    article_url = str(entry.get("url") or "").strip() or feed_url
     return {
         "title": str(entry.get("title") or ""),
         "summary": str(entry.get("summary") or ""),
-        "url": feed_url,
+        "url": article_url,
         "source": f"rss:{label}",
         "published_at": published,
         "sources": [
             {
                 "vendor": f"rss:{label}",
                 "publisher": label,
-                "url": feed_url,
+                "url": article_url,
                 "fetched_at": _now_iso(),
             }
         ],
@@ -140,7 +141,7 @@ def ingest_rows_to_hub(
     *,
     ticker: str,
     collection_day: str | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     if not rows:
         return {"ingested": 0, "cache_hits": 0, "verified": 0}
     try:
@@ -149,6 +150,7 @@ def ingest_rows_to_hub(
         from trade_integrations.hub_storage.news_staging_store import (
             enqueue_raw_ref,
             is_entity_pipeline_enabled,
+            pipeline_pause_status,
         )
 
         hub_sym = hub_ticker_for_symbol(ticker)
@@ -163,6 +165,7 @@ def ingest_rows_to_hub(
             )
             from trade_integrations.dataflows.index_research.news_tags import build_article_tags
 
+            pause = pipeline_pause_status(ticker=hub_sym)
             queued = 0
             for row in merged:
                 tagged = build_article_tags(
@@ -172,13 +175,21 @@ def ingest_rows_to_hub(
                     published_at=str(row.get("published_at") or ""),
                 ).to_dict()
                 row["tags"] = tagged
-                enqueue_raw_ref(row, ticker=hub_sym)
-                queued += 1
-            sync_limit = _sync_distill_limit()
+                _, appended = enqueue_raw_ref(row, ticker=hub_sym)
+                if appended:
+                    queued += 1
+
+            pause = pipeline_pause_status(ticker=hub_sym)
             sync_stats: dict[str, Any] = {}
-            if sync_limit > 0:
-                sync_stats = process_staging_batch(ticker=hub_sym, limit=sync_limit)
-            schedule_staging_processing(ticker=hub_sym, limit=20)
+            distill_mode = "deferred"
+            if not pause.get("pipeline_paused"):
+                sync_limit = _sync_distill_limit()
+                if sync_limit > 0:
+                    sync_stats = process_staging_batch(ticker=hub_sym, limit=sync_limit)
+                    distill_mode = "sync"
+                schedule_staging_processing(ticker=hub_sym, limit=20)
+
+            pending = pause.get("pending") or {}
             return {
                 "ingested": queued,
                 "queued": queued,
@@ -186,7 +197,11 @@ def ingest_rows_to_hub(
                 "verified": int(sync_stats.get("processed") or 0),
                 "created": int(sync_stats.get("created") or 0),
                 "updated": int(sync_stats.get("updated") or 0),
-                "distill": "sync" if sync_limit > 0 else "deferred",
+                "distill": distill_mode if not pause.get("pipeline_paused") else "paused",
+                "pipeline_paused": bool(pause.get("pipeline_paused")),
+                "pause_reason": str(pause.get("pause_reason") or ""),
+                "minimax_configured": bool(pause.get("minimax_configured")),
+                "pending_queued": int(pending.get("queued") or 0),
             }
 
         return ingest_headline_rows(
@@ -195,8 +210,12 @@ def ingest_rows_to_hub(
             collection_day=collection_day,
         )
     except Exception as exc:
-        logger.debug("hub ingest skipped for %s: %s", ticker, exc)
-        return {"ingested": len(rows), "error": 1}
+        logger.warning("hub ingest failed for %s: %s", ticker, exc, exc_info=True)
+        return {
+            "ingested": 0,
+            "error": 1,
+            "error_message": str(exc)[:200],
+        }
 
 
 def ingest_news_articles(

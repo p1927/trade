@@ -58,6 +58,14 @@ def ensure_hub_storage() -> None:
     if not ledger.is_file():
         ledger.parent.mkdir(parents=True, exist_ok=True)
         write_dataframe(pd.DataFrame(columns=["canonical_story_id", "updated_at"]), ledger)
+    try:
+        from trade_integrations.hub_storage.news_migrations import ensure_hub_news_migrations
+
+        ensure_hub_news_migrations()
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning("hub news migration skipped: %s", exc)
 
 
 def _now_iso() -> str:
@@ -225,140 +233,86 @@ def _should_replace_summary(
     return len(incoming) > len(existing)
 
 
+def iter_legacy_verified_records(
+    *,
+    ticker: str | None = None,
+    limit: int = 5000,
+) -> list[dict[str, Any]]:
+    """Read legacy records.parquet directly (migration only)."""
+    frame = _load_records_frame()
+    if frame.empty:
+        return []
+    if ticker and "ticker" in frame.columns:
+        frame = frame[frame["ticker"].astype(str).str.upper() == ticker.strip().upper()]
+    records = [_row_to_record(row) for _, row in frame.sort_values("published_at", ascending=False).iterrows()]
+    return records[:limit]
+
+
+def seed_legacy_record(record: dict[str, Any]) -> None:
+    """Write to legacy records.parquet only (migration tests / import source)."""
+    story_id = str(record.get("canonical_story_id") or "").strip()
+    if not story_id:
+        return
+    frame = _load_records_frame()
+    incoming = _record_to_row(record)
+    if not frame.empty and story_id in frame["canonical_story_id"].astype(str).values:
+        idx = frame.index[frame["canonical_story_id"].astype(str) == story_id][0]
+        for col, val in incoming.items():
+            if col in frame.columns:
+                frame.at[idx, col] = val
+    else:
+        frame = pd.concat([frame, pd.DataFrame([incoming])], ignore_index=True)
+    write_dataframe(_coerce_records_frame(frame), verified_records_path())
+
+
 def patch_verified_event_meta(
     updates: list[tuple[str, dict[str, Any]]],
     *,
     min_rows: int | None = None,
 ) -> int:
-    """Batch-update structured_summary.event_meta for story ids without full re-ingest."""
-    if not updates:
-        return 0
-    frame = _load_records_frame()
-    if frame.empty:
-        return 0
-    before = len(frame)
-    if min_rows is not None and before < min_rows:
-        raise RuntimeError(f"refusing patch: row count {before} below guard {min_rows}")
-    patched = 0
-    for story_id, event_meta in updates:
-        sid = str(story_id or "").strip()
-        if not sid:
-            continue
-        mask = frame["canonical_story_id"].astype(str) == sid
-        if not mask.any():
-            continue
-        idx = frame.index[mask][0]
-        structured = _json_loads(frame.at[idx, "structured_summary_json"], {})
-        if not isinstance(structured, dict):
-            structured = {}
-        structured["event_meta"] = event_meta
-        frame.at[idx, "structured_summary_json"] = _json_dumps(structured)
-        frame.at[idx, "updated_at"] = _now_iso()
-        patched += 1
-    if patched:
-        after = len(frame)
-        if after != before:
-            raise RuntimeError(f"refusing patch: row count changed {before} -> {after}")
-        write_dataframe(_coerce_records_frame(frame), verified_records_path())
-    return patched
+    from trade_integrations.hub_storage.news_events_store import patch_event_meta
+
+    return patch_event_meta(updates, min_rows=min_rows)
 
 
 def upsert_verified_record(record: dict[str, Any]) -> None:
-    """Insert or merge a canonical story record in hub parquet."""
-    story_id = str(record.get("canonical_story_id") or "").strip()
-    if not story_id:
-        return
+    """Insert or merge a canonical story record in hub events SSOT."""
+    from trade_integrations.hub_storage.news_events_store import upsert_hub_record
 
-    frame = _load_records_frame()
-    incoming = _record_to_row(record)
-
-    if not frame.empty and story_id in frame["canonical_story_id"].astype(str).values:
-        idx = frame.index[frame["canonical_story_id"].astype(str) == story_id][0]
-        existing = frame.loc[idx].to_dict()
-        merged_sources = _merge_sources(
-            _json_loads(existing.get("sources_json"), []),
-            _json_loads(incoming.get("sources_json"), []),
-        )
-        existing_summary = str(existing.get("content_summary") or "")
-        incoming_summary = str(incoming.get("content_summary") or "")
-        incoming_structured = _json_loads(incoming.get("structured_summary_json"), {})
-        if _should_replace_summary(
-            existing_summary,
-            incoming_summary,
-            incoming_structured=incoming_structured,
-        ):
-            existing["content_summary"] = incoming_summary
-        if incoming.get("structured_summary_json"):
-            existing["structured_summary_json"] = incoming["structured_summary_json"]
-        if incoming.get("verification_json"):
-            existing["verification_json"] = incoming["verification_json"]
-            existing["verification_status"] = incoming["verification_status"]
-            existing["verification_data_as_of"] = incoming["verification_data_as_of"]
-        if incoming.get("predicted_impact_json"):
-            existing["predicted_impact_json"] = incoming["predicted_impact_json"]
-        if incoming.get("actual_impact_json"):
-            existing["actual_impact_json"] = incoming["actual_impact_json"]
-        if incoming.get("tagged_factors_json"):
-            existing["tagged_factors_json"] = incoming["tagged_factors_json"]
-        if incoming.get("tags_json"):
-            from trade_integrations.dataflows.index_research.news_tags import merge_article_tags, tags_from_dict
-
-            merged_tags = merge_article_tags(
-                tags_from_dict(_json_loads(existing.get("tags_json"), {})),
-                tags_from_dict(_json_loads(incoming.get("tags_json"), {})),
-            )
-            existing["tags_json"] = _json_dumps(merged_tags.to_dict())
-        if incoming.get("maturity_date"):
-            existing["maturity_date"] = incoming["maturity_date"]
-        if incoming.get("horizon_trading_days"):
-            existing["horizon_trading_days"] = int(incoming["horizon_trading_days"])
-        existing["sources_json"] = _json_dumps(merged_sources)
-        existing["title"] = incoming.get("title") or existing.get("title")
-        existing["published_at"] = incoming.get("published_at") or existing.get("published_at")
-        existing["updated_at"] = _now_iso()
-        for col, val in existing.items():
-            if col in frame.columns:
-                frame.at[idx, col] = val
-    else:
-        new_row = pd.DataFrame([incoming])
-        frame = pd.concat([frame, new_row], ignore_index=True)
-
-    write_dataframe(_coerce_records_frame(frame), verified_records_path())
+    upsert_hub_record(record)
 
 
 def remove_verified_records(story_ids: set[str] | list[str]) -> int:
-    """Drop rows by canonical_story_id; returns removed count."""
-    ids = {str(s).strip() for s in story_ids if str(s).strip()}
-    if not ids:
-        return 0
-    frame = _load_records_frame()
-    if frame.empty:
-        return 0
-    before = len(frame)
-    frame = frame[~frame["canonical_story_id"].astype(str).isin(ids)]
-    removed = before - len(frame)
-    if removed:
-        write_dataframe(_coerce_records_frame(frame), verified_records_path())
-    return removed
+    from trade_integrations.hub_storage.news_events_store import remove_events
+
+    return remove_events(story_ids)
 
 
 def count_verified_records(*, ticker: str | None = None) -> int:
+    from trade_integrations.hub_storage.news_events_store import count_events
+
+    return count_events(ticker=ticker)
+
+
+def list_verified_tickers() -> list[str]:
+    from trade_integrations.hub_storage.news_events_store import list_event_tickers
+
+    tickers = list_event_tickers()
+    if tickers:
+        return tickers
     frame = _load_records_frame()
-    if frame.empty:
-        return 0
-    if ticker and "ticker" in frame.columns:
-        frame = frame[frame["ticker"].astype(str).str.upper() == ticker.strip().upper()]
-    return int(len(frame))
+    if frame.empty or "ticker" not in frame.columns:
+        return []
+    return sorted({str(v).strip().upper() for v in frame["ticker"].astype(str) if str(v).strip()})
 
 
 def get_verified_record(story_id: str) -> dict[str, Any] | None:
-    frame = _load_records_frame()
-    if frame.empty:
-        return None
-    matches = frame[frame["canonical_story_id"].astype(str) == story_id.strip()]
-    if matches.empty:
-        return None
-    return _row_to_record(matches.iloc[-1])
+    from trade_integrations.hub_storage.news_events_store import distilled_event_to_headline_dict, get_event
+
+    event = get_event(story_id.strip())
+    if event:
+        return distilled_event_to_headline_dict(event)
+    return None
 
 
 def list_verified_records(
@@ -376,47 +330,22 @@ def list_verified_records(
     ticker: str = "NIFTY",
     include_rejected: bool = False,
 ) -> list[dict[str, Any]]:
-    from trade_integrations.dataflows.index_research.news_tags import record_matches_filters
+    from trade_integrations.hub_storage.news_events_store import list_verified_records_from_events
 
-    frame = _load_records_frame()
-    if frame.empty:
-        return []
-
-    sym = ticker.strip().upper()
-    if "ticker" in frame.columns:
-        frame = frame[frame["ticker"].astype(str).str.upper() == sym]
-
-    statuses: set[str] | None = None
-    if status is None and not include_rejected:
-        statuses = {"approved", "partial", "pending"}
-    elif isinstance(status, str):
-        statuses = {status}
-    elif isinstance(status, list):
-        statuses = set(status)
-
-    if statuses is not None:
-        frame = frame[frame["verification_status"].astype(str).isin(statuses)]
-
-    if frame.empty:
-        return []
-
-    records = [_row_to_record(row) for _, row in frame.sort_values("published_at", ascending=False).iterrows()]
-    filtered = [
-        rec
-        for rec in records
-        if record_matches_filters(
-            rec,
-            since=since,
-            until=until,
-            publish_day=publish_day,
-            symbols=symbols,
-            topics=topics,
-            factors=factors,
-            themes=themes,
-            tags=tags,
-        )
-    ]
-    return filtered[:limit]
+    return list_verified_records_from_events(
+        status=status,
+        since=since,
+        until=until,
+        publish_day=publish_day,
+        symbols=symbols,
+        topics=topics,
+        factors=factors,
+        themes=themes,
+        tags=tags,
+        limit=limit,
+        ticker=ticker,
+        include_rejected=include_rejected,
+    )
 
 
 def list_tag_inventory(*, ticker: str = "NIFTY") -> dict[str, Any]:
@@ -449,30 +378,15 @@ def list_tag_inventory(*, ticker: str = "NIFTY") -> dict[str, Any]:
 
 
 def list_pending_maturity(as_of: str) -> list[dict[str, Any]]:
-    """Stories past maturity_date without actual_impact filled."""
-    frame = _load_records_frame()
-    if frame.empty:
-        return []
-    day = as_of[:10]
-    pending = frame[
-        frame["maturity_date"].astype(str).str[:10].le(day)
-        & frame["maturity_date"].astype(str).str.len().gt(0)
-        & (frame["actual_impact_json"].isna() | (frame["actual_impact_json"].astype(str).str.len() == 0))
-    ]
-    return [_row_to_record(row) for _, row in pending.iterrows()]
+    from trade_integrations.hub_storage.news_events_store import list_pending_maturity_events
+
+    return list_pending_maturity_events(as_of)
 
 
 def count_by_status(*, ticker: str = "NIFTY") -> dict[str, int]:
-    frame = _load_records_frame()
-    if frame.empty:
-        return {}
-    sym = ticker.strip().upper()
-    if "ticker" in frame.columns:
-        frame = frame[frame["ticker"].astype(str).str.upper() == sym]
-    counts: dict[str, int] = {}
-    for status, group in frame.groupby(frame["verification_status"].astype(str)):
-        counts[str(status)] = int(len(group))
-    return counts
+    from trade_integrations.hub_storage.news_events_store import count_events_by_status
+
+    return count_events_by_status(ticker=ticker)
 
 
 def _coerce_impact_ledger_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -506,12 +420,23 @@ def build_snapshot_from_hub(
     include_rejected: bool = False,
     limit: int = 20,
 ) -> dict[str, Any]:
-    """Materialize UI snapshot from hub records (no re-verification)."""
-    pool = list_verified_records(
-        status=["approved", "partial"],
-        limit=max(limit * 4, 80),
-        ticker=ticker,
+    """Materialize UI snapshot from hub events SSOT (no re-verification)."""
+    from trade_integrations.hub_storage.news_events_store import (
+        count_events_by_status,
+        distilled_event_to_headline_dict,
+        list_events,
     )
+
+    sym = ticker.strip().upper()
+    pool = [
+        distilled_event_to_headline_dict(event)
+        for event in list_events(
+            ticker=sym,
+            status=["approved", "partial"],
+            limit=max(limit * 4, 80),
+            include_rejected=False,
+        )
+    ]
     reconciled_items = [
         r for r in pool if (r.get("actual_impact") or r.get("actual") or {}).get("nifty_points") is not None
     ]
@@ -519,14 +444,17 @@ def build_snapshot_from_hub(
     mix_limit = max(4, limit // 3)
     items = (reconciled_items[:mix_limit] + live_items)[:limit]
 
-    rejected_count = count_by_status(ticker=ticker).get("rejected", 0)
+    rejected_count = count_by_status(ticker=sym).get("rejected", 0)
     if include_rejected:
-        rejected_items = list_verified_records(
-            status="rejected",
-            limit=limit,
-            ticker=ticker,
-            include_rejected=True,
-        )
+        rejected_items = [
+            distilled_event_to_headline_dict(event)
+            for event in list_events(
+                ticker=sym,
+                status="rejected",
+                limit=limit,
+                include_rejected=True,
+            )
+        ]
         items = items + rejected_items
 
     reconciled = sum(
@@ -564,6 +492,6 @@ def build_snapshot_from_hub(
             "partial_count": sum(1 for i in items if i.get("verification_status") == "partial"),
             "rejected_count": rejected_count,
             "rejected_skipped": rejected_count if not include_rejected else 0,
-            "source": "hub_records",
+            "source": "hub_events",
         },
     }

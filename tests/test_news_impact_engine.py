@@ -22,11 +22,11 @@ from trade_integrations.dataflows.index_research.news_verification import (
 
 @pytest.fixture
 def hub_tmp(tmp_path, monkeypatch):
-    from trade_integrations.hub_storage import verified_news_store as store
+    from trade_integrations.context import hub as hub_mod
 
     hub = tmp_path / "hub"
     hub.mkdir()
-    monkeypatch.setattr(store, "get_hub_dir", lambda: hub)
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub)
     return hub
 
 
@@ -133,7 +133,7 @@ def test_merge_raw_headlines_dedupes_sources():
     assert "3,000 crore" in merged[0]["summary"]
 
 
-def test_merge_raw_headlines_clusters_semantic_outcomes():
+def test_merge_raw_headlines_does_not_semantic_merge_at_ingest():
     from trade_integrations.dataflows.index_research.news_dedup import merge_raw_headlines
 
     merged = merge_raw_headlines(
@@ -154,11 +154,16 @@ def test_merge_raw_headlines_clusters_semantic_outcomes():
             },
         ]
     )
-    assert len(merged) == 1
-    assert len(merged[0]["sources"]) == 2
-    topics = merged[0]["tags"]["topics"]
-    assert "fii" in topics
-    assert merged[0]["tags"]["themes"] == ["selloff"] or "selloff" in merged[0]["tags"]["themes"]
+    assert len(merged) == 2
+
+
+def test_pick_best_published_keeps_later_timestamp():
+    from trade_integrations.dataflows.index_research.news_dedup import _pick_best_published
+
+    earlier = "2026-02-17T09:00:00+00:00"
+    later = "2026-02-18T14:30:00+00:00"
+    assert _pick_best_published(earlier, later) == later
+    assert _pick_best_published(later, earlier) == later
 
 
 def test_ingest_cache_hit_skips_reverify(hub_tmp, monkeypatch):

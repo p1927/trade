@@ -157,7 +157,7 @@ def collect_headlines_for_day(
             {
                 "title": row.get("title") or "",
                 "summary": "",
-                "url": "",
+                "url": row.get("url") or "",
                 "source": row.get("source") or "google_news_rss",
                 "published_at": row.get("published") or f"{day}T09:00:00+00:00",
             }

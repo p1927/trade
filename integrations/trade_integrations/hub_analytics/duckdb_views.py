@@ -21,6 +21,7 @@ HUB_VIEWS = (
     "news_daily",
     "derivatives_chain_daily",
     "news_verified",
+    "news_events",
     "news_impact_ledger",
     "capture_derivatives",
     "capture_flows",
@@ -128,7 +129,7 @@ _BUILTIN_QUERIES: dict[str, str] = {
     """,
     "verified_news_recent": """
         SELECT
-            canonical_story_id,
+            event_id AS canonical_story_id,
             title,
             published_at,
             verification_status,
@@ -136,7 +137,7 @@ _BUILTIN_QUERIES: dict[str, str] = {
             tags_json,
             predicted_impact_json,
             actual_impact_json
-        FROM news_verified
+        FROM news_events
         ORDER BY published_at DESC
         LIMIT 50
     """,
@@ -200,7 +201,7 @@ def hub_data_paths() -> dict[str, Path]:
         "ticks_daily": data / "ticks" / "daily",
         "news_daily": data / "news" / "daily",
         "derivatives_chain_daily": data / "derivatives_chain" / "daily",
-        "news_verified": data / "news_verified" / "records.parquet",
+        "news_events": data / "news_events" / "events.parquet",
         "news_impact_ledger": data / "news_impact" / "ledger.parquet",
         "capture_derivatives": data / "capture" / "nifty" / "derivatives_chain",
         "capture_flows": data / "capture" / "nifty" / "flows",
@@ -219,7 +220,7 @@ def register_hub_views(con: duckdb.DuckDBPyConnection) -> list[str]:
         "outcomes": paths["outcomes"],
         "executions": paths["executions"],
         "fills": paths["fills"],
-        "news_verified": paths["news_verified"],
+        "news_events": paths["news_events"],
         "news_impact_ledger": paths["news_impact_ledger"],
     }
     for view_name, path in single_views.items():
@@ -230,6 +231,37 @@ def register_hub_views(con: duckdb.DuckDBPyConnection) -> list[str]:
             source = _read_fn(path)
             con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM {source}")
         registered.append(view_name)
+
+    events_resolved = _resolve_readable_path(paths["news_events"])
+    if events_resolved is None:
+        con.execute("CREATE OR REPLACE VIEW news_verified AS SELECT NULL WHERE false")
+    else:
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW news_verified AS
+            SELECT
+                event_id AS canonical_story_id,
+                ticker,
+                title,
+                content AS content_summary,
+                published_at,
+                publish_day,
+                verification_status,
+                status,
+                maturity_date,
+                tags_json,
+                predicted_impact_json,
+                actual_impact_json,
+                structured_summary_json,
+                sources_json,
+                verification_json,
+                verification_data_as_of,
+                first_seen_at,
+                updated_at
+            FROM news_events
+            """
+        )
+    registered.append("news_verified")
 
     daily_dir = paths["index_factors_daily"]
     _register_daily_glob_view(con, "index_factors_daily", daily_dir)

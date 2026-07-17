@@ -434,7 +434,7 @@ def hydrate_news_item_from_hub(item: dict[str, Any], *, ticker: str = "NIFTY") -
     """Merge hub SSOT tags and fields into a snapshot/UI item when stale or partial."""
     from trade_integrations.dataflows.index_research.news_tags import tags_are_empty
 
-    story_id = str(item.get("canonical_story_id") or item.get("id") or "").strip()
+    story_id = str(item.get("canonical_story_id") or item.get("id") or item.get("event_id") or "").strip()
     if not story_id:
         return item
 
@@ -445,11 +445,24 @@ def hydrate_news_item_from_hub(item: dict[str, Any], *, ticker: str = "NIFTY") -
     out = dict(item)
     if tags_are_empty(out.get("tags")) and not tags_are_empty(hub.get("tags")):
         out["tags"] = hub.get("tags")
-    for key in ("content_summary", "verification_status", "sources", "tagged_factors", "title"):
+    for key in (
+        "content_summary",
+        "verification_status",
+        "sources",
+        "tagged_factors",
+        "title",
+        "structured_summary",
+        "references",
+        "consensus",
+        "timeline",
+    ):
         if not out.get(key) and hub.get(key):
             out[key] = hub[key]
     if not out.get("source") and hub.get("source"):
         out["source"] = hub["source"]
+    event_meta = ((out.get("structured_summary") or {}).get("event_meta") or {})
+    if event_meta and not out.get("event_meta"):
+        out["event_meta"] = event_meta
     return out
 
 

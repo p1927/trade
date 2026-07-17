@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..config import get_research_config
-from ..market import NormalizedTicker
+from ..market import NormalizedTicker, normalize_ticker
 from ..models import StageResult
 from ..fetch_policy import is_nifty50_batch
 from .resilience import SourceAttempt, classify_error, remediation_for, stage_status_from_attempts
@@ -171,7 +171,7 @@ def fetch_news(
     ][:3]
 
     for peer_sym in peer_symbols:
-        peer_yf = peer_sym if "." in peer_sym else f"{peer_sym}.NS"
+        peer_yf = normalize_ticker(str(peer_sym), market=normalized.market).yfinance_symbol
         try:
             peer_block = _fetch_ticker_news(peer_yf, lookback_days=days, label=peer_sym)
             if peer_block:

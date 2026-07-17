@@ -28,6 +28,16 @@ from trade_integrations.hub_storage.news_staging_store import (
     require_minimax_for_distillation,
 )
 from trade_integrations.hub_storage.news_merge_ledger import append_merge_event
+from trade_integrations.hub_storage.news_events_store import (
+    append_distillation_log,
+    build_event_from_distilled_row,
+    count_events,
+    distilled_event_to_headline_dict,
+    get_event,
+    list_events,
+    remove_events,
+    upsert_event,
+)
 from trade_integrations.hub_storage.verified_news_store import get_verified_record, list_verified_records
 
 logger = logging.getLogger(__name__)
@@ -111,6 +121,53 @@ def _apply_distilled_to_row(row: dict[str, Any], distilled: dict[str, Any]) -> d
     return row
 
 
+def _list_match_candidates(
+    *,
+    ticker: str,
+    publish_day: str | None,
+) -> list[dict[str, Any]]:
+    """Load distilled events for staging match."""
+    sym = ticker.strip().upper()
+    return [
+        distilled_event_to_headline_dict(event)
+        for event in list_events(
+            ticker=sym,
+            publish_day=publish_day or None,
+            since=publish_day or None,
+            limit=80,
+            include_rejected=False,
+        )
+    ]
+
+
+def _upsert_distilled_event_store(
+    *,
+    event_id: str,
+    ticker: str,
+    row: dict[str, Any],
+    distilled: dict[str, Any],
+    publish_day: str,
+) -> None:
+    verified = get_verified_record(event_id) or get_event(event_id)
+    verification_status = str((verified or {}).get("verification_status") or "pending")
+    event = build_event_from_distilled_row(
+        event_id=event_id,
+        ticker=ticker,
+        row=row,
+        distilled=distilled,
+        publish_day=publish_day,
+        verification_status=verification_status,
+    )
+    if verified:
+        event.predicted_impact = dict(verified.get("predicted_impact") or {})
+        event.actual_impact = dict(
+            verified.get("actual_impact") or verified.get("actual") or {}
+        )
+        if verified.get("sources"):
+            event.sources = list(verified.get("sources") or [])
+    upsert_event(event)
+
+
 def _log_merge(
     *,
     ticker: str,
@@ -145,19 +202,13 @@ def process_staging_ref(
     sym = (ticker or ref.get("ticker") or "NIFTY").strip().upper()
     publish_day = publish_day_from_value(str(ref.get("published_at") or ""))
 
-    candidates = list_verified_records(
-        ticker=sym,
-        publish_day=publish_day or None,
-        since=publish_day or None,
-        limit=80,
-        include_rejected=False,
-    )
+    candidates = _list_match_candidates(ticker=sym, publish_day=publish_day or None)
     matched = find_matching_event(ref, candidates, ticker=sym)
     event_id = str(matched.get("canonical_story_id") or "") if matched else ""
 
     if not matched:
         url_id = canonical_story_id(str(ref.get("title") or ""), str(ref.get("url") or ""))
-        if url_id and get_verified_record(url_id):
+        if url_id and get_event(url_id):
             mark_ref_merged(ref["ref_id"], url_id)
             return {"action": "skip_duplicate_url", "event_id": url_id}
 
@@ -208,6 +259,22 @@ def process_staging_batch(
     if not is_entity_pipeline_enabled():
         return {"processed": 0, "skipped": True}
 
+    from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status
+
+    pause = pipeline_pause_status(ticker=ticker)
+    if pause.get("pipeline_paused"):
+        return {
+            "processed": 0,
+            "created": 0,
+            "updated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "paused": True,
+            "pipeline_paused": True,
+            "pause_reason": pause.get("pause_reason") or "",
+            "pending": pause.get("pending") or {},
+        }
+
     require_minimax_for_distillation()
 
     pending = list_pending_refs(ticker=ticker, limit=limit)
@@ -248,6 +315,11 @@ def schedule_staging_processing(*, ticker: str | None = None, limit: int = 15) -
     if not is_entity_pipeline_enabled():
         return
 
+    from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status
+
+    if pipeline_pause_status(ticker=ticker).get("pipeline_paused"):
+        return
+
     now = time.time()
     if now - _last_run_at < 30:
         return
@@ -266,15 +338,41 @@ def schedule_staging_processing(*, ticker: str | None = None, limit: int = 15) -
 
 def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Daily compaction: drain staging queue and process pending refs."""
+    from trade_integrations.hub_storage.news_migrations import ensure_hub_news_migrations
+    from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status
+
     cfg = config or {}
     ticker = str(cfg.get("ticker") or "NIFTY")
     limit = int(cfg.get("batch_size") or 200)
     lookback = int(cfg.get("lookback_days") or 365)
+    migration = ensure_hub_news_migrations(ticker=ticker)
+    pause = pipeline_pause_status(ticker=ticker)
     staging = process_staging_batch(ticker=ticker, limit=limit, force_reverify=False)
+    if pause.get("pipeline_paused"):
+        skipped = {
+            "skipped": True,
+            "pipeline_paused": True,
+            "pause_reason": str(pause.get("pause_reason") or ""),
+        }
+        return {
+            "migration": migration,
+            "staging": staging,
+            "repair": dict(skipped),
+            "backfill": dict(skipped),
+            "compact_events": dict(skipped),
+            "pipeline_paused": True,
+            "pause_reason": pause.get("pause_reason") or "",
+        }
     repair = repair_leaked_distilled_summaries(ticker=ticker)
     backfill = backfill_distilled_event_metadata(ticker=ticker)
-    compact = compact_duplicate_events(ticker=ticker, lookback_days=lookback)
-    return {"staging": staging, "repair": repair, "backfill": backfill, "compact": compact}
+    compact_events = compact_distilled_events(ticker=ticker, lookback_days=lookback)
+    return {
+        "migration": migration,
+        "staging": staging,
+        "repair": repair,
+        "backfill": backfill,
+        "compact_events": compact_events,
+    }
 
 
 def _record_to_ref(rec: dict[str, Any]) -> dict[str, Any]:
@@ -297,23 +395,21 @@ def _build_duplicate_group(
     ticker: str,
     consumed: set[str],
 ) -> list[dict[str, Any]]:
-    """Collect all records transitively matching the anchor event."""
+    """Collect records that directly match the anchor event (star topology)."""
+    from trade_integrations.dataflows.index_research.news_event_matching import find_matching_event
+
     anchor_id = str(anchor.get("canonical_story_id") or "")
     group = [anchor]
     group_ids = {anchor_id}
-    changed = True
-    while changed:
-        changed = False
-        for other in records:
-            oid = str(other.get("canonical_story_id") or "")
-            if not oid or oid in consumed or oid in group_ids:
-                continue
-            ref = _record_to_ref(other)
-            ref["tags"] = other.get("tags") or ref.get("tags")
-            if any(find_matching_event(ref, [member], ticker=ticker) for member in group):
-                group.append(other)
-                group_ids.add(oid)
-                changed = True
+    for other in records:
+        oid = str(other.get("canonical_story_id") or "")
+        if not oid or oid in consumed or oid in group_ids:
+            continue
+        ref = _record_to_ref(other)
+        ref["tags"] = other.get("tags") or ref.get("tags")
+        if find_matching_event(ref, [anchor], ticker=ticker):
+            group.append(other)
+            group_ids.add(oid)
     return group
 
 
@@ -495,22 +591,29 @@ def backfill_distilled_event_metadata(*, ticker: str = "NIFTY") -> dict[str, Any
     }
 
 
-def compact_duplicate_events(
+def compact_distilled_events(
     *,
     ticker: str = "NIFTY",
     lookback_days: int = 90,
     dry_run: bool = False,
     max_passes: int = 3,
 ) -> dict[str, Any]:
-    """Merge similar hub events within lookback window using MiniMax distillation."""
-    totals = {
-        "groups_merged": 0,
-        "rows_removed": 0,
-        "passes": 0,
-    }
+    """Merge duplicate distilled events in events.parquet SSOT."""
+    if count_events(ticker=ticker) == 0:
+        return {
+            "ticker": ticker.strip().upper(),
+            "lookback_days": lookback_days,
+            "dry_run": dry_run,
+            "groups_merged": 0,
+            "rows_removed": 0,
+            "passes": 0,
+            "skipped": True,
+        }
+
+    totals = {"groups_merged": 0, "rows_removed": 0, "passes": 0}
     last_result: dict[str, Any] = {}
     for _ in range(max(1, max_passes)):
-        last_result = _compact_duplicate_events_once(
+        last_result = _compact_distilled_events_once(
             ticker=ticker,
             lookback_days=lookback_days,
             dry_run=dry_run,
@@ -526,65 +629,67 @@ def compact_duplicate_events(
     return last_result
 
 
-def _compact_duplicate_events_once(
+def _compact_distilled_events_once(
     *,
     ticker: str = "NIFTY",
     lookback_days: int = 90,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Single compaction pass over the lookback window."""
+    """Single compaction pass over distilled events parquet."""
     from datetime import date, timedelta
 
-    from trade_integrations.dataflows.index_research.news_event_matching import find_matching_event
     from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headline_rows
-    from trade_integrations.hub_storage.verified_news_store import (
-        count_verified_records,
-        list_verified_records,
-        remove_verified_records,
-    )
+    from trade_integrations.hub_storage.verified_news_store import remove_verified_records
 
     require_minimax_for_distillation()
     sym = ticker.strip().upper()
     since = (date.today() - timedelta(days=max(lookback_days, 1))).isoformat()
-    records = list_verified_records(
+    raw_events = list_events(
         ticker=sym,
         since=since,
         limit=5000,
         include_rejected=True,
     )
+    records = [distilled_event_to_headline_dict(event) for event in raw_events]
     before_count = len(records)
     consumed: set[str] = set()
     groups_merged = 0
     rows_removed = 0
 
     for anchor in records:
-        anchor_id = str(anchor.get("canonical_story_id") or "")
+        anchor_id = str(anchor.get("canonical_story_id") or anchor.get("event_id") or "")
         if not anchor_id or anchor_id in consumed:
             continue
         group = _build_duplicate_group(anchor, records, ticker=sym, consumed=consumed)
-
         if len(group) < 2:
             continue
 
         canonical = max(
             group,
             key=lambda r: (
-                not is_distillation_leak(str(r.get("content_summary") or "")),
+                not is_distillation_leak(str(r.get("content_summary") or r.get("content") or "")),
                 len(r.get("sources") or []),
-                len(str(r.get("content_summary") or "")),
+                len(r.get("references") or []),
+                len(str(r.get("content_summary") or r.get("content") or "")),
                 str(r.get("first_seen_at") or ""),
             ),
         )
-        canon_id = str(canonical.get("canonical_story_id") or "")
+        canon_id = str(canonical.get("canonical_story_id") or canonical.get("event_id") or "")
         refs = [_record_to_ref(r) for r in group]
         merged_sources: list[dict[str, Any]] = []
         for r in group:
             merged_sources = _merge_sources(merged_sources, r.get("sources") or [])
 
+        drop_ids = {
+            str(r.get("canonical_story_id") or r.get("event_id") or "")
+            for r in group
+            if str(r.get("canonical_story_id") or r.get("event_id") or "") != canon_id
+        }
+
         if dry_run:
             groups_merged += 1
             rows_removed += len(group) - 1
-            consumed.update(str(r.get("canonical_story_id") or "") for r in group)
+            consumed.update(str(r.get("canonical_story_id") or r.get("event_id") or "") for r in group)
             continue
 
         distilled = distill_event(refs=refs, previous=canonical)
@@ -592,29 +697,39 @@ def _compact_duplicate_events_once(
         row["sources"] = merged_sources
         row = _apply_distilled_to_row(row, distilled)
         publish_day = publish_day_from_value(str(canonical.get("published_at") or ""))
-        ingest_headline_rows(
-            [row],
+
+        _upsert_distilled_event_store(
+            event_id=canon_id,
             ticker=sym,
-            collection_day=publish_day or None,
-            force_reverify=True,
+            row=row,
+            distilled=distilled,
+            publish_day=publish_day or "",
         )
-        drop_ids = {
-            str(r.get("canonical_story_id") or "")
-            for r in group
-            if str(r.get("canonical_story_id") or "") != canon_id
-        }
-        rows_removed += remove_verified_records(drop_ids)
-        consumed.update(str(r.get("canonical_story_id") or "") for r in group)
+        rows_removed += remove_events(drop_ids)
+        consumed.update(str(r.get("canonical_story_id") or r.get("event_id") or "") for r in group)
         groups_merged += 1
         _log_merge(
             ticker=sym,
             canonical_story_id=canon_id,
             row=row,
             merged_story_ids=sorted(drop_ids),
-            reason="compaction",
+            reason="events_compaction",
         )
+        try:
+            append_distillation_log(
+                {
+                    "ticker": sym,
+                    "reason": "events_compaction",
+                    "canonical_event_id": canon_id,
+                    "removed_event_ids": sorted(drop_ids),
+                    "ref_count": len(refs),
+                    "publish_day": publish_day,
+                }
+            )
+        except Exception as exc:
+            logger.debug("distillation log append failed: %s", exc)
 
-    after_count = count_verified_records(ticker=sym)
+    after_count = count_events(ticker=sym)
     return {
         "ticker": sym,
         "lookback_days": lookback_days,
@@ -636,19 +751,20 @@ def union_headlines_with_staging(
     if not is_entity_pipeline_enabled():
         return records[:limit]
 
-    from trade_integrations.hub_storage.news_staging_store import staging_ref_to_headline
+    from trade_integrations.hub_storage.news_staging_store import (
+        collect_distilled_urls,
+        filter_staging_refs_not_in_urls,
+        list_pending_refs,
+        staging_ref_to_headline,
+    )
 
-    seen_urls = set()
-    for rec in records:
-        for src in rec.get("sources") or []:
-            if isinstance(src, dict) and src.get("url"):
-                seen_urls.add(str(src["url"]).strip().lower())
-
+    seen_urls = collect_distilled_urls(records)
     out = list(records)
-    for ref in list_pending_refs(ticker=ticker, limit=limit):
-        url = str(ref.get("url") or "").strip().lower()
-        if url and url in seen_urls:
-            continue
+    pending = filter_staging_refs_not_in_urls(
+        list_pending_refs(ticker=ticker, limit=limit),
+        seen_urls,
+    )
+    for ref in pending:
         out.append(staging_ref_to_headline(ref))
         if len(out) >= limit:
             break
