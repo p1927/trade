@@ -13,6 +13,8 @@ SERIES_TO_GROUP: dict[str, str] = {
     "vix": "vol",
     "ticks": "ticks",
     "news_verified": "flows",
+    "ohlcv_daily": "derivatives",
+    "quotes": "derivatives",
 }
 
 

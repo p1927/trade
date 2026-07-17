@@ -95,10 +95,29 @@ def default_entity() -> dict[str, Any]:
     }
 
 
+def _stock_entity(entity_id: str) -> dict[str, Any]:
+    return _validate_entity(
+        {
+            "id": entity_id,
+            "kind": "equity",
+            "capture_enabled": True,
+            "factor_groups": ["derivatives"],
+            "schedules": dict(_DEFAULT_SCHEDULES),
+            "retention_days": {"derivatives": 90, "ticks": 7},
+        }
+    )
+
+
 def default_registry() -> dict[str, Any]:
     return {
         "version": _REGISTRY_VERSION,
-        "entities": [default_entity()],
+        "entities": [
+            default_entity(),
+            _validate_entity({**default_entity(), "id": "BANKNIFTY", "kind": "index"}),
+            _validate_entity({**default_entity(), "id": "INDIAVIX", "kind": "index", "factor_groups": ["vol"]}),
+            _stock_entity("RELIANCE"),
+            _stock_entity("TCS"),
+        ],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

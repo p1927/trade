@@ -25,6 +25,38 @@ logger = logging.getLogger(__name__)
 
 _l1_cache = L1Cache()
 
+
+def seed_quote_l1(symbol: str, exchange: str, quote: dict[str, Any]) -> None:
+    """Push a live quote into the WATCH L1 cache (e.g. from OpenAlgo WebSocket)."""
+    symbol_key, exchange_key = symbol.strip().upper(), exchange.strip().upper()
+    l1_key = _quote_l1_key(symbol_key, exchange_key)
+    ttl = int(ttl_seconds(FreshnessPolicy.WATCH))
+    if ttl > 0:
+        _l1_cache.set(l1_key, quote, ttl_seconds=ttl)
+
+
+def _history_frame_from_cache(cached: pd.DataFrame) -> pd.DataFrame:
+    """Convert hub OHLCV cache rows to TradingAgents Date/OHLCV columns."""
+    if cached.empty:
+        return cached
+    frame = cached.copy()
+    rename = {
+        "date": "Date",
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "volume": "Volume",
+    }
+    for src, dst in rename.items():
+        if src in frame.columns and dst not in frame.columns:
+            frame = frame.rename(columns={src: dst})
+    if "Date" not in frame.columns and "date" in frame.columns:
+        frame["Date"] = pd.to_datetime(frame["date"], errors="coerce")
+    elif "Date" in frame.columns:
+        frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    return frame
+
 _STATS_REL = Path("_data") / "capture" / "channel_stats.json"
 
 
@@ -390,7 +422,7 @@ def get_multi_quotes(
             if policy != FreshnessPolicy.LIVE and max_age > 0:
                 _l1_cache.set(l1_key, row, ttl_seconds=max_age)
             entity = resolve_registered_entity(symbol)
-            if entity is not None and should_capture(entity, "derivatives_chain"):
+            if entity is not None and should_capture(entity, "quotes"):
                 record_quote_snapshot(entity, row, source=str(row.get("source") or "openalgo"))
             result[row_key] = row
 
@@ -406,12 +438,26 @@ def get_history(
     *,
     policy: FreshnessPolicy = FreshnessPolicy.NORMAL,
 ) -> pd.DataFrame:
-    """OHLCV history with L1 dedupe (v1: vendor fetch; hub parquet read deferred)."""
+    """OHLCV history with hub parquet cache, L1 dedupe, then vendor fetch."""
     sym = symbol.strip().upper()
     start_key = start[:10]
     end_key = end[:10]
     cache_key = f"{sym}:{start_key}:{end_key}:{interval}:history"
     max_age = int(ttl_seconds(policy))
+
+    entity = resolve_registered_entity(symbol)
+    if entity is not None and policy != FreshnessPolicy.LIVE:
+        try:
+            from trade_integrations.hub_capture.ohlcv_cache import read_cached_bars
+
+            cached, _meta = read_cached_bars(symbol, start_key, end_key)
+            if not cached.empty and len(cached) >= 5:
+                frame = _history_frame_from_cache(cached)
+                if policy != FreshnessPolicy.LIVE and max_age > 0:
+                    _l1_cache.set(cache_key, frame.copy(), ttl_seconds=max_age)
+                return frame
+        except Exception as exc:
+            logger.debug("hub ohlcv cache read failed for %s: %s", symbol, exc)
 
     if policy != FreshnessPolicy.LIVE and max_age > 0:
         cached = _l1_cache.get(cache_key)
@@ -421,6 +467,25 @@ def get_history(
 
     frame = fetch_fn(symbol, start, end, interval=interval)
     record_channel_stat("vendor_fetch", "ohlcv_daily")
+
+    if entity is not None and should_capture(entity, "ohlcv_daily") and not frame.empty:
+        try:
+            from trade_integrations.dataflows.openalgo import to_index_research_frame
+            from trade_integrations.hub_capture.ohlcv_cache import merge_with_cache
+
+            index_frame = to_index_research_frame(frame)
+            merge_with_cache(
+                symbol,
+                start_key,
+                end_key,
+                index_frame,
+                source="openalgo",
+                vendor="openalgo",
+                cache_before={},
+            )
+        except Exception as exc:
+            logger.debug("hub ohlcv cache write failed for %s: %s", symbol, exc)
+
     if policy != FreshnessPolicy.LIVE and max_age > 0:
         _l1_cache.set(cache_key, frame.copy(), ttl_seconds=max_age)
     return frame
@@ -499,10 +564,13 @@ def warm_entity_channel(entity_id: str, *, kind: str = "options") -> dict[str, A
         return {"status": "skipped", "reason": "not_registered_or_disabled"}
     summary: dict[str, Any] = {"entity_id": entity, "kind": kind}
     if kind in ("options", "index", "stock"):
-        from trade_integrations.dataflows.openalgo import _fetch_live_quote_raw, _fetch_option_chain_raw
+        from trade_integrations.openalgo.market_data import (
+            fetch_option_chain_channel_vendor,
+        )
+        from trade_integrations.dataflows.openalgo import _fetch_live_quote_raw
 
         try:
-            chain = get_chain(entity, "NFO", _fetch_option_chain_raw, strike_count=15)
+            chain = get_chain(entity, "NFO", fetch_option_chain_channel_vendor, strike_count=15)
             summary["chain"] = {"status": "ok", "legs": len(chain.get("chain") or [])}
         except Exception as exc:
             summary["chain"] = {"status": "error", "error": str(exc)}
