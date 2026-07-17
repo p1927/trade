@@ -132,7 +132,7 @@ def test_merge_flow_includes_browser_hub_rows(monkeypatch, tmp_path):
     except ImportError:
         df.to_csv(hub_nse / "fii_dii_daily.csv", index=False)
 
-    merged = merge_flow_derivatives_frame("2026-07-13", "2026-07-13")
+    merged = merge_flow_derivatives_frame("2026-07-13", "2026-07-13", allow_live_fetch=False)
     assert not merged.empty
     assert float(merged.iloc[0]["fii_net"]) == pytest.approx(-100.0)
 
