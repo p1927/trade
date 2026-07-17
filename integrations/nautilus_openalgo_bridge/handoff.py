@@ -122,6 +122,9 @@ def build_handoff_shell_from_hub_agent(agent_id: str) -> PositionHandoff | None:
         return None
     agent = dict(agent)
     agent.setdefault("id", agent_id)
+    from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+
+    mc = mandate_config_from_agent(agent)
     raw_spec = load_agent_watch_spec(agent_id) or agent.get("watch_spec") or {}
     spec = WatchSpec.from_dict(raw_spec if isinstance(raw_spec, dict) else {"rules": raw_spec})
     constraints = dict(agent.get("constraints") or {})
@@ -136,7 +139,7 @@ def build_handoff_shell_from_hub_agent(agent_id: str) -> PositionHandoff | None:
         watch_spec=spec,
         stop_rules=StopRules(
             max_loss_inr=float(constraints.get("max_daily_loss_inr") or 2_000) * 0.75,
-            flatten_at_close=True,
+            flatten_at_close=mc.needs_session_close_flatten(),
         ),
         vibe_session_id=agent.get("vibe_session_id"),
     )

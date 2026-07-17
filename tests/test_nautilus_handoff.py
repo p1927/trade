@@ -190,3 +190,37 @@ def test_ensure_handoff_for_agent_from_hub_json(hub_tmp: Path):
     assert handoff is not None
     assert len(handoff.watch_spec.rules) == 1
     assert load_handoff("aa_hub") is not None
+
+
+def test_build_handoff_shell_from_hub_respects_flatten_policy(hub_tmp: Path):
+    from nautilus_openalgo_bridge.handoff import build_handoff_shell_from_hub_agent
+
+    agents_dir = hub_tmp / "_data" / "autonomous_agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "aa_manual.json").write_text(
+        json.dumps(
+            {
+                "id": "aa_manual",
+                "symbols": ["NIFTY"],
+                "mandate_config": {"flatten_policy": "manual", "holding_period": "multi_day"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    shell = build_handoff_shell_from_hub_agent("aa_manual")
+    assert shell is not None
+    assert shell.stop_rules.flatten_at_close is False
+
+    (agents_dir / "aa_close.json").write_text(
+        json.dumps(
+            {
+                "id": "aa_close",
+                "symbols": ["NIFTY"],
+                "mandate_config": {"flatten_policy": "session_close", "holding_period": "multi_day"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    close_shell = build_handoff_shell_from_hub_agent("aa_close")
+    assert close_shell is not None
+    assert close_shell.stop_rules.flatten_at_close is True
