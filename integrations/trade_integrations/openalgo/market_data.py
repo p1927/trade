@@ -372,6 +372,36 @@ def _fetch_nselib_chain(
     }
 
 
+def _is_index_underlying(underlying: str, exchange: str) -> bool:
+    if exchange.upper() in ("NSE_INDEX", "BSE_INDEX"):
+        return True
+    return underlying.upper() in {
+        "NIFTY",
+        "BANKNIFTY",
+        "FINNIFTY",
+        "MIDCPNIFTY",
+        "SENSEX",
+        "INDIAVIX",
+    }
+
+
+def fetch_option_chain_channel_vendor(
+    underlying: str,
+    exchange: str,
+    *,
+    expiry_date: str | None = None,
+    strike_count: int | None = None,
+) -> dict[str, Any]:
+    """Hub-channel vendor fn: OpenAlgo primary, nselib fallback on failure."""
+    return fetch_option_chain_with_fallback(
+        underlying,
+        exchange,
+        expiry_date=expiry_date,
+        strike_count=strike_count,
+        is_index=_is_index_underlying(underlying, exchange),
+    )
+
+
 def fetch_option_chain_with_fallback(
     underlying: str,
     exchange: str,

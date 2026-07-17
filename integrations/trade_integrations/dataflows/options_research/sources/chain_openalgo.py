@@ -6,10 +6,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from trade_integrations.openalgo.market_data import (
-    fetch_option_chain_with_fallback,
-    fetch_option_expiry_dates,
-)
+from trade_integrations.dataflows.openalgo import fetch_option_chain
+from trade_integrations.openalgo.market_data import fetch_option_expiry_dates
 from trade_integrations.openalgo.symbols import normalize_openalgo_expiry
 from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError
 
@@ -45,12 +43,11 @@ def fetch_chain_stage(
             if expiry_date
             else (normalize_openalgo_expiry(expiries[0]) if expiries else "")
         )
-        chain = fetch_option_chain_with_fallback(
+        chain = fetch_option_chain(
             instrument.underlying_symbol,
             instrument.underlying_exchange,
             expiry_date=chosen_expiry or None,
             strike_count=strike_count,
-            is_index=instrument.instrument_type.value == "index",
         )
         chain["expiries"] = expiries
         chain["options_exchange"] = instrument.options_exchange

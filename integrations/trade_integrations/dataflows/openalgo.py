@@ -13,17 +13,20 @@ NoMarketDataError is raised so the vendor router can fall back to yfinance.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Annotated
+import time
+from datetime import date, datetime, timedelta
+from typing import Annotated, Any
 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
 from trade_integrations.openalgo.market_data import (
     fetch_history_raw,
+    fetch_option_chain_channel_vendor as _fetch_option_chain_vendor,
     fetch_option_chain_raw as _fetch_option_chain_raw,
     fetch_option_expiry_dates,
     fetch_quote_raw as _fetch_live_quote_raw,
+    openalgo_configured as _openalgo_configured,
     openalgo_post as _openalgo_post,
 )
 from trade_integrations.openalgo.rest_client import openalgo_settings as _openalgo_settings
@@ -34,9 +37,196 @@ from tradingagents.dataflows.y_finance import get_stock_stats_indicators_window
 
 logger = logging.getLogger(__name__)
 
+_BATCH_HISTORY_SLEEP_S = 0.12
 
-def _fetch_history(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-    return fetch_history_raw(symbol, start_date, end_date, interval="D")
+
+def _fetch_history(symbol: str, start_date: str, end_date: str, *, interval: str = "D") -> pd.DataFrame:
+    from trade_integrations.hub_capture.channel import get_history
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
+
+    return get_history(
+        symbol,
+        start_date,
+        end_date,
+        interval,
+        fetch_history_raw,
+        policy=FreshnessPolicy.NORMAL,
+    )
+
+
+def to_index_research_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize OpenAlgo or yfinance OHLCV to index_research columns (date, close, …)."""
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=["date", "close"])
+
+    working = frame.copy()
+    if "Date" in working.columns:
+        date_series = working["Date"]
+    elif "date" in working.columns:
+        date_series = working["date"]
+    elif "Datetime" in working.columns:
+        date_series = working["Datetime"]
+    else:
+        date_series = working.iloc[:, 0]
+
+    out = pd.DataFrame()
+    out["date"] = pd.to_datetime(date_series, errors="coerce").dt.strftime("%Y-%m-%d")
+    for src_upper, src_lower, dst in (
+        ("Close", "close", "close"),
+        ("Open", "open", "open"),
+        ("High", "high", "high"),
+        ("Low", "low", "low"),
+        ("Volume", "volume", "volume"),
+    ):
+        if src_upper in working.columns:
+            out[dst] = working[src_upper].astype(float)
+        elif src_lower in working.columns:
+            out[dst] = working[src_lower].astype(float)
+
+    out = out.dropna(subset=["date"])
+    if "close" not in out.columns:
+        return pd.DataFrame(columns=["date", "close"])
+
+    cols = ["date", "close"]
+    for optional in ("high", "low", "open", "volume"):
+        if optional in out.columns:
+            cols.append(optional)
+    return out[cols].sort_values("date").reset_index(drop=True)
+
+
+def _fetch_yfinance_history_india(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """yfinance enrichment fallback for India equities and indices."""
+    import yfinance as yf
+
+    raw = symbol.strip().upper()
+    if raw in ("NIFTY", "NIFTY50", "^NSEI"):
+        yf_sym = "^NSEI"
+    elif raw.endswith(".NS") or raw.endswith(".BO"):
+        yf_sym = raw
+    else:
+        yf_sym = f"{raw}.NS"
+
+    hist = yf.Ticker(yf_sym).history(start=start_date, end=end_date, auto_adjust=True)
+    if hist is None or hist.empty:
+        raise NoMarketDataError(symbol, yf_sym, "yfinance history returned no rows")
+
+    frame = hist.reset_index()
+    date_col = next(
+        (col for col in ("Date", "Datetime", "index") if col in frame.columns),
+        frame.columns[0],
+    )
+    rename = {date_col: "Date"}
+    for src, dst in (("Open", "Open"), ("High", "High"), ("Low", "Low"), ("Close", "Close"), ("Volume", "Volume")):
+        if src in frame.columns:
+            rename[src] = dst
+    frame = frame.rename(columns=rename)
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    if frame["Date"].dt.tz is not None:
+        frame["Date"] = frame["Date"].dt.tz_localize(None)
+    frame = frame.dropna(subset=["Date"])
+    from tradingagents.dataflows.stockstats_utils import _clean_dataframe
+
+    return _clean_dataframe(frame)
+
+
+def load_india_ohlcv(
+    symbol: str,
+    days: int = 365,
+    *,
+    interval: str = "D",
+    end_date: str | None = None,
+    start_date: str | None = None,
+    force_refresh: bool = False,
+    return_provenance: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, Any]]:
+    """Load India OHLCV via hub channel + parquet cache; yfinance fallback."""
+    end = end_date or date.today().isoformat()
+    start = start_date or (date.fromisoformat(end) - timedelta(days=max(int(days), 1))).isoformat()
+    provenance: dict[str, Any] = {"symbol": symbol, "start": start, "end": end, "source": "openalgo"}
+
+    if not force_refresh:
+        try:
+            from trade_integrations.hub_capture.ohlcv_cache import read_cached_bars
+
+            cached, cache_meta = read_cached_bars(symbol, start, end)
+            provenance.update(cache_meta)
+            if not cached.empty and len(cached) >= 5:
+                frame = to_index_research_frame(cached)
+                if not frame.empty:
+                    provenance["used_cache"] = True
+                    provenance["final_rows"] = len(frame)
+                    return (frame, provenance) if return_provenance else frame
+        except Exception as exc:
+            logger.debug("ohlcv hub cache read failed for %s: %s", symbol, exc)
+
+    if _openalgo_configured():
+        try:
+            raw = _fetch_history(symbol, start, end, interval=interval)
+            frame = to_index_research_frame(raw)
+            if not frame.empty:
+                try:
+                    from trade_integrations.hub_capture.ohlcv_cache import merge_with_cache
+
+                    _, prov = merge_with_cache(
+                        symbol,
+                        start,
+                        end,
+                        frame,
+                        source="openalgo",
+                        vendor="openalgo",
+                        cache_before=provenance,
+                    )
+                    provenance.update(prov)
+                except Exception as exc:
+                    logger.debug("ohlcv cache write failed for %s: %s", symbol, exc)
+                provenance["final_rows"] = len(frame)
+                return (frame, provenance) if return_provenance else frame
+        except (NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError) as exc:
+            logger.debug("OpenAlgo history failed for %s: %s", symbol, exc)
+
+    try:
+        raw = _fetch_yfinance_history_india(symbol, start, end)
+        frame = to_index_research_frame(raw)
+        provenance["source"] = "yfinance"
+        provenance["final_rows"] = len(frame)
+        return (frame, provenance) if return_provenance else frame
+    except Exception as exc:
+        logger.debug("yfinance history fallback failed for %s: %s", symbol, exc)
+        empty = pd.DataFrame(columns=["date", "close"])
+        return (empty, provenance) if return_provenance else empty
+
+
+def batch_load_india_ohlcv(
+    symbols: list[str],
+    days: int = 14,
+    *,
+    interval: str = "D",
+) -> dict[str, pd.DataFrame]:
+    """Fetch OHLCV for many symbols (hub channel primary, yfinance per-symbol fallback)."""
+    out: dict[str, pd.DataFrame] = {}
+    for idx, symbol in enumerate(symbols):
+        if idx > 0:
+            time.sleep(_BATCH_HISTORY_SLEEP_S)
+        base = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
+        frame = load_india_ohlcv(symbol, days=days, interval=interval)
+        if not frame.empty:
+            out[base] = frame
+    return out
+
+
+def fetch_openalgo_live_snapshot(symbol: str) -> dict[str, Any] | None:
+    """Live quote snapshot from OpenAlgo (hub channel when entity registered)."""
+    quote = fetch_openalgo_quote(symbol)
+    if not quote or quote.get("ltp") is None:
+        return None
+    return {
+        "ltp": float(quote["ltp"]),
+        "change_pct": quote.get("change_pct"),
+        "volume": quote.get("volume"),
+        "high_52w": quote.get("high_52w"),
+        "low_52w": quote.get("low_52w"),
+        "source": quote.get("source") or "openalgo",
+    }
 
 
 def _fetch_live_quote(oa_symbol: str, exchange: str) -> dict | None:
@@ -65,7 +255,7 @@ def fetch_option_chain(
     return get_chain(
         underlying,
         exchange,
-        _fetch_option_chain_raw,
+        _fetch_option_chain_vendor,
         expiry_date=expiry_date,
         strike_count=strike_count,
     )
