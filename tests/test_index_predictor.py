@@ -98,11 +98,31 @@ def test_predict_nifty_hybrid(monkeypatch):
     assert result["view"] in {"bullish", "bearish", "neutral"}
     assert "direction_view" in result
     assert "direction_confidence" in result
+    assert "direction_confidence_raw" in result
+    if result.get("direction_confidence_raw") is not None and result.get("direction_confidence") is not None:
+        assert result["direction_confidence"] <= max(result["direction_confidence_raw"], 0.56)
     assert "expected_return_pct" in result
     assert "range" in result
     assert result["range"]["low"] < result["range"]["high"]
     assert "coefficients" in result["equation"]
     assert result["bottom_up_return_pct"] != 0.0
+
+
+@pytest.mark.unit
+def test_sign_conflict_forces_neutral_and_lower_confidence():
+    from trade_integrations.dataflows.index_research.predictor import apply_sign_conflict_gate
+
+    view, conf, conflict = apply_sign_conflict_gate(
+        direction_view="bullish",
+        direction_confidence=0.58,
+        raw_macro=4.0,
+        scenario_anchor_return_pct=-1.5,
+        regime_label="range_bound",
+        wf_metrics={"direction_hit_rate_walk_forward": 0.53},
+    )
+    assert conflict is True
+    assert view == "neutral"
+    assert conf == pytest.approx(0.29)
 
 
 @pytest.mark.unit

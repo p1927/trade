@@ -78,6 +78,15 @@ def _nifty_trend_20d() -> str:
     return "sideways"
 
 
+def _news_shock_summary() -> dict[str, Any]:
+    try:
+        from trade_integrations.dataflows.index_research.event_overlay import overlay_summary_for_ui
+
+        return overlay_summary_for_ui("NIFTY")
+    except Exception:
+        return {}
+
+
 def _sector_breadth(signals: list[ConstituentSignal]) -> dict:
     by_sector: dict[str, list[float]] = defaultdict(list)
     for signal in signals:
@@ -274,6 +283,7 @@ def run_index_research(
         signals=signals,
         macro_factors=macro_factors,
         horizon=horizon,
+        as_of_day=now.date().isoformat(),
     ) if spot > 0 else {}
     if prediction:
         prediction["momentum_coverage"] = momentum_coverage_stats(signals)
@@ -495,6 +505,8 @@ def run_index_research(
         event_impact_curves=factor_bundle.get("event_impact_curves") or [],
         upcoming_events=upcoming_events,
         news_impact=news_impact,
+        event_overlay=(prediction or {}).get("event_overlay") or {},
+        news_shock_calibration=_news_shock_summary(),
         stages=stages,
         pipeline_log=log.to_dicts(),
     )

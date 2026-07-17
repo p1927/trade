@@ -164,3 +164,29 @@ def test_build_handoff_shell_from_agent(hub_tmp: Path):
 
 def test_clear_handoff_missing_is_noop(hub_tmp: Path):
     assert clear_handoff("aa_missing") is False
+
+
+def test_ensure_handoff_for_agent_from_hub_json(hub_tmp: Path):
+    from nautilus_openalgo_bridge.handoff import ensure_handoff_for_agent, load_handoff
+
+    agents_dir = hub_tmp / "_data" / "autonomous_agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "aa_hub.json").write_text(
+        json.dumps(
+            {
+                "id": "aa_hub",
+                "symbols": ["NIFTY"],
+                "constraints": {"max_daily_loss_inr": 1800},
+                "watch_spec": {
+                    "rules": [
+                        {"symbol": "NIFTY", "metric": "spot_move_pct", "threshold": 0.3, "direction": "either"},
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    handoff = ensure_handoff_for_agent("aa_hub")
+    assert handoff is not None
+    assert len(handoff.watch_spec.rules) == 1
+    assert load_handoff("aa_hub") is not None

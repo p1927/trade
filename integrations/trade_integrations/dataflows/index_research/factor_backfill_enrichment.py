@@ -269,6 +269,16 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
     except Exception as exc:
         logger.warning("sector / monthly flow factors failed: %s", exc)
 
+    headline_flags_by_day: dict[str, dict[str, float]] = {}
+    try:
+        from trade_integrations.dataflows.index_research.sources.headline_event_flags import (
+            build_headline_flag_series,
+        )
+
+        headline_flags_by_day = build_headline_flag_series(trading_dates)
+    except Exception as exc:
+        logger.warning("headline event flags failed: %s", exc)
+
     days_enriched = 0
     for _, row in nifty.iterrows():
         day = str(row["date"])
@@ -405,8 +415,29 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
                 }
             )
 
+        day_flags = headline_flags_by_day.get(day) or {}
+        for flag_name, flag_val in day_flags.items():
+            rows.append(
+                {
+                    "factor": flag_name,
+                    "value": float(flag_val),
+                    "source": "backfill_headline_flags",
+                }
+            )
+
         upsert_daily_factors(day, rows)
         days_enriched += 1
+
+    news_backfill: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.index_research.news_event_features import (
+            backfill_news_event_features,
+        )
+
+        news_backfill = backfill_news_event_features(trading_dates=trading_dates, ticker="NIFTY")
+    except Exception as exc:
+        logger.warning("news event features backfill failed: %s", exc)
+        news_backfill = {"status": "error", "error": str(exc)}
 
     return {
         "days_enriched": days_enriched,
@@ -421,6 +452,7 @@ def enrich_factor_history(*, days: int = 365) -> dict[str, int | str]:
         "pcr_days": int(flow_frame["nifty_pcr"].notna().sum()) if "nifty_pcr" in flow_frame.columns else 0,
         "momentum_days": int(momentum.notna().sum()) if not momentum.empty else 0,
         "sector_breadth_days": int(sector_factors.get("sector_breadth_price_7d", pd.Series()).notna().sum()),
+        "news_event_features": news_backfill,
     }
 
 

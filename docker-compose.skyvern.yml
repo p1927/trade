@@ -1,7 +1,8 @@
 # Skyvern agentic browser sidecar for Trade stack.
-# Start: docker compose -f docker-compose.skyvern.yml up -d
-# UI: http://localhost:8080  API: http://localhost:8000
-# Copy SKYVERN_API_KEY from UI settings into repo .env after first boot.
+# Start: scripts/start_skyvern.sh
+# UI: http://localhost:8080  API: http://localhost:8010 (8010 avoids ed-alpha on 8000)
+# LLM: MiniMax from repo .env via scripts/sync_skyvern_env.sh
+# Local API auth: auto-generated in .skyvern-data/.skyvern/credentials.toml (no manual copy)
 
 services:
   skyvern-postgres:
@@ -28,8 +29,8 @@ services:
     env_file:
       - .env.skyvern
     ports:
-      - "8000:8000"
-      - "6080:6080"
+      - "${SKYVERN_HOST_PORT:-8010}:8000"
+      - "${SKYVERN_BROWSER_PORT:-6080}:6080"
     volumes:
       - ./.skyvern-data/artifacts:/data/artifacts
       - ./.skyvern-data/videos:/data/videos
@@ -39,8 +40,15 @@ services:
       - ./.skyvern-data/browser_sessions:/data/browser_sessions
       - ./.skyvern-data/credential_vault:/data/credential_vault
       - ./.skyvern-data/.skyvern:/app/.skyvern
+      - ./.skyvern-data/host-ca-bundle.pem:/etc/ssl/host-ca-bundle.pem:ro
     environment:
       DATABASE_STRING: postgresql+psycopg://skyvern:skyvern@skyvern-postgres:5432/skyvern
+      SSL_CERT_FILE: /etc/ssl/host-ca-bundle.pem
+      REQUESTS_CA_BUNDLE: /etc/ssl/host-ca-bundle.pem
+      CURL_CA_BUNDLE: /etc/ssl/host-ca-bundle.pem
+      # UI on :8080 calls API on :8010 — wildcard CORS is ignored for credentialed requests
+      ALLOWED_ORIGINS: '["http://localhost:8080","http://127.0.0.1:8080"]'
+      ALLOWED_ORIGIN_REGEX: '^https?://(localhost|127\.0\.0\.1)(:\d+)?$'
       BROWSER_STREAMING_MODE: ${BROWSER_STREAMING_MODE:-cdp}
       BROWSER_TYPE: ${BROWSER_TYPE:-chromium-headful}
       DOWNLOAD_PATH: /data/downloads
@@ -79,7 +87,12 @@ services:
     env_file:
       - .env.skyvern
     environment:
+      # Browser hits host-mapped API port (8010 when ed-alpha uses 8000)
+      VITE_API_BASE_URL: http://localhost:${SKYVERN_HOST_PORT:-8010}/api/v1
+      VITE_WSS_BASE_URL: ws://localhost:${SKYVERN_HOST_PORT:-8010}/api/v1
+      VITE_ARTIFACT_API_BASE_URL: http://localhost:9090
       VITE_BROWSER_STREAMING_MODE: ${VITE_BROWSER_STREAMING_MODE:-cdp}
+      VITE_ENABLE_CODE_BLOCK: "true"
     depends_on:
       skyvern:
         condition: service_healthy

@@ -15,6 +15,11 @@ if str(INTEGRATIONS) not in sys.path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="OpenAlgo → Nautilus TradingNode watch bridge")
     parser.add_argument("--agent-id", default=None, help="Autonomous agent id (aa_…) ")
+    parser.add_argument(
+        "--registry",
+        action="store_true",
+        help="Load agent list from log/nautilus-watch.agents.json",
+    )
     parser.add_argument("--once", action="store_true", help="Single poll then exit (legacy poll only)")
     parser.add_argument("--trigger-vibe", action="store_true", help="Dispatch Vibe turn on alert")
     parser.add_argument(
@@ -30,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-process-intents", action="store_true", help="Skip intent queue processing")
     args = parser.parse_args(argv)
 
-    trigger = args.trigger_vibe or bool(args.agent_id)
+    trigger = args.trigger_vibe or bool(args.agent_id) or args.registry
 
     if args.dry_run or args.legacy_poll or args.once:
         from nautilus_openalgo_bridge.runtime.poll_loop import run_poll_loop
@@ -64,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     return run_trading_node(
         agent_id=args.agent_id,
         trigger_vibe=trigger,
+        use_registry=args.registry,
     )
 
 

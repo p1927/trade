@@ -74,7 +74,33 @@ FACTOR_BLOCKS: dict[str, list[str]] = {
     "vol": ["india_vix", "nifty_realized_vol_20d"],
     "calendar": ["days_to_monthly_expiry", "is_budget_week", "is_results_season"],
     "joint_flows": ["institutional_net_5d", "dii_absorption_ratio"],
+    "sector": [
+        "sector_breadth_price_7d",
+        "sector_rel_strength_mean_7d",
+        "bank_private_vs_psu_spread_7d",
+    ],
+    "event_flags": [
+        "geopolitical_headline_flag",
+        "oil_headline_flag",
+    ],
 }
+
+from trade_integrations.dataflows.index_research.news_event_features import NEWS_EVENT_FACTOR_KEYS
+
+FACTOR_BLOCKS["news_events"] = list(NEWS_EVENT_FACTOR_KEYS)
+
+from trade_integrations.dataflows.index_research.event_promotion import (
+    EVENT_FLAG_KEYS,
+    event_promotion_gate_pp,
+    save_event_promotion_decision,
+)
+from trade_integrations.dataflows.index_research.sector_promotion import (
+    SECTOR_FACTOR_KEYS,
+    load_sector_promotion_decision,
+    promoted_sector_factor_keys,
+    save_sector_promotion_decision,
+    sector_promotion_gate_pp,
+)
 
 LITERATURE_SIGNS: dict[str, str] = {
     "fii_net_5d": "positive",
@@ -144,6 +170,164 @@ def _row_factor_dict(row: pd.Series, feature_cols: list[str]) -> dict[str, float
         if pd.notna(val):
             out[col] = float(val)
     return out
+
+
+
+def run_sector_promotion_ablation(
+    frame: pd.DataFrame,
+    *,
+    horizon_days: int = 14,
+    min_train_rows: int = _MIN_TRAIN_ROWS,
+    eval_step: int = _DEFAULT_EVAL_STEP,
+    gate_pp: float | None = None,
+) -> dict[str, Any]:
+    """Train with forced sector keys vs baseline; promote if delta >= gate_pp."""
+    gate = sector_promotion_gate_pp() if gate_pp is None else gate_pp
+    present_sector = [k for k in SECTOR_FACTOR_KEYS if k in frame.columns]
+    if not present_sector:
+        decision = {
+            "promoted": False,
+            "reason": "sector_factors_not_in_history",
+            "baseline_hit_rate": None,
+            "with_sector_hit_rate": None,
+            "delta_pp": None,
+        }
+        save_sector_promotion_decision(decision)
+        return decision
+
+    baseline_hit = _walk_forward_hit_rate(
+        frame,
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+    with_sector_hit = _walk_forward_hit_rate_with_force_keys(
+        frame,
+        force_keys=tuple(present_sector),
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+    delta_pp = None
+    if baseline_hit is not None and with_sector_hit is not None:
+        delta_pp = round((with_sector_hit - baseline_hit) * 100, 2)
+    promoted = delta_pp is not None and delta_pp >= gate
+    decision = {
+        "promoted": promoted,
+        "baseline_hit_rate": round(baseline_hit, 4) if baseline_hit is not None else None,
+        "with_sector_hit_rate": round(with_sector_hit, 4) if with_sector_hit is not None else None,
+        "delta_pp": delta_pp,
+        "gate_pp": gate,
+        "sector_keys_tested": present_sector,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+    }
+    save_sector_promotion_decision(decision)
+    return decision
+
+
+def run_event_promotion_ablation(
+    frame: pd.DataFrame,
+    *,
+    horizon_days: int = 14,
+    min_train_rows: int = _MIN_TRAIN_ROWS,
+    eval_step: int = _DEFAULT_EVAL_STEP,
+    gate_pp: float | None = None,
+) -> dict[str, Any]:
+    """Promote headline event flags if walk-forward direction improves by gate_pp."""
+    gate = event_promotion_gate_pp() if gate_pp is None else gate_pp
+    present = [k for k in EVENT_FLAG_KEYS if k in frame.columns]
+    if not present:
+        decision = {
+            "promoted": False,
+            "reason": "event_flags_not_in_history",
+            "baseline_hit_rate": None,
+            "with_event_hit_rate": None,
+            "delta_pp": None,
+        }
+        save_event_promotion_decision(decision)
+        return decision
+
+    baseline_hit = _walk_forward_hit_rate(
+        frame,
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+    with_event_hit = _walk_forward_hit_rate_with_force_keys(
+        frame,
+        force_keys=tuple(present),
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+    delta_pp = None
+    if baseline_hit is not None and with_event_hit is not None:
+        delta_pp = round((with_event_hit - baseline_hit) * 100, 2)
+    promoted = delta_pp is not None and delta_pp >= gate
+    decision = {
+        "promoted": promoted,
+        "baseline_hit_rate": round(baseline_hit, 4) if baseline_hit is not None else None,
+        "with_event_hit_rate": round(with_event_hit, 4) if with_event_hit is not None else None,
+        "delta_pp": delta_pp,
+        "gate_pp": gate,
+        "event_keys_tested": present,
+        "as_of": datetime.now(timezone.utc).isoformat(),
+    }
+    save_event_promotion_decision(decision)
+    return decision
+
+
+def _walk_forward_hit_rate_with_force_keys(
+    frame: pd.DataFrame,
+    *,
+    force_keys: tuple[str, ...],
+    horizon_days: int,
+    min_train_rows: int,
+    eval_step: int,
+) -> float | None:
+    """Walk-forward direction hit rate forcing extra macro keys into training matrix."""
+    from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
+    from trade_integrations.dataflows.index_research.scenarios import (
+        build_index_scenarios,
+        scenario_weighted_return_pct,
+    )
+
+    horizon = resolve_horizon(horizon_days)
+    work = frame.copy()
+    work["target"] = _forward_return_pct(work["close"].astype(float), horizon.days)
+    feature_cols = _feature_columns(work)
+    directions_hit = 0
+    directions_total = 0
+    max_i = len(work) - horizon.days - 1
+    indices = list(range(min_train_rows, max_i + 1, max(1, eval_step)))
+
+    for i in indices:
+        train = work.iloc[:i].copy()
+        row = work.iloc[i]
+        actual = row["target"]
+        if pd.isna(actual):
+            continue
+        try:
+            artifact = train_macro_ridge(train, horizon, force_include_keys=force_keys)
+        except (ValueError, ImportError):
+            continue
+        if not artifact.feature_names:
+            continue
+        factors = _row_factor_dict(row, feature_cols)
+        raw_macro = predict_macro_delta_gated(factors, horizon, artifact)
+        scenario_anchor = None
+        try:
+            close = float(row["close"])
+            scenarios = build_index_scenarios([], factors, spot=close, horizon_days=horizon.days)
+            scenario_anchor = scenario_weighted_return_pct(scenarios, spot=close)
+        except Exception:
+            scenario_anchor = None
+        predicted = shrink_macro_delta(raw_macro, scenario_anchor)
+        if (predicted > 0) == (float(actual) > 0):
+            directions_hit += 1
+        directions_total += 1
+
+    return directions_hit / directions_total if directions_total else None
 
 
 def _walk_forward_hit_rate(
@@ -394,6 +578,19 @@ def run_equation_diagnostics(
     backtest = load_backtest_report(ticker)
     stored_corr = (backtest or {}).get("factor_correlations") or correlations
 
+    sector_promotion = run_sector_promotion_ablation(
+        frame,
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+    event_promotion = run_event_promotion_ablation(
+        frame,
+        horizon_days=horizon_days,
+        min_train_rows=min_train_rows,
+        eval_step=eval_step,
+    )
+
     return {
         "status": "ok",
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -412,6 +609,8 @@ def run_equation_diagnostics(
         ),
         "regime_correlation_matrix": _regime_correlation_matrix(frame, horizon_days),
         "logic_conflict_register": LOGIC_CONFLICTS,
+        "sector_promotion": sector_promotion,
+        "event_promotion": event_promotion,
     }
 
 

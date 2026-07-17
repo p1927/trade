@@ -37,8 +37,21 @@ def should_retrain(mae_14d: float | None, *, baseline_mae: float | None = None) 
     return drift > _DRIFT_THRESHOLD
 
 
+def _ensure_news_features_backfilled() -> dict[str, object] | None:
+    try:
+        from trade_integrations.dataflows.index_research.news_event_features import (
+            backfill_news_event_features,
+        )
+
+        return backfill_news_event_features(ticker="NIFTY")
+    except Exception as exc:
+        logger.debug("news feature backfill before retrain skipped: %s", exc)
+        return None
+
+
 def retrain(*, horizon_days: int | None = None) -> ModelArtifact | None:
     """Retrain macro Ridge model when aligned history is sufficient."""
+    _ensure_news_features_backfilled()
     horizon = resolve_horizon(horizon_days)
     history = load_aligned_factor_history(days=365)
     min_rows = max(_MIN_TRAINING_ROWS, horizon.feature_window + horizon.days + 5)

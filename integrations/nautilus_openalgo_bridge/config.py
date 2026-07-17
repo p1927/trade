@@ -61,12 +61,11 @@ def is_watch_enabled() -> bool:
 
 
 def allow_vibe_alert_outside_market_hours(config: BridgeConfig | None = None) -> bool:
-    """Paper / explicit override allows bridge alerts when NSE session is closed."""
+    """Opt-in only — paper mode does not bypass session gates by default."""
     explicit = os.getenv("NAUTILUS_BRIDGE_ALERT_OUTSIDE_HOURS")
     if explicit is not None:
         return explicit.strip().lower() in _TRUE
-    cfg = config or get_bridge_config()
-    return bool(cfg.paper_only)
+    return False
 
 
 def _parse_hhmm(raw: str) -> tuple[int, int]:
@@ -84,7 +83,10 @@ def is_bridge_market_open(config: BridgeConfig | None = None, *, now=None) -> bo
 
     cfg = config or get_bridge_config()
     ist = ZoneInfo("Asia/Kolkata")
-    now = now or datetime.now(ist)
+    if now is None:
+        now = datetime.now(ist)
+    else:
+        now = now.astimezone(ist)
     if now.weekday() >= 5:
         return False
     open_h, open_m = _parse_hhmm(cfg.market_open)
@@ -103,7 +105,10 @@ def is_bridge_exit_window_open(config: BridgeConfig | None = None, *, now=None) 
 
     cfg = config or get_bridge_config()
     ist = ZoneInfo("Asia/Kolkata")
-    now = now or datetime.now(ist)
+    if now is None:
+        now = datetime.now(ist)
+    else:
+        now = now.astimezone(ist)
     if now.weekday() >= 5:
         return False
     if is_bridge_market_open(cfg, now=now):

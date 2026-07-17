@@ -367,6 +367,15 @@ def enrich_eval_row_horizon(
     out["headlines_at_t0"] = headlines_t0
     out["headlines_at_maturity"] = headlines
 
+    try:
+        from trade_integrations.dataflows.index_research.event_overlay import compute_event_overlay
+
+        overlay = compute_event_overlay(t0, as_of_day=pred_day)
+        out["event_overlay_pct"] = overlay.get("return_pct")
+        out["event_overlay"] = overlay
+    except Exception:
+        pass
+
     if not direction_correct:
         category = categorize_miss(
             predicted_return_pct=predicted,

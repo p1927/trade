@@ -65,6 +65,54 @@ STRUCTURAL_CHANGES: list[dict[str, Any]] = [
         "status": "rejected",
         "rejection_reason": "Cap widening fits historical misses without fixing sign logic.",
     },
+    {
+        "id": "direction_confidence_calibration",
+        "hypothesis": "Calibrate logistic direction confidence to walk-forward OOS (backtest protocol), not in-sample holdout.",
+        "status": "accepted",
+    },
+    {
+        "id": "redundancy_prune",
+        "hypothesis": "Drop oil_wti, constituent_momentum_7d, sector_breadth_mean_sentiment to reduce collinearity.",
+        "status": "accepted",
+    },
+    {
+        "id": "sector_price_factors",
+        "hypothesis": "Sector rotation price factors (breadth, rel strength, bank spread) improve 14d direction OOS.",
+        "status": "pending_ablation",
+        "promotion_key": "sector_promotion",
+    },
+    {
+        "id": "flow_regime_buckets",
+        "hypothesis": "Non-linear flow regime offsets (FII contrarian + DAR absorption) improve direction OOS.",
+        "status": "rejected",
+        "rejection_reason": (
+            "Shipped for regime-conditional logic; walk-forward 50.0% vs 52.9% pre-Phase-2 baseline "
+            "(−2.9 pp); +3 pp OOS gate not met."
+        ),
+    },
+    {
+        "id": "sign_conflict_gate",
+        "hypothesis": "Neutralize direction when macro vs scenario anchor disagree on sign (|raw|>3%).",
+        "status": "accepted",
+        "validation_note": "Trust/honesty gate — forces neutral on anchor conflict; 4 sign-conflict eval days in latest diagnostics.",
+    },
+    {
+        "id": "headline_event_flags",
+        "hypothesis": "T0 geopolitical/oil headline flags improve direction when OOS ablation passes +3 pp.",
+        "status": "pending_ablation",
+        "promotion_key": "event_promotion",
+    },
+    {
+        "id": "hybrid_deferred_tier3",
+        "hypothesis": "Hybrid bottom-up promotion until non-backfill archives and hybrid_eval_count > 0.",
+        "status": "rejected",
+        "rejection_reason": "Tier 3 deferral — RSS backfill noise; 0 hybrid eval rows in latest backtest.",
+    },
+    {
+        "id": "news_event_overlay",
+        "hypothesis": "Calibrated per-topic shock overlay from reconciled impact ledger reduces event_gap misses.",
+        "status": "pending_ablation",
+    },
 ]
 
 
@@ -76,7 +124,24 @@ def _resolve_structural_changes(
     for change in STRUCTURAL_CHANGES:
         item = dict(change)
         block = item.pop("ablation_block", None)
-        if item.get("status") == "pending_ablation" and block:
+        if item.get("promotion_key") and item.get("status") == "pending_ablation":
+            promo = (diagnostics or {}).get(item["promotion_key"]) or {}
+            delta_pp = promo.get("delta_pp")
+            item["promotion"] = promo
+            reason = promo.get("reason")
+            if promo.get("promoted"):
+                item["status"] = "accepted"
+            elif reason:
+                item["status"] = "rejected"
+                item["rejection_reason"] = reason
+            else:
+                item["status"] = "rejected"
+                item["rejection_reason"] = (
+                    f"Promotion ablation delta {delta_pp} pp < {_ABLATION_ACCEPT_PP} pp gate "
+                    f"(baseline {promo.get('baseline_hit_rate')}, "
+                    f"with block {promo.get('with_sector_hit_rate') or promo.get('with_event_hit_rate')})."
+                )
+        elif item.get("status") == "pending_ablation" and block:
             row = ablation.get(block) or {}
             delta_pp = row.get("delta_pp")
             if delta_pp is not None and float(delta_pp) >= _ABLATION_ACCEPT_PP:
@@ -89,6 +154,18 @@ def _resolve_structural_changes(
                     f"baseline {row.get('baseline_hit_rate')})."
                 )
             item["ablation"] = row
+        elif item.get("id") == "news_event_overlay" and item.get("status") == "pending_ablation":
+            try:
+                from trade_integrations.dataflows.index_research.news_event_features import (
+                    load_news_model_config,
+                )
+
+                cfg = load_news_model_config()
+                overlay_status = str(cfg.get("news_event_overlay") or "pending")
+                item["status"] = overlay_status if overlay_status != "pending" else "pending_ablation"
+                item["config"] = cfg.get("coverage", {}).get("gates")
+            except Exception:
+                pass
         resolved.append(item)
     return resolved
 
@@ -139,6 +216,15 @@ def _format_decisions_md(
         lines.append(f"**Hypothesis:** {change['hypothesis']}")
         if change["status"] == "rejected":
             lines.append(f"**Rejected because:** {change.get('rejection_reason')}")
+        elif change.get("validation_note"):
+            lines.append(f"**Validation:** {change['validation_note']}")
+        elif change.get("promotion"):
+            promo = change["promotion"]
+            lines.append(
+                f"**Promotion ablation:** baseline {promo.get('baseline_hit_rate')}, "
+                f"with block {promo.get('with_sector_hit_rate') or promo.get('with_event_hit_rate')}, "
+                f"delta {promo.get('delta_pp')} pp (gate {_ABLATION_ACCEPT_PP} pp)."
+            )
         elif change.get("ablation"):
             row = change["ablation"]
             lines.append(

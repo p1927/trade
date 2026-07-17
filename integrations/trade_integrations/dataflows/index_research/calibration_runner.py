@@ -27,6 +27,26 @@ def run_calibration(
 
         backfill_summary = backfill_if_needed()
 
+    news_pipeline: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.index_research.news_event_features import (
+            backfill_news_event_features,
+            evaluate_news_model_gates,
+        )
+        from trade_integrations.dataflows.index_research.news_impact_engine import (
+            reconcile_matured_impacts,
+        )
+        from trade_integrations.dataflows.index_research.news_shock_calibration import (
+            update_shock_calibration,
+        )
+
+        news_pipeline["backfill"] = backfill_news_event_features(ticker="NIFTY")
+        news_pipeline["reconcile"] = reconcile_matured_impacts(ticker="NIFTY")
+        news_pipeline["shock_calibration"] = update_shock_calibration(ticker="NIFTY")
+        news_pipeline["model_gates"] = evaluate_news_model_gates(ticker="NIFTY")
+    except Exception as exc:
+        news_pipeline = {"status": "error", "error": str(exc)}
+
     reconciled = reconcile_predictions()
     accuracy = compute_accuracy_metrics()
     retrained = False
@@ -71,6 +91,14 @@ def run_calibration(
             }
         except Exception as exc:
             cascade_summary = {"status": "error", "message": str(exc)}
+
+        try:
+            from trade_integrations.dataflows.index_research.event_overlay import overlay_summary_for_ui
+
+            doc.news_shock_calibration = overlay_summary_for_ui("NIFTY")
+        except Exception:
+            pass
+
         save_index_research(doc)
 
     return {
@@ -81,4 +109,5 @@ def run_calibration(
         "backfill": backfill_summary,
         "model_coefficients": len(artifact.coefficients) if artifact else 0,
         "cascade_calibration": cascade_summary,
+        "news_pipeline": news_pipeline,
     }

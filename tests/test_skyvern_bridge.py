@@ -18,10 +18,24 @@ from trade_integrations.nse_browser.skyvern_bridge import (
 def test_skyvern_not_configured_without_key(monkeypatch):
     monkeypatch.setenv("SKYVERN_ENABLED", "1")
     monkeypatch.delenv("SKYVERN_API_KEY", raising=False)
-    assert skyvern_configured() is False
-    result = run_skyvern_task("test goal", url="https://example.com", persist=False)
+    with patch("trade_integrations.nse_browser.skyvern_bridge.read_local_skyvern_api_key", return_value=""):
+        assert skyvern_configured() is False
+        result = run_skyvern_task("test goal", url="https://example.com", persist=False)
     assert result["status"] == "error"
     assert result["error"] == "skyvern_not_configured"
+
+
+def test_read_local_skyvern_api_key_from_credentials(tmp_path, monkeypatch):
+    cred_dir = tmp_path / ".skyvern-data" / ".skyvern"
+    cred_dir.mkdir(parents=True)
+    cred_dir.joinpath("credentials.toml").write_text(
+        '[skyvern]\nconfigs = [{"orgs" = [{cred="eyJ-test-token"}]}]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TRADE_STACK_ROOT", str(tmp_path))
+    from trade_integrations.nse_browser.skyvern_local import read_local_skyvern_api_key
+
+    assert read_local_skyvern_api_key() == "eyJ-test-token"
 
 
 def test_rows_from_skyvern_output_table_rows():

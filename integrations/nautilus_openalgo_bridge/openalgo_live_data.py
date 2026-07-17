@@ -93,8 +93,13 @@ class OpenAlgoLiveDataClient(LiveMarketDataClient):
         self._quote_subs.discard(command.instrument_id)
 
     async def _poll_loop(self) -> None:
+        from nautilus_openalgo_bridge.market_hours import closed_market_poll_interval_sec, is_in_market_session_open
+
         interval = max(0.5, self._cfg.poll_interval_ms / 1000.0)
         while self._poll_active:
+            if not is_in_market_session_open():
+                await asyncio.sleep(closed_market_poll_interval_sec())
+                continue
             if self._quote_subs:
                 symbols = list(
                     {

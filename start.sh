@@ -31,6 +31,7 @@ START_VIBE=1
 START_CLI=0
 START_SEARXNG=1
 START_TIMESCALE=1
+START_REDIS=1
 DO_BOOTSTRAP=1
 STATUS_ONLY=0
 DAEMON=0
@@ -38,6 +39,7 @@ DAEMON=0
 # Readiness flags (0/1)
 READY_SEARXNG=0
 READY_TIMESCALE=0
+READY_REDIS=0
 READY_OPENALGO=0
 READY_AGENTS=0
 READY_VIBE=0
@@ -50,6 +52,7 @@ for arg in "$@"; do
     --agents-only) START_OPENALGO=0; START_VIBE=0; START_CLI=1 ;;
     --no-searxng) START_SEARXNG=0 ;;
     --no-timescale) START_TIMESCALE=0 ;;
+    --no-redis) START_REDIS=0 ;;
     --no-bootstrap) DO_BOOTSTRAP=0 ;;
     --status) STATUS_ONLY=1 ;;
     --daemon) DAEMON=1 ;;
@@ -63,6 +66,7 @@ Usage: ./start.sh [options]
   --agents-only     TradingAgents CLI only (SearXNG + OpenAlgo must already run)
   --no-searxng      Do not start/check SearXNG Docker
   --no-timescale    Do not start/check TimescaleDB Docker
+  --no-redis        Do not start/check Redis Docker (Nautilus watch cache)
   --no-bootstrap    Skip venv creation and pip install
   --status          Check readiness of all services and exit
   --daemon          Start OpenAlgo + Vibe in background and exit
@@ -380,6 +384,92 @@ check_timescale() {
   fi
 }
 
+# ── Redis (Docker — Nautilus watch node cache) ───────────────────────────────
+
+redis_enabled() {
+  if [[ "${START_REDIS:-1}" == "0" ]]; then
+    return 1
+  fi
+  local watch="${NAUTILUS_WATCH_ENABLE:-1}"
+  watch="${watch,,}"
+  if [[ "$watch" == "0" || "$watch" == "false" || "$watch" == "no" || "$watch" == "off" ]]; then
+    [[ -n "${NAUTILUS_REDIS_URL:-}" ]]
+    return $?
+  fi
+  return 0
+}
+
+redis_url() {
+  echo "${NAUTILUS_REDIS_URL:-redis://127.0.0.1:6379/0}"
+}
+
+probe_redis() {
+  if ! redis_enabled; then
+    return 0
+  fi
+  if command -v redis-cli >/dev/null 2>&1; then
+    redis-cli -u "$(redis_url)" ping 2>/dev/null | grep -q PONG && return 0
+  fi
+  (cd "$ROOT" && "$(pick_python)" - <<'PY') >/dev/null 2>&1
+import os
+try:
+    import redis
+except ImportError:
+    raise SystemExit(1)
+url = os.getenv("NAUTILUS_REDIS_URL", "redis://127.0.0.1:6379/0")
+client = redis.from_url(url, socket_connect_timeout=2)
+client.ping()
+PY
+}
+
+ensure_redis() {
+  if ! redis_enabled; then
+    return 0
+  fi
+
+  if probe_redis; then
+    READY_REDIS=1
+    return 0
+  fi
+
+  if [[ ! -f "$COMPOSE_FILE" ]]; then
+    warn "Redis needed for Nautilus watch but $COMPOSE_FILE missing"
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    ensure_docker_path
+  fi
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    warn "Redis needed for Nautilus watch — start Docker or: brew services start redis"
+    return 0
+  fi
+
+  log "Starting Redis via Docker ..."
+  docker compose -f "$COMPOSE_FILE" up -d redis
+
+  local i
+  for i in $(seq 1 20); do
+    if probe_redis; then
+      READY_REDIS=1
+      return 0
+    fi
+    sleep 1
+  done
+
+  warn "Redis did not become ready — Nautilus watch may fail to start"
+  return 0
+}
+
+check_redis() {
+  if ! redis_enabled; then
+    return 0
+  fi
+  if probe_redis; then
+    READY_REDIS=1
+  fi
+}
+
 # ── OpenAlgo ─────────────────────────────────────────────────────────────────
 
 probe_openalgo() {
@@ -492,6 +582,16 @@ print_status() {
     fi
   else
     warn "TimescaleDB    disabled (set TIMESCALE_ENABLED=true for hot tick tier)"
+  fi
+
+  if redis_enabled; then
+    if (( READY_REDIS )); then
+      ok "Redis          $(redis_url)  (Nautilus watch cache)"
+    else
+      fail "Redis          enabled but not reachable ($(redis_url))"
+    fi
+  else
+    warn "Redis          skipped (NAUTILUS_WATCH_ENABLE=0 and no NAUTILUS_REDIS_URL)"
   fi
 
   if (( READY_OPENALGO )); then
@@ -647,6 +747,12 @@ main() {
     ensure_timescale || true
   else
     check_timescale
+  fi
+
+  if (( START_REDIS )); then
+    ensure_redis || true
+  else
+    check_redis
   fi
 
   if (( STATUS_ONLY )); then

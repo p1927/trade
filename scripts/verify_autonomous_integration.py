@@ -263,7 +263,17 @@ def ensure_agent_ready(
     timeout_sec: int = 240,
 ) -> bool:
     """Wait for post-commit bootstrap + in-flight Vibe turns to finish."""
+    from nautilus_openalgo_bridge.market_hours import any_trading_market_open
     from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    if not any_trading_market_open():
+        agent = get_agent(agent_id) or {}
+        session_busy = bool(session_id and _session_turn_in_flight(session_id))
+        if not agent.get("streaming") and not session_busy:
+            _log(label, "markets closed — agent idle (no wait)", ok=True)
+            return True
+        timeout_sec = min(timeout_sec, 15)
+        _log(label, f"markets closed — short wait ({timeout_sec}s max)", ok=True)
 
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
@@ -297,6 +307,12 @@ def ensure_agent_ready(
 
 def verify_live_nautilus_node(agent_id: str, *, run_seconds: int = 90) -> bool:
     print("\n── 3. Live Nautilus TradingNode (watch ON) ──", flush=True)
+    from nautilus_openalgo_bridge.config import is_bridge_market_open
+
+    if not is_bridge_market_open():
+        _log("live nautilus node", "skipped — NSE market closed")
+        return True
+
     log_path = ROOT / "log" / "verify_nautilus_watch.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -429,12 +445,77 @@ def verify_direct_alert_dispatch(agent_id: str, session_id: str) -> bool:
     return False
 
 
+def verify_us_alpaca_mock_dispatch() -> bool:
+    """Fast US path check — registry + Alpaca quote + mock Vibe (no live LLM)."""
+    print("\n── 5. US Alpaca paper (mock dispatch) ──", flush=True)
+    from trade_integrations.dataflows.alpaca import alpaca_configured, fetch_alpaca_quote
+
+    if not alpaca_configured():
+        _log("us alpaca", "skipped — Alpaca keys not configured")
+        return True
+
+    q = fetch_alpaca_quote("SPY")
+    if not q or not q.get("ltp"):
+        _fail("us alpaca quote", "SPY quote empty")
+        return False
+    _log("us alpaca quote", f"SPY ltp={q.get('ltp')}")
+
+    agent_id: str | None = None
+    try:
+        agent_id, session_id = create_test_agent(
+            symbols=["SPY"],
+            name="Verify US mock",
+            mandate="US paper smoke — mock dispatch only.",
+        )
+        from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+        agent = get_agent(agent_id) or {}
+        agent["streaming"] = False
+        save_agent(agent)
+
+        from unittest.mock import AsyncMock, patch
+        from nautilus_openalgo_bridge.models import BridgeSignal, WatchAlert, WatchRule
+        from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
+
+        alert = WatchAlert(
+            signal=BridgeSignal.REVIEW_NEEDED,
+            rule=WatchRule(symbol="SPY", metric="spot_move_pct", threshold=0.1),
+            symbol="SPY",
+            message="US mock verify alert",
+            ltp=float(q.get("ltp") or 0),
+        )
+        with patch(
+            "nautilus_openalgo_bridge.vibe_trigger.make_vibe_message_client",
+            return_value=AsyncMock(return_value={"status": "ok"}),
+        ):
+            result = dispatch_watch_alert_sync(agent_id, alert)
+        if result.get("status") != "dispatched":
+            _fail("us mock dispatch", json.dumps(result)[:200])
+            return False
+        _log("us mock dispatch", "ok")
+        return True
+    except Exception as exc:
+        _fail("us mock", str(exc))
+        return False
+    finally:
+        if agent_id:
+            try:
+                vibe_post(f"/autonomous-agents/{agent_id}/stop")
+            except Exception:
+                pass
+
+
 def verify_us_alpaca_short_turn(*, timeout_sec: int = 240) -> bool:
     print("\n── 5. US Alpaca paper (SPY short turn) ──", flush=True)
+    from nautilus_openalgo_bridge.market_hours import is_us_market_session_open
     from trade_integrations.dataflows.alpaca import alpaca_configured
 
     if not alpaca_configured():
         _log("us alpaca", "skipped — Alpaca keys not configured")
+        return True
+
+    if not is_us_market_session_open():
+        _log("us alpaca", "skipped — US market closed")
         return True
 
     agent_id: str | None = None
@@ -531,6 +612,7 @@ def main() -> int:
     parser.add_argument("--skip-us", action="store_true")
     parser.add_argument("--node-seconds", type=int, default=40)
     parser.add_argument("--us-timeout", type=int, default=240)
+    parser.add_argument("--us-mock", action="store_true", help="US path: mock Vibe dispatch instead of live LLM turn")
     args = parser.parse_args()
 
     print("══════════════════════════════════════════════════════════", flush=True)
@@ -566,7 +648,10 @@ def main() -> int:
 
         ok_us = True
         if not args.skip_us:
-            ok_us = verify_us_alpaca_short_turn(timeout_sec=args.us_timeout)
+            if args.us_mock:
+                ok_us = verify_us_alpaca_mock_dispatch()
+            else:
+                ok_us = verify_us_alpaca_short_turn(timeout_sec=args.us_timeout)
 
     except Exception as exc:
         _fail("setup", str(exc))

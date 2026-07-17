@@ -14,10 +14,11 @@ from nautilus_trader.model.data import QuoteTick
 
 from nautilus_openalgo_bridge.config import get_bridge_config
 from nautilus_openalgo_bridge.handoff import handoff_mtime, load_agent_watch_spec, load_handoff
-from nautilus_openalgo_bridge.models import BridgeSignal, QuoteSnapshot, WatchSpec
+from nautilus_openalgo_bridge.models import BridgeSignal, QuoteSnapshot, WatchAlert, WatchSpec
 from nautilus_openalgo_bridge.nautilus_instruments import default_watch_instrument_ids
 from nautilus_openalgo_bridge.reconcile import open_positions_from_book, total_unrealized_pnl
 from nautilus_openalgo_bridge.stop_eval import evaluate_stop_rules
+from nautilus_openalgo_bridge.thesis_eval import evaluate_thesis_for_agent
 from nautilus_openalgo_bridge.watch_eval import evaluate_watch_spec
 
 SIGNAL_REVIEW = BridgeSignal.REVIEW_NEEDED.value
@@ -29,6 +30,8 @@ class WatchActorConfig(ActorConfig, frozen=True):
     agent_id: str | None = None
     alert_cooldown_sec: int = 300
     trigger_vibe: bool = True
+    market: str = "IN"
+    watch_symbols: list[str] | None = None
 
 
 class WatchActor(Actor):
@@ -40,8 +43,12 @@ class WatchActor(Actor):
         self._agent_id = (config.agent_id or "").strip() or None
         self._alert_cooldown_sec = max(30, int(config.alert_cooldown_sec))
         self._trigger_vibe = bool(config.trigger_vibe)
+        self._market = str(config.market or "IN").upper()
+        self._watch_symbols = tuple(config.watch_symbols or ())
         self._spec = WatchSpec()
         self._baselines: dict[str, float] = {}
+        self._oi_baselines: dict[str, float] = {}
+        self._volume_baselines: dict[str, float] = {}
         self._last_alert_at: dict[str, float] = {}
         self._last_handoff_mtime: float | None = None
         self._last_agent_reload_at: float = 0.0
@@ -49,18 +56,20 @@ class WatchActor(Actor):
 
     def on_start(self) -> None:
         self._reload_watch_spec(force=True)
-        for iid in default_watch_instrument_ids(self._bridge.watch_symbols):
+        symbols = self._watch_symbols or self._bridge.watch_symbols
+        for iid in default_watch_instrument_ids(symbols, market=self._market):
             self.subscribe_quote_ticks(iid)
         self.subscribe_signal(SIGNAL_REVIEW)
         self.subscribe_signal(SIGNAL_EXIT)
         self.subscribe_signal(SIGNAL_THESIS)
 
-        now = datetime.now(dt_timezone.utc)
         self._set_interval_timer("watch_reload", timedelta(seconds=30), self._on_reload_timer)
         self._set_interval_timer("watch_heartbeat", timedelta(minutes=1), self._on_heartbeat)
+        if self._agent_id:
+            self._set_interval_timer("thesis_eval", timedelta(seconds=30), self._on_thesis_timer)
         self._schedule_flatten_timer()
         self.log.info(
-            f"WatchActor started agent={self._agent_id or 'default'} rules={len(self._spec.rules)}",
+            f"WatchActor started agent={self._agent_id or 'default'} market={self._market} rules={len(self._spec.rules)}",
         )
 
     def on_stop(self) -> None:
@@ -77,6 +86,8 @@ class WatchActor(Actor):
         self._timer_names.append(name)
 
     def _schedule_flatten_timer(self) -> None:
+        if self._market == "US":
+            return
         ist = ZoneInfo("Asia/Kolkata")
         now = datetime.now(ist)
         parts = self._bridge.market_close.strip().split(":")
@@ -96,6 +107,18 @@ class WatchActor(Actor):
         self.log.info(
             f"WatchActor heartbeat agent={self._agent_id or 'default'} baselines={len(self._baselines)}",
         )
+
+    def _on_thesis_timer(self, _event) -> None:
+        if not self._agent_id:
+            return
+        from nautilus_openalgo_bridge.market_hours import is_market_open_for_market
+
+        if not is_market_open_for_market(self._market):
+            return
+        quotes = {sym: QuoteSnapshot(symbol=sym, exchange=self._market, ltp=ltp) for sym, ltp in self._baselines.items()}
+        alert = self._evaluate_thesis_alerts(quotes)
+        if alert is not None:
+            self._publish_alert(alert, ts_event=self.clock.timestamp_ns())
 
     def _on_flatten_alert(self, _event) -> None:
         handoff = load_handoff(self._agent_id) if self._agent_id else None
@@ -124,17 +147,91 @@ class WatchActor(Actor):
         if raw:
             self._spec = WatchSpec.from_dict(raw)
 
+    def _evaluate_thesis_alerts(self, quotes: dict[str, QuoteSnapshot]) -> WatchAlert | None:
+        if not self._agent_id:
+            return None
+        handoff = load_handoff(self._agent_id)
+        underlying = handoff.underlying if handoff else (self._watch_symbols[0] if self._watch_symbols else "NIFTY")
+        quote = quotes.get(underlying) or quotes.get(str(underlying).upper())
+        live_spot = quote.ltp if quote else None
+        pnl = self._position_pnl()
+        return evaluate_thesis_for_agent(self._agent_id, live_spot=live_spot, position_pnl=pnl)
+
+    def _position_pnl(self) -> float | None:
+        if not self._agent_id:
+            return None
+        if self._market == "US":
+            try:
+                from trade_integrations.dataflows.alpaca import list_alpaca_positions
+
+                rows = list_alpaca_positions()
+                total = 0.0
+                found = False
+                for row in rows:
+                    raw = row.get("unrealized_pl") or row.get("unrealized_plpc")
+                    if raw is None:
+                        continue
+                    try:
+                        total += float(raw)
+                        found = True
+                    except (TypeError, ValueError):
+                        continue
+                return total if found else None
+            except Exception:
+                return None
+        try:
+            from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
+
+            rows = open_positions_from_book(get_openalgo_client().get_position_book())
+            return total_unrealized_pnl(rows)
+        except Exception:
+            return None
+
+    def _publish_alert(self, alert, *, ts_event: int) -> None:
+        now = time.time()
+        key = f"{alert.symbol}:{alert.rule.metric if alert.rule else alert.signal.value}"
+        if now - self._last_alert_at.get(key, 0.0) < self._alert_cooldown_sec:
+            return
+        self._last_alert_at[key] = now
+        signal_name = alert.signal.value
+        payload = json.dumps(
+            {
+                "message": alert.message,
+                "symbol": alert.symbol,
+                "agent_id": self._agent_id,
+                "ltp": alert.ltp,
+                "trigger_vibe": self._trigger_vibe,
+            },
+            separators=(",", ":"),
+        )
+        self.publish_signal(
+            name=signal_name,
+            value=payload[:900],
+            ts_event=ts_event,
+        )
+        self.log.warning(f"WATCH ALERT [{signal_name}]: {alert.message}")
+
     def on_quote_tick(self, tick: QuoteTick) -> None:
+        from nautilus_openalgo_bridge.market_hours import is_market_open_for_market
+
+        if not is_market_open_for_market(self._market):
+            return
         symbol = str(tick.instrument_id.symbol)
         ltp = tick.bid_price.as_double()
         self._baselines.setdefault(symbol, ltp)
-        snap = QuoteSnapshot(symbol=symbol, exchange="NSE", ltp=ltp)
+        snap = QuoteSnapshot(symbol=symbol, exchange=self._market, ltp=ltp)
         quotes = {symbol: snap}
-        alerts = evaluate_watch_spec(self._spec, quotes, baselines=self._baselines)
+        alerts = evaluate_watch_spec(
+            self._spec,
+            quotes,
+            baselines=self._baselines,
+            oi_baselines=self._oi_baselines,
+            volume_baselines=self._volume_baselines,
+        )
 
         if self._agent_id:
             handoff = load_handoff(self._agent_id)
-            if handoff:
+            if handoff and self._market != "US":
                 try:
                     from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
 
@@ -150,27 +247,16 @@ class WatchActor(Actor):
                         alerts.insert(0, stop_alert)
                 except Exception:
                     pass
+            elif handoff and self._market == "US":
+                pnl = self._position_pnl()
+                stop_alert = evaluate_stop_rules(
+                    handoff,
+                    quotes,
+                    unrealized_pnl_inr=pnl,
+                    config=self._bridge,
+                )
+                if stop_alert is not None:
+                    alerts.insert(0, stop_alert)
 
-        now = time.time()
         for alert in alerts:
-            key = f"{alert.symbol}:{alert.rule.metric if alert.rule else alert.signal.value}"
-            if now - self._last_alert_at.get(key, 0.0) < self._alert_cooldown_sec:
-                continue
-            self._last_alert_at[key] = now
-            signal_name = alert.signal.value
-            payload = json.dumps(
-                {
-                    "message": alert.message,
-                    "symbol": alert.symbol,
-                    "agent_id": self._agent_id,
-                    "ltp": alert.ltp,
-                    "trigger_vibe": self._trigger_vibe,
-                },
-                separators=(",", ":"),
-            )
-            self.publish_signal(
-                name=signal_name,
-                value=payload[:900],
-                ts_event=tick.ts_event,
-            )
-            self.log.warning(f"WATCH ALERT [{signal_name}]: {alert.message}")
+            self._publish_alert(alert, ts_event=tick.ts_event)

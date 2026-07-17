@@ -640,6 +640,22 @@ def save_quant_review(ticker: str, payload: dict) -> Path:
     return json_path
 
 
+def save_quant_review_history(ticker: str, payload: dict, *, keep: int = 48) -> Path | None:
+    """Append rolling snapshot under quant_review/history/ (for quant monitor diffs)."""
+    out_dir = _quant_review_dir(ticker) / "history"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = out_dir / f"{ts}.json"
+    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    files = sorted(out_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for stale in files[keep:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    return path
+
+
 def load_quant_review_json(ticker: str) -> dict | None:
     path = _quant_review_dir(ticker) / "latest.json"
     if not path.is_file():
@@ -698,7 +714,10 @@ def _index_doc_from_json(payload: dict):
         factor_sensitivity=list(payload.get("factor_sensitivity") or []),
         event_impact_curves=list(payload.get("event_impact_curves") or []),
         upcoming_events=list(payload.get("upcoming_events") or []),
+        cascade_calibration=dict(payload.get("cascade_calibration") or {}),
         news_impact=dict(payload.get("news_impact") or {}),
+        event_overlay=dict(payload.get("event_overlay") or {}),
+        news_shock_calibration=dict(payload.get("news_shock_calibration") or {}),
         pipeline_log=list(payload.get("pipeline_log") or []),
         stages=stages,
     )

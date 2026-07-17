@@ -579,6 +579,7 @@ def compute_accuracy_metrics(*, window: int = 14) -> dict[str, Any]:
     mae_14d, hit_14d = _metrics(recent)
 
     walk_forward_hit = None
+    eval_count = None
     try:
         from trade_integrations.dataflows.index_research.backtest_runner import load_backtest_report
 
@@ -587,8 +588,10 @@ def compute_accuracy_metrics(*, window: int = 14) -> dict[str, Any]:
         walk_forward_hit = metrics.get("direction_hit_rate_walk_forward") or metrics.get(
             "direction_hit_rate"
         )
+        eval_count = backtest.get("eval_count")
     except Exception:
         walk_forward_hit = None
+        eval_count = None
 
     return {
         "sample_count": int(len(reconciled)),
@@ -598,5 +601,6 @@ def compute_accuracy_metrics(*, window: int = 14) -> dict[str, Any]:
         "direction_hit_rate_walk_forward": walk_forward_hit,
         "direction_hit_rate_ledger": hit_all,
         "direction_hit_rate_14d": hit_14d,
+        "eval_count": eval_count,
         "window_days": window,
     }

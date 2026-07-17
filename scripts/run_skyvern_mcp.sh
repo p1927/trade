@@ -11,8 +11,23 @@ if [[ -f "$ROOT/.env" ]]; then
   set +a
 fi
 
-export SKYVERN_BASE_URL="${SKYVERN_BASE_URL:-http://localhost:8000}"
-export SKYVERN_API_PREFIX="${SKYVERN_API_PREFIX:-/api/v1}"
+export SKYVERN_BASE_URL="${SKYVERN_BASE_URL:-http://localhost:8010}"
+export SKYVERN_API_PREFIX="${SKYVERN_API_PREFIX:-/v1}"
+
+# Auto-read self-hosted API key from Docker-generated credentials.toml
+if [[ -z "${SKYVERN_API_KEY:-}" ]]; then
+  for cred_file in \
+    "$ROOT/.skyvern-data/.skyvern/credentials.toml" \
+    "$ROOT/.skyvern/credentials.toml"; do
+    if [[ -f "$cred_file" ]]; then
+      SKYVERN_API_KEY="$(sed -n 's/.*cred[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$cred_file" | head -n1)"
+      if [[ -n "$SKYVERN_API_KEY" ]]; then
+        export SKYVERN_API_KEY
+        break
+      fi
+    fi
+  done
+fi
 
 PY="${SKYVERN_MCP_PYTHON:-}"
 if [[ -z "$PY" ]]; then
@@ -32,7 +47,7 @@ if ! "$PY" -c "import skyvern" 2>/dev/null; then
 fi
 
 if [[ -z "${SKYVERN_API_KEY:-}" ]]; then
-  echo "Warning: SKYVERN_API_KEY not set — copy from http://localhost:8080/settings after docker compose up" >&2
+  echo "Warning: Skyvern local API key not found — run scripts/start_skyvern.sh and wait for healthy status" >&2
 fi
 
 exec "$PY" -m skyvern run mcp

@@ -9,7 +9,8 @@ from typing import Any
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.common.config import ActorConfig
 
-from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours, is_bridge_market_open
+from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours
+from nautilus_openalgo_bridge.market_hours import agent_market, is_market_open_for_market
 from nautilus_openalgo_bridge.handoff import load_handoff
 from nautilus_openalgo_bridge.intent_queue import process_pending_intents
 from nautilus_openalgo_bridge.models import BridgeSignal, WatchAlert, WatchRule
@@ -17,6 +18,7 @@ from nautilus_openalgo_bridge.risk_state import is_trading_halted, set_trading_h
 
 SIGNAL_REVIEW = BridgeSignal.REVIEW_NEEDED.value
 SIGNAL_EXIT = BridgeSignal.EXIT_NOW.value
+SIGNAL_THESIS = BridgeSignal.THESIS_BROKEN.value
 SIGNAL_HALT = BridgeSignal.HALT_TRADING.value
 SIGNAL_EXECUTE = BridgeSignal.EXECUTE_INTENT.value
 
@@ -35,7 +37,7 @@ class BridgeSignalActor(Actor):
         self._trigger_vibe = bool(config.trigger_vibe)
 
     def on_start(self) -> None:
-        for name in (SIGNAL_REVIEW, SIGNAL_EXIT, SIGNAL_HALT, SIGNAL_EXECUTE):
+        for name in (SIGNAL_REVIEW, SIGNAL_EXIT, SIGNAL_THESIS, SIGNAL_HALT, SIGNAL_EXECUTE):
             self.subscribe_signal(name)
         from datetime import datetime, timedelta, timezone
 
@@ -70,10 +72,21 @@ class BridgeSignalActor(Actor):
         if name == SIGNAL_REVIEW:
             if not self._trigger_vibe or not payload.get("trigger_vibe", True):
                 return
-            if not is_bridge_market_open() and not allow_vibe_alert_outside_market_hours():
+            if not allow_vibe_alert_outside_market_hours() and not is_market_open_for_market(
+                agent_market(agent_id),
+            ):
                 self.log.info("skip Vibe dispatch — outside market hours")
                 return
             self._dispatch_vibe_alert(agent_id, payload)
+        elif name == SIGNAL_THESIS:
+            if not self._trigger_vibe:
+                return
+            if not allow_vibe_alert_outside_market_hours() and not is_market_open_for_market(
+                agent_market(agent_id),
+            ):
+                self.log.info("skip thesis dispatch — outside market hours")
+                return
+            self._dispatch_thesis_alert(agent_id, payload)
         elif name == SIGNAL_EXIT:
             self._dispatch_exit(agent_id, payload)
         elif name == SIGNAL_HALT:
@@ -129,6 +142,22 @@ class BridgeSignalActor(Actor):
             self.log.info(f"Vibe dispatch: {result.get('status')}" + (f" ({reason})" if reason else ""))
         except Exception as exc:
             self.log.error(f"Vibe dispatch failed: {exc}")
+
+    def _dispatch_thesis_alert(self, agent_id: str, payload: dict[str, Any]) -> None:
+        from nautilus_openalgo_bridge.vibe_trigger import dispatch_thesis_alert_sync
+
+        alert = WatchAlert(
+            signal=BridgeSignal.THESIS_BROKEN,
+            rule=WatchRule(symbol=str(payload.get("symbol") or "NIFTY"), metric="spot_move_pct", threshold=0),
+            symbol=str(payload.get("symbol") or "NIFTY"),
+            message=str(payload.get("message") or "thesis break"),
+            ltp=float(payload["ltp"]) if payload.get("ltp") is not None else None,
+        )
+        try:
+            result = dispatch_thesis_alert_sync(agent_id, alert)
+            self.log.info(f"Thesis dispatch: {result.get('status')}")
+        except Exception as exc:
+            self.log.error(f"Thesis dispatch failed: {exc}")
 
     def _dispatch_exit(self, agent_id: str, payload: dict[str, Any]) -> None:
         from nautilus_openalgo_bridge.signal_actions import dispatch_exit_intent

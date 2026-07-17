@@ -78,11 +78,41 @@ def _check_vibe(url: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def _check_redis() -> tuple[bool, str]:
+    url = os.getenv("NAUTILUS_REDIS_URL", "redis://127.0.0.1:6379/0").strip()
+    if not url:
+        return True, "not configured"
+    try:
+        import redis
+
+        client = redis.from_url(url, socket_connect_timeout=3)
+        client.ping()
+        return True, "PONG"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _check_timescale() -> tuple[bool, str]:
+    if os.getenv("TIMESCALE_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return True, "disabled"
+    try:
+        from trade_integrations.hub_storage.timescale_ticks import timescale_health
+
+        health = timescale_health()
+        if health.get("ok"):
+            return True, "ok"
+        return False, str(health.get("error") or health)
+    except Exception as exc:
+        return False, str(exc)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify Nautilus bridge toolchain")
     parser.add_argument("--skip-openalgo", action="store_true")
     parser.add_argument("--skip-vibe", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--skip-redis", action="store_true")
+    parser.add_argument("--skip-timescale", action="store_true")
     args = parser.parse_args()
 
     venv_py = ROOT / ".venv-nautilus" / "bin" / "python"
@@ -103,6 +133,14 @@ def main() -> int:
         checks["nautilus_venv"] = {"ok": True, "detail": str(venv_py)}
     else:
         checks["nautilus_venv"] = {"ok": False, "detail": "missing — run ./scripts/setup_nautilus.sh"}
+
+    if not args.skip_redis and os.getenv("NAUTILUS_REDIS_URL", "").strip():
+        ok, detail = _check_redis()
+        checks["redis"] = {"ok": ok, "detail": detail, "url": os.getenv("NAUTILUS_REDIS_URL", "")}
+
+    if not args.skip_timescale:
+        ok, detail = _check_timescale()
+        checks["timescale"] = {"ok": ok, "detail": detail}
 
     if not args.skip_openalgo:
         ok, detail = _check_openalgo(host)

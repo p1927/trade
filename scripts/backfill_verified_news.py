@@ -41,6 +41,32 @@ def _archive_days(hub, days: int) -> list[str]:
     return out
 
 
+def _factor_history_days(days: int) -> list[str]:
+    try:
+        from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
+
+        nifty = load_nifty_history(days=days)
+        if nifty.empty:
+            return []
+        return nifty["date"].astype(str).str[:10].tolist()
+    except Exception:
+        return []
+
+
+def _backtest_eval_dates() -> list[str]:
+    try:
+        from trade_integrations.dataflows.index_research.backtest_runner import load_backtest_report
+
+        report = load_backtest_report("NIFTY") or {}
+        return [
+            str(row.get("date") or "")[:10]
+            for row in (report.get("daily_evaluations") or [])
+            if row.get("date")
+        ]
+    except Exception:
+        return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill verified news hub records")
     parser.add_argument("--days", type=int, default=90)
@@ -49,6 +75,12 @@ def main() -> int:
     parser.add_argument("--prioritize-miss-dates", action="store_true")
     parser.add_argument("--force-reverify", action="store_true")
     parser.add_argument("--repair-tags", action="store_true", help="Backfill tags on hub rows without re-verify")
+    parser.add_argument(
+        "--use-factor-history",
+        action="store_true",
+        help="Ingest for all Nifty trading days in the factor-history window (not just archive stems)",
+    )
+    parser.add_argument("--include-backtest-dates", action="store_true", help="Also ingest backtest eval dates")
     args = parser.parse_args()
 
     from trade_integrations.context.hub import get_hub_dir
@@ -62,8 +94,12 @@ def main() -> int:
         return 0
 
     days_set: set[str] = set(_archive_days(hub, args.days))
+    if args.use_factor_history:
+        days_set.update(_factor_history_days(args.days))
     if args.prioritize_miss_dates:
         days_set.update(_miss_dates())
+    if args.include_backtest_dates:
+        days_set.update(_backtest_eval_dates())
 
     if not days_set:
         end = date.today()

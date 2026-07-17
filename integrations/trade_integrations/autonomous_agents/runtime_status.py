@@ -225,21 +225,33 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
     nautilus_alive = _nautilus_process_alive()
     nautilus_state = _nautilus_state_for_agent(agent)
     nautilus_bound_agent: str | None = None
+    registry_agent_ids: list[str] = []
+    in_registry = False
     try:
-        from trade_integrations.autonomous_agents.nautilus_watch import get_watch_process_status
+        from trade_integrations.autonomous_agents.nautilus_watch import (
+            get_watch_process_status,
+            is_agent_in_registry,
+        )
 
-        nautilus_bound_agent = get_watch_process_status().get("bound_agent_id")  # type: ignore[assignment]
+        status = get_watch_process_status()
+        nautilus_bound_agent = status.get("bound_agent_id")  # type: ignore[assignment]
+        registry_agent_ids = list(status.get("registry_agent_ids") or [])
+        in_registry = is_agent_in_registry(agent_id)
     except Exception:
         pass
     watch_configured, position_tracked = _handoff_details(agent_id) if agent_id else (False, False)
 
-    if profile is not None and profile.uses_nautilus_handoff:
+    if profile is not None and profile.uses_nautilus_watch:
         if not nautilus_on:
-            watch_path = "nautilus_disabled"
-        elif nautilus_alive or nautilus_on:
-            watch_path = "nautilus_bridge"
+            watch_path = "degraded"
+        elif in_registry and nautilus_alive:
+            watch_path = "nautilus_alpaca_detached" if profile.is_us else "nautilus_detached"
+        elif in_registry:
+            watch_path = "nautilus_scheduler_poll"
+        elif nautilus_alive:
+            watch_path = "nautilus_scheduler_poll"
         else:
-            watch_path = "nautilus_bridge_poll"
+            watch_path = "nautilus_scheduler_poll" if profile.uses_nautilus_handoff else "nautilus_alpaca_poll"
     elif linked and session.get("nautilus_bridge_mode"):
         watch_path = "nautilus_bridge"
     else:
@@ -270,6 +282,8 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
         "nautilus_process_alive": nautilus_alive,
         "nautilus_state": nautilus_state,
         "nautilus_bound_agent_id": nautilus_bound_agent,
+        "nautilus_registry_agent_ids": registry_agent_ids,
+        "nautilus_in_registry": in_registry,
         "watch_path": watch_path,
         "watch_configured": watch_configured,
         "position_tracked": position_tracked,
@@ -302,12 +316,15 @@ def build_stack_health() -> dict[str, Any]:
 
     nautilus_state = "off"
     nautilus_bound_agent: str | None = None
+    registry_agent_ids: list[str] = []
     if _nautilus_watch_enabled():
         nautilus_state = "node_on" if _nautilus_process_alive() else "expected"
         try:
             from trade_integrations.autonomous_agents.nautilus_watch import get_watch_process_status
 
-            nautilus_bound_agent = get_watch_process_status().get("bound_agent_id")  # type: ignore[assignment]
+            status = get_watch_process_status()
+            nautilus_bound_agent = status.get("bound_agent_id")  # type: ignore[assignment]
+            registry_agent_ids = list(status.get("registry_agent_ids") or [])
         except Exception:
             pass
 
@@ -316,6 +333,7 @@ def build_stack_health() -> dict[str, Any]:
         "nautilus_process_alive": _nautilus_process_alive(),
         "nautilus_state": nautilus_state,
         "nautilus_bound_agent_id": nautilus_bound_agent,
+        "nautilus_registry_agent_ids": registry_agent_ids,
         "scheduler_health": scheduler_health,
         "market_open": paper.get("market_open"),
         "paper_session_enabled": bool(session.get("enabled")),

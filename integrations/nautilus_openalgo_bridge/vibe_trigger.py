@@ -8,6 +8,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from typing import Any
 
 from nautilus_openalgo_bridge.config import BridgeConfig, get_bridge_config
@@ -102,11 +103,176 @@ def build_alert_turn_prompt(
     agent: dict[str, Any],
     alert: WatchAlert,
     quotes: dict[str, QuoteSnapshot] | None = None,
+    extra_block: str = "",
 ) -> str:
-    return build_bridge_alert_block(alert, quotes) + build_full_reasoning_prompt(
+    return (
+        extra_block
+        + build_bridge_alert_block(alert, quotes)
+        + build_full_reasoning_prompt(agent=agent, turn_kind="strategy_revision")
+    )
+
+
+def build_thesis_alert_block(alert: WatchAlert) -> str:
+    return (
+        "## Thesis break alert (Nautilus bridge)\n"
+        f"**Alert:** {alert.message}\n"
+        "Thesis no longer matches live market / position state. Re-evaluate REVISE | EXIT | HOLD.\n\n"
+    )
+
+
+def build_quant_alert_block(alert_type: str, message: str, delta: dict[str, Any] | None = None) -> str:
+    payload = {"source": "quant_monitor", "alert_type": alert_type, "message": message, "delta": delta or {}}
+    return (
+        "## Quant monitor alert\n"
+        f"```json\n{json.dumps(payload, indent=2)}\n```\n\n"
+        f"**Alert:** {message}\n"
+        "Review quant_review/latest.json and re-evaluate strategy.\n\n"
+    )
+
+
+async def dispatch_thesis_alert(
+    agent_id: str,
+    alert: WatchAlert,
+    *,
+    quotes: dict[str, QuoteSnapshot] | None = None,
+    config: BridgeConfig | None = None,
+) -> dict[str, Any]:
+    agent = get_agent(agent_id)
+    if not agent:
+        return {"status": "error", "error": f"agent not found: {agent_id}"}
+    if str(agent.get("status")) != "running":
+        return {"status": "skipped", "reason": "agent_not_running"}
+    session_id = str(agent.get("vibe_session_id") or "").strip()
+    if not session_id:
+        return {"status": "error", "error": "agent has no vibe_session_id"}
+    if agent.get("streaming"):
+        return {"status": "skipped", "reason": "turn_in_flight"}
+
+    prompt = build_alert_turn_prompt(
+        agent=agent,
+        alert=alert,
+        quotes=quotes,
+        extra_block=build_thesis_alert_block(alert),
+    )
+    caller = make_vibe_message_client(config)
+    agent["streaming"] = True
+    agent["last_bridge_alert_at"] = alert.fired_at
+    agent["last_revision_at"] = alert.fired_at
+    save_agent(agent)
+    try:
+        result = await caller(session_id, prompt)
+        return {"status": "dispatched", "session_id": session_id, "result": result}
+    except RuntimeError as exc:
+        latest = get_agent(agent_id) or agent
+        latest["streaming"] = False
+        save_agent(latest)
+        return {"status": "error", "error": str(exc)}
+
+
+def dispatch_thesis_alert_sync(
+    agent_id: str,
+    alert: WatchAlert,
+    *,
+    quotes: dict[str, QuoteSnapshot] | None = None,
+    config: BridgeConfig | None = None,
+) -> dict[str, Any]:
+    return asyncio.run(dispatch_thesis_alert(agent_id, alert, quotes=quotes, config=config))
+
+
+async def dispatch_quant_alert(
+    agent_id: str,
+    *,
+    alert_type: str,
+    message: str,
+    delta: dict[str, Any] | None = None,
+    config: BridgeConfig | None = None,
+) -> dict[str, Any]:
+    agent = get_agent(agent_id)
+    if not agent:
+        return {"status": "error", "error": f"agent not found: {agent_id}"}
+    if str(agent.get("status")) != "running":
+        return {"status": "skipped", "reason": "agent_not_running"}
+    session_id = str(agent.get("vibe_session_id") or "").strip()
+    if not session_id:
+        return {"status": "error", "error": "agent has no vibe_session_id"}
+    if agent.get("streaming"):
+        return {"status": "skipped", "reason": "turn_in_flight"}
+
+    prompt = build_quant_alert_block(alert_type, message, delta) + build_full_reasoning_prompt(
         agent=agent,
         turn_kind="strategy_revision",
     )
+    caller = make_vibe_message_client(config)
+    agent["streaming"] = True
+    agent["last_quant_alert_at"] = alert_type
+    agent["last_revision_at"] = datetime.now(timezone.utc).isoformat()
+    save_agent(agent)
+    try:
+        result = await caller(session_id, prompt)
+        return {"status": "dispatched", "session_id": session_id, "result": result}
+    except RuntimeError as exc:
+        latest = get_agent(agent_id) or agent
+        latest["streaming"] = False
+        save_agent(latest)
+        return {"status": "error", "error": str(exc)}
+
+
+def dispatch_quant_alert_sync(
+    agent_id: str,
+    *,
+    alert_type: str,
+    message: str,
+    delta: dict[str, Any] | None = None,
+    config: BridgeConfig | None = None,
+) -> dict[str, Any]:
+    return asyncio.run(
+        dispatch_quant_alert(agent_id, alert_type=alert_type, message=message, delta=delta, config=config)
+    )
+
+
+async def dispatch_us_exit_alert(
+    agent_id: str,
+    alert: WatchAlert,
+    *,
+    config: BridgeConfig | None = None,
+) -> dict[str, Any]:
+    agent = get_agent(agent_id)
+    if not agent:
+        return {"status": "error", "error": f"agent not found: {agent_id}"}
+    session_id = str(agent.get("vibe_session_id") or "").strip()
+    if not session_id:
+        return {"status": "error", "error": "agent has no vibe_session_id"}
+    symbols = list(agent.get("symbols") or ["SPY"])
+    symbol = symbols[0]
+    block = (
+        "## EXIT alert (US Alpaca — Nautilus watch)\n"
+        f"**Alert:** {alert.message}\n"
+        f"Close all open **{symbol}** shares via `trading_place_order` @ alpaca-paper-trade, "
+        "then `record_autonomous_decision` with EXIT.\n\n"
+    )
+    prompt = block + build_full_reasoning_prompt(agent=agent, turn_kind="strategy_revision")
+    caller = make_vibe_message_client(config)
+    if agent.get("streaming"):
+        return {"status": "skipped", "reason": "turn_in_flight"}
+    agent["streaming"] = True
+    save_agent(agent)
+    try:
+        result = await caller(session_id, prompt)
+        return {"status": "dispatched", "session_id": session_id, "result": result}
+    except RuntimeError as exc:
+        latest = get_agent(agent_id) or agent
+        latest["streaming"] = False
+        save_agent(latest)
+        return {"status": "error", "error": str(exc)}
+
+
+def dispatch_us_exit_alert_sync(
+    agent_id: str,
+    alert: WatchAlert,
+    *,
+    config: BridgeConfig | None = None,
+) -> dict[str, Any]:
+    return asyncio.run(dispatch_us_exit_alert(agent_id, alert, config=config))
 
 
 def make_vibe_message_client(

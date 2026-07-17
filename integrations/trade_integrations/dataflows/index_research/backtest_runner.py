@@ -26,6 +26,7 @@ from trade_integrations.dataflows.index_research.calendar_features import (
 from trade_integrations.dataflows.index_research.factor_matrix import (
     MACRO_FACTOR_KEYS,
     build_factor_matrix,
+    redundancy_audit,
 )
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.predictor import (
@@ -401,9 +402,20 @@ def run_walk_forward_backtest(
         except Exception:
             scenario_anchor = None
         macro = shrink_macro_delta(raw_macro, scenario_anchor)
+        try:
+            from trade_integrations.dataflows.index_research.event_overlay import merge_overlay_into_macro
+
+            macro, _overlay = merge_overlay_into_macro(macro, factors_today, as_of_day=day_str)
+        except Exception:
+            _overlay = {}
         predicted = macro  # macro-only backtest (no historical constituent research)
         day_str = str(row["date"])[:10]
         regime_label = resolve_regime_label(factors_today)
+        from trade_integrations.dataflows.index_research.flow_regime_buckets import (
+            flow_regime_bucket,
+        )
+
+        flow_bucket = flow_regime_bucket(factors_today, regime_label)
         bottom_up = None
         hybrid_predicted = None
         if include_bottom_up:
@@ -440,8 +452,10 @@ def run_walk_forward_backtest(
                 "error_pct": round(err, 3),
                 "direction_correct": pred_dir == actual_dir,
                 "regime_label": regime_label,
+                "flow_regime_bucket": flow_bucket,
                 "macro_delta_pct": round(macro, 3),
                 "macro_raw_pct": round(raw_macro, 3),
+                "event_overlay_pct": round(_overlay.get("return_pct") or 0.0, 3) if _overlay else None,
                 "bottom_up_return_pct": round(bottom_up, 3) if bottom_up is not None else None,
                 "hybrid_predicted_return_pct": round(hybrid_predicted, 3)
                 if hybrid_predicted is not None
@@ -460,6 +474,18 @@ def run_walk_forward_backtest(
         total = len(bucket)
         hits = sum(1 for r in bucket if r.get("direction_correct"))
         regime_buckets[label] = {
+            "eval_count": total,
+            "direction_hits": hits,
+            "direction_hit_rate": round(hits / total, 4) if total else None,
+        }
+
+    flow_regime_buckets: dict[str, dict[str, int | float | None]] = {}
+    flow_labels = sorted({str(r.get("flow_regime_bucket") or "") for r in eval_rows if r.get("flow_regime_bucket")})
+    for label in flow_labels:
+        bucket = [r for r in eval_rows if r.get("flow_regime_bucket") == label]
+        total = len(bucket)
+        hits = sum(1 for r in bucket if r.get("direction_correct"))
+        flow_regime_buckets[label] = {
             "eval_count": total,
             "direction_hits": hits,
             "direction_hit_rate": round(hits / total, 4) if total else None,
@@ -519,6 +545,7 @@ def run_walk_forward_backtest(
             "hybrid_direction_hit_rate": round(hybrid_hit_rate, 4) if hybrid_hit_rate is not None else None,
             "hybrid_eval_count": hybrid_total,
             "regime_direction_hit_rates": regime_buckets,
+            "flow_regime_direction_hit_rates": flow_regime_buckets,
             "in_sample_mae_pct": in_sample_artifact.mae if in_sample_artifact else None,
             "in_sample_r2": in_sample_artifact.r2_walk_forward if in_sample_artifact else None,
             "in_sample_direction_hit_rate": in_sample_artifact.direction_hit_rate_oos
@@ -540,6 +567,7 @@ def run_walk_forward_backtest(
             "Event attribution uses calendar flags + factor day-over-day changes alongside index-level drivers.",
         ],
         "feature_names_used": names,
+        "redundancy_prune": redundancy_audit(),
     }
     return report
 

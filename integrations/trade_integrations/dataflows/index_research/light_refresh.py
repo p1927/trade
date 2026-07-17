@@ -47,6 +47,15 @@ def _stage_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _overlay_summary() -> dict[str, Any]:
+    try:
+        from trade_integrations.dataflows.index_research.event_overlay import overlay_summary_for_ui
+
+        return overlay_summary_for_ui("NIFTY")
+    except Exception:
+        return {}
+
+
 def _fetch_spot(ticker: str) -> float:
     from trade_integrations.dataflows.index_research.aggregator import _fetch_spot as agg_fetch
 
@@ -227,6 +236,7 @@ def run_index_light_refresh(
             signals=signals,
             macro_factors=macro_factors,
             horizon=horizon,
+            as_of_day=_stage_now().date().isoformat(),
         )
         if spot > 0
         else {}
@@ -372,6 +382,8 @@ def run_index_light_refresh(
         upcoming_events=(cached_doc.upcoming_events if cached_doc else []),
         cascade_calibration=(getattr(cached_doc, "cascade_calibration", None) or {}),
         news_impact=news_impact,
+        event_overlay=(prediction or {}).get("event_overlay") or {},
+        news_shock_calibration=_overlay_summary(),
         stages=stages,
     )
     save_index_research(doc)

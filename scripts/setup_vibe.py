@@ -133,8 +133,16 @@ def render_agent_json() -> dict:
         )
     template = TEMPLATE.read_text(encoding="utf-8")
     skyvern_key = os.getenv("SKYVERN_API_KEY", "").strip()
-    skyvern_base = (os.getenv("SKYVERN_BASE_URL") or "http://localhost:8000").rstrip("/")
-    skyvern_prefix = os.getenv("SKYVERN_API_PREFIX", "/api/v1").strip() or "/api/v1"
+    if not skyvern_key:
+        try:
+            sys.path.insert(0, str(ROOT / "integrations"))
+            from trade_integrations.nse_browser.skyvern_local import read_local_skyvern_api_key
+
+            skyvern_key = read_local_skyvern_api_key()
+        except Exception:
+            skyvern_key = ""
+    skyvern_base = (os.getenv("SKYVERN_BASE_URL") or "http://localhost:8010").rstrip("/")
+    skyvern_prefix = os.getenv("SKYVERN_API_PREFIX", "/v1").strip() or "/v1"
     rendered = (
         template.replace("{{OPENALGO_MCP_WRAPPER}}", str(openalgo_mcp_wrapper()))
         .replace("{{OPENALGO_API_KEY}}", api_key or "REPLACE_ME")

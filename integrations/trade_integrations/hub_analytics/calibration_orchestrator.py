@@ -170,8 +170,13 @@ def _run_market_intelligence_step(as_of_date: str) -> dict[str, Any]:
 def _run_news_impact_reconcile_step() -> dict[str, Any]:
     try:
         from trade_integrations.dataflows.index_research.news_impact_engine import reconcile_matured_impacts
+        from trade_integrations.dataflows.index_research.news_shock_calibration import update_shock_calibration
+        from trade_integrations.dataflows.index_research.news_event_features import evaluate_news_model_gates
 
-        return reconcile_matured_impacts(ticker="NIFTY")
+        reconcile = reconcile_matured_impacts(ticker="NIFTY")
+        shock = update_shock_calibration(ticker="NIFTY")
+        gates = evaluate_news_model_gates(ticker="NIFTY")
+        return {"reconcile": reconcile, "shock_calibration": shock, "model_gates": gates}
     except Exception as exc:
         logger.exception("news impact reconcile failed")
         return {"status": "error", "error": str(exc)}

@@ -9,22 +9,42 @@
 
 ---
 
-## Current state (July 2026 — Phases 0–5 shipped)
+## Current state (July 2026 — Phases 0–8 direction work)
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Direction OOS (365d, walk-forward) | **55.6%** | Up from 44.4% after Nifty Invest API backfill (Jul 2026) |
-| MAE OOS | **3.46%** | Down from 3.92% |
-| FII/DII full-window coverage | **100%** | Nifty Invest API: 338 daily rows (Mar 2025–Jul 2026) |
-| FII/DII flow-era coverage | **101.6%** | Gate **passed** via `web_flow_fetch.py` |
-| Hybrid eval count | **12** | Hybrid direction **16.7%** — RSS backfill noise |
-| Joint flow features | **Rejected** | Ablation delta 0.0 pp |
-| `cap_artifact` misses | **4** | Shrinkage did not reduce |
-| `nse_browser` hub rows | **111+ daily** | MCP + repo seeds; web scrape mission added |
+| Direction OOS (365d, walk-forward, eval_step=5) | **50.0%** | 18 eval rows (2025-07-17 → 2026-07-15); pre–Phase-2 baseline was 52.9% (17 rows) |
+| MAE OOS | **3.49%** | Up from 3.17% on prior window |
+| Direction confidence | **Calibrated** | `direction_calibration.py` caps logistic prob to walk-forward OOS |
+| FII/DII flow-era coverage | **100%** | Nifty Invest + web scrape pipeline |
+| Sector factors | **Rejected** | Promotion ablation delta 0.0 pp (< +3 pp gate) |
+| Headline event flags | **Rejected** | Flags not in factor history until enrich; ablation pending re-run |
+| Flow regime buckets | **Rejected (OOS)** | Shipped in code; walk-forward −2.9 pp vs baseline |
+| Sign-conflict gate | **Accepted (trust)** | Neutralizes direction on macro vs anchor conflict |
+| Redundancy prune | **Accepted** | Dropped oil_wti, constituent_momentum_7d, sector_breadth_mean_sentiment |
+| Hybrid eval count | **0** | Tier 3 deferral — RSS backfill noise |
+| `cap_artifact` misses | **0** | Shrinkage + sign-conflict gate |
+| `nse_browser` hub rows | **111+ daily** | MCP + repo seeds |
 
-**Counterfactual on misses (10):** 1 mapping_error_T0, 5 drift_dominant, 4 cap_artifact.
+**Flow regime direction (latest backtest):** high_fear 33.3% (n=9), range_fii_selling 100% (n=3), range_fii_sell_dii_absorb 50% (n=6).
+
+**Counterfactual on misses:** re-run after Phase 8 validation.
 
 **Assumption register:** [`2026-07-16-prediction-factor-rationality-plan.md`](2026-07-16-prediction-factor-rationality-plan.md) — see § July 2026 re-verification (Phase 7).
+
+### Phase 8 — Direction structural experiments (July 2026)
+
+| Change | OOS gate | Outcome |
+|--------|----------|---------|
+| Direction confidence calibration | Trust (not OOS) | **Accepted** — UI shows calibrated score + walk-forward accuracy |
+| Redundancy prune | ≥ baseline − 2 pp | **Accepted** — interpretability prune |
+| Sector block promotion | +3 pp | **Rejected** — 50.0% → 50.0% (0 pp) |
+| Flow regime buckets | +3 pp | **Rejected** — 50.0% vs 52.9% baseline |
+| Sign-conflict gate | Trust or subset +10 pp | **Accepted** — honesty gate shipped |
+| T0 headline event flags | +3 pp | **Rejected** — enrich required; not in history |
+| Tier 3 hybrid bottom-up | hybrid_eval_count > 0 | **Deferred** |
+| Pre-2026 daily FII | User accepted | **Deferred** |
+| Lower Ridge α / widen cap | Forbidden | **Rejected** |
 
 ---
 
@@ -107,9 +127,9 @@ Operationalize **`get_nse_browser_data`** into prediction pipeline via `nse_brow
 
 Update factor-rationality plan with web research + empirical rejects (joint flows, shrinkage, hybrid RSS).
 
-### Phase 8 — Direction structural experiments (OOS-gated)
+### Phase 8 — Direction structural experiments (SHIPPED July 2026)
 
-Cap/sign conflict gate (shipped in `shrink_macro_delta`), flow regime buckets, hybrid quality gate (non-backfill archives only).
+Direction calibration, redundancy prune, flow regime buckets, sign-conflict gate, sector/event promotion ablations. See metrics table above and `equation_improvement_decisions.md`.
 
 ---
 

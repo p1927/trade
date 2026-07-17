@@ -14,10 +14,10 @@ _FRAGMENTS: dict[str, str] = {
 2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")` — cite tool output for price
 3. Refine thesis; state confidence 0–100
 4. If confidence ≥ {threshold}: {order_tool} (paper only)
-5. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules with exchange US, gate}})`
+5. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules with exchange US, gate}})` — Nautilus Alpaca watch owns alerts
 6. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP
 
-Do **not** call `execute_auto_paper_basket`, `get_options_trade_widget`, `get_auto_paper_status`, or `get_auto_paper_market_feedback`.""",
+Do **not** call `execute_auto_paper_basket`, `get_options_trade_widget`, `get_auto_paper_status`, or `get_auto_paper_market_feedback`. Nautilus Alpaca watch dispatches revision turns on rule fires.""",
     "us_equity_live": """## Required flow
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")`

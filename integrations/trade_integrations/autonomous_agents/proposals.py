@@ -482,7 +482,7 @@ def commit_autonomous_agent(
             "US agent — OpenAlgo INR auto-paper session not started; use Alpaca paper tools."
         )
 
-    if profile.uses_nautilus_handoff:
+    if profile.uses_nautilus_watch:
         try:
             from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
 
@@ -498,7 +498,7 @@ def commit_autonomous_agent(
             )
             paper_session_warnings.append(
                 f"Nautilus watch not started ({exc}). "
-                f"Run: trade start nautilus-watch --agent-id {agent_id}"
+                f"Run: trade start nautilus-watch --registry"
             )
 
     try:
@@ -508,7 +508,7 @@ def commit_autonomous_agent(
         mc = dict(proposal.get("mandate_config") or {})
         if not watch_spec.get("rules") and mc.get("watch_spec"):
             watch_spec = dict(mc["watch_spec"])
-        if watch_spec.get("rules") and profile.uses_nautilus_handoff:
+        if watch_spec.get("rules") and profile.uses_nautilus_watch:
             sync_watch_spec_to_handoff(agent_id, watch_spec)
     except Exception:
         import logging
@@ -551,6 +551,12 @@ def stop_autonomous_agent(agent_id: str) -> dict[str, Any]:
             stop_auto_paper(unregister_scheduler=True)
     except Exception:
         pass
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import remove_agent_from_registry
+
+        remove_agent_from_registry(agent_id)
+    except Exception:
+        pass
     return {"status": "ok", "agent": agent}
 
 
@@ -579,6 +585,19 @@ def delete_autonomous_agent(agent_id: str) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent:
         raise ValueError(f"agent not found: {agent_id}")
+
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import remove_agent_from_registry
+
+        remove_agent_from_registry(agent_id)
+    except Exception:
+        pass
+    try:
+        from nautilus_openalgo_bridge.handoff import clear_handoff
+
+        clear_handoff(agent_id)
+    except Exception:
+        pass
 
     from trade_integrations.autonomous_agents.store import delete_agent
 

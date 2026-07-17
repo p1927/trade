@@ -56,7 +56,20 @@ def _predict_impact(
     macro_factors: dict[str, float],
     primary_factor: str,
     horizon_days: int,
+    primary_topic: str | None = None,
 ) -> dict[str, Any]:
+    shock_pct = 8.0
+    if primary_topic:
+        try:
+            from trade_integrations.dataflows.index_research.news_shock_calibration import (
+                calibrated_shock_pct_for_topic,
+            )
+
+            shock_pct = abs(calibrated_shock_pct_for_topic(primary_topic))
+            if shock_pct <= 0:
+                shock_pct = 8.0
+        except Exception:
+            shock_pct = 8.0
     if spot <= 0 or not primary_factor:
         return {"return_pct": 0.0, "nifty_points": 0.0, "model": "ridge_shock_v1"}
     try:
@@ -66,7 +79,7 @@ def _predict_impact(
             bottom_up_return_pct=0.0,
             horizon_days=horizon_days,
             primary_factor=primary_factor,
-            primary_shock_pct=8.0,
+            primary_shock_pct=shock_pct,
             cascade=True,
             india_vix=macro_factors.get("india_vix"),
         )
@@ -248,11 +261,22 @@ def process_and_upsert_headline(
         enriched.structured_summary.implied_factors,
     )
     primary = tagged[0]["factor"] if tagged else "index_sentiment"
+    from trade_integrations.dataflows.index_research.news_tags import build_article_tags
+
+    article_tags = build_article_tags(
+        enriched.title,
+        enriched.content_summary,
+        ticker=ticker,
+        published_at=str(row.get("published_at") or ""),
+        implied_factors=enriched.structured_summary.implied_factors,
+    )
+    primary_topic = article_tags.topics[0] if article_tags.topics else None
     predicted = _predict_impact(
         spot=spot,
         macro_factors=macro_factors,
         primary_factor=primary,
         horizon_days=horizon_days,
+        primary_topic=primary_topic,
     )
     maturity = resolve_maturity_trading_date(publish_day, horizon_days, trading_dates)
 

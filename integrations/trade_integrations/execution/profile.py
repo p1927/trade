@@ -12,7 +12,7 @@ MarketCode = Literal["IN", "US"]
 ModeCode = Literal["paper", "live"]
 BackendCode = Literal["openalgo", "alpaca"]
 PaperSessionKind = Literal["openalgo_per_agent", "alpaca_account", "none"]
-WatchBackend = Literal["nautilus_openalgo", "alpaca_quote", "none"]
+WatchBackend = Literal["nautilus_openalgo", "nautilus_alpaca", "alpaca_quote", "none"]
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,7 @@ class ExecutionProfile:
     watch_backend: WatchBackend
     uses_openalgo_auto_paper: bool
     uses_nautilus_handoff: bool
+    uses_nautilus_watch: bool
 
     @property
     def is_us(self) -> bool:
@@ -72,9 +73,10 @@ def resolve_profile(*, agent: dict[str, Any], mode: str | None = None) -> Execut
             allowed_instruments=instruments,
             paper_session_kind="alpaca_account" if agent_mode == "paper" else "none",
             prompt_fragment_id=fragment,
-            watch_backend="alpaca_quote",
+            watch_backend="nautilus_alpaca",
             uses_openalgo_auto_paper=False,
             uses_nautilus_handoff=False,
+            uses_nautilus_watch=True,
         )
 
     return ExecutionProfile(
@@ -87,6 +89,7 @@ def resolve_profile(*, agent: dict[str, Any], mode: str | None = None) -> Execut
         watch_backend="nautilus_openalgo",
         uses_openalgo_auto_paper=agent_mode == "paper",
         uses_nautilus_handoff=True,
+        uses_nautilus_watch=True,
     )
 
 

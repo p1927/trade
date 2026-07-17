@@ -248,22 +248,32 @@ def mcp_set_watch_spec(agent_id: str, watch_spec: dict[str, Any]) -> dict[str, A
     save_agent(agent)
 
     handoff = None
-    if profile.uses_nautilus_handoff:
+    if profile.uses_nautilus_watch:
         from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
 
         handoff = sync_watch_spec_to_handoff(agent_id, watch_spec)
-        try:
-            from nautilus_openalgo_bridge.reconcile import sync_handoff_from_position_book
+        if profile.uses_nautilus_handoff:
+            try:
+                from nautilus_openalgo_bridge.reconcile import sync_handoff_from_position_book
 
-            sync_handoff_from_position_book(agent_id, underlying=str(agent.get("symbols", ["NIFTY"])[0]))
-        except Exception:
-            pass
+                sync_handoff_from_position_book(agent_id, underlying=str(agent.get("symbols", ["NIFTY"])[0]))
+            except Exception:
+                pass
     return {
         "status": "ok",
         "agent_id": agent_id,
         "watch_spec": watch_spec,
         "handoff_synced": handoff is not None,
     }
+
+
+def mcp_get_quant_monitor_status(agent_id: str) -> dict[str, Any]:
+    from trade_integrations.monitor.quant_monitor import get_quant_monitor_status
+
+    agent = get_agent(agent_id)
+    if not agent:
+        return {"status": "error", "error": f"agent not found: {agent_id}"}
+    return {"status": "ok", **get_quant_monitor_status(agent_id)}
 
 
 def mcp_submit_bridge_execution_intent(

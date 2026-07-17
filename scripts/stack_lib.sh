@@ -389,7 +389,7 @@ for agent in list_agents():
         profile = resolve_profile(agent=agent)
     except Exception:
         continue
-    if profile.uses_nautilus_handoff:
+    if profile.uses_nautilus_watch:
         aid = str(agent.get("id") or "").strip()
         if aid:
             print(aid)
@@ -397,11 +397,37 @@ for agent in list_agents():
 PY
 }
 
+stack_ensure_redis() {
+  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
+    if [[ -z "${NAUTILUS_REDIS_URL:-}" ]]; then
+      return 0
+    fi
+  fi
+  local url="${NAUTILUS_REDIS_URL:-redis://127.0.0.1:6379/0}"
+  if command -v redis-cli >/dev/null 2>&1 && redis-cli -u "$url" ping 2>/dev/null | grep -q PONG; then
+    return 0
+  fi
+  local root compose
+  root="$(stack_root)"
+  compose="$root/docker-compose.stack.yml"
+  if [[ -f "$compose" ]] && command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    echo "[stack] starting Redis (Nautilus watch cache) ..."
+    docker compose -f "$compose" up -d redis >/dev/null 2>&1 || true
+    sleep 2
+    if command -v redis-cli >/dev/null 2>&1 && redis-cli -u "$url" ping 2>/dev/null | grep -q PONG; then
+      return 0
+    fi
+  fi
+  echo "[stack] Redis not reachable at $url — Nautilus watch may fail (brew services start redis)" >&2
+  return 0
+}
+
 stack_ensure_nautilus_watch() {
   local agent_id="${1:-$(stack_primary_nautilus_agent_id)}"
   if [[ -z "$agent_id" ]]; then
     return 0
   fi
+  stack_ensure_redis || true
   stack_start_nautilus_watch "$agent_id" || {
     echo "[stack] Nautilus watch not started — bootstrap poll ticks still run via Vibe scheduler" >&2
     return 0
@@ -477,10 +503,35 @@ stack_status_vibe_stack() {
     fi
   done
 
-  local nautilus_pid
+  local redis_url="${NAUTILUS_REDIS_URL:-redis://127.0.0.1:6379/0}"
+  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" != "0" && "${NAUTILUS_WATCH_ENABLE:-}" != "false" ]]; then
+    if command -v redis-cli >/dev/null 2>&1 && redis-cli -u "$redis_url" ping 2>/dev/null | grep -q PONG; then
+      echo "  ✓ Redis       $redis_url  (PONG)"
+    else
+      echo "  ✗ Redis       $redis_url  (Nautilus watch needs Redis)"
+      ok=0
+    fi
+  fi
+
+  local nautilus_pid registry_file registry_summary=""
   nautilus_pid="$(stack_read_pid "$log_dir/nautilus-watch.pid")"
+  registry_file="$log_dir/nautilus-watch.agents.json"
+  if [[ -f "$registry_file" ]]; then
+    registry_summary="$(stack_pick_python - "$registry_file" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text())
+agents = [str(r.get("agent_id") or "") for r in (data.get("agents") or []) if r.get("agent_id")]
+print(", ".join(agents) if agents else "")
+PY
+)"
+  fi
   if stack_pid_alive "$nautilus_pid"; then
-    echo "  ✓ Nautilus watch  pid=${nautilus_pid} (alive)"
+    if [[ -n "$registry_summary" ]]; then
+      echo "  ✓ Nautilus watch  pid=${nautilus_pid} (alive, agents: ${registry_summary})"
+    else
+      echo "  ✓ Nautilus watch  pid=${nautilus_pid} (alive)"
+    fi
   elif [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
     echo "  · Nautilus watch  disabled (NAUTILUS_WATCH_ENABLE=0)"
   else
@@ -571,6 +622,22 @@ stack_start_nautilus_watch() {
   echo "[stack] starting Nautilus watch node ..."
   local cmd=("$launch_script")
   if [[ -n "$agent_id" ]]; then
+    "$(stack_pick_python)" - "$root" "$agent_id" <<'PY' 2>/dev/null || true
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+agent_id = sys.argv[2]
+sys.path.insert(0, str(root / "integrations"))
+try:
+    from trade_integrations.autonomous_agents.nautilus_watch import add_agent_to_registry
+    add_agent_to_registry(agent_id)
+except Exception:
+    pass
+PY
+  fi
+  if [[ -f "$log_dir/nautilus-watch.agents.json" ]]; then
+    cmd+=(--registry)
+  elif [[ -n "$agent_id" ]]; then
     cmd+=(--agent-id "$agent_id")
     echo "$agent_id" >"$agent_id_file"
   fi

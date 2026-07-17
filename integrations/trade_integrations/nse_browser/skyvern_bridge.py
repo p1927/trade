@@ -15,6 +15,7 @@ from urllib.parse import urljoin
 import requests
 
 from trade_integrations.nse_browser.registry import hub_root
+from trade_integrations.nse_browser.skyvern_local import read_local_skyvern_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -30,31 +31,40 @@ def skyvern_enabled() -> bool:
 
 
 def skyvern_base_url() -> str:
-    return os.environ.get("SKYVERN_BASE_URL", "http://localhost:8000").rstrip("/")
+    return os.environ.get("SKYVERN_BASE_URL", "http://localhost:8010").rstrip("/")
 
 
 def skyvern_api_key() -> str:
-    return os.environ.get("SKYVERN_API_KEY", "").strip()
+    explicit = os.environ.get("SKYVERN_API_KEY", "").strip()
+    if explicit:
+        return explicit
+    return read_local_skyvern_api_key()
 
 
 def skyvern_configured() -> bool:
-    return bool(skyvern_enabled() and skyvern_api_key())
+    if not skyvern_enabled():
+        return False
+    return bool(skyvern_api_key())
 
 
 def _api_prefix() -> str:
-    raw = os.environ.get("SKYVERN_API_PREFIX", "/api/v1").strip()
+    raw = os.environ.get("SKYVERN_API_PREFIX", "/v1").strip()
     if not raw.startswith("/"):
         raw = f"/{raw}"
     return raw.rstrip("/")
 
 
 def _api_url(path: str) -> str:
-    prefix = _api_prefix()
     if not path.startswith("/"):
         path = f"/{path}"
+    base = skyvern_base_url()
+    # Self-hosted image: heartbeat under /api/v1; task/run APIs under /v1
+    if path.lstrip("/") == "heartbeat":
+        return f"{base}/api/v1/heartbeat"
+    prefix = _api_prefix()
     if path.startswith(prefix + "/") or path == prefix:
-        return urljoin(skyvern_base_url() + "/", path.lstrip("/"))
-    return urljoin(skyvern_base_url() + prefix + "/", path.lstrip("/"))
+        return urljoin(base + "/", path.lstrip("/"))
+    return urljoin(base + prefix + "/", path.lstrip("/"))
 
 
 def skyvern_status() -> dict[str, Any]:
@@ -62,6 +72,12 @@ def skyvern_status() -> dict[str, Any]:
     payload: dict[str, Any] = {
         "enabled": skyvern_enabled(),
         "configured": skyvern_configured(),
+        "api_key_source": (
+            "env"
+            if os.environ.get("SKYVERN_API_KEY", "").strip()
+            else ("local_credentials" if skyvern_api_key() else "missing")
+        ),
+        "llm_provider": "minimax_openai_compatible",
         "base_url": skyvern_base_url(),
         "api_prefix": _api_prefix(),
         "reachable": False,
@@ -139,7 +155,7 @@ def run_skyvern_task(
             "task_id": task_id,
             "engine": "skyvern",
             "error": "skyvern_not_configured",
-            "hint": "Set SKYVERN_API_KEY and start Skyvern (docker compose -f docker-compose.skyvern.yml up -d)",
+            "hint": "Start Skyvern (scripts/start_skyvern.sh) — local API key auto-read from .skyvern-data/.skyvern/credentials.toml",
         }
 
     wait_s = max_wait_s or int(os.environ.get("SKYVERN_TASK_TIMEOUT_S", "180"))

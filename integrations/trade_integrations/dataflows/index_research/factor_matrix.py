@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -56,6 +56,10 @@ MACRO_FACTOR_KEYS: tuple[str, ...] = (
     "dii_absorption_ratio",
 )
 
+from trade_integrations.dataflows.index_research.news_event_features import NEWS_EVENT_FACTOR_KEYS
+
+NEWS_EVENT_MACRO_KEYS: tuple[str, ...] = NEWS_EVENT_FACTOR_KEYS
+
 _MAX_FEATURES = 40
 _MIN_ABS_CORR = 0.05
 
@@ -78,7 +82,39 @@ def _forward_return_pct(close: pd.Series, horizon_days: int) -> pd.Series:
     return (future - close) / close * 100.0
 
 
-_EXCLUDED_REDUNDANT: frozenset[str] = frozenset({"sector_breadth_mean_sentiment"})
+_EXCLUDED_REDUNDANT: frozenset[str] = frozenset(
+    {
+        "sector_breadth_mean_sentiment",
+        "oil_wti",
+        "constituent_momentum_7d",
+    }
+)
+
+# When both appear in candidate columns, drop the second (keep interpretable primary).
+_REDUNDANCY_PAIRS: tuple[tuple[str, str], ...] = (
+    ("nifty_return_7d", "constituent_momentum_7d"),
+    ("oil_brent", "oil_wti"),
+    ("nifty_return_7d", "nifty_return_14d"),  # prefer shorter horizon when both correlate
+)
+
+
+def _apply_redundancy_prune(columns: list[str]) -> list[str]:
+    """Drop redundant pair members already excluded or superseded."""
+    present = set(columns)
+    drop: set[str] = set()
+    for keep, discard in _REDUNDANCY_PAIRS:
+        if keep in present and discard in present:
+            drop.add(discard)
+    drop |= _EXCLUDED_REDUNDANT & present
+    return [c for c in columns if c not in drop]
+
+
+def redundancy_audit() -> dict[str, Any]:
+    """Document factors excluded from Ridge training for interpretability."""
+    return {
+        "excluded_redundant": sorted(_EXCLUDED_REDUNDANT),
+        "redundancy_pairs": [list(pair) for pair in _REDUNDANCY_PAIRS],
+    }
 
 
 def _select_macro_columns(
@@ -95,9 +131,35 @@ def _select_macro_columns(
     else:
         ordered = list(MACRO_FACTOR_KEYS)
 
+    try:
+        from trade_integrations.dataflows.index_research.news_event_features import is_news_ridge_enabled
+
+        if is_news_ridge_enabled():
+            ordered = list(ordered) + [k for k in NEWS_EVENT_MACRO_KEYS if k not in ordered]
+    except Exception:
+        pass
+
     present = [
         key for key in ordered if key in history_df.columns and key not in _EXCLUDED_REDUNDANT
     ]
+    present = _apply_redundancy_prune(present)
+    try:
+        from trade_integrations.dataflows.index_research.sector_promotion import (
+            promoted_sector_factor_keys,
+        )
+
+        for key in promoted_sector_factor_keys():
+            if key in history_df.columns and key not in present:
+                present.append(key)
+        from trade_integrations.dataflows.index_research.event_promotion import (
+            promoted_event_factor_keys,
+        )
+
+        for key in promoted_event_factor_keys():
+            if key in history_df.columns and key not in present:
+                present.append(key)
+    except ImportError:
+        pass
     if present:
         return present
     exclude = {"date", "close", "open", "high", "low", "volume"}
@@ -111,6 +173,8 @@ def _select_macro_columns(
 def build_factor_matrix(
     history_df: pd.DataFrame,
     horizon: HorizonProfile,
+    *,
+    force_include_keys: tuple[str, ...] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Return ``(X, y, feature_names)`` for macro Ridge training.
 
@@ -159,6 +223,12 @@ def build_factor_matrix(
         selected = ranked[:_MAX_FEATURES]
 
     for col in _PINNED_MACRO_FACTORS:
+        if col in macro_cols and col not in selected and col not in _EXCLUDED_REDUNDANT:
+            selected.append(col)
+
+    selected = _apply_redundancy_prune(selected)
+
+    for col in force_include_keys or ():
         if col in macro_cols and col not in selected:
             selected.append(col)
 

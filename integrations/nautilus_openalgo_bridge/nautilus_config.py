@@ -8,3 +8,8 @@ from nautilus_trader.config import LiveDataClientConfig
 class OpenAlgoDataClientConfig(LiveDataClientConfig, frozen=True):
     poll_interval_ms: int = 2_000
     watch_symbols: tuple[str, ...] = ("NIFTY", "BANKNIFTY", "INDIAVIX")
+
+
+class AlpacaDataClientConfig(LiveDataClientConfig, frozen=True):
+    poll_interval_ms: int = 2_000
+    watch_symbols: tuple[str, ...] = ("SPY",)

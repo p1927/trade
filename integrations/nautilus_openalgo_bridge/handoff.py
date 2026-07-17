@@ -113,6 +113,52 @@ def build_handoff_shell_from_agent(
     )
 
 
+def build_handoff_shell_from_hub_agent(agent_id: str) -> PositionHandoff | None:
+    """Build handoff from hub agent JSON only (Nautilus venv safe)."""
+    from nautilus_openalgo_bridge.hub_paths import load_agent_json
+
+    agent = load_agent_json(agent_id)
+    if not agent:
+        return None
+    agent = dict(agent)
+    agent.setdefault("id", agent_id)
+    raw_spec = load_agent_watch_spec(agent_id) or agent.get("watch_spec") or {}
+    spec = WatchSpec.from_dict(raw_spec if isinstance(raw_spec, dict) else {"rules": raw_spec})
+    constraints = dict(agent.get("constraints") or {})
+    symbols = list(agent.get("symbols") or ["NIFTY"])
+    underlying = str(symbols[0] if symbols else "NIFTY").upper()
+    return PositionHandoff(
+        agent_id=agent_id,
+        widget_id=None,
+        underlying=underlying,
+        legs=[],
+        entry_spot=0.0,
+        watch_spec=spec,
+        stop_rules=StopRules(
+            max_loss_inr=float(constraints.get("max_daily_loss_inr") or 2_000) * 0.75,
+            flatten_at_close=True,
+        ),
+        vibe_session_id=agent.get("vibe_session_id"),
+    )
+
+
+def ensure_handoff_for_agent(agent_id: str) -> PositionHandoff | None:
+    """Ensure handoff file exists with watch_spec before Nautilus node starts."""
+    agent_id = str(agent_id or "").strip()
+    if not agent_id:
+        return None
+    existing = load_handoff(agent_id)
+    if existing and existing.watch_spec.rules:
+        return existing
+    raw = load_agent_watch_spec(agent_id)
+    if raw:
+        return sync_watch_spec_to_handoff(agent_id, raw)
+    shell = build_handoff_shell_from_hub_agent(agent_id)
+    if shell is None:
+        return None
+    return save_handoff(shell)
+
+
 def sync_watch_spec_to_handoff(agent_id: str, watch_spec: dict[str, Any]) -> PositionHandoff | None:
     """Persist watch rules on the bridge handoff file (create shell if needed)."""
     from trade_integrations.autonomous_agents.store import get_agent

@@ -358,11 +358,17 @@ def _predict_direction_probability(
 def train_macro_ridge(
     history_df: pd.DataFrame,
     horizon: HorizonProfile,
+    *,
+    force_include_keys: tuple[str, ...] | None = None,
 ) -> ModelArtifact:
     """Train Ridge on polynomial macro features; return artifact for inference."""
     Ridge, _, mean_absolute_error, r2_score, PolynomialFeatures, _ = _require_sklearn()
 
-    X, y, feature_names = build_factor_matrix(history_df, horizon)
+    X, y, feature_names = build_factor_matrix(
+        history_df,
+        horizon,
+        force_include_keys=force_include_keys,
+    )
     if X.size == 0 or len(y) < 3:
         return ModelArtifact(
             poly_degree=horizon.poly_degree,
@@ -423,6 +429,54 @@ def load_stored_model_artifact() -> ModelArtifact | None:
 
 
 
+def detect_sign_conflict(
+    raw_macro: float,
+    scenario_anchor_return_pct: float | None,
+    *,
+    threshold_pct: float = _MACRO_SHRINK_THRESHOLD_PCT,
+) -> bool:
+    """True when gated macro and scenario anchor disagree on sign with material magnitude."""
+    if scenario_anchor_return_pct is None:
+        return False
+    if abs(raw_macro) <= threshold_pct:
+        return False
+    return raw_macro * scenario_anchor_return_pct < 0
+
+
+def apply_sign_conflict_gate(
+    *,
+    direction_view: str | None,
+    direction_confidence: float | None,
+    raw_macro: float,
+    scenario_anchor_return_pct: float | None,
+    regime_label: str,
+    wf_metrics: dict[str, Any],
+) -> tuple[str | None, float | None, bool]:
+    """Neutralize direction and halve confidence when macro vs scenario conflict."""
+    from trade_integrations.dataflows.index_research.direction_calibration import (
+        artifact_direction_hit_rate,
+        regime_oos_hit_rate,
+    )
+
+    if not detect_sign_conflict(raw_macro, scenario_anchor_return_pct):
+        return direction_view, direction_confidence, False
+
+    regime_cap = regime_oos_hit_rate(wf_metrics, regime_label)
+    global_cap = artifact_direction_hit_rate(wf_metrics)
+    cap = regime_cap if regime_cap is not None else global_cap
+    high_conf = (
+        direction_confidence is not None
+        and cap is not None
+        and direction_confidence > cap + 0.1
+    )
+    if high_conf:
+        conf = direction_confidence * 0.5 if direction_confidence is not None else None
+        return direction_view, conf, True
+
+    conf = direction_confidence * 0.5 if direction_confidence is not None else None
+    return "neutral", conf, True
+
+
 def _classify_view(expected_return_pct: float) -> str:
     if expected_return_pct >= _VIEW_BULL_THRESHOLD:
         return "bullish"
@@ -439,8 +493,14 @@ def predict_nifty(
     *,
     model_artifact: ModelArtifact | None = None,
     scenario_anchor_return_pct: float | None = None,
+    as_of_day: str | None = None,
 ) -> dict[str, Any]:
     """Hybrid forecast: bottom-up constituent attribution + macro Ridge delta."""
+    from trade_integrations.dataflows.index_research.event_overlay import enrich_macro_with_news_features
+
+    as_of = (as_of_day or datetime.now(timezone.utc).date().isoformat())[:10]
+    macro_factors = enrich_macro_with_news_features(macro_factors, as_of_day=as_of)
+
     artifact = model_artifact or load_stored_model_artifact()
     attributed = attribute_constituents(signals, horizon_days=horizon.days)
     rollup = rollup_attribution(attributed)
@@ -452,7 +512,15 @@ def predict_nifty(
     gated_raw = predict_macro_delta_gated(macro_factors, horizon, artifact)
     if abs(gated_raw) > 1e-9:
         raw_macro = gated_raw
-    macro_delta = shrink_macro_delta(raw_macro, scenario_anchor_return_pct)
+
+    from trade_integrations.dataflows.index_research.event_overlay import merge_overlay_into_macro
+
+    raw_with_overlay, event_overlay = merge_overlay_into_macro(
+        raw_macro,
+        macro_factors,
+        as_of_day=as_of,
+    )
+    macro_delta = shrink_macro_delta(raw_with_overlay, scenario_anchor_return_pct)
     expected_return_pct = bottom_up + macro_delta
     mae = artifact.mae if artifact else _DEFAULT_MAE_PCT
 
@@ -463,7 +531,21 @@ def predict_nifty(
     intercept = artifact.intercept if artifact else 0.0
     r2 = artifact.r2_walk_forward if artifact else None
 
-    direction_prob = _predict_direction_probability(macro_factors, artifact) if artifact else None
+    direction_prob_raw = _predict_direction_probability(macro_factors, artifact) if artifact else None
+    from trade_integrations.dataflows.index_research.direction_calibration import (
+        calibrate_direction_confidence,
+        load_walk_forward_accuracy,
+    )
+    from trade_integrations.dataflows.index_research.regime_gates import resolve_regime_label
+
+    wf_metrics = load_walk_forward_accuracy()
+    regime_label = resolve_regime_label(macro_factors)
+    direction_prob = (
+        calibrate_direction_confidence(direction_prob_raw, regime_label, wf_metrics)
+        if direction_prob_raw is not None
+        else None
+    )
+    walk_forward_hit = wf_metrics.get("direction_hit_rate_walk_forward")
     direction_view = None
     if direction_prob is not None:
         if direction_prob >= _DIRECTION_PROB_BULL:
@@ -473,17 +555,31 @@ def predict_nifty(
         else:
             direction_view = "neutral"
 
+    direction_view, direction_prob, sign_conflict = apply_sign_conflict_gate(
+        direction_view=direction_view,
+        direction_confidence=direction_prob,
+        raw_macro=raw_macro,
+        scenario_anchor_return_pct=scenario_anchor_return_pct,
+        regime_label=regime_label,
+        wf_metrics=wf_metrics,
+    )
+
     return {
         "view": _classify_view(expected_return_pct),
         "expected_return_pct": expected_return_pct,
         "bottom_up_return_pct": bottom_up,
         "macro_delta_pct": macro_delta,
         "raw_macro_delta_pct": round(raw_macro, 4),
+        "event_overlay_pct": event_overlay.get("return_pct"),
+        "event_overlay": event_overlay,
         "direction_view": direction_view,
         "direction_confidence": direction_prob,
+        "direction_confidence_raw": direction_prob_raw,
         "direction_model_score": direction_prob,
-        "direction_hit_rate_oos": artifact.direction_hit_rate_oos if artifact else None,
-        "direction_hit_rate_walk_forward": artifact.direction_hit_rate_oos if artifact else None,
+        "sign_conflict": sign_conflict,
+        "direction_hit_rate_oos": walk_forward_hit,
+        "direction_hit_rate_walk_forward": walk_forward_hit,
+        "direction_eval_count": wf_metrics.get("eval_count"),
         "range": {
             "low": range_low,
             "high": range_high,
@@ -496,7 +592,7 @@ def predict_nifty(
             "r2_walk_forward": r2,
             "direction_coefficients": artifact.direction_coefficients if artifact else {},
             "direction_intercept": artifact.direction_intercept if artifact else 0.0,
-            "direction_hit_rate_oos": artifact.direction_hit_rate_oos if artifact else None,
+            "direction_hit_rate_oos": walk_forward_hit,
         },
         "horizon": {"name": horizon.name, "days": horizon.days},
     }

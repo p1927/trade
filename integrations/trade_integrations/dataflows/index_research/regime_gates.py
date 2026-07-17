@@ -26,6 +26,19 @@ MOMENTUM_FACTORS = frozenset(
 )
 FII_CONTRARIAN_FACTORS = frozenset({"fii_net_5d"})
 JOINT_FLOW_FACTORS = frozenset({"institutional_net_5d", "dii_absorption_ratio"})
+NEWS_EVENT_FACTORS = frozenset(
+    {
+        "news_material_7d",
+        "news_war_7d",
+        "news_oil_7d",
+        "news_fii_7d",
+        "news_rbi_7d",
+        "news_crash_theme_7d",
+        "news_rally_theme_7d",
+        "news_net_tone_7d",
+        "news_surprise_7d",
+    }
+)
 
 _HIGH_FEAR_VIX = 18.0
 _TREND_DOWN_PCT = -3.0
@@ -60,10 +73,17 @@ def resolve_regime_label(factors: dict[str, Any]) -> str:
 def block_gate_weights(regime_label: str) -> dict[str, float]:
     """Pre-specified multipliers — not tuned on miss dates."""
     if regime_label == "high_fear":
-        return {"momentum": 0.5, "flows": 1.0, "global": 1.0, "vol": 1.0, "calendar": 1.0}
+        return {
+            "momentum": 0.5,
+            "flows": 1.0,
+            "global": 1.0,
+            "vol": 1.0,
+            "calendar": 1.0,
+            "news_events": 0.5,
+        }
     if regime_label == "trend_down":
-        return {"momentum": 1.0, "flows": 0.0, "global": 1.0, "vol": 1.0, "calendar": 1.0}
-    return {"momentum": 1.0, "flows": 1.0, "global": 1.0, "vol": 1.0, "calendar": 1.0}
+        return {"momentum": 1.0, "flows": 0.0, "global": 1.0, "vol": 1.0, "calendar": 1.0, "news_events": 1.0}
+    return {"momentum": 1.0, "flows": 1.0, "global": 1.0, "vol": 1.0, "calendar": 1.0, "news_events": 1.0}
 
 
 def factor_gate_weight(factor_name: str, regime_label: str) -> float:
@@ -80,6 +100,8 @@ def factor_gate_weight(factor_name: str, regime_label: str) -> float:
         return weights["vol"]
     if factor_name in {"days_to_monthly_expiry", "is_budget_week", "is_results_season"}:
         return weights["calendar"]
+    if factor_name in NEWS_EVENT_FACTORS:
+        return weights["news_events"]
     return 1.0
 
 
@@ -121,7 +143,12 @@ def predict_macro_delta_gated(
     expanded, poly_names = _expand_poly(gated_input, artifact.feature_names, artifact.poly_degree)
     coefs = np.array([artifact.coefficients.get(name, 0.0) for name in poly_names], dtype=float)
     trust = _macro_trust_weight(float(artifact.mae or 1.5))
-    return float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
+    raw_delta = float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
+    from trade_integrations.dataflows.index_research.flow_regime_buckets import (
+        apply_flow_regime_adjustment,
+    )
+
+    return apply_flow_regime_adjustment(raw_delta, macro_factors, regime)
 
 
 def apply_regime_gates_to_contributions(

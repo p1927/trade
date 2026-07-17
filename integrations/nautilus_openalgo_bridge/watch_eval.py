@@ -22,6 +22,8 @@ def evaluate_rule(
     quote: QuoteSnapshot,
     *,
     baseline_ltp: float | None = None,
+    baseline_oi: float | None = None,
+    baseline_volume: float | None = None,
 ) -> WatchAlert | None:
     base = baseline_ltp if baseline_ltp is not None else rule.baseline_ltp
     ltp = quote.ltp
@@ -71,6 +73,44 @@ def evaluate_rule(
             ltp=ltp,
         )
 
+    if rule.metric == "oi_change_pct":
+        oi_base = baseline_oi if baseline_oi is not None else rule.baseline_ltp
+        if oi_base is None or oi_base <= 0 or quote.oi is None:
+            return None
+        change = _move_pct(oi_base, quote.oi)
+        if abs(change) < rule.threshold:
+            return None
+        if rule.direction == "up" and change < 0:
+            return None
+        if rule.direction == "down" and change > 0:
+            return None
+        label = rule.label or rule.symbol
+        return WatchAlert(
+            signal=BridgeSignal.REVIEW_NEEDED,
+            rule=rule,
+            symbol=rule.symbol,
+            message=f"{label} OI changed {change:+.2f}% (threshold {rule.threshold}%)",
+            ltp=ltp,
+            move_pct=change,
+        )
+
+    if rule.metric == "volume_spike_pct":
+        vol_base = baseline_volume if baseline_volume is not None else rule.baseline_ltp
+        if vol_base is None or vol_base <= 0 or quote.volume is None:
+            return None
+        spike = _move_pct(vol_base, quote.volume)
+        if spike < rule.threshold:
+            return None
+        label = rule.label or rule.symbol
+        return WatchAlert(
+            signal=BridgeSignal.REVIEW_NEEDED,
+            rule=rule,
+            symbol=rule.symbol,
+            message=f"{label} volume spike {spike:+.2f}% (threshold {rule.threshold}%)",
+            ltp=ltp,
+            move_pct=spike,
+        )
+
     return None
 
 
@@ -79,15 +119,25 @@ def evaluate_watch_spec(
     quotes: dict[str, QuoteSnapshot],
     *,
     baselines: dict[str, float] | None = None,
+    oi_baselines: dict[str, float] | None = None,
+    volume_baselines: dict[str, float] | None = None,
 ) -> list[WatchAlert]:
     """Return alerts for all rules that fire on this poll tick."""
     baselines = baselines or {}
+    oi_baselines = oi_baselines or {}
+    volume_baselines = volume_baselines or {}
     alerts: list[WatchAlert] = []
     for rule in spec.rules:
         quote = quotes.get(rule.symbol) or quotes.get(rule.symbol.upper())
         if quote is None:
             continue
-        alert = evaluate_rule(rule, quote, baseline_ltp=baselines.get(rule.symbol))
+        alert = evaluate_rule(
+            rule,
+            quote,
+            baseline_ltp=baselines.get(rule.symbol),
+            baseline_oi=oi_baselines.get(rule.symbol),
+            baseline_volume=volume_baselines.get(rule.symbol),
+        )
         if alert is not None:
             alerts.append(alert)
     return alerts

@@ -44,5 +44,5 @@ Always pass `output_schema` when you need structured JSON for hub or trade plans
 
 ## Env
 
-- `SKYVERN_API_KEY` — from http://localhost:8080/settings after `docker compose -f docker-compose.skyvern.yml up -d`
-- `MINIMAX_API_KEY` — fallback when Skyvern unavailable
+- `MINIMAX_API_KEY` — powers Skyvern brain (via `scripts/sync_skyvern_env.sh`) and direct fallback
+- Local Skyvern API auth — auto from `.skyvern-data/.skyvern/credentials.toml` after `scripts/start_skyvern.sh`

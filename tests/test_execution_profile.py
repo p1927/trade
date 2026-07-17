@@ -46,6 +46,8 @@ def test_resolve_profile_us_paper() -> None:
     assert profile.market == "US"
     assert profile.backend == "alpaca"
     assert not profile.uses_openalgo_auto_paper
+    assert profile.uses_nautilus_watch
+    assert profile.watch_backend == "nautilus_alpaca"
     assert profile.prompt_fragment_id == "us_equity_paper"
 
 

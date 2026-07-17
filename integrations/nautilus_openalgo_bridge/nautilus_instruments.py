@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from nautilus_trader.model.currencies import INR
+from nautilus_trader.model.currencies import INR, USD
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.instruments import IndexInstrument
+from nautilus_trader.model.instruments import Equity, IndexInstrument
 from nautilus_trader.model.objects import Price, Quantity
 
 from nautilus_openalgo_bridge.instruments import normalize_watch_symbol
 from nautilus_openalgo_bridge.models import QuoteSnapshot
 
 VENUE_NSE = "NSE"
+VENUE_US = "NASDAQ"
 PRICE_PRECISION = 2
+US_PRICE_PRECISION = 4
 
 
 def watch_symbol_to_instrument_id(symbol: str) -> InstrumentId:
@@ -64,5 +66,28 @@ def quote_snapshot_to_tick(
     )
 
 
-def default_watch_instrument_ids(symbols: tuple[str, ...]) -> list[InstrumentId]:
+def us_symbol_to_instrument_id(symbol: str) -> InstrumentId:
+    key = str(symbol or "").strip().upper()
+    return InstrumentId.from_str(f"{key}.{VENUE_US}")
+
+
+def build_us_equity_instrument(symbol: str) -> Equity:
+    key = str(symbol or "").strip().upper()
+    instrument_id = us_symbol_to_instrument_id(key)
+    now_ns = int(datetime.now(timezone.utc).timestamp() * 1_000_000_000)
+    return Equity(
+        instrument_id=instrument_id,
+        raw_symbol=instrument_id.symbol,
+        currency=USD,
+        price_precision=US_PRICE_PRECISION,
+        price_increment=Price.from_str("0.0001"),
+        lot_size=Quantity.from_int(1),
+        ts_event=now_ns,
+        ts_init=now_ns,
+    )
+
+
+def default_watch_instrument_ids(symbols: tuple[str, ...], *, market: str = "IN") -> list[InstrumentId]:
+    if market == "US":
+        return [us_symbol_to_instrument_id(symbol) for symbol in symbols]
     return [watch_symbol_to_instrument_id(symbol) for symbol in symbols]

@@ -15,6 +15,7 @@ from nautilus_openalgo_bridge.models import BridgeSignal, WatchSpec
 from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
 from nautilus_openalgo_bridge.reconcile import open_positions_from_book, total_unrealized_pnl
 from nautilus_openalgo_bridge.stop_eval import evaluate_stop_rules
+from nautilus_openalgo_bridge.thesis_eval import evaluate_thesis_for_agent
 from nautilus_openalgo_bridge.watch_eval import evaluate_watch_spec
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,41 @@ def maybe_reload_watch_spec(
     return spec, last_handoff_mtime, last_agent_mtime
 
 
+def _dispatch_alerts(
+    agent_id: str,
+    alerts: list,
+    *,
+    quotes: dict,
+    trigger_vibe: bool,
+    market: str | None = None,
+) -> list[dict]:
+    dispatch_results: list[dict] = []
+    if not trigger_vibe:
+        return dispatch_results
+    from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours
+    from nautilus_openalgo_bridge.market_hours import agent_market, is_market_open_for_market
+    from nautilus_openalgo_bridge.signal_actions import dispatch_exit_intent
+    from nautilus_openalgo_bridge.vibe_trigger import dispatch_thesis_alert_sync, dispatch_watch_alert_sync
+
+    agent_market_code = (market or agent_market(agent_id)).upper()
+    outside_hours = not allow_vibe_alert_outside_market_hours()
+
+    for alert in alerts:
+        if alert.signal == BridgeSignal.EXIT_NOW:
+            dispatch_results.append(dispatch_exit_intent(agent_id, alert))
+        elif alert.signal == BridgeSignal.THESIS_BROKEN:
+            if outside_hours and not is_market_open_for_market(agent_market_code):
+                dispatch_results.append({"status": "skipped", "reason": "outside_market_hours"})
+                continue
+            dispatch_results.append(dispatch_thesis_alert_sync(agent_id, alert, quotes=quotes))
+        elif alert.signal == BridgeSignal.REVIEW_NEEDED:
+            if outside_hours and not is_market_open_for_market(agent_market_code):
+                dispatch_results.append({"status": "skipped", "reason": "outside_market_hours"})
+                continue
+            dispatch_results.append(dispatch_watch_alert_sync(agent_id, alert, quotes=quotes))
+    return dispatch_results
+
+
 def run_once(
     *,
     agent_id: str | None = None,
@@ -96,7 +132,31 @@ def run_once(
         except RuntimeError as exc:
             logger.debug("stop rule eval skipped: %s", exc)
 
-    dispatch_results: list[dict] = []
+    if agent_id:
+        focus = handoff.underlying if handoff else None
+        if not focus:
+            try:
+                from trade_integrations.autonomous_agents.store import get_agent
+
+                agent = get_agent(agent_id) or {}
+                syms = list(agent.get("symbols") or ["NIFTY"])
+                focus = syms[0]
+            except Exception:
+                focus = "NIFTY"
+        quote = quotes.get(str(focus).upper()) if focus else None
+        live_spot = quote.ltp if quote else None
+        pnl = None
+        if handoff:
+            try:
+                client = get_openalgo_client(cfg)
+                rows = open_positions_from_book(client.get_position_book())
+                pnl = total_unrealized_pnl(rows)
+            except RuntimeError:
+                pass
+        thesis_alert = evaluate_thesis_for_agent(agent_id, live_spot=live_spot, position_pnl=pnl)
+        if thesis_alert is not None:
+            alerts.insert(0, thesis_alert)
+
     intent_results: list[dict] = []
 
     if process_intents:
@@ -105,15 +165,17 @@ def run_once(
         except RuntimeError as exc:
             logger.warning("intent queue processing failed: %s", exc)
 
-    if trigger_vibe and agent_id:
-        from nautilus_openalgo_bridge.signal_actions import dispatch_exit_intent
-        from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
-
-        for alert in alerts:
-            if alert.signal == BridgeSignal.EXIT_NOW:
-                dispatch_results.append(dispatch_exit_intent(agent_id, alert))
-            elif alert.signal == BridgeSignal.REVIEW_NEEDED:
-                dispatch_results.append(dispatch_watch_alert_sync(agent_id, alert, quotes=quotes))
+    dispatch_results = (
+        _dispatch_alerts(
+            agent_id,
+            alerts,
+            quotes=quotes,
+            trigger_vibe=bool(trigger_vibe and agent_id),
+            market="IN",
+        )
+        if agent_id
+        else []
+    )
 
     return {
         "quotes": {k: v.to_dict() for k, v in quotes.items()},
@@ -121,6 +183,90 @@ def run_once(
         "dispatches": dispatch_results,
         "intents_processed": intent_results,
     }
+
+
+def run_once_alpaca(
+    *,
+    agent_id: str | None = None,
+    baselines: dict[str, float] | None = None,
+    trigger_vibe: bool = False,
+    process_intents: bool = False,
+) -> dict[str, Any]:
+    from nautilus_openalgo_bridge.alpaca_quote_feed import AlpacaQuoteFeed
+
+    _ = process_intents
+    cfg = get_bridge_config()
+    feed = AlpacaQuoteFeed()
+    spec = _resolve_watch_spec(agent_id)
+    try:
+        from trade_integrations.autonomous_agents.store import get_agent
+
+        agent = get_agent(agent_id) if agent_id else None
+        symbols = [str(s).upper() for s in (agent.get("symbols") or ["SPY"])] if agent else ["SPY"]
+    except Exception:
+        symbols = ["SPY"]
+    quotes = feed.poll(symbols)
+    alerts = evaluate_watch_spec(spec, quotes, baselines=baselines or {})
+
+    handoff = load_handoff(agent_id) if agent_id else None
+    if handoff:
+        try:
+            from trade_integrations.dataflows.alpaca import list_alpaca_positions
+
+            rows = list_alpaca_positions()
+            pnl = 0.0
+            found = False
+            for row in rows:
+                raw = row.get("unrealized_pl")
+                if raw is None:
+                    continue
+                pnl += float(raw)
+                found = True
+            stop_alert = evaluate_stop_rules(
+                handoff,
+                quotes,
+                unrealized_pnl_inr=pnl if found else None,
+                config=cfg,
+            )
+            if stop_alert is not None:
+                alerts.insert(0, stop_alert)
+        except Exception as exc:
+            logger.debug("US stop rule eval skipped: %s", exc)
+
+    if agent_id:
+        focus = symbols[0] if symbols else "SPY"
+        quote = quotes.get(focus)
+        thesis_alert = evaluate_thesis_for_agent(agent_id, live_spot=quote.ltp if quote else None)
+        if thesis_alert is not None:
+            alerts.insert(0, thesis_alert)
+
+    dispatch_results = (
+        _dispatch_alerts(
+            agent_id,
+            alerts,
+            quotes=quotes,
+            trigger_vibe=bool(trigger_vibe and agent_id),
+            market="US",
+        )
+        if agent_id
+        else []
+    )
+
+    return {
+        "quotes": {k: v.to_dict() for k, v in quotes.items()},
+        "alerts": [a.to_dict() for a in alerts],
+        "dispatches": dispatch_results,
+        "intents_processed": [],
+    }
+
+
+def _poll_loop_market(agent_id: str | None) -> str:
+    try:
+        from nautilus_openalgo_bridge.market_hours import agent_market
+
+        return agent_market(agent_id)
+    except Exception:
+        return "IN"
 
 
 def run_poll_loop(
@@ -174,7 +320,18 @@ def run_poll_loop(
         trigger_vibe and bool(agent_id),
     )
 
+    from nautilus_openalgo_bridge.market_hours import closed_market_poll_interval_sec, is_market_open_for_market
+
+    loop_market = _poll_loop_market(agent_id)
+
     while True:
+        if not is_market_open_for_market(loop_market):
+            if once:
+                logger.info("market closed (%s) — exiting poll loop", loop_market)
+                return 0
+            time.sleep(closed_market_poll_interval_sec())
+            continue
+
         if agent_id:
             spec, last_handoff_mtime, last_agent_mtime = maybe_reload_watch_spec(
                 agent_id,
@@ -224,7 +381,17 @@ def run_poll_loop(
                 logger.info("EXIT intent: %s", result.get("status"))
                 continue
 
-            if not trigger_vibe or not agent_id or alert.signal != BridgeSignal.REVIEW_NEEDED:
+            if not trigger_vibe or not agent_id:
+                continue
+            if alert.signal == BridgeSignal.THESIS_BROKEN:
+                from nautilus_openalgo_bridge.vibe_trigger import dispatch_thesis_alert_sync
+
+                result = dispatch_thesis_alert_sync(agent_id, alert, quotes=quotes)
+                if result.get("status") == "dispatched":
+                    last_vibe_dispatch_at = now
+                continue
+
+            if alert.signal != BridgeSignal.REVIEW_NEEDED:
                 continue
             if spec.gate and (now - last_vibe_dispatch_at) < gate_minutes * 60:
                 continue
