@@ -96,7 +96,7 @@ def test_get_option_chain_two_calls_one_vendor_fetch(hub_tmp, monkeypatch):
         return _fake_chain(underlying, exchange, expiry_date=expiry_date, strike_count=strike_count)
 
     monkeypatch.setattr(
-        "trade_integrations.dataflows.openalgo._fetch_option_chain_raw",
+        "trade_integrations.openalgo.market_data.fetch_option_chain_channel_vendor",
         counting_fetch,
     )
 
