@@ -30,6 +30,15 @@
 | dii_net_5d | Context | Often insignificant vs FII in regression | Included; low weight expected |
 | fii_fut_long_short_ratio | Positive | Positioning | Derivatives context ✓ |
 | nifty_pe | Mixed | Valuation; slow mean reversion | Ridge ✓ |
+| **nifty_earnings_yield** | Negative when below bond yield | E/P vs risk-free — structural 14–30d stagnation | **Phase I** — derive from P/E |
+| **nifty_dividend_yield** | Positive (floor) | Classical robust predictor; spike = long regime | **Phase I** — NSE/yfinance |
+| **nifty_pb_zscore_5y** | Mean-reversion | Extreme P/B vs 5y → reversal (India) | **Phase I** — derived |
+| **india_term_spread** | Positive when steepening | Yield curve expansion signal | **Phase I** — 10Y − 91D T-Bill |
+| **india_credit_spread** | Negative when widening | Credit stress leading indicator | **Phase I** — corp BAA−AAA proxy |
+| **equity_risk_premium** | Positive | E/P − India 10Y; institutional rotation | **Phase I** — derived |
+| **india_vix_velocity_3d** | Negative on spike | VIX rate-of-change > level for 14d | **Phase I** — derived |
+| **usd_inr_momentum_5d** | Negative on INR dep. | Foreign-return channel | **Phase I** — derived |
+| **us_10y_velocity_3d** | Negative on spike | EM outflow on US rate shock | **Phase I** — derived |
 | cpi_yoy_proxy / repo_rate | Negative | Policy/inflation channel | Ridge + RBI scenarios ✓ |
 | index_sentiment | Weak positive | FinBERT short-horizon predictability unstable ([SSRN 5086825](https://ssrn.com/abstract=5086825)) | Bottom-up + Ridge; needs calibration (Phase 5) |
 | nifty_pcr | Mixed | Contrarian at extremes | OpenAlgo + Ridge ✓ |
@@ -110,6 +119,47 @@
 
 ---
 
+## Phase 8 — Pipeline integrity (P0) — SHIPPED
+
+**Plan:** [`2026-07-17-prediction-review-phase1-pipeline-integrity.md`](2026-07-17-prediction-review-phase1-pipeline-integrity.md)
+
+- Scenario-before-predict; pass scenario anchor into `predict_nifty`
+- `finalize_index_prediction()` after reconcile (+ after debate in Phase 9)
+- Sign-conflict gate always neutralizes `direction_view`
+- Reconcile updates `view` from blended return
+
+---
+
+## Phase 9 — Index debate hybrid (P0) — SHIPPED
+
+**Plan:** [`2026-07-17-prediction-review-phase2-debate-hybrid.md`](2026-07-17-prediction-review-phase2-debate-hybrid.md)
+
+- `merge_index_prediction` 60/40 debate/quant blend
+- Recompute `view` + `direction_view` from blended return
+- Second finalize pass after debate merge
+
+---
+
+## Phase 10 — Data gate transparency (P1) — SHIPPED
+
+**Plan:** [`2026-07-17-prediction-review-phase3-data-gate.md`](2026-07-17-prediction-review-phase3-data-gate.md)
+
+- `data_quality_warning` when flow coverage gate fails
+- `macro_trust_multiplier=0.5` on failed gate
+- PredictionSummary UI banner
+
+---
+
+## Phase 11 — Consumption layer (P1) — SHIPPED
+
+**Plan:** [`2026-07-17-prediction-review-phase4-consumption.md`](2026-07-17-prediction-review-phase4-consumption.md)
+
+- `thesis_break` view normalization + `expected_return_pct` fallback
+- `prediction_action` options archetype mapping
+- Unit tests for options `_prediction_view`
+
+---
+
 ## Verification checklist (each release)
 
 ```bash
@@ -128,3 +178,24 @@ import json,sys; a=json.load(sys.stdin)['artifact']; fe=a['factor_explanation'];
 - Never change `cap_macro_delta(±5%)` without backtest re-run
 - Scenario reconciliation threshold (1.5%) unchanged in Phase 1–4
 - Ledger append shape unchanged (metadata keys additive only)
+
+---
+
+## Phase 12–18 — Prediction algorithms lab (NEW — July 2026)
+
+**Master plan:** [2026-07-17-prediction-algorithms-master-plan.md](2026-07-17-prediction-algorithms-master-plan.md)
+
+| Phase | Doc | Scope |
+|-------|-----|--------|
+| A–F | [tracks catalog](2026-07-17-prediction-algorithms-tracks-catalog.md) | `prediction_algorithms/` package, 10 tracks, 9 combiners, scoreboard, optional live promotion |
+| H1 | [causal flow](2026-07-17-prediction-algorithms-causal-flow.md) | `cause_stress_index`, channel attribution, invalidation UX |
+| **I** | [master plan § Phase I](2026-07-17-prediction-algorithms-master-plan.md#standard-regression-predictors-phase-i--ridge-learning-inputs) | Valuation yields, term/credit spreads, ERP, VIX/FX/US10Y velocities → `MACRO_FACTOR_KEYS` + ablation |
+| H2 | causal flow § H2 | statsmodels SVAR + optional localprojections IRFs |
+| G | tracks catalog § Phase G | split overlay track, debate archive, LightGBM deferred |
+
+**North star:** Independent tracks logged before merge; combiner promoted only if direction +3 pp OOS vs quant; report-only lab is valid success.
+
+**Default headline:** `quant_only` until promotion gates pass (`eval_count >= 60`, two-run stability).
+
+**Risks & mitigations:** [2026-07-17-prediction-risks-assumptions-premortem.md](2026-07-17-prediction-risks-assumptions-premortem.md)
+
