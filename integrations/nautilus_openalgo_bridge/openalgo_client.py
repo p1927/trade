@@ -32,6 +32,7 @@ class BridgeOpenAlgoClient(_BaseOpenAlgoClient):
     """Extends auto_paper OpenAlgo client with quote endpoints."""
 
     def get_quote(self, symbol: str, *, exchange: str = "NSE") -> dict[str, Any]:
+        """Single quote via REST. Deprecated for market data — use hub channel instead."""
         body = self._post(
             "quotes",
             {"apikey": self.api_key, "symbol": symbol.upper(), "exchange": exchange.upper()},
@@ -41,6 +42,7 @@ class BridgeOpenAlgoClient(_BaseOpenAlgoClient):
         return data if isinstance(data, dict) else body
 
     def get_multi_quotes(self, symbols: list[dict[str, str]]) -> dict[str, Any]:
+        """Batch quotes via REST. Deprecated for market data — use hub channel ``get_multi_quotes``."""
         normalized = [
             {"symbol": row["symbol"].upper(), "exchange": row["exchange"].upper()}
             for row in symbols
