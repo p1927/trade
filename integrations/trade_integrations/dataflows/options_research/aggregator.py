@@ -9,7 +9,11 @@ from .browse_summary import build_browse_summary
 from .candidate_generator import generate_candidates
 from .config import get_options_config
 from trade_integrations.dataflows.company_research.market import Market
-from .market import InstrumentType, resolve_options_instrument
+from .market import (
+    InstrumentType,
+    options_research_ineligible_reason,
+    resolve_options_instrument,
+)
 from .models import OptionsResearchDoc
 from .payoff_charges import build_implementation_steps
 from .strategy_ranker import build_scenarios, rank_strategies
@@ -69,6 +73,42 @@ def _prediction_view(
     return "neutral"
 
 
+def _skipped_options_doc(
+    ticker: str,
+    *,
+    reason: str,
+    now: datetime,
+    days: int,
+) -> OptionsResearchDoc:
+    """Return a minimal hub doc when India options research does not apply."""
+    instrument = resolve_options_instrument(ticker)
+    doc = OptionsResearchDoc(
+        underlying=instrument.display_symbol,
+        as_of=now,
+        lookahead_days=days,
+        instrument_type=instrument.instrument_type.value,
+        market=instrument.market.value,
+        meta={
+            "input_ticker": instrument.input_ticker,
+            "underlying_symbol": instrument.underlying_symbol,
+            "underlying_exchange": instrument.underlying_exchange,
+            "options_exchange": instrument.options_exchange,
+            "skip_reason": reason,
+        },
+    )
+    doc.stages.append(
+        StageResult(
+            stage="market",
+            status="skipped",
+            vendor="trade_integrations.options_market",
+            fetched_at=now,
+            data={"reason": reason, "eligible": False},
+            errors=[reason],
+        )
+    )
+    return doc
+
+
 def run_options_research(
     ticker: str,
     *,
@@ -79,6 +119,9 @@ def run_options_research(
     config = get_options_config()
     days = lookahead_days if lookahead_days is not None else config.lookahead_days
     now = datetime.now(timezone.utc)
+    skip_reason = options_research_ineligible_reason(ticker)
+    if skip_reason:
+        return _skipped_options_doc(ticker, reason=skip_reason, now=now, days=days)
     instrument = resolve_options_instrument(ticker)
 
     doc = OptionsResearchDoc(

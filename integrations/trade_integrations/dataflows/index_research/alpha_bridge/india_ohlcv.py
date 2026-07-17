@@ -50,8 +50,13 @@ def _normalize_history_frame(raw: pd.DataFrame) -> pd.DataFrame:
 def _fetch_yfinance(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     import yfinance as yf
 
-    sym = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
-    ticker = sym if sym.endswith(".NS") or sym.endswith(".BO") else f"{sym}.NS"
+    from trade_integrations.dataflows.company_research.market import Market, detect_market, normalize_ticker
+
+    if detect_market(symbol) == Market.US:
+        return pd.DataFrame(columns=["date", "close"])
+
+    normalized = normalize_ticker(symbol, market=Market.IN)
+    ticker = normalized.yfinance_symbol
     hist = yf.Ticker(ticker).history(start=start_date, end=end_date, auto_adjust=True)
     return _normalize_history_frame(hist.reset_index() if not hist.empty else pd.DataFrame())
 
@@ -63,7 +68,11 @@ def load_symbol_ohlcv(
     end_date: str,
 ) -> pd.DataFrame:
     """Load daily OHLCV for one NSE symbol between start/end (YYYY-MM-DD)."""
+    from trade_integrations.dataflows.company_research.market import Market, detect_market
     from trade_integrations.dataflows.openalgo import load_india_ohlcv
+
+    if detect_market(symbol) == Market.US:
+        return pd.DataFrame(columns=["date", "close"])
 
     start = start_date[:10]
     end = end_date[:10]

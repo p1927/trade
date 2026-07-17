@@ -30,8 +30,8 @@ _MACRO_SHRINK_THRESHOLD_PCT = 3.0
 _RIDGE_ALPHA = 50.0
 _MACRO_TRUST_MAE_GOOD = 1.5
 _MACRO_TRUST_MAE_POOR = 7.0
-_VIEW_BULL_THRESHOLD = 0.3
-_VIEW_BEAR_THRESHOLD = -0.3
+from trade_integrations.dataflows.index_research.views import classify_index_view
+
 _DIRECTION_PROB_BULL = 0.55
 _DIRECTION_PROB_BEAR = 0.45
 _MIN_WALK_FORWARD_TRAIN = 15
@@ -182,6 +182,8 @@ def _predict_macro_delta(
     macro_factors: dict[str, Any],
     horizon: HorizonProfile,
     artifact: ModelArtifact | None,
+    *,
+    macro_trust_multiplier: float = 1.0,
 ) -> float:
     if artifact is None or not artifact.feature_names:
         return 0.0
@@ -198,7 +200,7 @@ def _predict_macro_delta(
         raw = _scale_features(raw, artifact.feature_means, artifact.feature_stds)
     expanded, poly_names = _expand_poly(raw, artifact.feature_names, artifact.poly_degree)
     coefs = np.array([artifact.coefficients.get(name, 0.0) for name in poly_names], dtype=float)
-    trust = _macro_trust_weight(float(artifact.mae or _DEFAULT_MAE_PCT))
+    trust = _macro_trust_weight(float(artifact.mae or _DEFAULT_MAE_PCT)) * max(0.0, macro_trust_multiplier)
     return float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
 
 
@@ -453,36 +455,73 @@ def apply_sign_conflict_gate(
     wf_metrics: dict[str, Any],
 ) -> tuple[str | None, float | None, bool]:
     """Neutralize direction and halve confidence when macro vs scenario conflict."""
-    from trade_integrations.dataflows.index_research.direction_calibration import (
-        artifact_direction_hit_rate,
-        regime_oos_hit_rate,
-    )
-
     if not detect_sign_conflict(raw_macro, scenario_anchor_return_pct):
         return direction_view, direction_confidence, False
-
-    regime_cap = regime_oos_hit_rate(wf_metrics, regime_label)
-    global_cap = artifact_direction_hit_rate(wf_metrics)
-    cap = regime_cap if regime_cap is not None else global_cap
-    high_conf = (
-        direction_confidence is not None
-        and cap is not None
-        and direction_confidence > cap + 0.1
-    )
-    if high_conf:
-        conf = direction_confidence * 0.5 if direction_confidence is not None else None
-        return direction_view, conf, True
 
     conf = direction_confidence * 0.5 if direction_confidence is not None else None
     return "neutral", conf, True
 
 
-def _classify_view(expected_return_pct: float) -> str:
-    if expected_return_pct >= _VIEW_BULL_THRESHOLD:
-        return "bullish"
-    if expected_return_pct <= _VIEW_BEAR_THRESHOLD:
-        return "bearish"
-    return "neutral"
+def finalize_index_prediction(
+    prediction: dict[str, Any],
+    *,
+    spot: float,
+    mae_pct: float = 1.5,
+    macro_factors: dict[str, Any] | None = None,
+    scenario_anchor_return_pct: float | None = None,
+) -> dict[str, Any]:
+    """Sync headline view/range and re-apply sign-conflict gate after reconcile or debate."""
+    if not prediction or spot <= 0:
+        return prediction
+
+    from trade_integrations.dataflows.index_research.direction_calibration import (
+        load_walk_forward_accuracy,
+    )
+    from trade_integrations.dataflows.index_research.regime_gates import resolve_regime_label
+
+    updated = dict(prediction)
+    expected = float(updated.get("expected_return_pct") or 0.0)
+    updated["view"] = classify_index_view(expected)
+
+    anchor = scenario_anchor_return_pct
+    if anchor is None and updated.get("scenario_anchor_return_pct") is not None:
+        try:
+            anchor = float(updated["scenario_anchor_return_pct"])
+        except (TypeError, ValueError):
+            anchor = None
+    if anchor is not None:
+        updated["scenario_anchor_return_pct"] = anchor
+
+    raw_macro = float(
+        updated.get("ridge_raw_macro_delta_pct")
+        or updated.get("raw_macro_delta_pct")
+        or updated.get("macro_delta_pct")
+        or 0.0
+    )
+    wf_metrics = load_walk_forward_accuracy()
+    regime_label = resolve_regime_label(macro_factors or {})
+
+    direction_view, direction_conf, sign_conflict = apply_sign_conflict_gate(
+        direction_view=updated.get("direction_view") or updated["view"],
+        direction_confidence=updated.get("direction_confidence"),
+        raw_macro=raw_macro,
+        scenario_anchor_return_pct=anchor,
+        regime_label=regime_label,
+        wf_metrics=wf_metrics,
+    )
+    updated["direction_view"] = direction_view
+    updated["direction_confidence"] = direction_conf
+    updated["sign_conflict"] = sign_conflict
+    if not sign_conflict:
+        updated["direction_view"] = updated["view"]
+
+    range_block = dict(updated.get("range") or {})
+    updated["range"] = {
+        **range_block,
+        "low": spot * (1 + expected / 100 - mae_pct / 100),
+        "high": spot * (1 + expected / 100 + mae_pct / 100),
+    }
+    return updated
 
 
 def predict_nifty(
@@ -494,6 +533,8 @@ def predict_nifty(
     model_artifact: ModelArtifact | None = None,
     scenario_anchor_return_pct: float | None = None,
     as_of_day: str | None = None,
+    macro_trust_multiplier: float = 1.0,
+    apply_event_overlay: bool = True,
 ) -> dict[str, Any]:
     """Hybrid forecast: bottom-up constituent attribution + macro Ridge delta."""
     from trade_integrations.dataflows.index_research.event_overlay import enrich_macro_with_news_features
@@ -506,21 +547,42 @@ def predict_nifty(
     rollup = rollup_attribution(attributed)
     bottom_up = float(rollup["total_contribution_pct"])
 
-    raw_macro = _predict_macro_delta(macro_factors, horizon, artifact)
+    raw_macro = _predict_macro_delta(
+        macro_factors,
+        horizon,
+        artifact,
+        macro_trust_multiplier=macro_trust_multiplier,
+    )
     from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
 
-    gated_raw = predict_macro_delta_gated(macro_factors, horizon, artifact)
+    gated_raw = predict_macro_delta_gated(
+        macro_factors,
+        horizon,
+        artifact,
+        macro_trust_multiplier=macro_trust_multiplier,
+    )
     if abs(gated_raw) > 1e-9:
         raw_macro = gated_raw
 
-    from trade_integrations.dataflows.index_research.event_overlay import merge_overlay_into_macro
-
-    raw_with_overlay, event_overlay = merge_overlay_into_macro(
-        raw_macro,
-        macro_factors,
-        as_of_day=as_of,
+    from trade_integrations.dataflows.index_research.event_overlay import (
+        compute_event_overlay,
+        merge_overlay_into_macro,
     )
-    macro_delta = shrink_macro_delta(raw_with_overlay, scenario_anchor_return_pct)
+
+    if apply_event_overlay:
+        raw_with_overlay, event_overlay = merge_overlay_into_macro(
+            raw_macro,
+            macro_factors,
+            as_of_day=as_of,
+        )
+        macro_for_shrink = raw_with_overlay
+    else:
+        event_overlay = compute_event_overlay(
+            macro_factors,
+            as_of_day=as_of,
+        )
+        macro_for_shrink = raw_macro
+    macro_delta = shrink_macro_delta(macro_for_shrink, scenario_anchor_return_pct)
     expected_return_pct = bottom_up + macro_delta
     mae = artifact.mae if artifact else _DEFAULT_MAE_PCT
 
@@ -565,7 +627,7 @@ def predict_nifty(
     )
 
     return {
-        "view": _classify_view(expected_return_pct),
+        "view": classify_index_view(expected_return_pct),
         "expected_return_pct": expected_return_pct,
         "bottom_up_return_pct": bottom_up,
         "macro_delta_pct": macro_delta,

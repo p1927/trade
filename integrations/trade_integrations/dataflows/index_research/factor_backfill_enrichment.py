@@ -28,6 +28,57 @@ logger = logging.getLogger(__name__)
 
 _SENTIMENT_SCALE = 10.0
 
+_PHASE_I_DERIVED_SOURCE = "backfill_phase_i_derived"
+
+
+def _persist_phase_i_derived_factors(*, days: int = 365) -> dict[str, int | str]:
+    """Upsert Phase I derived columns from aligned wide history."""
+    try:
+        from trade_integrations.dataflows.index_research.sources.history_loader import (
+            load_aligned_factor_history,
+        )
+
+        frame = load_aligned_factor_history(days=days)
+        if frame.empty:
+            return {"days": 0, "reason": "empty_history"}
+
+        days_written = 0
+        derived_keys = (
+            "nifty_earnings_yield",
+            "nifty_dividend_yield",
+            "nifty_book_to_market",
+            "nifty_pb_zscore_5y",
+            "equity_risk_premium",
+            "india_vix_velocity_3d",
+            "usd_inr_momentum_5d",
+            "us_10y_velocity_3d",
+            "fii_net_5d_momentum",
+            "india_term_spread",
+        )
+        for _, row in frame.iterrows():
+            day = str(row["date"])
+            rows: list[dict] = []
+            for key in derived_keys:
+                if key not in row.index:
+                    continue
+                val = row.get(key)
+                if val is None or (isinstance(val, float) and np.isnan(val)):
+                    continue
+                rows.append(
+                    {
+                        "factor": key,
+                        "value": float(val),
+                        "source": _PHASE_I_DERIVED_SOURCE,
+                    }
+                )
+            if rows:
+                upsert_daily_factors(day, rows)
+                days_written += 1
+        return {"days": days_written, "status": "ok"}
+    except Exception as exc:
+        logger.warning("phase I derived persist failed: %s", exc)
+        return {"days": 0, "status": "error", "error": str(exc)}
+
 
 def _prepare_nse_repository_layers(
     *,
@@ -325,6 +376,14 @@ def enrich_factor_history(*, days: int = 365, allow_live_fetch: bool = True) -> 
                 "source": "backfill_rbi_schedule",
             }
         ]
+        try:
+            from trade_integrations.dataflows.index_research.sources.india_rates import (
+                india_rate_factor_rows,
+            )
+
+            rows.extend(india_rate_factor_rows(repo_rate=repo_rate_on(day)))
+        except Exception as exc:
+            logger.debug("india rate rows skipped for %s: %s", day, exc)
 
         if day in fii_5d and not pd.isna(fii_5d[day]):
             rows.append(
@@ -486,6 +545,8 @@ def enrich_factor_history(*, days: int = 365, allow_live_fetch: bool = True) -> 
         logger.warning("alpha zoo backfill failed: %s", exc)
         alpha_zoo_backfill = {"status": "error", "error": str(exc)}
 
+    phase_i_persist = _persist_phase_i_derived_factors(days=days)
+
     return {
         "days_enriched": days_enriched,
         "start": start,
@@ -501,6 +562,7 @@ def enrich_factor_history(*, days: int = 365, allow_live_fetch: bool = True) -> 
         "sector_breadth_days": int(sector_factors.get("sector_breadth_price_7d", pd.Series()).notna().sum()),
         "news_event_features": news_backfill,
         "alpha_zoo_backfill": alpha_zoo_backfill,
+        "phase_i_persist": phase_i_persist,
     }
 
 

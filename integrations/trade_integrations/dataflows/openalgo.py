@@ -96,13 +96,17 @@ def _fetch_yfinance_history_india(symbol: str, start_date: str, end_date: str) -
     """yfinance enrichment fallback for India equities and indices."""
     import yfinance as yf
 
+    from trade_integrations.dataflows.company_research.market import Market, detect_market, normalize_ticker
+
     raw = symbol.strip().upper()
-    if raw in ("NIFTY", "NIFTY50", "^NSEI"):
+    if detect_market(raw) == Market.US:
+        raise NoMarketDataError(symbol, raw, "US symbols must use Alpaca, not India yfinance fallback")
+
+    normalized = normalize_ticker(raw, market=Market.IN)
+    if normalized.base_symbol in ("NIFTY", "NIFTY50") or raw in ("NIFTY", "NIFTY50", "^NSEI"):
         yf_sym = "^NSEI"
-    elif raw.endswith(".NS") or raw.endswith(".BO"):
-        yf_sym = raw
     else:
-        yf_sym = f"{raw}.NS"
+        yf_sym = normalized.yfinance_symbol
 
     hist = yf.Ticker(yf_sym).history(start=start_date, end=end_date, auto_adjust=True)
     if hist is None or hist.empty:
@@ -138,9 +142,18 @@ def load_india_ohlcv(
     return_provenance: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, Any]]:
     """Load India OHLCV via hub channel + parquet cache; yfinance fallback."""
+    from trade_integrations.dataflows.company_research.market import Market, detect_market
+
     end = end_date or date.today().isoformat()
     start = start_date or (date.fromisoformat(end) - timedelta(days=max(int(days), 1))).isoformat()
     provenance: dict[str, Any] = {"symbol": symbol, "start": start, "end": end, "source": "openalgo"}
+
+    if detect_market(symbol) == Market.US:
+        empty = pd.DataFrame(columns=["date", "close"])
+        provenance["source"] = "skipped"
+        provenance["reason"] = "us_market"
+        provenance["final_rows"] = 0
+        return (empty, provenance) if return_provenance else empty
 
     if not force_refresh:
         try:

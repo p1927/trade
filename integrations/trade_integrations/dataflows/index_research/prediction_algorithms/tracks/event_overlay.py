@@ -16,14 +16,16 @@ def run_event_overlay(ctx: TrackContext) -> ForecastTrack:
     )
     value = float(overlay.get("return_pct") or 0.0)
     method = str(overlay.get("method") or "unknown")
+    overlay_ready = method == "calibrated_ledger_v1"
     return ForecastTrack(
         track_id="event_overlay",
         expected_return_pct=round(value, 4),
         view=classify_index_view(value),
-        available=True,
+        available=overlay_ready,
         provenance={
             "method": method,
             "active_topics": overlay.get("active_topics") or [],
             "calibration_as_of": overlay.get("calibration_as_of"),
+            "reason": None if overlay_ready else f"overlay_{method}",
         },
     )

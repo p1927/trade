@@ -191,3 +191,88 @@ def test_reconcile_prediction_pulls_toward_scenarios(monkeypatch):
     assert reconciled["reconciled_with_scenarios"] is True
     assert reconciled["expected_return_pct"] < raw["expected_return_pct"]
     assert abs(reconciled["expected_return_pct"]) < 2.0
+
+
+@pytest.mark.unit
+def test_reconcile_updates_view_from_blended_return(monkeypatch):
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.scenarios._today",
+        lambda: date(2026, 7, 16),
+    )
+    spot = 24072.75
+    scenarios = build_index_scenarios(
+        _scenario_signals(),
+        {"repo_rate": 6.5, "rbi_events": [{"date": "2026-07-25"}]},
+        spot=spot,
+        horizon_days=14,
+    )
+    raw = {
+        "view": "bullish",
+        "expected_return_pct": 5.5,
+        "bottom_up_return_pct": 0.5,
+        "macro_delta_pct": 5.0,
+        "range": {"low": spot * 0.95, "high": spot * 1.1, "confidence": 0.5},
+    }
+    reconciled = reconcile_prediction_with_scenarios(raw, scenarios, spot=spot, mae_pct=1.5)
+    assert reconciled["reconciled_with_scenarios"] is True
+    if reconciled["expected_return_pct"] >= 0.3:
+        assert reconciled["view"] == "bullish"
+    elif reconciled["expected_return_pct"] <= -0.3:
+        assert reconciled["view"] == "bearish"
+    else:
+        assert reconciled["view"] == "neutral"
+
+
+@pytest.mark.unit
+def test_finalize_index_prediction_syncs_view_after_reconcile():
+    from trade_integrations.dataflows.index_research.predictor import finalize_index_prediction
+
+    spot = 24500.0
+    prediction = {
+        "view": "bullish",
+        "expected_return_pct": -1.0,
+        "bottom_up_return_pct": -0.2,
+        "macro_delta_pct": -0.8,
+        "raw_macro_delta_pct": 4.0,
+        "direction_view": "bullish",
+        "direction_confidence": 0.58,
+        "range": {"low": 24000, "high": 25000, "confidence": 0.5},
+    }
+    finalized = finalize_index_prediction(
+        prediction,
+        spot=spot,
+        mae_pct=1.5,
+        macro_factors={"india_vix": 14.0},
+        scenario_anchor_return_pct=-1.5,
+    )
+    assert finalized["view"] == "bearish"
+    assert finalized["direction_view"] == "neutral"
+    assert finalized["sign_conflict"] is True
+    assert finalized["range"]["low"] < finalized["range"]["high"]
+
+
+@pytest.mark.unit
+def test_finalize_preserves_sign_conflict_after_reconcile_clobber():
+    from trade_integrations.dataflows.index_research.predictor import finalize_index_prediction
+
+    spot = 24500.0
+    prediction = {
+        "view": "bullish",
+        "expected_return_pct": 0.5,
+        "bottom_up_return_pct": 0.1,
+        "macro_delta_pct": 2.5,
+        "ridge_raw_macro_delta_pct": 4.0,
+        "raw_macro_delta_pct": 2.5,
+        "direction_view": "bullish",
+        "direction_confidence": 0.58,
+        "range": {"low": 24000, "high": 25000, "confidence": 0.5},
+    }
+    finalized = finalize_index_prediction(
+        prediction,
+        spot=spot,
+        mae_pct=1.5,
+        macro_factors={"india_vix": 14.0},
+        scenario_anchor_return_pct=-1.5,
+    )
+    assert finalized["sign_conflict"] is True
+    assert finalized["direction_view"] == "neutral"

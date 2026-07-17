@@ -66,7 +66,7 @@ def normalize_scoreboard_report(report: dict[str, Any]) -> dict[str, Any]:
         for tid in CANONICAL_TRACK_IDS
     }
     out.setdefault("schema_version", SCOREBOARD_SCHEMA_VERSION)
-    return out
+    return enrich_track_metrics_from_daily(out)
 
 
 def save_scoreboard(ticker: str, report: dict[str, Any]) -> Path:
@@ -95,9 +95,46 @@ def summarize_track_metrics(eval_rows: list[dict[str, Any]], track_id: str) -> d
     errors = [abs(float(r.get("error_pct") or 0.0)) for r in preds]
     hits = sum(1 for r in preds if r.get("direction_hit"))
     total = len(preds)
+    misses = total - hits
     return {
         "track_id": track_id,
         "eval_count": total,
         "mae_pct": round(sum(errors) / total, 4),
         "direction_hit_rate": round(hits / total, 4) if total else None,
+        "direction_hit_count": hits,
+        "direction_miss_count": misses,
     }
+
+
+def enrich_track_metrics_from_daily(report: dict[str, Any]) -> dict[str, Any]:
+    """Backfill hit/miss counts on cached scoreboards that predate direction_hit_count."""
+    daily = report.get("daily_evaluations") or []
+    if not daily:
+        return report
+
+    out = dict(report)
+
+    def _fill(section_key: str, *, combiner_prefix: bool) -> None:
+        section = dict(out.get(section_key) or {})
+        for tid, row in section.items():
+            if not isinstance(row, dict):
+                continue
+            lookup_id = f"combiner:{tid}" if combiner_prefix else tid
+            if row.get("direction_hit_count") is not None and row.get("direction_miss_count") is not None:
+                continue
+            metrics = summarize_track_metrics(daily, lookup_id)
+            row = dict(row)
+            row["direction_hit_count"] = metrics.get("direction_hit_count")
+            row["direction_miss_count"] = metrics.get("direction_miss_count")
+            if row.get("direction_hit_rate") is None and metrics.get("direction_hit_rate") is not None:
+                row["direction_hit_rate"] = metrics["direction_hit_rate"]
+            if row.get("mae_pct") is None and metrics.get("mae_pct") is not None:
+                row["mae_pct"] = metrics["mae_pct"]
+            if row.get("eval_count") in (None, 0) and metrics.get("eval_count"):
+                row["eval_count"] = metrics["eval_count"]
+            section[tid] = row
+        out[section_key] = section
+
+    _fill("tracks", combiner_prefix=False)
+    _fill("combiners", combiner_prefix=True)
+    return out

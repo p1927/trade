@@ -41,6 +41,16 @@ def is_index_symbol(ticker: str) -> bool:
     return raw in _INDEX_SYMBOLS
 
 
+def options_research_ineligible_reason(ticker: str) -> str | None:
+    """Return skip reason when India F&O options research must not run."""
+    if is_options_research_eligible(ticker):
+        return None
+    normalized = normalize_ticker(ticker)
+    if normalized.market == Market.US:
+        return "us_market"
+    return "not_fno_eligible"
+
+
 def is_options_research_eligible(ticker: str) -> bool:
     """Return True when OpenAlgo SymToken has F&O contracts for this underlying."""
     raw = ticker.strip().upper()
@@ -74,8 +84,12 @@ def resolve_options_instrument(ticker: str) -> OptionsInstrument:
         underlying_symbol = base
     else:
         inst_type = InstrumentType.STOCK
-        underlying_exchange = normalized.openalgo_exchange or "NSE"
-        options_exchange = "BFO" if underlying_exchange == "BSE" else "NFO"
+        if normalized.market == Market.US:
+            underlying_exchange = "US"
+            options_exchange = "US"
+        else:
+            underlying_exchange = normalized.openalgo_exchange or "NSE"
+            options_exchange = "BFO" if underlying_exchange == "BSE" else "NFO"
         underlying_symbol = base
 
     return OptionsInstrument(

@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 FLOW_FACTORS: tuple[str, ...] = ("fii_net_5d", "dii_net_5d", "nifty_pcr")
 MIN_FLOW_COVERAGE_PCT = 90.0
 DEFAULT_ENRICH_DAYS = 365
+GATE_FAIL_MACRO_TRUST_MULTIPLIER = 0.5
 
 
 def measure_flow_coverage(

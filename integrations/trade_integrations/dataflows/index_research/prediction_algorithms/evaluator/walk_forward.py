@@ -63,6 +63,7 @@ def _append_eval_row(
     close: float,
 ) -> None:
     err = predicted_pct - actual_f
+    implied_level = close * (1.0 + predicted_pct / 100.0) if close > 0 else None
     eval_rows.append(
         {
             "date": day_str,
@@ -72,6 +73,7 @@ def _append_eval_row(
             "error_pct": round(err, 4),
             "direction_hit": (predicted_pct > 0) == (actual_f > 0),
             "close": round(close, 2),
+            "implied_level": round(implied_level, 2) if implied_level is not None else None,
         }
     )
 
@@ -293,5 +295,15 @@ def run_track_walk_forward(
         report["limitations"].append(
             "bottom_up uses index_sentiment proxy when company_research/history archives are sparse"
         )
+    try:
+        from trade_integrations.dataflows.index_research.news_shock_calibration import load_shock_calibration
+
+        shock = load_shock_calibration(ticker) or {}
+        if not (shock.get("topics") or {}):
+            report["limitations"].append(
+                "event_overlay track skipped in walk-forward — news shock calibration has no topics yet"
+            )
+    except Exception:
+        pass
     save_scoreboard(ticker, normalize_scoreboard_report(report))
     return normalize_scoreboard_report(report)

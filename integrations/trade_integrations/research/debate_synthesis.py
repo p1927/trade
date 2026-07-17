@@ -192,25 +192,65 @@ def merge_index_prediction(
     debate: dict[str, Any] | None,
     index_doc_prediction: dict[str, Any],
 ) -> dict[str, Any]:
-    """Reconcile index predictor with debate direction when debate present."""
+    """Hybrid merge: debate direction/catalysts; quant primary for macro attribution."""
+    from trade_integrations.dataflows.index_research.views import classify_index_view
+
     d = debate or {}
     base = dict(index_doc_prediction or {})
     if not d:
         return base
-    if d.get("view"):
-        base["view"] = d["view"]
-    prov = dict(base.get("provenance") or {})
-    prov["direction"] = "debate"
-    prov["debate_as_of"] = d.get("debate_as_of")
-    base["provenance"] = prov
-    if d.get("direction_confidence") is not None:
-        base["confidence"] = min(
-            float(base.get("confidence") or 1.0),
-            float(d["direction_confidence"]),
-        )
+
+    q_ret = float(base.get("expected_return_pct") or 0.0)
+    d_ret = d.get("expected_return_pct")
+    d_conf = float(d.get("direction_confidence") or 0.0)
+    q_conf_raw = base.get("direction_confidence")
+    try:
+        q_conf = float(q_conf_raw) if q_conf_raw is not None else 0.0
+    except (TypeError, ValueError):
+        q_conf = 0.0
+
+    if d_ret is not None:
+        expected_return_pct = round(0.6 * float(d_ret) + 0.4 * q_ret, 4)
+    else:
+        expected_return_pct = round(q_ret, 4)
+
+    bottom_up = float(base.get("bottom_up_return_pct") or 0.0)
+    from trade_integrations.dataflows.index_research.predictor import cap_macro_delta
+
+    macro_delta = cap_macro_delta(expected_return_pct - bottom_up)
+
+    view = classify_index_view(expected_return_pct)
+
+    confidence = round(min(d_conf or q_conf or 0.5, q_conf or d_conf or 0.5), 3)
+    if d_conf and q_conf:
+        confidence = round(min(d_conf, q_conf), 3)
+
+    merged = dict(base)
+    merged["expected_return_pct"] = expected_return_pct
+    merged["macro_delta_pct"] = macro_delta
+    merged["view"] = view
+    merged["direction_view"] = view
+    merged["confidence"] = confidence
+    merged["direction_confidence"] = confidence
+    merged["provenance"] = {
+        **dict(base.get("provenance") or {}),
+        "direction": "debate" if d.get("view") else "quant",
+        "debate_as_of": d.get("debate_as_of"),
+    }
+    merged["quant"] = {
+        "expected_return_pct": q_ret,
+        "macro_delta_pct": base.get("macro_delta_pct"),
+        "direction_confidence": q_conf,
+        "view": base.get("view"),
+    }
+    merged["debate"] = {
+        "direction_confidence": d_conf,
+        "expected_return_pct": d_ret,
+        "view": d.get("view"),
+    }
     if d.get("rationale"):
-        base["debate_rationale"] = d["rationale"][:300]
-    return base
+        merged["debate_rationale"] = d["rationale"][:300]
+    return merged
 
 
 def apply_debate_bias_to_stock_ranked(

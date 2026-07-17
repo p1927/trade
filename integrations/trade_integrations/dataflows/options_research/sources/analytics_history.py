@@ -6,7 +6,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ..market import OptionsInstrument
+from trade_integrations.dataflows.company_research.market import Market, normalize_ticker
+
+from ..market import InstrumentType, OptionsInstrument
 from ..models import StageResult
 
 logger = logging.getLogger(__name__)
@@ -33,17 +35,30 @@ def _realized_vol(closes: list[float], window: int = 20) -> float | None:
     return round(math.sqrt(var) * math.sqrt(252) * 100, 2)
 
 
+def _yfinance_history_symbol(instrument: OptionsInstrument) -> str:
+    if instrument.instrument_type == InstrumentType.INDEX:
+        if instrument.display_symbol == "BANKNIFTY":
+            return "^NSEBANK"
+        return "^NSEI"
+    normalized = normalize_ticker(instrument.input_ticker, market=instrument.market)
+    return normalized.yfinance_symbol
+
+
 def fetch_analytics_history(instrument: OptionsInstrument) -> StageResult:
     """30-day realized vol for IV/RV comparison (Acelogic-style gate)."""
     now = _stage_now()
+    if instrument.market == Market.US:
+        return StageResult(
+            stage="analytics_history",
+            status="skipped",
+            vendor="yfinance",
+            fetched_at=now,
+            data={"reason": "us_market"},
+        )
+
     closes: list[float] = []
     vendor = "yfinance"
-    symbol = instrument.display_symbol
-    yf_symbol = f"{symbol}.NS" if instrument.instrument_type.value == "stock" else "^NSEI"
-    if symbol == "BANKNIFTY":
-        yf_symbol = "^NSEBANK"
-    elif symbol == "NIFTY":
-        yf_symbol = "^NSEI"
+    yf_symbol = _yfinance_history_symbol(instrument)
 
     try:
         import yfinance as yf

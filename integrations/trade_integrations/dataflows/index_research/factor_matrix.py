@@ -54,6 +54,14 @@ MACRO_FACTOR_KEYS: tuple[str, ...] = (
     "is_results_season",
     "institutional_net_5d",
     "dii_absorption_ratio",
+    # Phase I — included when coverage gate passes (see phase_i_coverage.py)
+    "nifty_earnings_yield",
+    "equity_risk_premium",
+    "india_term_spread",
+    "india_vix_velocity_3d",
+    "usd_inr_momentum_5d",
+    "us_10y_velocity_3d",
+    "fii_net_5d_momentum",
 )
 
 from trade_integrations.dataflows.index_research.news_event_features import NEWS_EVENT_FACTOR_KEYS
@@ -101,6 +109,8 @@ _REDUNDANCY_PAIRS: tuple[tuple[str, str], ...] = (
     ("nifty_return_7d", "constituent_momentum_7d"),
     ("oil_brent", "oil_wti"),
     ("nifty_return_7d", "nifty_return_14d"),  # prefer shorter horizon when both correlate
+    ("nifty_earnings_yield", "nifty_pe"),
+    ("nifty_book_to_market", "nifty_pb"),
 )
 
 
@@ -214,6 +224,14 @@ def build_factor_matrix(
     frame["target"] = _forward_return_pct(frame["close"].astype(float), horizon.days)
 
     macro_cols = _select_macro_columns(frame, horizon)
+    try:
+        from trade_integrations.dataflows.index_research.phase_i_coverage import phase_i_keys_for_ridge
+
+        for key in phase_i_keys_for_ridge(frame):
+            if key in frame.columns and key not in macro_cols:
+                macro_cols.append(key)
+    except Exception:
+        pass
     force_keys = tuple(force_include_keys or ())
     for col in force_keys:
         if col in frame.columns and col not in macro_cols and col not in {"date", "close", "open", "high", "low", "volume"}:

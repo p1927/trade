@@ -126,6 +126,53 @@ def test_sign_conflict_forces_neutral_and_lower_confidence():
 
 
 @pytest.mark.unit
+def test_sign_conflict_always_neutral_even_when_high_confidence():
+    from trade_integrations.dataflows.index_research.predictor import apply_sign_conflict_gate
+
+    view, conf, conflict = apply_sign_conflict_gate(
+        direction_view="bullish",
+        direction_confidence=0.75,
+        raw_macro=4.0,
+        scenario_anchor_return_pct=-1.5,
+        regime_label="range_bound",
+        wf_metrics={"direction_hit_rate_walk_forward": 0.53},
+    )
+    assert conflict is True
+    assert view == "neutral"
+    assert conf == pytest.approx(0.375)
+
+
+@pytest.mark.unit
+def test_macro_trust_multiplier_scales_macro_delta():
+    pytest.importorskip("sklearn")
+    history, horizon = _synthetic_history()
+    artifact = train_macro_ridge(history, horizon)
+    macro = {"usd_inr": 83.2, "oil_brent": 82.0, "fii_net_5d": 600.0}
+    signals = [
+        ConstituentSignal(symbol="RELIANCE", weight=0.4, sentiment_score=0.2),
+    ]
+    full = predict_nifty(
+        spot=24500.0,
+        signals=signals,
+        macro_factors=macro,
+        horizon=horizon,
+        model_artifact=artifact,
+        macro_trust_multiplier=1.0,
+    )
+    reduced = predict_nifty(
+        spot=24500.0,
+        signals=signals,
+        macro_factors=macro,
+        horizon=horizon,
+        model_artifact=artifact,
+        macro_trust_multiplier=0.5,
+    )
+    assert abs(float(reduced.get("macro_delta_pct") or 0.0)) <= abs(
+        float(full.get("macro_delta_pct") or 0.0)
+    )
+
+
+@pytest.mark.unit
 def test_store_and_load_model_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
 

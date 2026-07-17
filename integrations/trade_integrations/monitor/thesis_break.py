@@ -36,13 +36,27 @@ def _get_attr(doc: Any, name: str, default: Any = None) -> Any:
     return getattr(doc, name, default)
 
 
+def _normalize_prediction_view(view: str) -> str:
+    """Map options archetype views to bullish/bearish/neutral for scenario logic."""
+    text = str(view or "").strip().lower()
+    if not text:
+        return "neutral"
+    if "bear" in text:
+        return "bearish"
+    if "bull" in text:
+        return "bullish"
+    if any(token in text for token in ("neutral", "range", "condor", "sideways", "hold")):
+        return "neutral"
+    return text
+
+
 def _prediction_view(doc: Any, ledger_entry: dict[str, Any]) -> str:
     view = ledger_entry.get("prediction_view")
     if view:
-        return str(view).strip().lower()
+        return _normalize_prediction_view(str(view))
     prediction = _get_attr(doc, "prediction", {}) or {}
     if isinstance(prediction, dict):
-        return str(prediction.get("view") or "neutral").strip().lower()
+        return _normalize_prediction_view(str(prediction.get("view") or "neutral"))
     return "neutral"
 
 
@@ -50,7 +64,7 @@ def _expected_move_pct(doc: Any) -> float | None:
     prediction = _get_attr(doc, "prediction", {}) or {}
     if not isinstance(prediction, dict):
         return None
-    for key in ("expected_move_pct", "expected_move"):
+    for key in ("expected_move_pct", "expected_move", "expected_return_pct"):
         value = prediction.get(key)
         if value is None:
             continue
@@ -114,11 +128,12 @@ def _max_severity(current: ThesisSeverity, candidate: ThesisSeverity) -> ThesisS
 
 def _is_adverse_scenario(scenario_name: str, prediction_view: str) -> bool:
     name = scenario_name.lower()
-    if prediction_view in {"bullish", "bull"}:
+    normalized = _normalize_prediction_view(prediction_view)
+    if normalized in {"bullish", "bull"}:
         return "bear" in name or "breakdown" in name or "sell" in name
-    if prediction_view in {"bearish", "bear"}:
+    if normalized in {"bearish", "bear"}:
         return "bull" in name or "breakout" in name or "rally" in name
-    if prediction_view in {"range_bound", "neutral", "sideways"}:
+    if normalized in {"range_bound", "neutral", "sideways"}:
         return name in {"bullish_breakout", "bearish_breakdown", "high_vol_event"}
     return False
 

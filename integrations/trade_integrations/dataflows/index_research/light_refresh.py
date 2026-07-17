@@ -28,11 +28,16 @@ from trade_integrations.dataflows.index_research.prediction_ledger import (
     append_prediction,
     build_prediction_metadata,
 )
-from trade_integrations.dataflows.index_research.predictor import load_stored_model_artifact, predict_nifty
+from trade_integrations.dataflows.index_research.predictor import (
+    finalize_index_prediction,
+    load_stored_model_artifact,
+    predict_nifty,
+)
 from trade_integrations.dataflows.index_research.regime import classify_regime
 from trade_integrations.dataflows.index_research.scenarios import (
     build_index_scenarios,
     reconcile_prediction_with_scenarios,
+    scenario_weighted_return_pct,
 )
 
 logger = logging.getLogger(__name__)
@@ -334,10 +339,36 @@ def run_index_light_refresh(
         f"Spot: {spot:.2f}" if spot > 0 else "Spot unavailable",
         spot=spot,
     )
+
+    from trade_integrations.dataflows.index_research.data_completeness import (
+        GATE_FAIL_MACRO_TRUST_MULTIPLIER,
+        measure_flow_coverage,
+    )
+
+    flow_coverage = measure_flow_coverage(allow_live_fetch=False)
+    macro_trust_multiplier = (
+        GATE_FAIL_MACRO_TRUST_MULTIPLIER if not flow_coverage.get("passes_gate") else 1.0
+    )
+
     regime = classify_regime(
         india_vix=macro_factors.get("india_vix"),
         nifty_trend_20d=_nifty_trend_20d(),
     )
+
+    scenarios = (
+        build_index_scenarios(
+            signals,
+            macro_factors,
+            spot=spot,
+            horizon_days=horizon.days,
+        )
+        if spot > 0
+        else []
+    )
+    scenario_anchor = (
+        scenario_weighted_return_pct(scenarios, spot=spot) if spot > 0 and scenarios else None
+    )
+
     prediction = (
         predict_nifty(
             spot=spot,
@@ -345,11 +376,25 @@ def run_index_light_refresh(
             macro_factors=macro_factors,
             horizon=horizon,
             as_of_day=_stage_now().date().isoformat(),
+            scenario_anchor_return_pct=scenario_anchor,
+            macro_trust_multiplier=macro_trust_multiplier,
         )
         if spot > 0
         else {}
     )
+    if prediction and not flow_coverage.get("passes_gate"):
+        prediction["data_quality_warning"] = {
+            "gate": "flow_coverage",
+            "min_pct": flow_coverage.get("min_pct"),
+            "threshold_pct": flow_coverage.get("gate_threshold_pct", 90.0),
+            "message": "FII/DII/PCR coverage below gate — macro Ridge down-weighted",
+            "macro_trust_multiplier": macro_trust_multiplier,
+        }
     if prediction:
+        prediction["flow_coverage"] = {
+            "passes_gate": flow_coverage.get("passes_gate"),
+            "min_pct": flow_coverage.get("min_pct"),
+        }
         ret = prediction.get("expected_return_pct")
         ret_text = f"{ret:+.2f}%" if isinstance(ret, (int, float)) else "n/a"
         log.info(
@@ -378,17 +423,6 @@ def run_index_light_refresh(
         except Exception as exc:
             logger.debug("interpretation bundle skipped: %s", exc)
 
-    scenarios = (
-        build_index_scenarios(
-            signals,
-            macro_factors,
-            spot=spot,
-            horizon_days=horizon.days,
-        )
-        if spot > 0
-        else []
-    )
-
     if spot > 0 and prediction and scenarios:
         artifact = load_stored_model_artifact()
         mae_pct = float(artifact.mae if artifact else 1.5)
@@ -397,6 +431,13 @@ def run_index_light_refresh(
             scenarios,
             spot=spot,
             mae_pct=mae_pct,
+        )
+        prediction = finalize_index_prediction(
+            prediction,
+            spot=spot,
+            mae_pct=mae_pct,
+            macro_factors=macro_factors,
+            scenario_anchor_return_pct=scenario_anchor,
         )
 
     factor_bundle: dict[str, Any] = {}

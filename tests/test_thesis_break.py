@@ -123,3 +123,48 @@ def test_within_thresholds_not_broken():
     assert report.broken is False
     assert report.reasons == []
     assert report.severity == "low"
+
+
+@pytest.mark.unit
+def test_bullish_earnings_view_triggers_adverse_scenario():
+    doc = _sample_doc(expected_move_pct=2.0)
+    doc.prediction = {"view": "bullish_earnings", "expected_move_pct": 2.0}
+    ledger_entry = {**_ledger_entry(), "prediction_view": "bullish_earnings"}
+    live_spot = 24500.0 * 0.989
+
+    report = evaluate_thesis_break(
+        doc,
+        ledger_entry,
+        live_spot=live_spot,
+        position_pnl=None,
+    )
+
+    assert report.broken is True
+    assert any(reason.startswith("scenario_adverse:") for reason in report.reasons)
+
+
+@pytest.mark.unit
+def test_stock_expected_return_pct_triggers_move_breach():
+    doc = {
+        "underlying": "RELIANCE",
+        "spot": 2500.0,
+        "prediction": {"view": "bullish", "expected_return_pct": 1.5},
+        "scenarios": [],
+        "recommended": {"net_max_loss": 5000},
+    }
+    ledger_entry = {
+        "widget_id": "tp_RELIANCE_abc",
+        "underlying": "RELIANCE",
+        "plan_spot": 2500.0,
+        "net_max_loss": 5000.0,
+    }
+
+    report = evaluate_thesis_break(
+        doc,
+        ledger_entry,
+        live_spot=2500.0 * 0.97,
+        position_pnl=None,
+    )
+
+    assert report.broken is True
+    assert "spot_outside_expected_move" in report.reasons

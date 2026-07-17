@@ -95,12 +95,21 @@ def _append_institutional_joint_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def enrich_history_features(frame: pd.DataFrame) -> pd.DataFrame:
-    """Add technical + calendar + institutional joint columns."""
+    """Add technical + calendar + institutional joint + Phase I derived columns."""
     if frame.empty:
         return frame
     enriched = enrich_nifty_technical_columns(frame)
     enriched = _append_calendar_columns(enriched)
-    return _append_institutional_joint_columns(enriched)
+    enriched = _append_institutional_joint_columns(enriched)
+    try:
+        from trade_integrations.dataflows.index_research.fundamental_features import enrich_fundamental_columns
+        from trade_integrations.dataflows.index_research.spread_features import enrich_spread_columns
+
+        enriched = enrich_fundamental_columns(enriched)
+        enriched = enrich_spread_columns(enriched)
+    except Exception:
+        pass
+    return enriched
 
 
 def load_aligned_factor_history(days: int = 365) -> pd.DataFrame:

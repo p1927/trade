@@ -10,6 +10,7 @@ from trade_integrations.dataflows.index_research.attribution import (
     _parse_event_date,
 )
 from trade_integrations.dataflows.index_research.models import ConstituentSignal
+from trade_integrations.dataflows.index_research.views import classify_index_view
 
 
 def _today() -> date:
@@ -309,9 +310,12 @@ def reconcile_prediction_with_scenarios(
 
     updated = dict(prediction)
     updated["raw_expected_return_pct"] = raw
+    if prediction.get("raw_macro_delta_pct") is not None:
+        updated["ridge_raw_macro_delta_pct"] = float(prediction["raw_macro_delta_pct"])
     updated["raw_macro_delta_pct"] = float(prediction.get("macro_delta_pct") or 0.0)
     updated["expected_return_pct"] = expected
     updated["macro_delta_pct"] = macro_delta
+    updated["view"] = classify_index_view(expected)
     updated["scenario_anchor_return_pct"] = anchor
     updated["reconciled_with_scenarios"] = True
     updated["reconciliation_blend"] = {"model_weight": 0.25, "scenario_weight": 0.75}

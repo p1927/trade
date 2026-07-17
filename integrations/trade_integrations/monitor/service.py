@@ -156,5 +156,10 @@ class MonitorService:
 
     @staticmethod
     def _refresh(ticker: str) -> None:
-        doc = run_options_research(ticker)
+        from trade_integrations.dataflows.options_research.market import is_options_research_eligible
+
+        symbol = ticker.strip().upper()
+        if not symbol or not is_options_research_eligible(symbol):
+            return
+        doc = run_options_research(symbol)
         save_options_research(doc)

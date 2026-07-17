@@ -528,6 +528,62 @@ def fetch_global_macro_snapshot(
             )
         )
 
+    try:
+        from trade_integrations.dataflows.index_research.sources.india_rates import india_rate_factor_rows
+
+        repo = factors.get("repo_rate")
+        repo_f = float(repo) if repo is not None else None
+        for row in india_rate_factor_rows(repo_rate=repo_f):
+            factor_rows.append(_factor_row_from_payload(row))
+            factors[row["factor"]] = row["value"]
+    except Exception as exc:
+        logger.debug("india rate snapshot skipped: %s", exc)
+
+    try:
+        from trade_integrations.dataflows.index_research.fundamental_features import (
+            fundamental_factor_rows_from_dict,
+        )
+        from trade_integrations.dataflows.index_research.spread_features import spread_factor_rows_from_dict
+
+        for row in fundamental_factor_rows_from_dict(factors):
+            factor_rows.append(_factor_row_from_payload(row))
+            factors[row["factor"]] = row["value"]
+        for row in spread_factor_rows_from_dict(factors):
+            if row["factor"] not in factors:
+                factor_rows.append(_factor_row_from_payload(row))
+                factors[row["factor"]] = row["value"]
+
+        # Velocities need short history window.
+        from datetime import date, timedelta
+
+        from trade_integrations.dataflows.index_research.factor_store import load_factor_history
+        from trade_integrations.dataflows.index_research.spread_features import enrich_spread_columns
+
+        end_d = date.today().isoformat()
+        start_d = (date.today() - timedelta(days=20)).isoformat()
+        hist = load_factor_history(start_d, end_d)
+        if not hist.empty and "factor" in hist.columns:
+            wide = hist.pivot_table(index="date", columns="factor", values="value", aggfunc="last")
+            wide = wide.reset_index().rename(columns={"index": "date"})
+            if "date" not in wide.columns:
+                wide["date"] = wide.index.astype(str)
+            spread_frame = enrich_spread_columns(wide)
+            if not spread_frame.empty:
+                last = spread_frame.iloc[-1]
+                for key in (
+                    "india_vix_velocity_3d",
+                    "usd_inr_momentum_5d",
+                    "us_10y_velocity_3d",
+                    "fii_net_5d_momentum",
+                ):
+                    val = last.get(key)
+                    if val is not None and not pd.isna(val):
+                        payload = {"factor": key, "value": float(val), "source": "spread_features_live"}
+                        factor_rows.append(_factor_row_from_payload(payload))
+                        factors[key] = float(val)
+    except Exception as exc:
+        logger.debug("phase I live derived skipped: %s", exc)
+
     has_output = bool(factor_rows)
     status = stage_status_from_attempts(attempts, has_output=has_output)
 

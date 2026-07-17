@@ -109,6 +109,8 @@ def predict_macro_delta_gated(
     macro_factors: dict[str, Any],
     horizon: Any,
     artifact: Any,
+    *,
+    macro_trust_multiplier: float = 1.0,
 ) -> float:
     """Apply pre-specified regime gates to macro Ridge output (no new coefficients)."""
     from trade_integrations.dataflows.index_research.predictor import (
@@ -142,7 +144,7 @@ def predict_macro_delta_gated(
     gated_input = scaled * gate_vec
     expanded, poly_names = _expand_poly(gated_input, artifact.feature_names, artifact.poly_degree)
     coefs = np.array([artifact.coefficients.get(name, 0.0) for name in poly_names], dtype=float)
-    trust = _macro_trust_weight(float(artifact.mae or 1.5))
+    trust = _macro_trust_weight(float(artifact.mae or 1.5)) * max(0.0, macro_trust_multiplier)
     raw_delta = float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
     from trade_integrations.dataflows.index_research.flow_regime_buckets import (
         apply_flow_regime_adjustment,
