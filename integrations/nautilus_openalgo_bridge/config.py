@@ -37,11 +37,19 @@ class BridgeConfig:
 
 
 def get_bridge_config() -> BridgeConfig:
+    try:
+        from trade_integrations.env import ensure_openalgo_env
+
+        oa = ensure_openalgo_env()
+        host = oa["host"]
+        api_key = oa["api_key"]
+    except ImportError:
+        host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
+        api_key = os.getenv("OPENALGO_API_KEY", "").strip()
     redis_raw = os.getenv("NAUTILUS_REDIS_URL", "").strip()
-    api_key = os.getenv("OPENALGO_API_KEY", "").strip()
     return BridgeConfig(
         watch_enabled=_env_bool("NAUTILUS_WATCH_ENABLE", "true"),
-        openalgo_host=os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/"),
+        openalgo_host=host,
         openalgo_api_key=api_key,
         vibe_backend_url=os.getenv("VIBE_BACKEND_URL", "http://127.0.0.1:8899").rstrip("/"),
         vibe_api_key=os.getenv("VIBE_API_AUTH_KEY", os.getenv("API_AUTH_KEY", "")).strip(),
@@ -72,7 +80,10 @@ def _parse_hhmm(raw: str) -> tuple[int, int]:
     parts = raw.strip().split(":")
     if len(parts) != 2:
         return 9, 20
-    return int(parts[0]), int(parts[1])
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return 9, 20
 
 
 def is_bridge_market_open(config: BridgeConfig | None = None, *, now=None) -> bool:
