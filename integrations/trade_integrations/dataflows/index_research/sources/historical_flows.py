@@ -8,10 +8,12 @@ from typing import Any
 
 import pandas as pd
 
-from trade_integrations.dataflows.index_research.history_store import save_history_dataset
+from trade_integrations.dataflows.index_research.history_store import load_history_dataset, save_history_dataset
 from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
     fetch_mrchartist_flow_frame,
     load_flow_cash_cache,
+    load_nifty_oi_daily_frame,
+    merge_flow_derivatives_frame,
     upsert_flow_cash_cache,
 )
 from trade_integrations.dataflows.index_research.sources.web_flow_fetch import fetch_niftyinvest_flow_frame
@@ -114,6 +116,43 @@ def backfill_flow_history(
 
     cash = _merge_flow_frames([repo_flows, niftyinvest, mrchartist, cache])
 
+    merged_flow = merge_flow_derivatives_frame(
+        start[:10],
+        end_day,
+        allow_live_fetch=allow_live_fetch,
+    )
+    if not merged_flow.empty:
+        cash_cols = [c for c in ("date", "fii_net", "dii_net", "source", "fii_buy", "fii_sell", "dii_buy", "dii_sell") if c in merged_flow.columns]
+        if cash_cols:
+            cash = _merge_flow_frames([cash, merged_flow[cash_cols]])
+
+    deriv_cols = (
+        "nifty_pcr",
+        "fii_sentiment_score",
+        "fii_idx_fut_long",
+        "fii_idx_fut_short",
+        "fii_idx_put_oi",
+        "fii_idx_call_oi",
+        "fii_fut_long_short_ratio",
+    )
+    deriv = pd.DataFrame()
+    if not merged_flow.empty:
+        present = ["date"] + [c for c in deriv_cols if c in merged_flow.columns]
+        deriv = merged_flow[present].copy()
+
+    oi_daily = load_nifty_oi_daily_frame(start=start, end=end_day)
+    if not oi_daily.empty:
+        from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+        deriv = overlay_derivative_columns(deriv, oi_daily)
+
+    if not deriv.empty:
+        from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+        cash = overlay_derivative_columns(cash, deriv)
+        existing_deriv = load_history_dataset("flow_derivatives_daily")
+        deriv = overlay_derivative_columns(existing_deriv, deriv)
+
     vix = fetch_india_vix_history(start=start, end=end_day)
 
     if cash.empty and vix.empty:
@@ -127,6 +166,7 @@ def backfill_flow_history(
         return {
             "status": "dry_run",
             "cash_rows": len(cash),
+            "deriv_rows": len(deriv),
             "vix_rows": len(vix),
             "fii_coverage_pct": round(coverage * 100.0, 1),
             "start": start,
@@ -139,10 +179,8 @@ def backfill_flow_history(
         cash_result = save_history_dataset("flow_cash_daily", cash)
         upsert_flow_cash_cache(cash.to_dict(orient="records"))
 
-    deriv_cols = [c for c in cash.columns if c not in {"date", "source", "fii_net", "dii_net", "fii_buy", "fii_sell", "dii_buy", "dii_sell"}]
     deriv_result: dict[str, Any] = {"status": "skipped"}
-    if deriv_cols:
-        deriv = cash[["date"] + deriv_cols].copy()
+    if not deriv.empty:
         deriv_result = save_history_dataset("flow_derivatives_daily", deriv)
 
     vix_result: dict[str, Any] = {"status": "skipped"}

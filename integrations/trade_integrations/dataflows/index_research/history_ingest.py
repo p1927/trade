@@ -277,7 +277,9 @@ def sync_repo_flows_to_cold_tier(*, start: str = "2006-01-01", end: str | None =
         if "source" not in repo_deriv.columns and "source" in cash.columns:
             repo_deriv["source"] = cash["source"]
         existing_deriv = load_history_dataset("flow_derivatives_daily")
-        deriv = merge_with_priority([existing_deriv, repo_deriv], on=["date"])
+        from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+        deriv = overlay_derivative_columns(existing_deriv, repo_deriv)
         deriv_result = save_history_dataset("flow_derivatives_daily", deriv)
 
     return {"status": "ok", "cash": cash_result, "derivatives": deriv_result}

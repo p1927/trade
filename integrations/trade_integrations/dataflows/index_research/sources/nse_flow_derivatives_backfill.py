@@ -602,12 +602,23 @@ def merge_flow_derivatives_frame(
     latest = fetch_mrchartist_latest_session(allow_live_fetch=allow_live_fetch)
     nse = fetch_nselib_fii_dii_frame(start, end, allow_live_fetch=allow_live_fetch)
     cache = load_flow_cash_cache()
+    cold_deriv = pd.DataFrame()
+    try:
+        from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+        cold_deriv = load_history_dataset("flow_derivatives_daily")
+        if not cold_deriv.empty:
+            cold_deriv = cold_deriv.copy()
+            cold_deriv["date"] = cold_deriv["date"].astype(str).str[:10]
+            cold_deriv = cold_deriv[(cold_deriv["date"] >= start[:10]) & (cold_deriv["date"] <= end[:10])]
+    except Exception:
+        cold_deriv = pd.DataFrame()
 
     # Per-date last wins (listed low → high priority): flow cache, web snapshots,
-    # Mr. Chartist, NSE today, git repo parquet, nse_browser hub rows.
+    # Mr. Chartist, NSE today, git repo parquet, nse_browser hub rows, cold-tier deriv.
     frames = [
         f
-        for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow)
+        for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow, cold_deriv)
         if f is not None and not f.empty
     ]
     if not frames:
@@ -686,6 +697,138 @@ def backfill_nse_fao_to_cache(
         "fetched": len(rows),
         "cached_total": len(load_flow_cash_cache()),
     }
+
+
+def _fao_backfill_progress_path() -> Path:
+    return get_hub_dir() / "_data" / "history" / ".fao_backfill_progress.json"
+
+
+def _load_fao_backfill_progress() -> set[str]:
+    path = _fao_backfill_progress_path()
+    if not path.is_file():
+        return set()
+    try:
+        import json
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return set(str(d) for d in (payload.get("completed_dates") or []))
+    except Exception:
+        return set()
+
+
+def _save_fao_backfill_progress(completed: set[str]) -> None:
+    import json
+
+    path = _fao_backfill_progress_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"completed_dates": sorted(completed), "count": len(completed)}, indent=2),
+        encoding="utf-8",
+    )
+
+
+def backfill_nse_fao_to_cold_tier(
+    *,
+    start: str = "2007-01-01",
+    end: str | None = None,
+    sleep_s: float = 0.35,
+    max_fetch: int | None = None,
+    resume: bool = True,
+    dry_run: bool = False,
+) -> dict[str, int | str]:
+    """Bulk-fetch NSE FAO participant OI archives into flow_derivatives_daily cold tier."""
+    from datetime import datetime, timezone
+
+    from trade_integrations.dataflows.index_research.history_store import (
+        load_history_dataset,
+        save_history_dataset,
+    )
+    from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
+
+    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    nifty = load_nifty_history(days=0)
+    if nifty.empty:
+        nifty = load_history_dataset("nifty_ohlcv_daily")
+    if nifty.empty or "date" not in nifty.columns:
+        return {"status": "error", "reason": "no_trading_calendar"}
+
+    trading_dates = (
+        nifty["date"]
+        .astype(str)
+        .str[:10]
+        .loc[lambda s: (s >= start[:10]) & (s <= end_day)]
+        .tolist()
+    )
+    existing = load_history_dataset("flow_derivatives_daily")
+    have_pcr: set[str] = set()
+    if not existing.empty and "nifty_pcr" in existing.columns:
+        have_pcr = set(
+            existing.loc[existing["nifty_pcr"].notna(), "date"].astype(str).str[:10].tolist()
+        )
+
+    completed = _load_fao_backfill_progress() if resume else set()
+    missing = [d for d in trading_dates if d not in have_pcr and d not in completed]
+    if max_fetch is not None and len(missing) > max_fetch:
+        missing = missing[:max_fetch]
+
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "missing": len(missing),
+            "trading_days": len(trading_dates),
+            "existing_pcr_days": len(have_pcr),
+        }
+
+    fetched_rows: list[dict] = []
+    for idx, day in enumerate(missing):
+        frame = fetch_nse_fao_participant_oi_for_date(day)
+        if not frame.empty:
+            fetched_rows.append(frame.iloc[0].to_dict())
+            completed.add(day[:10])
+        if sleep_s > 0 and idx < len(missing) - 1:
+            time.sleep(sleep_s)
+        if (idx + 1) % 50 == 0:
+            _save_fao_backfill_progress(completed)
+
+    _save_fao_backfill_progress(completed)
+
+    if not fetched_rows:
+        return {
+            "status": "ok",
+            "fetched": 0,
+            "missing_requested": len(missing),
+            "existing_pcr_days": len(have_pcr),
+        }
+
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+    overlay = pd.DataFrame(fetched_rows)
+    merged = overlay_derivative_columns(existing, overlay)
+    result = save_history_dataset("flow_derivatives_daily", merged)
+    return {
+        "status": "ok",
+        "fetched": len(fetched_rows),
+        "missing_requested": len(missing),
+        **result,
+    }
+
+
+def load_nifty_oi_daily_frame(*, start: str, end: str) -> pd.DataFrame:
+    """Load historic nifty OI daily (PCR proxy) from repo parquet."""
+    try:
+        from trade_integrations.nse_browser.repository import load_repo_dataset
+
+        frame = load_repo_dataset("nifty_oi_daily")
+    except Exception:
+        return pd.DataFrame()
+    if frame.empty or "date" not in frame.columns:
+        return pd.DataFrame()
+    out = frame.copy()
+    out["date"] = out["date"].astype(str).str[:10]
+    out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
+    if "pcr" in out.columns and "nifty_pcr" not in out.columns:
+        out["nifty_pcr"] = pd.to_numeric(out["pcr"], errors="coerce")
+    return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
 
 
 def flow_backfill_summary(*, days: int = 365, allow_live_fetch: bool = False) -> dict[str, int | str]:
