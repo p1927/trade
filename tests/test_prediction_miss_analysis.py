@@ -97,7 +97,7 @@ def test_enrich_eval_row_horizon_adds_maturity_and_miss_category(monkeypatch):
     }
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.prediction_miss_analysis._fetch_index_headlines",
-        lambda day, limit=5: [],
+        lambda day, limit=5, **kwargs: [],
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.prediction_miss_analysis.collect_constituent_headlines_for_day",
@@ -146,7 +146,7 @@ def test_run_miss_analysis_from_synthetic_backtest(monkeypatch):
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.prediction_miss_analysis._fetch_index_headlines",
-        lambda day, limit=5: [],
+        lambda day, limit=5, **kwargs: [],
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.prediction_miss_analysis.collect_constituent_headlines_for_day",

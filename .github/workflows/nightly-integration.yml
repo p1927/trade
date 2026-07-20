@@ -1,0 +1,34 @@
+name: Nightly integration
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  integration-subset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: |
+          pip install pytest pytest-timeout pandas numpy pyarrow
+          pip install -e tradingagents/ 2>/dev/null || pip install -e tradingagents
+          pip install -e integrations/ 2>/dev/null || true
+
+      - name: Nautilus + autonomous matrix
+        run: |
+          pytest tests/test_nautilus_poll_latency.py tests/test_nautilus_channel_feed.py \
+            tests/test_nautilus_preflight.py tests/test_nautilus_execute.py \
+            tests/test_nautilus_agent_scoping.py tests/test_execution_enforce.py \
+            tests/test_nautilus_intent_queue.py tests/test_autonomous_bootstrap.py \
+            tests/test_prediction_miss_analysis.py tests/test_track_walk_forward.py \
+            -q --timeout=120

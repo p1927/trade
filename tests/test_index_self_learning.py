@@ -105,10 +105,11 @@ def test_self_learning_loop_reconcile_metrics_trigger_retrain(tmp_path, monkeypa
         )
     )
 
+    nifty_dates = pd.date_range("2026-06-01", periods=12, freq="B").strftime("%Y-%m-%d").tolist()
     nifty_history = pd.DataFrame(
         {
-            "date": ["2026-06-01", "2026-06-06", "2026-06-02", "2026-06-07"],
-            "close": [24000.0, 25200.0, 24100.0, 23136.0],
+            "date": nifty_dates,
+            "close": [24000.0, 24100.0, 24200.0, 24300.0, 24400.0, 25200.0, 25100.0, 25000.0, 24900.0, 23136.0, 23200.0, 23300.0],
         }
     )
     monkeypatch.setattr(
@@ -174,10 +175,26 @@ def test_calibration_main_reconciles_scores_and_retrains(tmp_path, monkeypatch):
         "trade_integrations.dataflows.index_research.calibration_runner.retrain",
         retrain_mock,
     )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_event_features.backfill_news_event_features",
+        lambda **k: {"status": "skipped"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_impact_engine.reconcile_matured_impacts",
+        lambda **k: {"status": "skipped"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_shock_calibration.update_shock_calibration",
+        lambda **k: {"status": "skipped"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_event_features.evaluate_news_model_gates",
+        lambda **k: {"status": "skipped"},
+    )
 
     from trade_integrations.dataflows.index_research.calibration_runner import run_calibration
 
-    summary = run_calibration()
+    summary = run_calibration(backfill_history=False)
     assert summary["reconciled_rows"] == 2
     reconcile_mock.assert_called_once()
     metrics_mock.assert_called_once()
