@@ -21,6 +21,37 @@ _DRIFT_THRESHOLD = 0.20
 _MIN_TRAINING_ROWS = 30
 
 
+def artifact_needs_retrain(artifact: ModelArtifact | None, horizon) -> bool:
+    """True when stored Ridge artifact is missing or out of sync with the factor matrix."""
+    if artifact is None or not artifact.feature_names or not artifact.coefficients:
+        return True
+    if artifact.horizon_name and artifact.horizon_name != horizon.name:
+        return True
+    history = load_aligned_factor_history(days=365)
+    if history.empty:
+        return False
+    try:
+        from trade_integrations.dataflows.index_research.factor_matrix import build_factor_matrix
+
+        _, _, current_names = build_factor_matrix(history, horizon)
+    except Exception as exc:
+        logger.debug("index calibrator: factor matrix probe failed: %s", exc)
+        return True
+    if not current_names:
+        return True
+    return set(current_names) != set(artifact.feature_names)
+
+
+def ensure_ridge_model_artifact(*, horizon_days: int | None = None) -> ModelArtifact | None:
+    """Load stored Ridge artifact or retrain when feature universe changed."""
+    horizon = resolve_horizon(horizon_days)
+    artifact = load_stored_model_artifact()
+    if not artifact_needs_retrain(artifact, horizon):
+        return artifact
+    logger.info("index calibrator: retraining Ridge — artifact stale or missing")
+    return retrain(horizon_days=horizon.days)
+
+
 def should_retrain(mae_14d: float | None, *, baseline_mae: float | None = None) -> bool:
     """Return True when rolling MAE drift exceeds 20% vs training baseline."""
     if mae_14d is None:

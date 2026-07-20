@@ -16,6 +16,11 @@ SPREAD_OUTPUT_KEYS: tuple[str, ...] = (
     "india_credit_spread",
 )
 
+INDIA_CREDIT_SPREAD_OBSERVED_COL = "india_credit_spread_is_observed"
+# Observed AAA–G-sec spread should differ from the affine term-spread proxy by > this (pp).
+_CREDIT_SPREAD_PROXY_GAP_PP = 0.01
+_MIN_OBSERVED_CREDIT_ROWS = 1
+
 
 def compute_velocity_3d(series: pd.Series) -> pd.Series:
     """3-session percent change."""
@@ -30,6 +35,52 @@ def compute_momentum_5d(series: pd.Series) -> pd.Series:
 def compute_level_momentum(series: pd.Series, days: int = 5) -> pd.Series:
     """Absolute change over ``days`` (for flow sums)."""
     return series.astype(float) - series.astype(float).shift(days)
+
+
+def _term_spread_series(frame: pd.DataFrame) -> pd.Series | None:
+    if "india_term_spread" in frame.columns:
+        return pd.to_numeric(frame["india_term_spread"], errors="coerce")
+    if "india_10y" in frame.columns and "india_91d_tbill" in frame.columns:
+        return pd.to_numeric(frame["india_10y"], errors="coerce") - pd.to_numeric(
+            frame["india_91d_tbill"], errors="coerce"
+        )
+    return None
+
+
+def _credit_spread_observed_series(frame: pd.DataFrame) -> pd.Series:
+    """Per-row flag: 1 when credit spread is independent of the term-spread proxy."""
+    import os
+
+    if os.getenv("INDEX_INDIA_CREDIT_SPREAD", "").strip():
+        return pd.Series(1, index=frame.index, dtype=int)
+    if "india_credit_spread" not in frame.columns:
+        return pd.Series(0, index=frame.index, dtype=int)
+    credit = pd.to_numeric(frame["india_credit_spread"], errors="coerce")
+    term = _term_spread_series(frame)
+    if term is None:
+        return credit.notna().astype(int)
+    proxy = compute_credit_spread_proxy(term)
+    if not isinstance(proxy, pd.Series):
+        proxy = pd.Series(float(proxy), index=frame.index)
+    gap = (credit - proxy).abs()
+    return ((credit.notna()) & (gap > _CREDIT_SPREAD_PROXY_GAP_PP)).astype(int)
+
+
+def india_credit_spread_is_observed(
+    frame: pd.DataFrame,
+    *,
+    min_rows: int = _MIN_OBSERVED_CREDIT_ROWS,
+) -> bool:
+    """True when history carries observed corporate credit spread, not just the proxy."""
+    import os
+
+    if os.getenv("INDEX_INDIA_CREDIT_SPREAD", "").strip():
+        return True
+    col = INDIA_CREDIT_SPREAD_OBSERVED_COL
+    if col not in frame.columns:
+        frame = enrich_spread_columns(frame.copy())
+    flags = pd.to_numeric(frame.get(col, 0), errors="coerce").fillna(0)
+    return int(flags.sum()) >= max(1, min_rows)
 
 
 def compute_credit_spread_proxy(term_spread: pd.Series | float) -> pd.Series | float:
@@ -94,6 +145,8 @@ def enrich_spread_columns(frame: pd.DataFrame) -> pd.DataFrame:
         out["india_credit_spread"] = compute_credit_spread_proxy(term)
     elif "india_credit_spread" not in out.columns:
         out["india_credit_spread"] = np.nan
+
+    out[INDIA_CREDIT_SPREAD_OBSERVED_COL] = _credit_spread_observed_series(out)
 
     return out
 

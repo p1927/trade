@@ -46,6 +46,16 @@ def test_apply_redundancy_prune_prefers_research_primary_in_groups():
 
 
 @pytest.mark.unit
+def test_apply_redundancy_prune_keeps_observed_credit_spread_with_term_spread():
+    cols = ["india_term_spread", "india_credit_spread", "india_10y", "india_91d_tbill"]
+    pruned = _apply_redundancy_prune(cols, credit_spread_observed=True)
+    assert "india_term_spread" in pruned
+    assert "india_credit_spread" in pruned
+    assert "india_10y" not in pruned
+    assert "india_91d_tbill" not in pruned
+
+
+@pytest.mark.unit
 def test_select_macro_columns_excludes_redundant():
     horizon = resolve_horizon(14)
     frame = pd.DataFrame(

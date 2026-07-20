@@ -80,3 +80,17 @@ def test_cold_tier_credit_spread_overrides_proxy(tmp_path, monkeypatch):
     )
     out = enrich_spread_columns(with_rates)
     assert float(out.loc[out["date"] == "2026-07-10", "india_credit_spread"].iloc[0]) == pytest.approx(1.30)
+    assert int(out.loc[out["date"] == "2026-07-10", "india_credit_spread_is_observed"].iloc[0]) == 1
+
+
+@pytest.mark.unit
+def test_proxy_credit_spread_not_marked_observed():
+    frame = pd.DataFrame(
+        {
+            "date": ["2026-07-10", "2026-07-11"],
+            "india_10y": [7.2, 7.4],
+            "india_91d_tbill": [6.5, 6.5],
+        }
+    )
+    out = enrich_spread_columns(frame)
+    assert out["india_credit_spread_is_observed"].sum() == 0

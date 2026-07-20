@@ -58,6 +58,7 @@ MACRO_FACTOR_KEYS: tuple[str, ...] = (
     "nifty_earnings_yield",
     "equity_risk_premium",
     "india_term_spread",
+    "india_credit_spread",
     "india_vix_velocity_3d",
     "usd_inr_momentum_5d",
     "us_10y_velocity_3d",
@@ -119,8 +120,9 @@ _REDUNDANCY_PAIRS: tuple[tuple[str, str], ...] = (
 
 # Within each group keep the first present member; drop the rest (TA multicollinearity guidance).
 _REDUNDANCY_GROUPS: tuple[tuple[str, ...], ...] = (
-    # India curve: term spread (10Y − T-Bill) beats level + affine credit proxy.
-    ("india_term_spread", "india_credit_spread", "india_10y", "india_91d_tbill"),
+    # India G-Sec curve: term spread (10Y − T-Bill) subsumes raw yield levels.
+    # Corporate credit spread is handled separately when observed (see _apply_redundancy_prune).
+    ("india_term_spread", "india_10y", "india_91d_tbill"),
     # Oscillators: stochastic %K; Williams %R is a linear transform (StockSharp / TA-Lib studies).
     ("nifty_stoch_k", "nifty_williams_r", "nifty_stoch_d", "nifty_bb_percent_b"),
     # MACD: histogram is line − signal; keep the actionable residual.
@@ -146,7 +148,20 @@ def _safe_abs_corr(series: pd.Series, target: pd.Series) -> float | None:
     return abs(float(corr))
 
 
-def _apply_redundancy_prune(columns: list[str]) -> list[str]:
+def _credit_spread_observed_for_frame(history_df: pd.DataFrame) -> bool:
+    try:
+        from trade_integrations.dataflows.index_research.spread_features import india_credit_spread_is_observed
+
+        return india_credit_spread_is_observed(history_df)
+    except Exception:
+        return False
+
+
+def _apply_redundancy_prune(
+    columns: list[str],
+    *,
+    credit_spread_observed: bool = False,
+) -> list[str]:
     """Drop redundant pair/group members already excluded or superseded."""
     present = set(columns)
     drop: set[str] = set()
@@ -159,7 +174,14 @@ def _apply_redundancy_prune(columns: list[str]) -> list[str]:
             continue
         drop |= {name for name in group if name != keep and name in present}
     drop |= _EXCLUDED_REDUNDANT & present
-    return [c for c in columns if c not in drop]
+    result = [c for c in columns if c not in drop]
+    # Term spread = yield-curve slope; credit spread = corporate vs G-sec risk.
+    # Keep both only when credit is observed — proxy is an affine function of term spread.
+    if not credit_spread_observed:
+        present_after = set(result)
+        if "india_term_spread" in present_after and "india_credit_spread" in present_after:
+            result = [c for c in result if c != "india_credit_spread"]
+    return result
 
 
 def redundancy_audit() -> dict[str, Any]:
@@ -196,7 +218,8 @@ def _select_macro_columns(
     present = [
         key for key in ordered if key in history_df.columns and key not in _EXCLUDED_REDUNDANT
     ]
-    present = _apply_redundancy_prune(present)
+    credit_observed = _credit_spread_observed_for_frame(history_df)
+    present = _apply_redundancy_prune(present, credit_spread_observed=credit_observed)
     try:
         from trade_integrations.dataflows.index_research.sector_promotion import (
             promoted_sector_factor_keys,
@@ -316,13 +339,14 @@ def build_factor_matrix(
         if col in macro_cols and col not in selected and col not in _EXCLUDED_REDUNDANT:
             selected.append(col)
 
-    selected = _apply_redundancy_prune(selected)
+    credit_observed = _credit_spread_observed_for_frame(frame)
+    selected = _apply_redundancy_prune(selected, credit_spread_observed=credit_observed)
 
     for col in force_keys:
         if col in frame.columns and col not in selected:
             selected.append(col)
 
-    selected = _apply_redundancy_prune(selected)
+    selected = _apply_redundancy_prune(selected, credit_spread_observed=credit_observed)
 
     final = usable.dropna(subset=["target"] + selected).copy()
     if len(final) < 3:

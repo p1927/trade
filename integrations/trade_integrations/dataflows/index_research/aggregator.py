@@ -31,6 +31,7 @@ from trade_integrations.dataflows.index_research.pipeline_cancel import check_pi
 from trade_integrations.ml_runtime_env import ensure_libomp_loaded
 
 ensure_libomp_loaded()
+from trade_integrations.dataflows.index_research.calibrator import ensure_ridge_model_artifact
 from trade_integrations.dataflows.index_research.predictor import (
     finalize_index_prediction,
     load_stored_model_artifact,
@@ -418,6 +419,8 @@ def run_index_research(
         scenario_weighted_return_pct(scenarios, spot=spot) if spot > 0 and scenarios else None
     )
 
+    log.info("predict", "Ensuring Ridge model artifact matches current factor universe…")
+    model_artifact = ensure_ridge_model_artifact(horizon_days=horizon.days)
     log.info("predict", "Running hybrid predictor (bottom-up + macro Ridge + direction head)…")
     prediction = predict_nifty(
         spot=spot,
@@ -428,6 +431,7 @@ def run_index_research(
         scenario_anchor_return_pct=scenario_anchor,
         macro_trust_multiplier=macro_trust_multiplier,
         pipeline=log,
+        model_artifact=model_artifact,
     ) if spot > 0 else {}
     if prediction and not completeness.get("passes_gate"):
         after = completeness.get("after") or {}
