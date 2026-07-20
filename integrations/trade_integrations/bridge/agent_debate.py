@@ -15,12 +15,23 @@ _INDEX_YF = {
     "NIFTY": "^NSEI",
     "NIFTY50": "^NSEI",
     "BANKNIFTY": "^NSEBANK",
-    "FINNIFTY": "^NSEI",
-    "MIDCPNIFTY": "^NSEI",
     "SENSEX": "^BSESN",
     "^NSEI": "^NSEI",
     "^BSESN": "^BSESN",
 }
+
+# Indices without confirmed yfinance symbols — block debate until mapped.
+_DEBATE_BLOCKED_INDICES = frozenset({"FINNIFTY", "MIDCPNIFTY", "NIFTYIT", "NIFTYMIDSELECT"})
+
+
+def debate_eligible_for_ticker(ticker: str) -> tuple[bool, str | None]:
+    """Return (eligible, block_reason) for TradingAgents debate."""
+    raw = ticker.strip().upper()
+    if raw in _DEBATE_BLOCKED_INDICES:
+        return False, f"debate unavailable for {raw} until yfinance symbol is confirmed"
+    if raw in _INDEX_YF or raw in _INDEX_YF.values():
+        return True, None
+    return True, None
 
 
 def _ensure_paths() -> Path:

@@ -88,6 +88,15 @@ def _validate_proposal_committable(proposal: dict[str, Any]) -> None:
     routing_errors = validate_proposal_routing(proposal)
     symbol_errors = validate_proposal_symbols(symbols)
     fresh_errors = list(routing_errors) + list(symbol_errors)
+    exec_market = str(proposal.get("execution_market") or "").upper()
+    if exec_market == "US":
+        fresh_errors.append(
+            "US autonomous agents are not enabled until US execution profile exists — use /agent for US research"
+        )
+    for sym in symbols:
+        eligible, reason = _debate_eligibility_for_symbol(sym)
+        if not eligible and reason:
+            fresh_errors.append(reason)
     if fresh_errors:
         raise ValueError(f"proposal routing validation failed: {'; '.join(fresh_errors)}")
 
@@ -198,6 +207,12 @@ def validate_proposal_routing(proposal: dict[str, Any]) -> list[str]:
             errors.append(text)
 
     return errors
+
+
+def _debate_eligibility_for_symbol(symbol: str) -> tuple[bool, str | None]:
+    from trade_integrations.bridge.agent_debate import debate_eligible_for_ticker
+
+    return debate_eligible_for_ticker(str(symbol or "").strip())
 
 
 def validate_proposal_symbols(symbols: list[str]) -> list[str]:
@@ -617,6 +632,13 @@ def _commit_autonomous_agent_locked(
         vibe_session_id=vibe_session.session_id,
         fresh_mandate_cfg=fresh_mandate_cfg,
     )
+
+    try:
+        from trade_integrations.autonomous_agents.quote_prewarm import prewarm_agent_quotes
+
+        prewarm_agent_quotes(symbols=symbols)
+    except Exception:
+        logger.debug("quote prewarm skipped for %s", agent_id, exc_info=True)
 
     if blocking and profile.market == "IN":
         agent["status"] = "paused"

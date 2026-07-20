@@ -81,22 +81,7 @@ def start_required_infra(
             else:
                 warnings.append(msg)
 
-    try:
-        from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
-
-        watch_spec = dict(proposal.get("watch_spec") or {})
-        mc = dict(proposal.get("mandate_config") or {})
-        if not watch_spec.get("rules") and mc.get("watch_spec"):
-            watch_spec = dict(mc["watch_spec"])
-        if watch_spec.get("rules") and profile.uses_nautilus_watch:
-            sync_watch_spec_to_handoff(str(agent.get("id") or ""), watch_spec)
-    except Exception as exc:
-        logger.warning("handoff sync failed for %s: %s", agent.get("id"), exc)
-        msg = f"watch_spec handoff sync failed: {exc}"
-        if profile.market == "IN" and profile.uses_nautilus_watch:
-            blocking.append(msg)
-        else:
-            warnings.append(msg)
+    # Handoff/watch_spec sync deferred until plan approval (R7-04) — see plan_approval.approve_agent_plan.
 
     return blocking, warnings
 

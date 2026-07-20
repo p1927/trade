@@ -22,6 +22,33 @@ def is_bridge_autonomous_agent(agent_id: str | None) -> bool:
     return profile is not None and profile.uses_nautilus_handoff
 
 
+_BLOCKED_DIRECT_ORDER_TOOLS = frozenset(
+    {
+        "place_basket_order",
+        "mcp_openalgo_place_basket_order",
+        "execute_auto_paper_basket",
+        "mcp_openalgo_execute_auto_paper_basket",
+    }
+)
+
+
+def assert_direct_order_tool_allowed(
+    *,
+    tool_name: str,
+    session_kind: str | None = None,
+    autonomous_agent_id: str | None = None,
+) -> None:
+    """Hard-fail raw basket placement when bridge/autonomous agent is active."""
+    slug = tool_name.removeprefix("mcp_openalgo_")
+    if tool_name not in _BLOCKED_DIRECT_ORDER_TOOLS and slug not in _BLOCKED_DIRECT_ORDER_TOOLS:
+        return
+    if session_kind == "autonomous_agent" or is_bridge_autonomous_agent(autonomous_agent_id):
+        raise PermissionError(
+            "Direct basket order blocked for autonomous/bridge agents — use execute_auto_paper_basket "
+            "or bridge intent queue"
+        )
+
+
 def bridge_watch_required() -> bool:
     try:
         from nautilus_openalgo_bridge.config import is_watch_enabled

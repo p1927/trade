@@ -11,12 +11,43 @@ from trade_integrations.autonomous_agents.watch import dispatch_full_reasoning, 
 logger = logging.getLogger(__name__)
 
 
+def _bootstrap_structured_plan_ready(agent: dict) -> bool:
+    """Options agents need structured legs in thesis/recommended before plan approval."""
+    from trade_integrations.execution.profile import resolve_profile
+
+    profile = resolve_profile(agent=agent)
+    if "options" not in profile.allowed_instruments:
+        return True
+    thesis = dict(agent.get("thesis") or {})
+    recommended = dict(thesis.get("recommended") or thesis.get("strategy") or {})
+    legs = recommended.get("legs") or recommended.get("implementation_legs") or []
+    if isinstance(legs, list) and len(legs) >= 1:
+        return True
+    last = dict(agent.get("last_decision") or {})
+    widget_id = str(last.get("widget_id") or "")
+    if widget_id:
+        try:
+            from trade_integrations.trade_widgets.store import load_trade_widget
+
+            widget = load_trade_widget(widget_id)
+            if widget:
+                rec = dict(widget.get("recommended") or {})
+                wlegs = rec.get("legs") or []
+                if isinstance(wlegs, list) and len(wlegs) >= 1:
+                    return True
+        except Exception:
+            logger.debug("bootstrap widget leg check skipped", exc_info=True)
+    return False
+
+
 def finalize_bootstrap_if_ready(agent_id: str) -> bool:
     """Move to plan approval once bootstrap decision + watch_spec are recorded."""
     agent = get_agent(agent_id)
     if not agent or str(agent.get("bootstrap_status")) != "running":
         return False
     if not agent.get("last_decision"):
+        return False
+    if not _bootstrap_structured_plan_ready(agent):
         return False
 
     now = datetime.now(timezone.utc).isoformat()
