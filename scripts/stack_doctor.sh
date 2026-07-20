@@ -59,6 +59,18 @@ if (( ! hub_only )); then
     echo "  ✗ verify_hub_integration.py failed"
     failures=$((failures + 1))
   fi
+
+  if [[ -x "$ROOT/scripts/ensure_crawl4ai.sh" ]]; then
+    if bash "$ROOT/scripts/ensure_crawl4ai.sh" --verify-only 2>/dev/null; then
+      echo "  ✓ Crawl4AI (external predictions browser fetch)"
+    else
+      echo "  ✗ Crawl4AI not ready — run: ./scripts/ensure_crawl4ai.sh"
+      failures=$((failures + 1))
+    fi
+  else
+    echo "  ✗ ensure_crawl4ai.sh missing"
+    failures=$((failures + 1))
+  fi
 fi
 
 echo "──────────────────────────────────────────────────────────"

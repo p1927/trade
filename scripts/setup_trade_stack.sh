@@ -74,7 +74,8 @@ if ! "$PY" -c "import trade_integrations; import tradingagents" 2>/dev/null; the
   log "Installing trade integrations + TradingAgents ..."
   "$PY" -m pip install -q --upgrade pip
   "$PY" -m pip install -q -e "$ROOT/tradingagents"
-  "$PY" -m pip install -q -e ".[dev,research]"
+  "$PY" -m pip install -q -e ".[dev,research,external-predictions]"
+  "$PY" -m pip install -q 'requests>=2.34.2'
 fi
 
 if [[ ! -x "$ROOT/.venv/bin/vibe-trading" ]]; then
@@ -90,6 +91,13 @@ if [[ -x "$ROOT/scripts/ensure_prediction_ml.sh" ]]; then
   bash "$ROOT/scripts/ensure_prediction_ml.sh"
 else
   die "Missing scripts/ensure_prediction_ml.sh"
+fi
+
+if [[ -x "$ROOT/scripts/ensure_crawl4ai.sh" ]]; then
+  log "Installing Crawl4AI + Playwright for external predictions ..."
+  bash "$ROOT/scripts/ensure_crawl4ai.sh"
+else
+  die "Missing scripts/ensure_crawl4ai.sh"
 fi
 
 if [[ -x "$ROOT/scripts/ensure_openalgo_venv.sh" ]]; then

@@ -139,6 +139,8 @@ stack_export_ml_runtime_env() {
     [[ -n "$libdir" && -f "$libdir/libomp.dylib" ]] || continue
     export LIBOMP_LIB="$libdir"
     export DYLD_LIBRARY_PATH="${libdir}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    # yfinance must use requests when libomp is on DYLD (curl_cffi TLS breaks).
+    export YF_DISABLE_CURL_CFFI="${YF_DISABLE_CURL_CFFI:-1}"
     return 0
   done
 }
@@ -149,6 +151,16 @@ stack_verify_prediction_ml() {
   py="$(stack_pick_python)"
   stack_export_ml_runtime_env
   "$py" "$root/scripts/verify_prediction_ml.py"
+}
+
+stack_verify_crawl4ai() {
+  local root
+  root="$(stack_root)"
+  if [[ ! -x "$root/scripts/ensure_crawl4ai.sh" ]]; then
+    echo "[stack] Crawl4AI setup script missing" >&2
+    return 1
+  fi
+  bash "$root/scripts/ensure_crawl4ai.sh" --verify-only
 }
 
 stack_sync_env() {
@@ -831,6 +843,10 @@ stack_preflight_start() {
   elif ! stack_verify_prediction_ml >/dev/null; then
     echo "[stack] preflight: prediction ML runtime not ready — run: ./scripts/ensure_prediction_ml.sh" >&2
     stack_verify_prediction_ml 2>&1 | sed 's/^/[stack] preflight: /' >&2 || true
+    failures=$((failures + 1))
+  elif ! stack_verify_crawl4ai >/dev/null 2>&1; then
+    echo "[stack] preflight: Crawl4AI not ready — run: ./scripts/ensure_crawl4ai.sh" >&2
+    stack_verify_crawl4ai 2>&1 | sed 's/^/[stack] preflight: /' >&2 || true
     failures=$((failures + 1))
   fi
 

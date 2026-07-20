@@ -178,42 +178,53 @@ stack_http_ok() {
 _searxng_probe_check_unresponsive() {
   python3 -c '
 import json, sys
-allow = (
-    "bing", "bing news", "mojeek", "qwant",
-)
 data = json.load(sys.stdin)
-for entry in data.get("unresponsive_engines") or []:
-    name = str(entry[0] if entry else "").lower()
-    if not any(token in name for token in allow):
-        print(name, file=sys.stderr)
-        sys.exit(1)
+unresponsive = data.get("unresponsive_engines") or []
+if unresponsive:
+    for entry in unresponsive:
+        name = str(entry[0] if entry else "")
+        reason = str(entry[1] if len(entry) > 1 else "")
+        print(f"{name}: {reason}", file=sys.stderr)
+    sys.exit(1)
 '
 }
 
-stack_probe_searxng() {
-  local base probe_url
+stack_probe_searxng_health() {
+  local base
   base="$(stack_searxng_url)"
   base="${base%/}"
-  if ! curl -sf -o /dev/null -m 3 -H "X-Real-IP: 127.0.0.1" \
-      "$base/healthz" 2>/dev/null; then
+  curl -sf -o /dev/null -m 3 -H "X-Real-IP: 127.0.0.1" \
+    "$base/healthz" 2>/dev/null
+}
+
+stack_probe_searxng_engines() {
+  local base probe_url lang
+  base="$(stack_searxng_url)"
+  base="${base%/}"
+  lang="${SEARXNG_DEFAULT_LANG:-en-IN}"
+
+  # Startup/heal only — real engine probes (not every status tick; Bing news is rate-sensitive).
+  probe_url="${base}/search?q=trade+hub+probe&format=json&categories=general&engines=bing&language=${lang}"
+  if ! curl -sf -m 12 -H "X-Real-IP: 127.0.0.1" -H "Accept-Language: ${lang},en;q=0.9" \
+      "$probe_url" 2>/dev/null \
+      | _searxng_probe_check_unresponsive 2>/dev/null; then
+    echo "[stack] SearXNG probe: engine bing failing (check stack/searxng/settings.yml)" >&2
     return 1
   fi
 
-  # Pin a single engine per probe — avoids hammering optional engines on every status/heal tick.
-  probe_url="${base}/search?q=trade+hub+probe&format=json&categories=general&engines=bing"
-  if ! curl -sf -m 8 -H "X-Real-IP: 127.0.0.1" "$probe_url" 2>/dev/null \
+  probe_url="${base}/search?q=NIFTY+markets+probe&format=json&categories=news&engines=bing&language=${lang}"
+  if ! curl -sf -m 12 -H "X-Real-IP: 127.0.0.1" -H "Accept-Language: ${lang},en;q=0.9" \
+      "$probe_url" 2>/dev/null \
       | _searxng_probe_check_unresponsive 2>/dev/null; then
-    echo "[stack] SearXNG probe: disallowed engines failing (check stack/searxng/settings.yml keep_only)" >&2
-    return 1
-  fi
-
-  probe_url="${base}/search?q=NIFTY+markets+probe&format=json&categories=news&engines=bing%20news"
-  if ! curl -sf -m 8 -H "X-Real-IP: 127.0.0.1" "$probe_url" 2>/dev/null \
-      | _searxng_probe_check_unresponsive 2>/dev/null; then
-    echo "[stack] SearXNG news probe: disallowed engines failing (check stack/searxng/settings.yml keep_only)" >&2
+    echo "[stack] SearXNG news probe: engine bing/news failing (check stack/searxng/settings.yml)" >&2
     return 1
   fi
   return 0
+}
+
+stack_probe_searxng() {
+  stack_probe_searxng_health || return 1
+  stack_probe_searxng_engines || return 1
 }
 
 stack_ensure_searxng() {
@@ -514,7 +525,7 @@ stack_status_hub_docker() {
   echo "══════════════════════════════════════════════════════════"
 
   if [[ "$start_searxng" != "0" && "$start_searxng" != "false" && "$start_searxng" != "no" && "$start_searxng" != "off" ]]; then
-    if stack_probe_searxng; then
+    if stack_probe_searxng_health; then
       echo "  ✓ SearXNG     $(stack_searxng_url)"
     else
       echo "  ✗ SearXNG     not reachable at $(stack_searxng_url)"
