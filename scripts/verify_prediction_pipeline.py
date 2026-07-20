@@ -35,7 +35,7 @@ def main() -> int:
     py = sys.executable
     steps: list[dict] = []
 
-    steps.append(_run([py, str(ROOT / "scripts" / "audit_prediction_data.py"), "--write"], label="audit"))
+    steps.append(_run([py, str(ROOT / "scripts" / "audit_prediction_data.py"), "--days", "500", "--write"], label="audit"))
     if not args.skip_backtest:
         steps.append(
             _run(
@@ -63,6 +63,7 @@ def main() -> int:
                     "tests/test_phase_i_coverage.py",
                     "tests/test_spread_features.py",
                     "tests/test_prediction_data_consistency.py",
+                    "tests/test_history_panel.py",
                     "tests/test_data_router_ohlcv.py",
                     "tests/test_data_router_worker.py",
                     "tests/test_prediction_algorithms_tracks.py",

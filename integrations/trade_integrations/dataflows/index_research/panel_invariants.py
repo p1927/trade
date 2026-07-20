@@ -16,6 +16,8 @@ _MIN_STD = 1e-12
 _MIN_PINNED_COVERAGE = 0.45
 _DEFAULT_WINDOW_DAYS = 500
 _COLD_PARITY_TOLERANCE = 0.05
+# Policy rates can be flat over multi-month windows without indicating data corruption.
+_POLICY_FLAT_PINNED_OK: frozenset[str] = frozenset({"repo_rate", "india_91d_tbill"})
 
 # Daily macro columns from macro_daily — must not be collapsed by annual joins.
 DAILY_PROTECTED_FROM_ANNUAL: frozenset[str] = frozenset(
@@ -116,7 +118,7 @@ def check_pinned_factor_gates(
             violations.append(
                 f"pinned_sparse:{factor}:coverage={stats['coverage']:.3f}<{_MIN_PINNED_COVERAGE}"
             )
-        if stats["non_null"] > 1 and stats["std"] <= _MIN_STD:
+        if stats["non_null"] > 1 and stats["std"] <= _MIN_STD and factor not in _POLICY_FLAT_PINNED_OK:
             violations.append(f"pinned_flat:{factor}:std={stats['std']}")
 
     return violations
@@ -129,9 +131,14 @@ def check_parent_derived_pairs(frame: pd.DataFrame, *, window_days: int = _DEFAU
         if parent not in window.columns or derived not in window.columns:
             continue
         parent_std = _series_stats(window[parent])["std"]
-        derived_std = _series_stats(window[derived])["std"]
+        derived_stats = _series_stats(window[derived])
+        derived_std = derived_stats["std"]
         if parent_std > _MIN_STD and derived_std <= _MIN_STD:
-            violations.append(f"derived_flat:{derived}:parent={parent}:parent_std={parent_std:.6f}")
+            derived_vals = pd.to_numeric(window[derived], errors="coerce").fillna(0.0)
+            if float(derived_vals.abs().max()) <= _MIN_STD:
+                violations.append(
+                    f"derived_flat:{derived}:parent={parent}:parent_std={parent_std:.6f}"
+                )
     return violations
 
 

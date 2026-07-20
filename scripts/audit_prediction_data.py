@@ -39,6 +39,7 @@ def main() -> int:
     from trade_integrations.dataflows.index_research.prediction_data_requirements import (
         audit_prediction_panel_coverage,
     )
+    from trade_integrations.dataflows.index_research.panel_invariants import audit_panel_invariants
 
     load_trade_env()
 
@@ -49,10 +50,12 @@ def main() -> int:
         diagnostics_report = run_and_save_diagnostics(days=args.days, ticker="NIFTY")
 
     panel = build_history_panel(panel_name=args.panel_name)
+    invariants = audit_panel_invariants(panel, window_days=max(args.days, 500))
     audit = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "panel_name": args.panel_name,
         "panel_rows": len(panel),
+        "panel_invariants": invariants,
         "panel_coverage": audit_prediction_panel_coverage(panel),
         "phase_i_coverage": audit_phase_i_coverage(panel),
         "flow_coverage": measure_flow_coverage(days=args.days, allow_live_fetch=False),
@@ -75,6 +78,13 @@ def main() -> int:
         audit["written_to"] = str(out_path)
 
     print(json.dumps(audit, indent=2, default=str))
+    if not invariants.get("ok"):
+        return 1
+    pinned_issues = (audit.get("panel_coverage") or {}).get("pinned_missing_or_sparse") or []
+    # Full-panel coverage uses all rows; sparse ancient history is expected for some pins.
+    # Invariant window (500d) is the hard gate; log full-panel pinned gaps as warnings only.
+    if pinned_issues:
+        audit["pinned_full_panel_warnings"] = pinned_issues
     return 0
 
 

@@ -19,6 +19,11 @@ def main() -> int:
     parser.add_argument("--end", default=None)
     parser.add_argument("--panel", default="NIFTY_2006_present")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass panel invariant gate (also INDEX_PANEL_SAVE_FORCE=1)",
+    )
     args = parser.parse_args()
 
     from trade_integrations.env import load_trade_env
@@ -30,6 +35,7 @@ def main() -> int:
         end=args.end,
         panel_name=args.panel,
         dry_run=args.dry_run,
+        force=args.force,
     )
     print(json.dumps(result, indent=2))
     return 0 if result.get("status") in {"ok", "dry_run"} else 1

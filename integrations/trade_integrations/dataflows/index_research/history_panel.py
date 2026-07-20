@@ -11,6 +11,7 @@ from trade_integrations.dataflows.index_research.history_store import (
     load_panel,
     save_panel,
 )
+from trade_integrations.dataflows.index_research.panel_invariants import ANNUAL_JOIN_BLOCKLIST
 from trade_integrations.dataflows.index_research.sources.history_loader import enrich_history_features
 
 
@@ -39,6 +40,7 @@ def _join_annual_macro_by_year(frame: pd.DataFrame) -> pd.DataFrame:
             "source",
             "source_file",
         }
+        and c not in ANNUAL_JOIN_BLOCKLIST
     ]
     if not join_cols:
         return frame
@@ -128,19 +130,24 @@ def materialize_panel(
     end: str | None = None,
     panel_name: str = "NIFTY_2006_present",
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     frame = build_history_panel(start=start, end=end, panel_name=panel_name)
     if frame.empty:
         return {"status": "error", "reason": "empty_panel", "panel": panel_name}
     if dry_run:
+        from trade_integrations.dataflows.index_research.panel_invariants import audit_panel_invariants
+
+        inv = audit_panel_invariants(frame)
         return {
             "status": "dry_run",
             "rows": len(frame),
             "columns": len(frame.columns),
             "start": str(frame["date"].iloc[0]),
             "end": str(frame["date"].iloc[-1]),
+            "invariants": inv,
         }
-    result = save_panel(frame, name=panel_name)
+    result = save_panel(frame, name=panel_name, force=force)
     return {"status": "ok", **result}
 
 

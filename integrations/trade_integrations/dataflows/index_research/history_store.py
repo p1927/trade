@@ -245,7 +245,6 @@ def save_panel(
         )
 
     _write_parquet(out, staging_path)
-    _write_parquet(out, staging_path.with_suffix(".csv")) if not staging_path.is_file() else None
 
     if prod_path.is_file():
         shutil.copy2(prod_path, previous_path)

@@ -121,6 +121,11 @@ try:
 except ImportError:
     pass
 
+try:
+    from trade_integrations.dataflows.index_research.panel_invariants import COLUMN_GRANULARITY
+except ImportError:
+    COLUMN_GRANULARITY = {}
+
 # Explicitly out of scope for index prediction cold tier.
 EXCLUDED_DATA: dict[str, str] = {
     "nikkei_dax_ftse_hsi": "Not in MACRO_FACTOR_KEYS; SP500 is the sole global index input",
