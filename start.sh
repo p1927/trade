@@ -207,7 +207,10 @@ bootstrap_tradingagents() {
   if ! "$vpy" -c "import trade_integrations; import tradingagents" 2>/dev/null; then
     log "Installing TradingAgents engine + trade integrations ..."
     "$ROOT/.venv/bin/pip" install -q -e "$AGENTS_DIR"
-    "$ROOT/.venv/bin/pip" install -q -e "$ROOT"
+    "$ROOT/.venv/bin/pip" install -q -e ".[dev,research]"
+    if [[ -x "$ROOT/scripts/ensure_prediction_ml.sh" ]]; then
+      bash "$ROOT/scripts/ensure_prediction_ml.sh" || warn "prediction ML extras partial — run: ./scripts/ensure_prediction_ml.sh"
+    fi
     "$vpy" -c "import trade_integrations"
   fi
 

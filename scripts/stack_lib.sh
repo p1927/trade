@@ -121,6 +121,25 @@ stack_load_env() {
   # shellcheck disable=SC1091
   source "$root/scripts/stack_docker_lib.sh"
   stack_ensure_docker_path
+  stack_export_ml_runtime_env
+}
+
+# LightGBM on macOS needs libomp (brew install libomp).
+stack_export_ml_runtime_env() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+  local libdir
+  for libdir in \
+    "${LIBOMP_LIB:-}" \
+    "${HOMEBREW_PREFIX:-}/opt/libomp/lib" \
+    "/opt/homebrew/opt/libomp/lib" \
+    "/usr/local/opt/libomp/lib" \
+    "$HOME/.homebrew/opt/libomp/lib"; do
+    [[ -n "$libdir" && -f "$libdir/libomp.dylib" ]] || continue
+    export DYLD_LIBRARY_PATH="${libdir}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    return 0
+  done
 }
 
 stack_openalgo_port() {
@@ -706,6 +725,9 @@ stack_preflight_start() {
 
   if [[ ! -x "$root/.venv/bin/vibe-trading" ]]; then
     echo "[stack] preflight: vibe-trading missing — pip install -e vibetrading/" >&2
+    failures=$((failures + 1))
+  elif ! ( stack_export_ml_runtime_env; "$py" -c "import lightgbm, xgboost, darts" 2>/dev/null ); then
+    echo "[stack] preflight: prediction ML deps missing — run: ./scripts/ensure_prediction_ml.sh" >&2
     failures=$((failures + 1))
   fi
 
