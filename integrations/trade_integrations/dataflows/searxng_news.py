@@ -10,7 +10,12 @@ from email.utils import parsedate_to_datetime
 from trade_integrations.http import RequestException
 from dateutil.relativedelta import relativedelta
 
-from trade_integrations.dataflows.searxng_client import search_json
+from trade_integrations.dataflows.searxng_client import (
+    parse_engine_list,
+    search_json,
+    searxng_news_engines,
+    searxng_web_engines,
+)
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.yfinance_news import _in_news_window
 
@@ -41,21 +46,42 @@ def _parse_pub_date(result: dict) -> datetime | None:
     return None
 
 
-def _search(query: str, limit: int) -> list[dict]:
-    category_attempts = ["general", "news", "finance"]
-    for cat in category_attempts:
-        try:
-            payload = search_json(query, categories=cat, timeout=REQUEST_TIMEOUT)
-        except RequestException as exc:
-            logger.debug("SearXNG search failed (%s) for %r: %s", cat, query, exc)
-            continue
-        except ValueError as exc:
-            logger.warning("SearXNG returned invalid JSON (%s) for %r: %s", cat, query, exc)
-            continue
+def _ticker_news_query(ticker: str) -> str:
+    sym = (ticker or "").strip().upper()
+    return f"{sym} stock news India NSE moneycontrol economictimes livemint markets"
 
-        results = payload.get("results") or []
-        if results:
-            return results[:limit]
+
+def _search(query: str, limit: int) -> list[dict]:
+    news_engines = parse_engine_list(searxng_news_engines()) or ["bing news"]
+    web_engines = parse_engine_list(searxng_web_engines()) or ["bing"]
+    attempts: list[tuple[str, list[str]]] = [
+        ("news", news_engines),
+        ("general", web_engines),
+        ("finance", web_engines),
+    ]
+    for cat, engines in attempts:
+        for engine in engines:
+            try:
+                payload = search_json(
+                    query,
+                    categories=cat,
+                    engines=engine,
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except RequestException as exc:
+                logger.debug(
+                    "SearXNG search failed (%s/%s) for %r: %s", cat, engine, query, exc
+                )
+                continue
+            except ValueError as exc:
+                logger.warning(
+                    "SearXNG returned invalid JSON (%s/%s) for %r: %s", cat, engine, query, exc
+                )
+                continue
+
+            results = payload.get("results") or []
+            if results:
+                return results[:limit]
 
     logger.warning("SearXNG search returned no results for %r", query)
     return []
@@ -117,7 +143,7 @@ def get_news_searxng(ticker: str, start_date: str, end_date: str) -> str:
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-    query = f"{ticker} stock news"
+    query = _ticker_news_query(ticker)
     results = _search(query, article_limit * 2)
     if not results:
         return f"No news found for {ticker} via SearXNG"
@@ -157,7 +183,8 @@ def get_global_news_searxng(
     seen_titles: set[str] = set()
 
     for query in config["global_news_queries"]:
-        for result in _search(query, limit):
+        enriched = f"{query} India markets moneycontrol economictimes livemint"
+        for result in _search(enriched, limit):
             title = (result.get("title") or "").strip()
             if title and title not in seen_titles:
                 seen_titles.add(title)

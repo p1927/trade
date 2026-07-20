@@ -30,7 +30,7 @@ _DATA_DIR = Path("_data") / "searxng"
 _DRAIN_LOCK = "drain.lock"
 _LAST_CALL = "last_call.json"
 _WAITING = "waiting.json"
-_DEFAULT_MIN_INTERVAL = 0.5
+_DEFAULT_MIN_INTERVAL = 1.5
 _DEFAULT_TIMEOUT = 30.0
 
 
@@ -64,6 +64,27 @@ def _base_url() -> str:
     from trade_integrations.stack_ports import searxng_base_url
 
     return os.environ.get("SEARXNG_BASE_URL", searxng_base_url()).rstrip("/")
+
+
+def _env_engines(name: str, default: str) -> str:
+    return os.environ.get(name, default).strip()
+
+
+def parse_engine_list(raw: str) -> list[str]:
+    return [part.strip() for part in (raw or "").split(",") if part.strip()]
+
+
+def searxng_news_engines() -> str:
+    return _env_engines("SEARXNG_NEWS_ENGINES", "bing news")
+
+
+def searxng_finance_engines() -> str:
+    return _env_engines("SEARXNG_FINANCE_ENGINES", "bing,mojeek,qwant")
+
+
+def searxng_web_engines() -> str:
+    default = searxng_finance_engines()
+    return _env_engines("SEARXNG_WEB_ENGINES", default)
 
 
 class _CounterLock:
@@ -179,6 +200,7 @@ def search_json(
     q: str,
     *,
     categories: str = "news",
+    engines: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
     """Queued SearXNG JSON search — blocks until the global drain slot is available."""
@@ -192,6 +214,8 @@ def search_json(
         params: dict[str, str] = {"q": q, "format": "json"}
         if categories:
             params["categories"] = categories
+        if engines:
+            params["engines"] = engines
         try:
             resp = get(
                 url,

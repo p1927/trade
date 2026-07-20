@@ -1,9 +1,8 @@
 use_default_settings:
   engines:
     keep_only:
-      - duckduckgo
       - bing
-      - brave
+      - bing news
       - mojeek
       - qwant
 
@@ -15,7 +14,7 @@ server:
 
 search:
   safe_search: 0
-  autocomplete: google
+  autocomplete: ""
   formats:
     - html
     - json
@@ -27,29 +26,17 @@ outgoing:
 categories_as_tabs:
   general: General
   finance: Finance
+  news: News
 
 engines:
-  # Working metasearch engines also serve the Finance tab (site: scoping is in Python queries).
-  - name: duckduckgo
-    engine: duckduckgo
-    categories:
-      - general
-      - web
-      - finance
-      - news
-
   - name: bing
     engine: bing
     categories:
       - general
       - finance
-      - news
 
-  - name: brave
-    engine: brave
+  - name: bing news
     categories:
-      - general
-      - finance
       - news
 
   - name: mojeek
@@ -57,11 +44,9 @@ engines:
     categories:
       - general
       - finance
-      - news
 
   - name: qwant
     engine: qwant
     categories:
       - general
       - finance
-      - news

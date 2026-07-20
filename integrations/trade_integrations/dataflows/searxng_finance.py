@@ -8,7 +8,11 @@ from typing import Any
 
 from trade_integrations.http import RequestException
 
-from trade_integrations.dataflows.searxng_client import search_json
+from trade_integrations.dataflows.searxng_client import (
+    parse_engine_list,
+    search_json,
+    searxng_finance_engines,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,28 +87,39 @@ def search_finance(
 ) -> list[dict[str, Any]]:
     """Query SearXNG JSON API (finance category when configured)."""
     category_attempts = [categories, "general", "news"]
+    engine_attempts = parse_engine_list(searxng_finance_engines()) or ["bing"]
     seen_urls: set[str] = set()
     collected: list[dict[str, Any]] = []
 
     for cat in category_attempts:
-        try:
-            payload = search_json(query, categories=cat, timeout=REQUEST_TIMEOUT)
-        except RequestException as exc:
-            logger.debug("SearXNG search failed (%s) for %r: %s", cat or "all", query, exc)
-            continue
-        except ValueError as exc:
-            logger.debug("SearXNG invalid JSON (%s) for %r: %s", cat or "all", query, exc)
-            continue
-
-        for row in payload.get("results") or []:
-            link = str(row.get("url") or "")
-            if not link or link in seen_urls:
+        for engine in engine_attempts:
+            try:
+                payload = search_json(
+                    query,
+                    categories=cat,
+                    engines=engine,
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except RequestException as exc:
+                logger.debug(
+                    "SearXNG search failed (%s/%s) for %r: %s", cat or "all", engine, query, exc
+                )
                 continue
-            seen_urls.add(link)
-            if _trusted_result(row):
-                collected.append(row)
-            if len(collected) >= limit:
-                return collected[:limit]
+            except ValueError as exc:
+                logger.debug(
+                    "SearXNG invalid JSON (%s/%s) for %r: %s", cat or "all", engine, query, exc
+                )
+                continue
+
+            for row in payload.get("results") or []:
+                link = str(row.get("url") or "")
+                if not link or link in seen_urls:
+                    continue
+                seen_urls.add(link)
+                if _trusted_result(row):
+                    collected.append(row)
+                if len(collected) >= limit:
+                    return collected[:limit]
 
     return collected[:limit]
 
@@ -173,15 +188,15 @@ def parse_nifty_pe_from_results(results: list[dict[str, Any]]) -> float | None:
 def fetch_rbi_macro_via_searxng() -> dict[str, Any]:
     """Best-effort RBI repo rate and CPI YoY from trusted finance portals."""
     repo_queries = (
-        "RBI repo rate unchanged at 6.5",
-        "RBI MPC policy repo rate current India",
-        "site:rbi.org.in repo rate monetary policy",
-        "site:moneycontrol.com RBI repo rate current",
+        "RBI repo rate unchanged at 6.5 India moneycontrol livemint",
+        "RBI MPC policy repo rate current India rbi.org.in",
+        "RBI repo rate monetary policy India economictimes",
+        "RBI repo rate current moneycontrol",
     )
     cpi_queries = (
-        "site:moneycontrol.com India CPI inflation yoy",
-        "site:livemint.com retail inflation India",
-        "site:economictimes.indiatimes.com CPI inflation India",
+        "India CPI inflation yoy moneycontrol retail",
+        "India retail inflation livemint CPI",
+        "India CPI inflation economictimes yoy",
     )
 
     repo_rate: float | None = None
@@ -220,11 +235,11 @@ def fetch_rbi_macro_via_searxng() -> dict[str, Any]:
 def fetch_nifty_trailing_pe_via_searxng() -> dict[str, Any] | None:
     """Best-effort Nifty trailing P/E from Moneycontrol / Screener / ET via SearXNG."""
     queries = (
-        "Nifty 50 trailing PE ratio economictimes",
-        "Nifty 50 PE ratio today moneycontrol",
-        "site:economictimes.indiatimes.com Nifty 50 PE ratio",
-        "Nifty 50 PE multiple trailing",
-        "site:screener.in Nifty 50 index trailing PE ratio",
+        "Nifty 50 trailing PE ratio economictimes moneycontrol",
+        "Nifty 50 PE ratio today moneycontrol India",
+        "Nifty 50 PE ratio economictimes indiatimes",
+        "Nifty 50 PE multiple trailing screener",
+        "Nifty 50 index trailing PE ratio screener.in",
     )
     for query in queries:
         results = search_finance(query, limit=8)

@@ -175,30 +175,42 @@ stack_http_ok() {
   curl -sf -o /dev/null -m 3 "$1" 2>/dev/null
 }
 
-stack_probe_searxng() {
-  local base probe_url
-  base="$(stack_searxng_url)"
-  base="${base%/}"
-  if stack_http_ok "$base/"; then
-    :
-  elif stack_http_ok "$base/search?q=test&format=json"; then
-    :
-  else
-    return 1
-  fi
-
-  probe_url="${base}/search?q=trade+hub+probe&format=json&categories=general"
-  if ! curl -sf -m 8 "$probe_url" 2>/dev/null | python3 -c '
+_searxng_probe_check_unresponsive() {
+  python3 -c '
 import json, sys
-allow = ("duckduckgo", "bing", "brave", "mojeek", "qwant")
+allow = (
+    "bing", "bing news", "mojeek", "qwant",
+)
 data = json.load(sys.stdin)
 for entry in data.get("unresponsive_engines") or []:
     name = str(entry[0] if entry else "").lower()
     if not any(token in name for token in allow):
         print(name, file=sys.stderr)
         sys.exit(1)
-' 2>/dev/null; then
+'
+}
+
+stack_probe_searxng() {
+  local base probe_url
+  base="$(stack_searxng_url)"
+  base="${base%/}"
+  if ! curl -sf -o /dev/null -m 3 -H "X-Real-IP: 127.0.0.1" \
+      "$base/healthz" 2>/dev/null; then
+    return 1
+  fi
+
+  # Pin a single engine per probe — avoids hammering optional engines on every status/heal tick.
+  probe_url="${base}/search?q=trade+hub+probe&format=json&categories=general&engines=bing"
+  if ! curl -sf -m 8 -H "X-Real-IP: 127.0.0.1" "$probe_url" 2>/dev/null \
+      | _searxng_probe_check_unresponsive 2>/dev/null; then
     echo "[stack] SearXNG probe: disallowed engines failing (check stack/searxng/settings.yml keep_only)" >&2
+    return 1
+  fi
+
+  probe_url="${base}/search?q=NIFTY+markets+probe&format=json&categories=news&engines=bing%20news"
+  if ! curl -sf -m 8 -H "X-Real-IP: 127.0.0.1" "$probe_url" 2>/dev/null \
+      | _searxng_probe_check_unresponsive 2>/dev/null; then
+    echo "[stack] SearXNG news probe: disallowed engines failing (check stack/searxng/settings.yml keep_only)" >&2
     return 1
   fi
   return 0
