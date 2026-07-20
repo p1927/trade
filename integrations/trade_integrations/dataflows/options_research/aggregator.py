@@ -91,6 +91,7 @@ def _skipped_options_doc(
         lookahead_days=days,
         instrument_type=instrument.instrument_type.value,
         market=instrument.market.value,
+        execution_market=instrument.market.value,
         meta={
             "input_ticker": instrument.input_ticker,
             "underlying_symbol": instrument.underlying_symbol,
@@ -133,6 +134,7 @@ def run_options_research(
         lookahead_days=days,
         instrument_type=instrument.instrument_type.value,
         market=instrument.market.value,
+        execution_market=instrument.market.value,
         meta={
             "input_ticker": instrument.input_ticker,
             "underlying_symbol": instrument.underlying_symbol,

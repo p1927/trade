@@ -20,6 +20,7 @@ class OptionsResearchDoc:
     lookahead_days: int
     instrument_type: InstrumentType = "stock"
     market: str = "IN"
+    execution_market: str = "IN"
     expiry: str = ""
     spot: float | None = None
     meta: dict[str, Any] = field(default_factory=dict)

@@ -67,6 +67,9 @@ def filter_positions_for_agent(rows: list[dict[str, Any]], agent_id: str) -> lis
         if symbol in universe or row_ul in universe:
             scoped.append(row)
             continue
+        if any(symbol.startswith(ul) or (row_ul and (row_ul == ul or row_ul.startswith(ul))) for ul in universe):
+            scoped.append(row)
+            continue
         if underlying and (symbol.startswith(underlying) or row_ul == underlying):
             scoped.append(row)
     return scoped

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -78,6 +79,32 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
     return True
 
 
+async def _prefetch_bootstrap_research(agent_id: str) -> None:
+    """Warm hub research + debate in parallel before the bootstrap Vibe turn."""
+    agent = get_agent(agent_id) or {}
+    symbols = list(agent.get("symbols") or [])
+    if not symbols:
+        return
+    sym = str(symbols[0]).strip().upper()
+    from trade_integrations.bridge.agent_debate import debate_eligible_for_ticker, run_agent_debate
+    from trade_integrations.execution.profile import resolve_profile
+    from trade_integrations.research.orchestrator import ensure_research_complete
+    from trade_integrations.research.registry import ResearchKind
+
+    profile = resolve_profile(agent=agent)
+    kind = ResearchKind.STOCK if "options" not in profile.allowed_instruments else ResearchKind.OPTIONS
+
+    def hub() -> None:
+        ensure_research_complete(sym, kind=kind)
+
+    def debate() -> None:
+        eligible, _ = debate_eligible_for_ticker(sym)
+        if eligible:
+            run_agent_debate(sym)
+
+    await asyncio.gather(asyncio.to_thread(hub), asyncio.to_thread(debate))
+
+
 async def bootstrap_agent(agent_id: str) -> None:
     """Run first watch tick and bootstrap research turn for a newly committed agent."""
     agent = get_agent(agent_id)
@@ -89,7 +116,7 @@ async def bootstrap_agent(agent_id: str) -> None:
     save_agent(agent)
 
     try:
-        await run_watch_tick(agent_id)
+        await asyncio.gather(run_watch_tick(agent_id), _prefetch_bootstrap_research(agent_id))
         dispatched = await dispatch_full_reasoning(agent_id, turn_kind="bootstrap")
         if not dispatched:
             raise RuntimeError("bootstrap research turn was not dispatched (session unavailable or turn in flight)")
