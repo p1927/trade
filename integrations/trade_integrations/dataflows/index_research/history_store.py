@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ from trade_integrations.context.hub import get_hub_dir
 _HISTORY_SUBDIR = "_data/history"
 _PANEL_SUBDIR = "_data/index_factors/panel"
 _HOT_RETENTION_DAYS = 365
+_PANEL_MANIFEST = "panel_manifest.json"
 
 
 def get_history_dir() -> Path:
@@ -35,6 +38,20 @@ def history_path(name: str) -> Path:
 def panel_path(name: str) -> Path:
     stem = name.removesuffix(".parquet")
     return get_panel_dir() / f"{stem}.parquet"
+
+
+def panel_staging_path(name: str) -> Path:
+    stem = name.removesuffix(".parquet")
+    return get_panel_dir() / f"{stem}.staging.parquet"
+
+
+def panel_previous_path(name: str) -> Path:
+    stem = name.removesuffix(".parquet")
+    return get_panel_dir() / f"{stem}.previous.parquet"
+
+
+def panel_manifest_path() -> Path:
+    return get_panel_dir() / _PANEL_MANIFEST
 
 
 def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
@@ -144,7 +161,12 @@ def save_history_dataset(name: str, frame: pd.DataFrame, *, merge: bool | None =
     if merge:
         existing = load_history_dataset(name)
         if not existing.empty:
-            out = concat_dataframes(existing, out)
+            if "source" in out.columns or "source" in existing.columns:
+                from trade_integrations.dataflows.index_research.history_ingest import merge_with_priority
+
+                out = merge_with_priority([existing, out], on=keys)
+            else:
+                out = concat_dataframes(existing, out)
     out = out.sort_values(keys).drop_duplicates(keys, keep="last").reset_index(drop=True)
     path = history_path(name)
     _write_parquet(out, path)
@@ -161,14 +183,90 @@ def load_panel(name: str = "NIFTY_2006_present") -> pd.DataFrame:
     return out.sort_values("date").reset_index(drop=True)
 
 
-def save_panel(frame: pd.DataFrame, name: str = "NIFTY_2006_present") -> dict[str, Any]:
+def _update_panel_manifest(name: str, frame: pd.DataFrame, path: Path, *, invariant_report: dict[str, Any]) -> None:
+    manifest_path = panel_manifest_path()
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {}
+    if manifest_path.is_file():
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    panels: dict[str, Any] = dict(payload.get("panels") or {})
+    from trade_integrations.dataflows.index_research.panel_invariants import factor_stats_snapshot
+
+    panels[name] = {
+        "path": str(path.relative_to(get_hub_dir())),
+        "rows": len(frame),
+        "columns": len(frame.columns),
+        "date_range": {
+            "start": str(frame["date"].iloc[0]),
+            "end": str(frame["date"].iloc[-1]),
+        },
+        "sha256": _sha256_file(path) if path.is_file() else None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "invariants": invariant_report,
+        "factor_stats": factor_stats_snapshot(frame),
+    }
+    payload["panels"] = panels
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def save_panel(
+    frame: pd.DataFrame,
+    name: str = "NIFTY_2006_present",
+    *,
+    force: bool = False,
+    skip_invariants: bool = False,
+) -> dict[str, Any]:
+    """Write-Audit-Publish: stage → invariant check → promote production panel."""
     if frame.empty:
         return {"status": "skipped", "reason": "empty_frame", "panel": name}
+
     out = frame.copy()
     out["date"] = out["date"].astype(str).str[:10]
     out = out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
-    path = panel_path(name)
-    _write_parquet(out, path)
+
+    prod_path = panel_path(name)
+    staging_path = panel_staging_path(name)
+    previous_path = panel_previous_path(name)
+    existing = load_panel(name) if prod_path.is_file() else pd.DataFrame()
+
+    invariant_report: dict[str, Any] = {"ok": True, "skipped": skip_invariants}
+    if not skip_invariants:
+        from trade_integrations.dataflows.index_research.panel_invariants import assert_panel_invariants
+
+        force_save = force or os.getenv("INDEX_PANEL_SAVE_FORCE", "").strip().lower() in {"1", "true", "yes"}
+        invariant_report = assert_panel_invariants(
+            out,
+            existing_panel=existing if not existing.empty else None,
+            force=force_save,
+        )
+
+    _write_parquet(out, staging_path)
+    _write_parquet(out, staging_path.with_suffix(".csv")) if not staging_path.is_file() else None
+
+    if prod_path.is_file():
+        shutil.copy2(prod_path, previous_path)
+        prev_csv = prod_path.with_suffix(".csv")
+        if prev_csv.is_file():
+            shutil.copy2(prev_csv, previous_path.with_suffix(".csv"))
+
+    shutil.copy2(staging_path, prod_path)
+    staging_csv = staging_path.with_suffix(".csv")
+    prod_csv = prod_path.with_suffix(".csv")
+    if staging_csv.is_file():
+        shutil.copy2(staging_csv, prod_csv)
+
+    _update_panel_manifest(name, out, prod_path, invariant_report=invariant_report)
+
+    try:
+        staging_path.unlink(missing_ok=True)
+        staging_path.with_suffix(".csv").unlink(missing_ok=True)
+    except OSError:
+        pass
+
     return {
         "status": "ok",
         "panel": name,
@@ -176,6 +274,8 @@ def save_panel(frame: pd.DataFrame, name: str = "NIFTY_2006_present") -> dict[st
         "start": str(out["date"].iloc[0]),
         "end": str(out["date"].iloc[-1]),
         "columns": len(out.columns),
+        "invariants_ok": invariant_report.get("ok", True),
+        "forced": invariant_report.get("forced", False),
     }
 
 
