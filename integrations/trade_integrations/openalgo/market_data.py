@@ -264,7 +264,7 @@ def parse_multi_quotes_payload(payload: dict[str, Any] | list[Any]) -> dict[str,
 
 
 def fetch_multi_quotes_raw(requests: list[dict[str, str]]) -> dict[str, Any]:
-    """Batch quote fetch via OpenAlgo multiquotes endpoint."""
+    """Batch quote fetch via OpenAlgo multiquotes endpoint (watch hot path — no hub channel)."""
     normalized = [
         {"symbol": row["symbol"].upper(), "exchange": row["exchange"].upper()}
         for row in requests
@@ -275,6 +275,21 @@ def fetch_multi_quotes_raw(requests: list[dict[str, str]]) -> dict[str, Any]:
     parsed = openalgo_post("multiquotes", {"symbols": normalized})
     data = parsed.get("data")
     return data if isinstance(data, dict) else parsed
+
+
+def fetch_multi_quotes_for_research(requests: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
+    """Hub-channel multiquotes for research/MCP (write-through capture, not watch hot path)."""
+    from trade_integrations.hub_capture.channel import get_multi_quotes
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
+
+    normalized = [
+        {"symbol": row["symbol"].upper(), "exchange": row["exchange"].upper()}
+        for row in requests
+        if isinstance(row, dict) and row.get("symbol") and row.get("exchange")
+    ]
+    if not normalized:
+        return {}
+    return get_multi_quotes(normalized, fetch_multi_quotes_raw, policy=FreshnessPolicy.NORMAL)
 
 
 def _unwrap_openalgo_market_payload(parsed: dict) -> dict:

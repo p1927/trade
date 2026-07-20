@@ -115,6 +115,24 @@ def run_once(
     trigger_vibe: bool = False,
     process_intents: bool = False,
 ) -> dict[str, Any]:
+    from nautilus_openalgo_bridge.poll_latency import poll_eval_timer
+
+    with poll_eval_timer():
+        return _run_once_impl(
+            agent_id=agent_id,
+            baselines=baselines,
+            trigger_vibe=trigger_vibe,
+            process_intents=process_intents,
+        )
+
+
+def _run_once_impl(
+    *,
+    agent_id: str | None = None,
+    baselines: dict[str, float] | None = None,
+    trigger_vibe: bool = False,
+    process_intents: bool = False,
+) -> dict[str, Any]:
     cfg = get_bridge_config()
     feed = OpenAlgoQuoteFeed()
     spec = _resolve_watch_spec(agent_id)

@@ -1,4 +1,7 @@
-"""Environment configuration for the Nautilus ↔ OpenAlgo bridge."""
+"""Environment configuration for the Nautilus ↔ OpenAlgo bridge.
+
+Watch poll interval: ``NAUTILUS_QUOTE_POLL_MS`` (default 1000, minimum 500).
+"""
 
 from __future__ import annotations
 

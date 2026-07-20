@@ -85,6 +85,12 @@ class OpenAlgoQuoteFeed:
         self.client = client or get_openalgo_client(self.config)
 
     def poll(self, symbols: list[str] | None = None) -> dict[str, QuoteSnapshot]:
+        from nautilus_openalgo_bridge.poll_latency import poll_eval_timer
+
+        with poll_eval_timer():
+            return self._poll_impl(symbols)
+
+    def _poll_impl(self, symbols: list[str] | None = None) -> dict[str, QuoteSnapshot]:
         watch_symbols = symbols or list(self.config.watch_symbols)
         requests = multiquote_requests(watch_symbols)
         if not requests:
