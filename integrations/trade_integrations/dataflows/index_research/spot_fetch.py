@@ -20,12 +20,29 @@ def _is_auth_error(message: str) -> bool:
             "access_token",
             "expired",
             "revoked",
+            "re-authenticate",
             "unauthorized",
             "authentication",
             "login",
             "session",
         )
     )
+
+
+def _format_spot_error(err_text: str) -> str:
+    if _is_auth_error(err_text):
+        return f"{err_text} — re-login INDmoney in OpenAlgo"
+    if err_text == "vendor_zero_ltp":
+        return (
+            "INDmoney returned zero LTP (broker session may be expired) — "
+            "re-login INDmoney in OpenAlgo"
+        )
+    if err_text == "openalgo_quotes_circuit_open":
+        return (
+            "OpenAlgo quotes temporarily blocked after recent failures — "
+            "retry in a few minutes or reset reports/hub/_data/source_health.json"
+        )
+    return err_text
 
 
 def fetch_index_spot(ticker: str) -> SpotFetchResult:
@@ -55,10 +72,7 @@ def fetch_index_spot(ticker: str) -> SpotFetchResult:
         or quote.get("error")
         or "OpenAlgo returned no live LTP for index"
     )
-    err_text = str(err)
-    if _is_auth_error(err_text):
-        err_text = f"{err_text} — re-login INDmoney in OpenAlgo"
-    return SpotFetchResult(0.0, "unavailable", err_text)
+    return SpotFetchResult(0.0, "unavailable", _format_spot_error(str(err)))
 
 
 def check_openalgo_index_quote_health(ticker: str) -> tuple[bool, str | None]:

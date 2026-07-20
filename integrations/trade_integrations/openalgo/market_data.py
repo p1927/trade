@@ -37,6 +37,12 @@ def _record_openalgo_failure(endpoint: str, exc: Exception | str) -> None:
         source_availability.record_failure("openalgo", _openalgo_capability(endpoint), exc)
 
 
+def _record_openalgo_success(endpoint: str) -> None:
+    from trade_integrations.dataflows import source_availability
+
+    source_availability.record_success("openalgo", _openalgo_capability(endpoint))
+
+
 def _ensure_date_column(data: pd.DataFrame) -> pd.DataFrame:
     if "Date" in data.columns:
         return data
@@ -234,7 +240,7 @@ def _quote_data(oa_symbol: str, exchange: str) -> dict | None:
 
 
 def _parse_quote_ltp(data: dict[str, Any]) -> tuple[float | None, str | None]:
-    """Return (ltp, error). Treat vendor zero LTP as failure."""
+    """Return (ltp, error). Treat vendor zero LTP as failure unless prev_close is usable."""
     error = data.get("error") or data.get("message")
     raw_ltp = data.get("ltp")
     if raw_ltp is None:
@@ -244,7 +250,15 @@ def _parse_quote_ltp(data: dict[str, Any]) -> tuple[float | None, str | None]:
     except (TypeError, ValueError):
         ltp = None
     if ltp is not None and ltp <= 0:
-        return None, str(error or "vendor_zero_ltp")
+        if error:
+            return None, str(error)
+        try:
+            prev_close = float(data.get("prev_close") or 0)
+        except (TypeError, ValueError):
+            prev_close = 0.0
+        if prev_close > 0:
+            return prev_close, None
+        return None, "vendor_zero_ltp"
     if ltp is None:
         return None, str(error or "missing_ltp")
     if error:
@@ -293,6 +307,7 @@ def fetch_quote_raw(symbol: str, *, exchange: str | None = None) -> dict | None:
             "error": data.get("error") or quote_error,
         }
 
+    _record_openalgo_success("quotes")
     return {
         "ltp": ltp,
         "volume": data.get("volume"),

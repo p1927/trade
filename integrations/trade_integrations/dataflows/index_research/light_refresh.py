@@ -224,6 +224,24 @@ def _reload_index_doc(
     return fresh if fresh is not None else fallback
 
 
+def _strip_spot_data_warnings(warnings: list[str] | None) -> list[str]:
+    """Drop stale live-spot warnings once a fresh spot fetch succeeds."""
+    if not warnings:
+        return []
+    kept: list[str] = []
+    for warning in warnings:
+        text = str(warning)
+        lowered = text.lower()
+        if text.startswith("Live spot unavailable:"):
+            continue
+        if "vendor_zero_ltp" in lowered:
+            continue
+        if "openalgo_quotes_circuit_open" in lowered:
+            continue
+        kept.append(text)
+    return kept
+
+
 def _try_spot_touch(
     sym: str,
     cached_doc: IndexResearchDoc,
@@ -246,6 +264,7 @@ def _try_spot_touch(
         spot=spot_result.spot,
         spot_source=spot_result.source,
         spot_error=None,
+        data_warnings=_strip_spot_data_warnings(cached_doc.data_warnings),
         as_of=refresh_at,
     )
     save_index_research(doc)
