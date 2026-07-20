@@ -24,10 +24,16 @@ from nautilus_openalgo_bridge.models import ExecutionIntent, IntentAction  # noq
 
 @pytest.fixture
 def hub_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from nautilus_openalgo_bridge.risk_state import clear_intent_dedupe, clear_trading_halt
+
     hub = tmp_path / "hub"
     hub.mkdir()
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(hub))
-    return hub
+    clear_trading_halt()
+    clear_intent_dedupe()
+    yield hub
+    clear_trading_halt()
+    clear_intent_dedupe()
 
 
 def test_submit_and_process_intent(hub_tmp: Path):

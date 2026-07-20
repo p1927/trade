@@ -18,7 +18,10 @@ def test_halt_and_clear():
 
 
 def test_intent_dedupe():
+    from nautilus_openalgo_bridge.risk_state import clear_intent_dedupe
+
     clear_trading_halt()
+    clear_intent_dedupe("aa_1")
     assert should_skip_intent("aa_1", "intent_a") is False
     assert should_skip_intent("aa_1", "intent_a") is True
     assert should_skip_intent("aa_1", "intent_b") is False

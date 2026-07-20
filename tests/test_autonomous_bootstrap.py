@@ -60,6 +60,7 @@ def test_finalize_bootstrap_requires_last_decision(hub_tmp: Path):
 def test_finalize_bootstrap_marks_awaiting_plan_approval(hub_tmp: Path):
     agent = _agent()
     agent["last_decision"] = {"decision": "HOLD", "at": "2026-07-16T20:00:00+00:00"}
+    agent["thesis"] = {"recommended": {"legs": [{"symbol": "NIFTY", "side": "BUY", "qty": 1}]}}
     save_agent(agent)
     assert finalize_bootstrap_if_ready("aa_boot") is True
     updated = get_agent("aa_boot")

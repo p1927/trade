@@ -158,7 +158,7 @@ def test_query_verified_news_reads_events_ssot(hub_tmp, monkeypatch):
     rows = query_verified_news(ticker="NIFTY", publish_day="2026-04-28", limit=10)
     titles = {str(r.get("title") or "") for r in rows}
     assert "Distilled FII story" in titles
-    assert "Pending staging headline" in titles
+    assert "Pending staging headline" not in titles
 
 
 def test_legacy_ingest_flag(monkeypatch):
