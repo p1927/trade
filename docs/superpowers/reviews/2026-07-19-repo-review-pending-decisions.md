@@ -124,7 +124,9 @@ See plan [`pending_decisions_implementation_2f127018.plan.md`](../../.cursor/pla
 
 Key decisions recorded: fail-closed execution (R12-*), multi-agent scoping (R2-*), verified-only `query_verified_news` (R8-03), defer handoff until plan approval (R7-04), US autonomous gate + FINNIFTY debate block, mandatory rich research (no `tools_only`), watch hot path direct multiquote + async tick capture.
 
-**Implementation complete 2026-07-20** — see plan progress table in [`.cursor/plans/pending_decisions_implementation_2f127018.plan.md`](../../.cursor/plans/pending_decisions_implementation_2f127018.plan.md) (Implementation progress section). Deferred items (R4-04, R11-04 UI, M033 vibe prompt, R1-10/R1-15 stack docs) documented there — not silent backlog.
+**Phases 0–5 complete 2026-07-20** — see [`.cursor/plans/pending_decisions_implementation_2f127018.plan.md`](../../.cursor/plans/pending_decisions_implementation_2f127018.plan.md).
+
+**Phases 6–10 complete 2026-07-20** — R11-04 charges refetch, M033 scheduler/prompt alignment, R1-15 idempotent Nautilus in dev, R1-10 `.stack.pids` removed, R9-07 NSE ingest gated + `nse-macro-refresh` job, R8-02 news facade lint, R4-04 stock `payoff_over_time`, FINNIFTY/MIDCPNIFTY yfinance map, parallel bootstrap prefetch, `execution_market` on hub docs, nightly CI extended.
 
 ---
 

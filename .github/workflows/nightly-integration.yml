@@ -31,4 +31,6 @@ jobs:
             tests/test_nautilus_agent_scoping.py tests/test_execution_enforce.py \
             tests/test_nautilus_intent_queue.py tests/test_autonomous_bootstrap.py \
             tests/test_prediction_miss_analysis.py tests/test_track_walk_forward.py \
+            tests/test_execution_prompt_fragments.py tests/test_news_facade_imports.py \
+            tests/test_nse_browser_ingest_policy.py tests/test_stock_widget_payload.py \
             -q --timeout=120
