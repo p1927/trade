@@ -1,0 +1,4094 @@
+{
+  "steps": {
+    "openalgo": {
+      "bundles": {
+        "indices_extended": {
+          "bundle": "indices_extended",
+          "symbols": 7,
+          "start_date": "2016-07-12",
+          "end_date": "2026-07-20",
+          "interval": "D",
+          "started_at": "2026-07-19T22:21:48.729686Z",
+          "historify": {},
+          "symbols_stats": {
+            "NIFTY": {
+              "symbol": "NIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BANKNIFTY": {
+              "symbol": "BANKNIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "FINNIFTY": {
+              "symbol": "FINNIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2482,
+              "existing_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ],
+              "merged_rows": 2482,
+              "merged_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "MIDCPNIFTY": {
+              "symbol": "MIDCPNIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 1120,
+              "existing_range": [
+                "2022-01-10",
+                "2026-07-17"
+              ],
+              "merged_rows": 1120,
+              "merged_range": [
+                "2022-01-10",
+                "2026-07-17"
+              ]
+            },
+            "INDIAVIX": {
+              "symbol": "INDIAVIX",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2480,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2480,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "SENSEX": {
+              "symbol": "SENSEX",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2482,
+              "existing_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ],
+              "merged_rows": 2482,
+              "merged_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "NIFTYIT": {
+              "symbol": "NIFTYIT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 0,
+              "chunks_failed": 1,
+              "rows_fetched": 0,
+              "status": "error",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "errors": [
+                "2016-07-12..2026-07-20: Symbol 'NIFTYIT' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+              ],
+              "error": "2016-07-12..2026-07-20: Symbol 'NIFTYIT' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+            }
+          },
+          "summary": {
+            "ok": 0,
+            "cached": 0,
+            "error": 1,
+            "empty": 6,
+            "skipped": 0
+          },
+          "token_sync": "{\"synced\": false, \"reason\": \"already_in_sync\", \"broker\": \"indmoney\", \"updated_users\": [], \"env_matches_db\": true}",
+          "finished_at": "2026-07-19T22:22:10.548744Z"
+        },
+        "nifty50": {
+          "bundle": "nifty50",
+          "symbols": 53,
+          "start_date": "2016-07-12",
+          "end_date": "2026-07-20",
+          "interval": "D",
+          "started_at": "2026-07-19T22:22:11.712690Z",
+          "historify": {},
+          "symbols_stats": {
+            "NIFTY": {
+              "symbol": "NIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "INDIAVIX": {
+              "symbol": "INDIAVIX",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2480,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2480,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BANKNIFTY": {
+              "symbol": "BANKNIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ADANIENT": {
+              "symbol": "ADANIENT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ADANIPORTS": {
+              "symbol": "ADANIPORTS",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2235,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2235,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "APOLLOHOSP": {
+              "symbol": "APOLLOHOSP",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ASIANPAINT": {
+              "symbol": "ASIANPAINT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "AXISBANK": {
+              "symbol": "AXISBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BAJAJ-AUTO": {
+              "symbol": "BAJAJ-AUTO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BAJFINANCE": {
+              "symbol": "BAJFINANCE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BAJAJFINSV": {
+              "symbol": "BAJAJFINSV",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BEL": {
+              "symbol": "BEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BHARTIARTL": {
+              "symbol": "BHARTIARTL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "CIPLA": {
+              "symbol": "CIPLA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "COALINDIA": {
+              "symbol": "COALINDIA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "DRREDDY": {
+              "symbol": "DRREDDY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "EICHERMOT": {
+              "symbol": "EICHERMOT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ETERNAL": {
+              "symbol": "ETERNAL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 1236,
+              "existing_range": [
+                "2021-07-23",
+                "2026-07-17"
+              ],
+              "merged_rows": 1236,
+              "merged_range": [
+                "2021-07-23",
+                "2026-07-17"
+              ]
+            },
+            "GRASIM": {
+              "symbol": "GRASIM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HCLTECH": {
+              "symbol": "HCLTECH",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HDFCBANK": {
+              "symbol": "HDFCBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HDFCLIFE": {
+              "symbol": "HDFCLIFE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2146,
+              "existing_range": [
+                "2017-11-17",
+                "2026-07-17"
+              ],
+              "merged_rows": 2146,
+              "merged_range": [
+                "2017-11-17",
+                "2026-07-17"
+              ]
+            },
+            "HINDALCO": {
+              "symbol": "HINDALCO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HINDUNILVR": {
+              "symbol": "HINDUNILVR",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ICICIBANK": {
+              "symbol": "ICICIBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ITC": {
+              "symbol": "ITC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "INFY": {
+              "symbol": "INFY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "INDIGO": {
+              "symbol": "INDIGO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "JSWSTEEL": {
+              "symbol": "JSWSTEEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "JIOFIN": {
+              "symbol": "JIOFIN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 721,
+              "existing_range": [
+                "2023-08-21",
+                "2026-07-17"
+              ],
+              "merged_rows": 721,
+              "merged_range": [
+                "2023-08-21",
+                "2026-07-17"
+              ]
+            },
+            "KOTAKBANK": {
+              "symbol": "KOTAKBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "LT": {
+              "symbol": "LT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "M&M": {
+              "symbol": "M&M",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "MARUTI": {
+              "symbol": "MARUTI",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "MAXHEALTH": {
+              "symbol": "MAXHEALTH",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 1465,
+              "existing_range": [
+                "2020-08-21",
+                "2026-07-17"
+              ],
+              "merged_rows": 1465,
+              "merged_range": [
+                "2020-08-21",
+                "2026-07-17"
+              ]
+            },
+            "NTPC": {
+              "symbol": "NTPC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "NESTLEIND": {
+              "symbol": "NESTLEIND",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ONGC": {
+              "symbol": "ONGC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "POWERGRID": {
+              "symbol": "POWERGRID",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "RELIANCE": {
+              "symbol": "RELIANCE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "SBILIFE": {
+              "symbol": "SBILIFE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2178,
+              "existing_range": [
+                "2017-10-03",
+                "2026-07-17"
+              ],
+              "merged_rows": 2178,
+              "merged_range": [
+                "2017-10-03",
+                "2026-07-17"
+              ]
+            },
+            "SHRIRAMFIN": {
+              "symbol": "SHRIRAMFIN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "SBIN": {
+              "symbol": "SBIN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "SUNPHARMA": {
+              "symbol": "SUNPHARMA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TCS": {
+              "symbol": "TCS",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TATACONSUM": {
+              "symbol": "TATACONSUM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TMPV": {
+              "symbol": "TMPV",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TATASTEEL": {
+              "symbol": "TATASTEEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TECHM": {
+              "symbol": "TECHM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TITAN": {
+              "symbol": "TITAN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TRENT": {
+              "symbol": "TRENT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ULTRACEMCO": {
+              "symbol": "ULTRACEMCO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "WIPRO": {
+              "symbol": "WIPRO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            }
+          },
+          "summary": {
+            "ok": 0,
+            "cached": 0,
+            "error": 0,
+            "empty": 53,
+            "skipped": 0
+          },
+          "token_sync": "{\"synced\": false, \"reason\": \"already_in_sync\", \"broker\": \"indmoney\", \"updated_users\": [], \"env_matches_db\": true}",
+          "finished_at": "2026-07-19T22:24:47.614126Z"
+        },
+        "nifty100": {
+          "bundle": "nifty100",
+          "symbols": 95,
+          "start_date": "2016-07-12",
+          "end_date": "2026-07-20",
+          "interval": "D",
+          "started_at": "2026-07-19T22:24:47.616850Z",
+          "historify": {},
+          "symbols_stats": {
+            "NIFTY": {
+              "symbol": "NIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "INDIAVIX": {
+              "symbol": "INDIAVIX",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2480,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2480,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BANKNIFTY": {
+              "symbol": "BANKNIFTY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ABBOTINDIA": {
+              "symbol": "ABBOTINDIA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/ABBOTINDIA_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "ABBOTINDIA",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:00.447014+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "ADANIENSOL": {
+              "symbol": "ADANIENSOL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/ADANIENSOL_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "ADANIENSOL",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:05.065706+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "ADANIENT": {
+              "symbol": "ADANIENT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ADANIGREEN": {
+              "symbol": "ADANIGREEN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2002,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/ADANIGREEN_ohlcv_daily.parquet",
+                "rows": 2002,
+                "start": "2018-06-18",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "ADANIGREEN",
+                "appended": 2002,
+                "updated_at": "2026-07-19T22:25:09.957000+00:00",
+                "bar_count": 2002,
+                "first_date": "2018-06-18",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2002,
+              "final_range": [
+                "2018-06-18",
+                "2026-07-17"
+              ]
+            },
+            "ADANIPORTS": {
+              "symbol": "ADANIPORTS",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2235,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2235,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ADANIPOWER": {
+              "symbol": "ADANIPOWER",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/ADANIPOWER_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "ADANIPOWER",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:15.329891+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "AMBUJACEM": {
+              "symbol": "AMBUJACEM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/AMBUJACEM_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "AMBUJACEM",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:18.420990+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "APOLLOHOSP": {
+              "symbol": "APOLLOHOSP",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ASIANPAINT": {
+              "symbol": "ASIANPAINT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ATGL": {
+              "symbol": "ATGL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 1908,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/ATGL_ohlcv_daily.parquet",
+                "rows": 1908,
+                "start": "2018-11-05",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "ATGL",
+                "appended": 1908,
+                "updated_at": "2026-07-19T22:25:28.105423+00:00",
+                "bar_count": 1908,
+                "first_date": "2018-11-05",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 1908,
+              "final_range": [
+                "2018-11-05",
+                "2026-07-17"
+              ]
+            },
+            "AXISBANK": {
+              "symbol": "AXISBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BAJAJ-AUTO": {
+              "symbol": "BAJAJ-AUTO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BAJAJFINSV": {
+              "symbol": "BAJAJFINSV",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BAJAJHLDNG": {
+              "symbol": "BAJAJHLDNG",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/BAJAJHLDNG_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "BAJAJHLDNG",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:41.112354+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "BAJFINANCE": {
+              "symbol": "BAJFINANCE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BANKBARODA": {
+              "symbol": "BANKBARODA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/BANKBARODA_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "BANKBARODA",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:48.666944+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "BEL": {
+              "symbol": "BEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BHARTIARTL": {
+              "symbol": "BHARTIARTL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "BHEL": {
+              "symbol": "BHEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/BHEL_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "BHEL",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:55.702404+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "BOSCHLTD": {
+              "symbol": "BOSCHLTD",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/BOSCHLTD_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "BOSCHLTD",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:25:58.827150+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "BPCL": {
+              "symbol": "BPCL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/BPCL_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "BPCL",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:01.927801+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "BRITANNIA": {
+              "symbol": "BRITANNIA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/BRITANNIA_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "BRITANNIA",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:04.984313+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "CANBK": {
+              "symbol": "CANBK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/CANBK_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "CANBK",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:10.897643+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "CHOLAFIN": {
+              "symbol": "CHOLAFIN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ]
+            },
+            "CIPLA": {
+              "symbol": "CIPLA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "COALINDIA": {
+              "symbol": "COALINDIA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "DABUR": {
+              "symbol": "DABUR",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/DABUR_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "DABUR",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:26.733430+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "DIVISLAB": {
+              "symbol": "DIVISLAB",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/DIVISLAB_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "DIVISLAB",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:31.676744+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "DLF": {
+              "symbol": "DLF",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/DLF_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "DLF",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:36.546923+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "DMART": {
+              "symbol": "DMART",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2311,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/DMART_ohlcv_daily.parquet",
+                "rows": 2311,
+                "start": "2017-03-21",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "DMART",
+                "appended": 2311,
+                "updated_at": "2026-07-19T22:26:41.601464+00:00",
+                "bar_count": 2311,
+                "first_date": "2017-03-21",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2311,
+              "final_range": [
+                "2017-03-21",
+                "2026-07-17"
+              ]
+            },
+            "DRREDDY": {
+              "symbol": "DRREDDY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "EICHERMOT": {
+              "symbol": "EICHERMOT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "GAIL": {
+              "symbol": "GAIL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/GAIL_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "GAIL",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:51.887779+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "GODREJCP": {
+              "symbol": "GODREJCP",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/GODREJCP_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "GODREJCP",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:26:56.873182+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "GRASIM": {
+              "symbol": "GRASIM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HAL": {
+              "symbol": "HAL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2057,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/HAL_ohlcv_daily.parquet",
+                "rows": 2057,
+                "start": "2018-03-28",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "HAL",
+                "appended": 2057,
+                "updated_at": "2026-07-19T22:27:01.833342+00:00",
+                "bar_count": 2057,
+                "first_date": "2018-03-28",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2057,
+              "final_range": [
+                "2018-03-28",
+                "2026-07-17"
+              ]
+            },
+            "HAVELLS": {
+              "symbol": "HAVELLS",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/HAVELLS_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "HAVELLS",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:27:05.038994+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "HCLTECH": {
+              "symbol": "HCLTECH",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HDFCBANK": {
+              "symbol": "HDFCBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HDFCLIFE": {
+              "symbol": "HDFCLIFE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2146,
+              "existing_range": [
+                "2017-11-17",
+                "2026-07-17"
+              ],
+              "merged_rows": 2146,
+              "merged_range": [
+                "2017-11-17",
+                "2026-07-17"
+              ]
+            },
+            "HEROMOTOCO": {
+              "symbol": "HEROMOTOCO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/HEROMOTOCO_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "HEROMOTOCO",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:27:15.986428+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "HINDALCO": {
+              "symbol": "HINDALCO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "HINDUNILVR": {
+              "symbol": "HINDUNILVR",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ICICIBANK": {
+              "symbol": "ICICIBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ICICIGI": {
+              "symbol": "ICICIGI",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2181,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/ICICIGI_ohlcv_daily.parquet",
+                "rows": 2181,
+                "start": "2017-09-27",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "ICICIGI",
+                "appended": 2181,
+                "updated_at": "2026-07-19T22:27:25.065780+00:00",
+                "bar_count": 2181,
+                "first_date": "2017-09-27",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2181,
+              "final_range": [
+                "2017-09-27",
+                "2026-07-17"
+              ]
+            },
+            "ICICIPRULI": {
+              "symbol": "ICICIPRULI",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2428,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/ICICIPRULI_ohlcv_daily.parquet",
+                "rows": 2428,
+                "start": "2016-09-29",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "ICICIPRULI",
+                "appended": 2428,
+                "updated_at": "2026-07-19T22:27:28.131021+00:00",
+                "bar_count": 2428,
+                "first_date": "2016-09-29",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2428,
+              "final_range": [
+                "2016-09-29",
+                "2026-07-17"
+              ]
+            },
+            "INDIGO": {
+              "symbol": "INDIGO",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "INDUSINDBK": {
+              "symbol": "INDUSINDBK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/INDUSINDBK_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "INDUSINDBK",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:27:33.034740+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "INFY": {
+              "symbol": "INFY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "IOC": {
+              "symbol": "IOC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/IOC_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "IOC",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:27:37.820367+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "IRCTC": {
+              "symbol": "IRCTC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 1679,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/IRCTC_ohlcv_daily.parquet",
+                "rows": 1679,
+                "start": "2019-10-14",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "IRCTC",
+                "appended": 1679,
+                "updated_at": "2026-07-19T22:27:40.878774+00:00",
+                "bar_count": 1679,
+                "first_date": "2019-10-14",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 1679,
+              "final_range": [
+                "2019-10-14",
+                "2026-07-17"
+              ]
+            },
+            "IRFC": {
+              "symbol": "IRFC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 1354,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/IRFC_ohlcv_daily.parquet",
+                "rows": 1354,
+                "start": "2021-01-29",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "IRFC",
+                "appended": 1354,
+                "updated_at": "2026-07-19T22:27:44.029393+00:00",
+                "bar_count": 1354,
+                "first_date": "2021-01-29",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 1354,
+              "final_range": [
+                "2021-01-29",
+                "2026-07-17"
+              ]
+            },
+            "ITC": {
+              "symbol": "ITC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "JINDALSTEL": {
+              "symbol": "JINDALSTEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/JINDALSTEL_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "JINDALSTEL",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:27:49.150104+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "JIOFIN": {
+              "symbol": "JIOFIN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 721,
+              "existing_range": [
+                "2023-08-21",
+                "2026-07-17"
+              ],
+              "merged_rows": 721,
+              "merged_range": [
+                "2023-08-21",
+                "2026-07-17"
+              ]
+            },
+            "JSWENERGY": {
+              "symbol": "JSWENERGY",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/JSWENERGY_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "JSWENERGY",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:27:58.849847+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "JSWSTEEL": {
+              "symbol": "JSWSTEEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "KOTAKBANK": {
+              "symbol": "KOTAKBANK",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "LICI": {
+              "symbol": "LICI",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 1035,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/LICI_ohlcv_daily.parquet",
+                "rows": 1035,
+                "start": "2022-05-17",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "LICI",
+                "appended": 1035,
+                "updated_at": "2026-07-19T22:28:05.408300+00:00",
+                "bar_count": 1035,
+                "first_date": "2022-05-17",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 1035,
+              "final_range": [
+                "2022-05-17",
+                "2026-07-17"
+              ]
+            },
+            "LODHA": {
+              "symbol": "LODHA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 1302,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/LODHA_ohlcv_daily.parquet",
+                "rows": 1302,
+                "start": "2021-04-19",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "LODHA",
+                "appended": 1302,
+                "updated_at": "2026-07-19T22:28:08.646085+00:00",
+                "bar_count": 1302,
+                "first_date": "2021-04-19",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 1302,
+              "final_range": [
+                "2021-04-19",
+                "2026-07-17"
+              ]
+            },
+            "LT": {
+              "symbol": "LT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "LTIM": {
+              "symbol": "LTIM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 0,
+              "chunks_failed": 1,
+              "rows_fetched": 0,
+              "status": "error",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "errors": [
+                "2016-07-12..2026-07-20: Symbol 'LTIM' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+              ],
+              "error": "2016-07-12..2026-07-20: Symbol 'LTIM' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+            },
+            "M&M": {
+              "symbol": "M&M",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "MARUTI": {
+              "symbol": "MARUTI",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "MOTHERSON": {
+              "symbol": "MOTHERSON",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/MOTHERSON_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "MOTHERSON",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:28:22.978756+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "NAUKRI": {
+              "symbol": "NAUKRI",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/NAUKRI_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "NAUKRI",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:28:26.172337+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "NESTLEIND": {
+              "symbol": "NESTLEIND",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "NHPC": {
+              "symbol": "NHPC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/NHPC_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "NHPC",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:28:33.140967+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "NTPC": {
+              "symbol": "NTPC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "ONGC": {
+              "symbol": "ONGC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "PFC": {
+              "symbol": "PFC",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/PFC_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "PFC",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:28:43.243054+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "PIDILITIND": {
+              "symbol": "PIDILITIND",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/PIDILITIND_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "PIDILITIND",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:28:48.133256+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "PNB": {
+              "symbol": "PNB",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/PNB_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "PNB",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:28:52.015304+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "POWERGRID": {
+              "symbol": "POWERGRID",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "RECLTD": {
+              "symbol": "RECLTD",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/RECLTD_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "RECLTD",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:28:56.839471+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "RELIANCE": {
+              "symbol": "RELIANCE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "SBILIFE": {
+              "symbol": "SBILIFE",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 2,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2178,
+              "existing_range": [
+                "2017-10-03",
+                "2026-07-17"
+              ],
+              "merged_rows": 2178,
+              "merged_range": [
+                "2017-10-03",
+                "2026-07-17"
+              ]
+            },
+            "SBIN": {
+              "symbol": "SBIN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "SHREECEM": {
+              "symbol": "SHREECEM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/SHREECEM_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "SHREECEM",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:29:07.852271+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "SHRIRAMFIN": {
+              "symbol": "SHRIRAMFIN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "SIEMENS": {
+              "symbol": "SIEMENS",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/SIEMENS_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "SIEMENS",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:29:16.037618+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "SUNPHARMA": {
+              "symbol": "SUNPHARMA",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TATACONSUM": {
+              "symbol": "TATACONSUM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TATAMOTORS": {
+              "symbol": "TATAMOTORS",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 0,
+              "chunks_failed": 1,
+              "rows_fetched": 0,
+              "status": "error",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "errors": [
+                "2016-07-12..2026-07-20: Symbol 'TATAMOTORS' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+              ],
+              "error": "2016-07-12..2026-07-20: Symbol 'TATAMOTORS' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+            },
+            "TATAPOWER": {
+              "symbol": "TATAPOWER",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/TATAPOWER_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "TATAPOWER",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:29:28.304122+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "TATASTEEL": {
+              "symbol": "TATASTEEL",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TCS": {
+              "symbol": "TCS",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TECHM": {
+              "symbol": "TECHM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TITAN": {
+              "symbol": "TITAN",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TORNTPHARM": {
+              "symbol": "TORNTPHARM",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/TORNTPHARM_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "TORNTPHARM",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:29:43.572830+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            },
+            "TRENT": {
+              "symbol": "TRENT",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 0,
+              "status": "empty",
+              "existing_rows": 2483,
+              "existing_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ],
+              "merged_rows": 2483,
+              "merged_range": [
+                "2016-07-11",
+                "2026-07-17"
+              ]
+            },
+            "TVSMOTOR": {
+              "symbol": "TVSMOTOR",
+              "start_date": "2016-07-12",
+              "end_date": "2026-07-20",
+              "chunks_fetched": 1,
+              "chunks_failed": 0,
+              "rows_fetched": 2482,
+              "status": "ok",
+              "existing_rows": 0,
+              "existing_range": [
+                null,
+                null
+              ],
+              "merged_rows": 0,
+              "merged_range": [
+                null,
+                null
+              ],
+              "repo": {
+                "status": "ok",
+                "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/TVSMOTOR_ohlcv_daily.parquet",
+                "rows": 2482,
+                "start": "2016-07-12",
+                "end": "2026-07-17"
+              },
+              "hub": {
+                "status": "ok",
+                "entity_id": "TVSMOTOR",
+                "appended": 2482,
+                "updated_at": "2026-07-19T22:29:53.723787+00:00",
+                "bar_count": 2482,
+                "first_date": "2016-07-12",
+                "last_date": "2026-07-17",
+                "last_vendor": "openalgo",
+                "last_source": "openalgo_indmoney"
+              },
+              "final_rows": 2482,
+              "final_range": [
+                "2016-07-12",
+                "2026-07-17"
+              ]
+            }
+          },
+          "summary": {
+            "ok": 44,
+            "cached": 0,
+            "error": 2,
+            "empty": 49,
+            "skipped": 0
+          },
+          "token_sync": "{\"synced\": false, \"reason\": \"already_in_sync\", \"broker\": \"indmoney\", \"updated_users\": [], \"env_matches_db\": true}",
+          "finished_at": "2026-07-19T22:29:53.741813Z"
+        }
+      },
+      "started_at": "2026-07-19T22:21:48.373982Z",
+      "token_sync": "{\"synced\": false, \"reason\": \"already_in_sync\", \"broker\": \"indmoney\", \"updated_users\": [], \"env_matches_db\": true}",
+      "historify": {
+        "path": "/Users/pratyushmishra/Documents/GitHub/Trade/openalgo/db/historify.duckdb",
+        "symbols": 0,
+        "rows": 0,
+        "status": "empty"
+      },
+      "cold_tier": {
+        "nifty50": {
+          "status": "ok",
+          "dataset": "nifty50_constituent_ohlcv_daily",
+          "rows": 335216,
+          "start": "1997-07-01",
+          "end": "2026-07-17"
+        },
+        "nifty100": {
+          "status": "ok",
+          "dataset": "nifty100_constituent_ohlcv_daily",
+          "rows": 219174,
+          "start": "2016-07-11",
+          "end": "2026-07-17"
+        }
+      },
+      "finished_at": "2026-07-19T22:29:58.699294Z"
+    },
+    "historical": {
+      "cmd": [
+        "/Users/pratyushmishra/.pyenv/versions/3.13.9/bin/python3",
+        "scripts/ingest_historical_data.py",
+        "--all"
+      ],
+      "returncode": 0,
+      "stdout": "{\n  \"repo\": {\n    \"historic_data\": 1218665,\n    \"historic_fii_dii_trading_activity\": 3770,\n    \"historic_india_cpi_monthly_yoy\": 240,\n    \"historic_nifty50_fo_panel\": 500000,\n    \"historic_nifty_oi_daily\": 133,\n    \"historic_india_macro_annual\": 45,\n    \"historic_nifty50_ohlcv_daily\": 4620,\n    \"historic_sensex_ohlcv_daily\": 6987,\n    \"historic_nifty50_constituent_ohlcv_daily\": 304543,\n    \"historic_sensex_constituent_ohlcv_daily\": 180327,\n    \"historic_nifty50_weights_monthly\": 216,\n    \"historic_nifty50_sectors\": 100,\n    \"historic_nifty50_constituents_membership_summary\": 100,\n    \"historic_global_india_daily_macro\": 4172,\n    \"historic_global_india_monthly_macro\": 192,\n    \"historic_nifty50_intraday_5min\": 114830,\n    \"historic_nifty50_intraday_30min\": 19911,\n    \"historic_india_equity_closes_26y_wide\": 6489,\n    \"historic_india_equity_volume_26y_wide\": 6489,\n    \"historic_india_equity_closes_gt10y_wide\": 1943,\n    \"historic_india_equity_closes_all20y_wide\": 1943,\n    \"historic_india_equity_closes_combined_wide\": 1943,\n    \"historic_india_symbol_list\": 2248,\n    \"historic_india_financial_news\": 50000,\n    \"historic_mrchartist_flow_daily\": 112,\n    \"historic_india_rbi_wss_weekly\": 459,\n    \"historic_nifty50_valuation_daily\": 6853,\n    \"historic_trading_activity\": 4164,\n    \"historic_nifty50_fo\": 4164,\n    \"aeron7_nifty_futures\": 0,\n    \"monthly_cash\": 4164,\n    \"mf_sebi\": 30,\n    \"fii_sebi\": 30,\n    \"sector_indices\": 2450,\n    \"niftyinvest_api\": 112\n  },\n  \"cold_tier\": {\n    \"status\": \"ok\",\n    \"datasets\": {\n      \"india_macro_annual\": {\n        \"status\": \"ok\",\n        \"dataset\": \"india_macro_annual\",\n        \"rows\": 45,\n        \"start\": \"1980-12-31\",\n        \"end\": \"2024-12-31\"\n      },\n      \"historic_index_ohlcv\": {\n        \"status\": \"ok\",\n        \"datasets\": {\n          \"nifty_ohlcv_daily\": {\n            \"status\": \"ok\",\n            \"dataset\": \"nifty_ohlcv_daily\",\n            \"rows\": 4620,\n            \"start\": \"2007-09-17\",\n            \"end\": \"2026-07-17\"\n          },\n          \"sensex_ohlcv_daily\": {\n            \"status\": \"ok\",\n            \"dataset\": \"sensex_ohlcv_daily\",\n            \"rows\": 6987,\n            \"start\": \"1997-07-01\",\n            \"end\": \"2025-11-11\"\n          }\n        }\n      },\n      \"historic_constituent_ohlcv\": {\n        \"status\": \"ok\",\n        \"datasets\": {\n          \"nifty50_constituent_ohlcv_daily\": {\n            \"status\": \"ok\",\n            \"dataset\": \"nifty50_constituent_ohlcv_daily\",\n            \"rows\": 304543,\n            \"start\": \"1997-07-01\",\n            \"end\": \"2025-11-11\"\n          },\n          \"sensex_constituent_ohlcv_daily\": {\n            \"status\": \"ok\",\n            \"dataset\": \"sensex_constituent_ohlcv_daily\",\n            \"rows\": 180327,\n            \"start\": \"2000-01-03\",\n            \"end\": \"2025-11-11\"\n          }\n        }\n      },\n      \"historic_figshare_hub\": {\n        \"status\": \"ok\",\n        \"months\": 216,\n        \"membership_rows\": 10800,\n        \"symbols_tracked\": 103,\n        \"start\": \"2008-01-31\",\n        \"end\": \"2025-08-31\",\n        \"wide_path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/nifty50/constituents_monthly_wide.parquet\",\n        \"long_path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/nifty50/constituents_monthly_long.parquet\",\n        \"sectors\": {\n          \"status\": \"ok\",\n          \"rows\": 100,\n          \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/nifty50/sector_map.parquet\"\n        },\n        \"membership_summary\": {\n          \"status\": \"ok\",\n          \"dataset\": \"nifty50_constituents_membership_summary\",\n          \"rows\": 100,\n          \"start\": \"2010-08-31\",\n          \"end\": \"2020-08-30\"\n        },\n        \"current_constituents\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/nifty50/constituents_current.json\"\n      },\n      \"global_india_macro\": {\n        \"status\": \"ok\",\n        \"datasets\": {\n          \"macro_daily\": {\n            \"status\": \"ok\",\n            \"dataset\": \"macro_daily\",\n            \"rows\": 4863,\n            \"start\": \"2007-09-17\",\n            \"end\": \"2026-07-17\"\n          },\n          \"nifty_ohlcv_daily\": {\n            \"status\": \"ok\",\n            \"dataset\": \"nifty_ohlcv_daily\",\n            \"rows\": 4864,\n            \"start\": \"2007-09-17\",\n            \"end\": \"2026-07-17\"\n          }\n        }\n      },\n      \"historic_intraday\": {\n        \"status\": \"ok\",\n        \"datasets\": {\n          \"nifty50_intraday_5min\": {\n            \"status\": \"ok\",\n            \"dataset\": \"nifty50_intraday_5min\",\n            \"rows\": 114830,\n            \"start\": \"2015-01-09 03:45:00\",\n            \"end\": \"2021-03-25 09:55:00\"\n          },\n          \"nifty50_intraday_30min\": {\n            \"status\": \"ok\",\n            \"dataset\": \"nifty50_intraday_30min\",\n            \"rows\": 19911,\n            \"start\": \"2015-01-09 03:45:00\",\n            \"end\": \"2021-03-25 09:45:00\"\n          }\n        }\n      },\n      \"historic_news\": {\n        \"status\": \"ok\",\n        \"dataset\": \"india_news_sentiment_daily\",\n        \"rows\": 1554,\n        \"start\": \"2017-01-01\",\n        \"end\": \"2021-04-15\"\n      },\n      \"sector_index_daily\": {\n        \"status\": \"ok\",\n        \"dataset\": \"sector_index_daily\",\n        \"rows\": 2450,\n        \"start\": \"2025-07-18\",\n        \"end\": \"2026-07-16\"\n      },\n      \"repo_flows\": {\n        \"status\": \"ok\",\n        \"cash\": {\n          \"status\": \"ok\",\n          \"dataset\": \"flow_cash_daily\",\n          \"rows\": 4140,\n          \"start\": \"2007-01-06\",\n          \"end\": \"2026-07-17\"\n        },\n        \"derivatives\": {\n          \"status\": \"ok\",\n          \"dataset\": \"flow_derivatives_daily\",\n          \"rows\": 4162,\n          \"start\": \"2007-01-06\",\n          \"end\": \"2026-07-17\"\n        }\n      },\n      \"macro_backfill\": {\n        \"status\": \"ok\",\n        \"rows\": 4619,\n        \"start\": \"2007-09-17\",\n        \"end\": \"2026-07-17\",\n        \"coverage_pct\": {\n          \"nifty_close\": 100.0,\n          \"open\": 100.0,\n          \"high\": 100.0,\n          \"low\": 100.0,\n          \"volume\": 100.0,\n          \"oil_brent\": 96.1,\n          \"oil_wti\": 97.2,\n          \"usd_inr\": 99.4,\n          \"gold\": 97.2,\n          \"sp500\": 97.2,\n          \"us_10y\": 100.0,\n          \"nifty_return_7d\": 99.8,\n          \"nifty_return_14d\": 99.7,\n          \"nifty_rsi_14\": 100.0,\n          \"nifty_realized_vol_20d\": 99.8,\n          \"nifty_ma20_distance_pct\": 99.8,\n          \"nifty_ma50_distance_pct\": 99.5,\n          \"nifty_ma200_distance_pct\": 97.9,\n          \"nifty_macd_line\": 100.0,\n          \"nifty_macd_signal\": 100.0,\n          \"nifty_macd_histogram\": 100.0,\n          \"nifty_bb_percent_b\": 99.8,\n          \"nifty_bb_width_pct\": 99.8,\n          \"nifty_stoch_k\": 100.0,\n          \"nifty_stoch_d\": 100.0,\n          \"nifty_williams_r\": 100.0,\n          \"nifty_cci_20\": 100.0,\n          \"nifty_atr_pct\": 99.9,\n          \"nifty_adx_14\": 99.6,\n          \"nifty_golden_cross_signal\": 100.0\n        },\n        \"nifty_ohlcv\": {\n          \"status\": \"ok\",\n          \"dataset\": \"nifty_ohlcv_daily\",\n          \"rows\": 4619,\n          \"start\": \"2007-09-17\",\n          \"end\": \"2026-07-17\"\n        },\n        \"macro_daily\": {\n          \"status\": \"ok\",\n          \"dataset\": \"macro_daily\",\n          \"rows\": 4619,\n          \"start\": \"2007-09-17\",\n          \"end\": \"2026-07-17\"\n        }\n      },\n      \"nifty_ohlcv_overlay\": {\n        \"status\": \"ok\",\n        \"dataset\": \"nifty_ohlcv_daily\",\n        \"rows\": 4620,\n        \"start\": \"2007-09-17\",\n        \"end\": \"2026-07-17\"\n      },\n      \"flow_backfill\": {\n        \"status\": \"ok\",\n        \"cash_rows\": 4162,\n        \"vix_rows\": 4500,\n        \"fii_coverage_pct\": 99.3,\n        \"cash\": {\n          \"status\": \"ok\",\n          \"dataset\": \"flow_cash_daily\",\n          \"rows\": 4162,\n          \"start\": \"2007-01-06\",\n          \"end\": \"2026-07-17\"\n        },\n        \"derivatives\": {\n          \"status\": \"ok\",\n          \"dataset\": \"flow_derivatives_daily\",\n          \"rows\": 4162,\n          \"start\": \"2007-01-06\",\n     ",
+      "stderr": "/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:425: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  out[\"date\"] = pd.to_datetime(out[\"TIMESTAMP\"], errors=\"coerce\", dayfirst=True).dt.strftime(\"%Y-%m-%d\")\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:390: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  work[\"date\"] = pd.to_datetime(work[\"date\"], errors=\"coerce\", dayfirst=True).dt.strftime(\"%Y-%m-%d\")\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1126: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"value_kind\"] = value_kind\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1127: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"source\"] = \"historic_data_archive7\"\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1128: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"source_file\"] = path.name\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1126: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"value_kind\"] = value_kind\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1127: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"source\"] = \"historic_data_archive7\"\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1128: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"source_file\"] = path.name\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1126: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"value_kind\"] = value_kind\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1127: PerformanceWarning: DataFrame is high"
+    },
+    "external": {
+      "cmd": [
+        "/Users/pratyushmishra/.pyenv/versions/3.13.9/bin/python3",
+        "scripts/ingest_github_datasets.py",
+        "--ingest-gaps",
+        "--slow-fetch",
+        "--skip-kaggle"
+      ],
+      "returncode": 0,
+      "stdout": "{\n  \"ingested_at\": \"2026-07-19T22:39:32.201973+00:00\",\n  \"ingest_results\": {\n    \"vishalvx_all_indices\": {\n      \"nifty50\": {\n        \"status\": \"ok\",\n        \"rows\": 216,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/indices/nifty50_weights_monthly_wide.parquet\"\n      },\n      \"niftymidcap50\": {\n        \"status\": \"ok\",\n        \"rows\": 90,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/indices/niftymidcap50_weights_monthly_wide.parquet\"\n      },\n      \"niftysmallcap50\": {\n        \"status\": \"ok\",\n        \"rows\": 90,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/indices/niftysmallcap50_weights_monthly_wide.parquet\"\n      },\n      \"nifty500momentum50\": {\n        \"status\": \"ok\",\n        \"rows\": 25,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/indices/nifty500momentum50_weights_monthly_wide.parquet\"\n      }\n    },\n    \"mrchartist_extended\": {\n      \"github_static\": {\n        \"saved\": [\n          \"data/history.json\",\n          \"data/latest.json\",\n          \"data/fpi_daily.json\",\n          \"data/fpi_monthly_history.json\",\n          \"data/fpi_quarterly.json\",\n          \"data/fpi_yearly_monthly.json\",\n          \"data/sector_history.json\",\n          \"data/sector_latest.json\",\n          \"data/sectors.json\",\n          \"data/debt_utilisation.json\",\n          \"data/country_auc.json\",\n          \"data/odi_pn.json\",\n          \"data/fetch-log.json\"\n        ],\n        \"errors\": [],\n        \"cache_dir\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/cache/mrchartist_github\"\n      },\n      \"datasets\": {\n        \"fpi_monthly_history\": {\n          \"rows\": 14,\n          \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/flows/fpi_monthly_history.parquet\"\n        },\n        \"fpi_sector_history\": {\n          \"rows\": 312,\n          \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/flows/fpi_sector_history.parquet\"\n        },\n        \"data_debt_utilisation.json\": {\n          \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/flows/debt_utilisation.json\",\n          \"bytes\": 865\n        },\n        \"data_country_auc.json\": {\n          \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/flows/country_auc.json\",\n          \"bytes\": 2828\n        },\n        \"data_odi_pn.json\": {\n          \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/curated_market/flows/odi_pn.json\",\n          \"bytes\": 157\n        }\n      }\n    },\n    \"local_historic_gaps\": {\n      \"fii_dii_trading_activity\": {\n        \"status\": \"ok\",\n        \"rows\": 3770,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/source_audit/local_historic/fii_dii_trading_activity.parquet\"\n      },\n      \"india_cpi_monthly_yoy\": {\n        \"status\": \"ok\",\n        \"rows\": 240,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/source_audit/local_historic/india_cpi_monthly_yoy.parquet\"\n      },\n      \"nifty_oi_daily\": {\n        \"status\": \"ok\",\n        \"rows\": 133,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/source_audit/local_historic/nifty_oi_daily.parquet\"\n      },\n      \"nifty50_fo_panel\": {\n        \"status\": \"ok\",\n        \"rows\": 500000,\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/source_audit/local_historic/nifty50_fo_panel.parquet\"\n      },\n      \"historic_data_folder\": {\n        \"status\": \"ok\",\n        \"datasets\": {\n          \"fii_dii_trading_activity\": {\n            \"rows\": 3770,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/fii_dii_trading_activity.parquet\"\n          },\n          \"ind_nifty50_constituents_current\": {\n            \"count\": 50,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/ind_nifty50_constituents_current.json\",\n            \"source_file\": \"ind_nifty50list.csv\"\n          },\n          \"india_cpi_monthly_yoy\": {\n            \"rows\": 240,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/india_cpi_monthly_yoy.parquet\"\n          },\n          \"nifty50_fo_panel\": {\n            \"rows\": 500000,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty50_fo_panel.parquet\",\n            \"note\": \"capped_rows\"\n          },\n          \"nifty_oi_daily\": {\n            \"rows\": 133,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty_oi_daily.parquet\"\n          },\n          \"india_macro_annual\": {\n            \"rows\": 45,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/india_macro_annual.parquet\",\n            \"start_year\": 1980,\n            \"end_year\": 2024\n          },\n          \"nifty50_ohlcv_daily\": {\n            \"rows\": 4620,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty50_ohlcv_daily.parquet\",\n            \"start\": \"2007-09-17\",\n            \"end\": \"2026-07-17\",\n            \"sources\": [\n              \"NIFTY50_Historical_PR_20250719.csv\"\n            ]\n          },\n          \"sensex_ohlcv_daily\": {\n            \"rows\": 6987,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/sensex_ohlcv_daily.parquet\",\n            \"start\": \"1997-07-01\",\n            \"end\": \"2025-11-11\"\n          },\n          \"nifty50_constituent_ohlcv_daily\": {\n            \"rows\": 304543,\n            \"symbols\": 51,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty50_constituent_ohlcv_daily.parquet\",\n            \"start\": \"1997-07-01\",\n            \"end\": \"2025-11-11\"\n          },\n          \"sensex_constituent_ohlcv_daily\": {\n            \"rows\": 180327,\n            \"symbols\": 30,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/sensex_constituent_ohlcv_daily.parquet\",\n            \"start\": \"2000-01-03\",\n            \"end\": \"2025-11-11\"\n          },\n          \"nifty50_weights_monthly\": {\n            \"months\": 216,\n            \"membership_rows\": 10800,\n            \"symbols_tracked\": 103,\n            \"start\": \"2008-01-31\",\n            \"end\": \"2025-08-31\",\n            \"wide_path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty50_weights_monthly_wide.parquet\",\n            \"long_path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty50_weights_monthly_long.parquet\",\n            \"sources\": [\n              \"historic_data_figshare\",\n              \"historic_data_constituents_nifty50\",\n              \"historic_data_amp4010\"\n            ]\n          },\n          \"nifty50_sectors\": {\n            \"rows\": 100,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty50_sectors.parquet\"\n          },\n          \"nifty50_constituents_membership_summary\": {\n            \"rows\": 100,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/nifty50_constituents_membership_summary.parquet\"\n          },\n          \"global_india_daily_macro\": {\n            \"rows\": 4172,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/global_india_daily_macro.parquet\",\n            \"start\": \"2010-01-01\",\n            \"end\": \"2025-12-30\"\n          },\n          \"global_india_monthly_macro\": {\n            \"rows\": 192,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/global_india_monthly_macro.parquet\",\n            \"start\": \"2010-01-01\",\n            \"end\": \"2025-12-01\"\n          },\n          \"nifty50_intraday_5min\": {\n            \"rows\": 114830,\n            \"path\": \"/Users/pratyushmishra/Documents/GitHub",
+      "stderr": "/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:390: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  work[\"date\"] = pd.to_datetime(work[\"date\"], errors=\"coerce\", dayfirst=True).dt.strftime(\"%Y-%m-%d\")\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:425: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  out[\"date\"] = pd.to_datetime(out[\"TIMESTAMP\"], errors=\"coerce\", dayfirst=True).dt.strftime(\"%Y-%m-%d\")\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:425: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  out[\"date\"] = pd.to_datetime(out[\"TIMESTAMP\"], errors=\"coerce\", dayfirst=True).dt.strftime(\"%Y-%m-%d\")\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:390: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.\n  work[\"date\"] = pd.to_datetime(work[\"date\"], errors=\"coerce\", dayfirst=True).dt.strftime(\"%Y-%m-%d\")\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1126: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"value_kind\"] = value_kind\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1127: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"source\"] = \"historic_data_archive7\"\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1128: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"source_file\"] = path.name\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1126: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"value_kind\"] = value_kind\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1127: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`\n  out[\"source\"] = \"historic_data_archive7\"\n/Users/pratyushmishra/Documents/GitHub/Trade/integrations/trade_integrations/nse_browser/parsers/historic_data.py:1128: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of c"
+    },
+    "fundamentals": {
+      "cmd": [
+        "/Users/pratyushmishra/.pyenv/versions/3.13.9/bin/python3",
+        "scripts/ingest_nifty100_financial_intel.py",
+        "--force-fetch"
+      ],
+      "returncode": 0,
+      "stdout": "{\n  \"status\": \"ok\",\n  \"companies\": 92,\n  \"panel_rows\": 1268,\n  \"nse_symbols\": 92,\n  \"company_research_merged\": 92,\n  \"hub_dir\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/fundamentals/nifty100\",\n  \"manifest\": {\n    \"source_repo\": \"https://github.com/Samadhan1904/nifty100-financial-intelligence\",\n    \"fetched_at\": \"2026-07-19T22:39:40.214659+00:00\",\n    \"files\": [\n      {\n        \"key\": \"analysis\",\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nifty100_financial_intel/raw/analysis.xlsx\",\n        \"bytes\": 6367,\n        \"sha256\": \"bda581328e9dfb25b6e11ca9a4bb09b8466ea7c3e933e870ce01db7121e2cd8d\",\n        \"mtime\": \"2026-07-19T22:39:38.903643+00:00\"\n      },\n      {\n        \"key\": \"balancesheet\",\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nifty100_financial_intel/raw/balancesheet.xlsx\",\n        \"bytes\": 99846,\n        \"sha256\": \"ae25967d1babd4ac68c2c7fab1633b8f86303283d0ccafb5cc158ac9c7a64a36\",\n        \"mtime\": \"2026-07-19T22:39:38.096530+00:00\"\n      },\n      {\n        \"key\": \"cashflow\",\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nifty100_financial_intel/raw/cashflow.xlsx\",\n        \"bytes\": 53875,\n        \"sha256\": \"e725377455680fd4ee51eac683708b9f65182c0ecaa5cb3c431586992c8f0095\",\n        \"mtime\": \"2026-07-19T22:39:38.546787+00:00\"\n      },\n      {\n        \"key\": \"companies\",\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nifty100_financial_intel/raw/companies.xlsx\",\n        \"bytes\": 26073,\n        \"sha256\": \"f6d64d17f27d8cfe72c47ca2620dfc2bcffdc0cbf9176beab7dad53d8180ff14\",\n        \"mtime\": \"2026-07-19T22:39:36.982649+00:00\"\n      },\n      {\n        \"key\": \"documents\",\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nifty100_financial_intel/raw/documents.xlsx\",\n        \"bytes\": 50590,\n        \"sha256\": \"5d5bc8334c71d278246046140047bb8db1d5371e8780bbaac06343a7cf886ca9\",\n        \"mtime\": \"2026-07-19T22:39:39.718683+00:00\"\n      },\n      {\n        \"key\": \"profitandloss\",\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nifty100_financial_intel/raw/profitandloss.xlsx\",\n        \"bytes\": 107350,\n        \"sha256\": \"9f76b2bfdb35bbe91fbb98977ca92c02b4674a8deb8e5bbc5051cd3cb7989af0\",\n        \"mtime\": \"2026-07-19T22:39:37.591421+00:00\"\n      },\n      {\n        \"key\": \"prosandcons\",\n        \"path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/data/nifty100_financial_intel/raw/prosandcons.xlsx\",\n        \"bytes\": 6246,\n        \"sha256\": \"c92e6f99b1409f9694b7c0f10dc6d6baeeb883b190ecaec39f4d703f7a8acab5\",\n        \"mtime\": \"2026-07-19T22:39:39.253766+00:00\"\n      }\n    ],\n    \"ingested_at\": \"2026-07-19T22:39:40.214661+00:00\",\n    \"companies\": 92,\n    \"panel_rows\": 1268,\n    \"nse_symbols\": 92,\n    \"panel_path\": \"/Users/pratyushmishra/Documents/GitHub/Trade/reports/hub/_data/fundamentals/nifty100/ratios_panel.parquet\"\n  }\n}",
+      "stderr": ""
+    }
+  }
+}

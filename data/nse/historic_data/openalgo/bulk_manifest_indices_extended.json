@@ -1,0 +1,157 @@
+{
+  "bundle": "indices_extended",
+  "symbols": 7,
+  "start_date": "2016-07-12",
+  "end_date": "2026-07-20",
+  "interval": "D",
+  "started_at": "2026-07-19T22:21:48.729686Z",
+  "historify": {},
+  "symbols_stats": {
+    "NIFTY": {
+      "symbol": "NIFTY",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 1,
+      "chunks_failed": 0,
+      "rows_fetched": 0,
+      "status": "empty",
+      "existing_rows": 2483,
+      "existing_range": [
+        "2016-07-11",
+        "2026-07-17"
+      ],
+      "merged_rows": 2483,
+      "merged_range": [
+        "2016-07-11",
+        "2026-07-17"
+      ]
+    },
+    "BANKNIFTY": {
+      "symbol": "BANKNIFTY",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 1,
+      "chunks_failed": 0,
+      "rows_fetched": 0,
+      "status": "empty",
+      "existing_rows": 2483,
+      "existing_range": [
+        "2016-07-11",
+        "2026-07-17"
+      ],
+      "merged_rows": 2483,
+      "merged_range": [
+        "2016-07-11",
+        "2026-07-17"
+      ]
+    },
+    "FINNIFTY": {
+      "symbol": "FINNIFTY",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 1,
+      "chunks_failed": 0,
+      "rows_fetched": 0,
+      "status": "empty",
+      "existing_rows": 2482,
+      "existing_range": [
+        "2016-07-12",
+        "2026-07-17"
+      ],
+      "merged_rows": 2482,
+      "merged_range": [
+        "2016-07-12",
+        "2026-07-17"
+      ]
+    },
+    "MIDCPNIFTY": {
+      "symbol": "MIDCPNIFTY",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 2,
+      "chunks_failed": 0,
+      "rows_fetched": 0,
+      "status": "empty",
+      "existing_rows": 1120,
+      "existing_range": [
+        "2022-01-10",
+        "2026-07-17"
+      ],
+      "merged_rows": 1120,
+      "merged_range": [
+        "2022-01-10",
+        "2026-07-17"
+      ]
+    },
+    "INDIAVIX": {
+      "symbol": "INDIAVIX",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 1,
+      "chunks_failed": 0,
+      "rows_fetched": 0,
+      "status": "empty",
+      "existing_rows": 2480,
+      "existing_range": [
+        "2016-07-11",
+        "2026-07-17"
+      ],
+      "merged_rows": 2480,
+      "merged_range": [
+        "2016-07-11",
+        "2026-07-17"
+      ]
+    },
+    "SENSEX": {
+      "symbol": "SENSEX",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 1,
+      "chunks_failed": 0,
+      "rows_fetched": 0,
+      "status": "empty",
+      "existing_rows": 2482,
+      "existing_range": [
+        "2016-07-12",
+        "2026-07-17"
+      ],
+      "merged_rows": 2482,
+      "merged_range": [
+        "2016-07-12",
+        "2026-07-17"
+      ]
+    },
+    "NIFTYIT": {
+      "symbol": "NIFTYIT",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 0,
+      "chunks_failed": 1,
+      "rows_fetched": 0,
+      "status": "error",
+      "existing_rows": 0,
+      "existing_range": [
+        null,
+        null
+      ],
+      "merged_rows": 0,
+      "merged_range": [
+        null,
+        null
+      ],
+      "errors": [
+        "2016-07-12..2026-07-20: Symbol 'NIFTYIT' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+      ],
+      "error": "2016-07-12..2026-07-20: Symbol 'NIFTYIT' not found for exchange 'NSE'. Please verify the symbol name and ensure master contracts are downloaded."
+    }
+  },
+  "summary": {
+    "ok": 0,
+    "cached": 0,
+    "error": 1,
+    "empty": 6,
+    "skipped": 0
+  },
+  "token_sync": "{\"synced\": false, \"reason\": \"already_in_sync\", \"broker\": \"indmoney\", \"updated_users\": [], \"env_matches_db\": true}",
+  "finished_at": "2026-07-19T22:22:10.548744Z"
+}

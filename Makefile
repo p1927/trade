@@ -31,7 +31,7 @@ dev:
 	./trade dev
 
 reload:
-	./scripts/reload_vibe_stack.sh
+	./trade reload
 
 vibe:
 	./start.sh --vibe-only

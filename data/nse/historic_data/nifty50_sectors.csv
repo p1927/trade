@@ -1,0 +1,101 @@
+symbol,sector,source
+ABB,CAPITAL GOODS,historic_data_figshare
+ACC,CEMENT,historic_data_figshare
+ADANIENT,CAPITAL GOODS,historic_data_figshare
+ADANIPORTS,CAPITAL GOODS,historic_data_figshare
+AMBUJACEM,CEMENT,historic_data_figshare
+APOLLOHOSP,MISCELLANEOUS,historic_data_figshare
+ASIANPAINT,CHEMICALS,historic_data_figshare
+AUROPHARMA,PHARMACEUTICALS,historic_data_figshare
+AXISBANK,FINANCIAL SERVICES,historic_data_figshare
+BAJAJAUTO,AUTOMOTIVE,historic_data_figshare
+BAJAJFINSV,FINANCIAL SERVICES,historic_data_figshare
+BAJFINANCE,FINANCIAL SERVICES,historic_data_figshare
+BANKBARODA,FINANCIAL SERVICES,historic_data_figshare
+BEL,CAPITAL GOODS,historic_data_figshare
+BHARTIARTL,TELECOM SERVICES,historic_data_figshare
+BHEL,CAPITAL GOODS,historic_data_figshare
+BOSCHLTD,AUTOMOTIVE,historic_data_figshare
+BPCL,ENERGY,historic_data_figshare
+BRITANNIA,FMCG,historic_data_figshare
+CAIRN,ENERGY,historic_data_figshare
+CIPLA,PHARMACEUTICALS,historic_data_figshare
+COALINDIA,METALS,historic_data_figshare
+DIVISLAB,PHARMACEUTICALS,historic_data_figshare
+DLF,MISCELLANEOUS,historic_data_figshare
+DRREDDY,PHARMACEUTICALS,historic_data_figshare
+EICHERMOT,AUTOMOTIVE,historic_data_figshare
+ETERNAL,CONSUMER DISCRETIONARY,historic_data_figshare
+GAIL,ENERGY,historic_data_figshare
+GLAXO,PHARMACEUTICALS,historic_data_figshare
+GRASIM,CHEMICALS,historic_data_figshare
+HCLTECH,INFORMATION TECHNOLOGY,historic_data_figshare
+HDFC,FINANCIAL SERVICES,historic_data_figshare
+HDFCBANK,FINANCIAL SERVICES,historic_data_figshare
+HDFCLIFE,FINANCIAL SERVICES,historic_data_figshare
+HEROMOTOCO,AUTOMOTIVE,historic_data_figshare
+HINDALCO,METALS,historic_data_figshare
+HINDPETRO,ENERGY,historic_data_figshare
+HINDUNILVR,FMCG,historic_data_figshare
+IBULHSGFIN,FINANCIAL SERVICES,historic_data_figshare
+ICICIBANK,FINANCIAL SERVICES,historic_data_figshare
+IDEA,TELECOM SERVICES,historic_data_figshare
+IDFC,FINANCIAL SERVICES,historic_data_figshare
+INDUSINDBK,FINANCIAL SERVICES,historic_data_figshare
+INFRATEL,TELECOM SERVICES,historic_data_figshare
+INFY,INFORMATION TECHNOLOGY,historic_data_figshare
+IOC,ENERGY,historic_data_figshare
+ITC,FMCG,historic_data_figshare
+JINDALSTEL,METALS,historic_data_figshare
+JIOFIN,FINANCIAL SERVICES,historic_data_figshare
+JPASSOCIAT,CEMENT,historic_data_figshare
+JSWSTEEL,METALS,historic_data_figshare
+KOTAKBANK,FINANCIAL SERVICES,historic_data_figshare
+LT,CAPITAL GOODS,historic_data_figshare
+LTIM,INFORMATION TECHNOLOGY,historic_data_figshare
+LUPIN,PHARMACEUTICALS,historic_data_figshare
+M&M,AUTOMOTIVE,historic_data_figshare
+MARUTI,AUTOMOTIVE,historic_data_figshare
+MCDOWELL-N,CONSUMER DISCRETIONARY,historic_data_figshare
+NATIONALUM,METALS,historic_data_figshare
+NESTLEIND,FMCG,historic_data_figshare
+NMDC,METALS,historic_data_figshare
+NTPC,UTILITIES,historic_data_figshare
+ONGC,ENERGY,historic_data_figshare
+PNB,FINANCIAL SERVICES,historic_data_figshare
+POWERGRID,UTILITIES,historic_data_figshare
+RANBAXY,PHARMACEUTICALS,historic_data_figshare
+RCOM,TELECOM SERVICES,historic_data_figshare
+RELCAPITAL,FINANCIAL SERVICES,historic_data_figshare
+RELIANCE,ENERGY,historic_data_figshare
+RELINFRA,UTILITIES,historic_data_figshare
+RPL,ENERGY,historic_data_figshare
+RPOWER,UTILITIES,historic_data_figshare
+SAIL,METALS,historic_data_figshare
+SATYAMCOMP,INFORMATION TECHNOLOGY,historic_data_figshare
+SBILIFE,FINANCIAL SERVICES,historic_data_figshare
+SBIN,FINANCIAL SERVICES,historic_data_figshare
+SESAGOA,METALS,historic_data_figshare
+SHREECEM,CEMENT,historic_data_figshare
+SHRIRAMFIN,FINANCIAL SERVICES,historic_data_figshare
+SIEMENS,CAPITAL GOODS,historic_data_figshare
+STER,TELECOM SERVICES,historic_data_figshare
+SUNPHARMA,PHARMACEUTICALS,historic_data_figshare
+SUZLON,ENERGY,historic_data_figshare
+TATACOMM,TELECOM SERVICES,historic_data_figshare
+TATACONSUM,FMCG,historic_data_figshare
+TATAMOTORS,AUTOMOTIVE,historic_data_figshare
+TATAPOWER,UTILITIES,historic_data_figshare
+TATASTEEL,METALS,historic_data_figshare
+TCS,INFORMATION TECHNOLOGY,historic_data_figshare
+TECHM,INFORMATION TECHNOLOGY,historic_data_figshare
+TITAN,CONSUMER DISCRETIONARY,historic_data_figshare
+TRENT,CONSUMER DISCRETIONARY,historic_data_figshare
+ULTRACEMCO,CEMENT,historic_data_figshare
+UNITECH,MISCELLANEOUS,historic_data_figshare
+UPL,CHEMICALS,historic_data_figshare
+VEDL,METALS,historic_data_figshare
+VSNL,TELECOM SERVICES,historic_data_figshare
+WIPRO,INFORMATION TECHNOLOGY,historic_data_figshare
+YESBANK,FINANCIAL SERVICES,historic_data_figshare
+ZEEL,MISCELLANEOUS,historic_data_figshare

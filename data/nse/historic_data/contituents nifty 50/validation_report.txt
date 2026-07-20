@@ -1,0 +1,7 @@
+VALIDATION REPORT
+Rows (excluding Headers): 216, Columns: 101
+Numeric tickers: 100
+Date range: 2008-01-31 -> 2025-08-31
+Row sums (weights): min=99.99999999999996, max=100.00000000000004, mean=100.0
+Rows where sum != 100 within tolerance 1e-6: 0
+Out-of-order date indices count: 0

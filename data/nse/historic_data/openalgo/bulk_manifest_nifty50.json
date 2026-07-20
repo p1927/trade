@@ -1,0 +1,67 @@
+{
+  "bundle": "nifty50",
+  "symbols": 1,
+  "start_date": "2016-07-12",
+  "end_date": "2026-07-20",
+  "interval": "D",
+  "started_at": "2026-07-19T23:45:02.658702Z",
+  "historify": {
+    "path": "/Users/pratyushmishra/Documents/GitHub/Trade/openalgo/db/historify.duckdb",
+    "symbols": 0,
+    "rows": 0,
+    "status": "empty"
+  },
+  "symbols_stats": {
+    "CHOLAFIN": {
+      "symbol": "CHOLAFIN",
+      "start_date": "2016-07-12",
+      "end_date": "2026-07-20",
+      "chunks_fetched": 1,
+      "chunks_failed": 0,
+      "rows_fetched": 2482,
+      "status": "ok",
+      "existing_rows": 0,
+      "existing_range": [
+        null,
+        null
+      ],
+      "merged_rows": 0,
+      "merged_range": [
+        null,
+        null
+      ],
+      "repo": {
+        "status": "ok",
+        "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/openalgo/CHOLAFIN_ohlcv_daily.parquet",
+        "rows": 2482,
+        "start": "2016-07-12",
+        "end": "2026-07-17"
+      },
+      "hub": {
+        "status": "ok",
+        "entity_id": "CHOLAFIN",
+        "appended": 2482,
+        "updated_at": "2026-07-19T23:45:08.813889+00:00",
+        "bar_count": 2482,
+        "first_date": "2016-07-12",
+        "last_date": "2026-07-17",
+        "last_vendor": "openalgo",
+        "last_source": "openalgo_indmoney"
+      },
+      "final_rows": 2482,
+      "final_range": [
+        "2016-07-12",
+        "2026-07-17"
+      ]
+    }
+  },
+  "summary": {
+    "ok": 1,
+    "cached": 0,
+    "error": 0,
+    "empty": 0,
+    "skipped": 0
+  },
+  "token_sync": "{\"synced\": false, \"reason\": \"already_in_sync\", \"broker\": \"indmoney\", \"updated_users\": [], \"env_matches_db\": true}",
+  "finished_at": "2026-07-19T23:45:08.937804Z"
+}
