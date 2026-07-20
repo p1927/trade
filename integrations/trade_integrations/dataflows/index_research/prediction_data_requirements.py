@@ -69,6 +69,11 @@ REQUIRED_COLD_DATASETS: dict[str, dict[str, Any]] = {
         "factors": ("india_10y", "india_91d_tbill", "india_term_spread"),
         "tracks": ("quant_ridge", "macro_only"),
     },
+    "india_credit_spread_daily": {
+        "source": "CRISIL / corporate BAA-AAA spread CSV (optional; proxy until present)",
+        "factors": ("india_credit_spread",),
+        "tracks": ("quant_ridge", "macro_only"),
+    },
     "nifty50_valuation_daily": {
         "source": "Nifty50 PE/PB/DIV CSV + curated ingest",
         "factors": ("nifty_pe", "nifty_pb", "nifty_dividend_yield", "equity_risk_premium"),

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_10Y_REPO_SPREAD = 0.65
 
 _RBI_COLUMNS = frozenset({"india_91d_tbill", "india_10y"})
+_CREDIT_SPREAD_DATASET = "india_credit_spread_daily"
 
 
 def _env_float(name: str) -> float | None:
@@ -61,6 +62,55 @@ def cold_tier_rbi_latest(column: str) -> float | None:
     if frame.empty or column not in frame.columns:
         return None
     series = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if series.empty:
+        return None
+    return float(series.iloc[-1])
+
+
+def _credit_spread_column(frame: pd.DataFrame) -> str | None:
+    for col in ("india_credit_spread", "credit_spread", "baa_aaa_spread", "spread"):
+        if col in frame.columns:
+            return col
+    return None
+
+
+def cold_tier_credit_spread_series(trading_dates: list[str]) -> pd.Series:
+    """Merge-asof CRISIL / corporate credit spread onto trading dates when cold tier exists."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    frame = load_history_dataset(_CREDIT_SPREAD_DATASET)
+    if frame.empty:
+        return pd.Series(dtype=float)
+    col = _credit_spread_column(frame)
+    if col is None or "date" not in frame.columns:
+        return pd.Series(dtype=float)
+    daily = frame[["date", col]].copy()
+    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily[col] = pd.to_numeric(daily[col], errors="coerce")
+    daily = daily.dropna(subset=[col]).sort_values("date").drop_duplicates("date", keep="last")
+    if daily.empty:
+        return pd.Series(dtype=float)
+    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    merged = pd.merge_asof(
+        trading.sort_values("date"),
+        daily.sort_values("date"),
+        on="date",
+        direction="backward",
+    )
+    return pd.Series(merged[col].values, index=trading_dates)
+
+
+def cold_tier_credit_spread_latest() -> float | None:
+    """Most recent non-null credit spread from cold tier."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    frame = load_history_dataset(_CREDIT_SPREAD_DATASET)
+    if frame.empty:
+        return None
+    col = _credit_spread_column(frame)
+    if col is None:
+        return None
+    series = pd.to_numeric(frame[col], errors="coerce").dropna()
     if series.empty:
         return None
     return float(series.iloc[-1])
@@ -145,10 +195,13 @@ def fetch_india_10y_fred_series(start: str, end: str) -> pd.Series:
 
 
 def resolve_india_credit_spread(*, repo_rate: float | None = None) -> float | None:
-    """Corporate credit spread — env override or term-spread proxy (no CRISIL CSV yet)."""
+    """Corporate credit spread — env, cold tier, or term-spread proxy (CRISIL CSV optional)."""
     override = _env_float("INDEX_INDIA_CREDIT_SPREAD")
     if override is not None:
         return override
+    cold = cold_tier_credit_spread_latest()
+    if cold is not None:
+        return cold
     tbill = resolve_india_91d_tbill(repo_rate=repo_rate)
     ten_y = resolve_india_10y(repo_rate=repo_rate)
     if ten_y is not None and tbill is not None:
@@ -175,6 +228,7 @@ def india_rate_factor_rows(*, repo_rate: float | None = None) -> list[dict[str, 
     tbill, tbill_source = _resolve_india_91d_tbill_with_source(repo_rate=repo_rate)
     ten_y, ten_y_source = _resolve_india_10y_with_source(repo_rate=repo_rate)
     credit = resolve_india_credit_spread(repo_rate=repo_rate)
+    credit_cold = cold_tier_credit_spread_latest()
 
     if tbill is not None:
         rows.append(
@@ -195,17 +249,21 @@ def india_rate_factor_rows(*, repo_rate: float | None = None) -> list[dict[str, 
             }
         )
     if credit is not None:
-        credit_source = (
-            "india_rates_env"
-            if _env_float("INDEX_INDIA_CREDIT_SPREAD") is not None
-            else "india_rates_proxy"
-        )
+        if _env_float("INDEX_INDIA_CREDIT_SPREAD") is not None:
+            credit_source = "india_rates_env"
+            credit_quality = "observed"
+        elif credit_cold is not None:
+            credit_source = "india_credit_spread_cold_tier"
+            credit_quality = "cold_tier"
+        else:
+            credit_source = "india_rates_proxy"
+            credit_quality = "proxy"
         rows.append(
             {
                 "factor": "india_credit_spread",
                 "value": credit,
                 "source": credit_source,
-                "data_quality": "proxy" if credit_source == "india_rates_proxy" else "observed",
+                "data_quality": credit_quality,
             }
         )
     if ten_y is not None and tbill is not None:

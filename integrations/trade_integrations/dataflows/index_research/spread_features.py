@@ -74,9 +74,25 @@ def enrich_spread_columns(frame: pd.DataFrame) -> pd.DataFrame:
     import os
 
     credit_override = os.getenv("INDEX_INDIA_CREDIT_SPREAD", "").strip()
+    existing_credit = (
+        pd.to_numeric(out["india_credit_spread"], errors="coerce")
+        if "india_credit_spread" in out.columns
+        else pd.Series(dtype=float)
+    )
+    has_observed_credit = bool(existing_credit.notna().any())
+
     if credit_override:
         out["india_credit_spread"] = float(credit_override)
-    else:
+    elif has_observed_credit:
+        pass
+    elif "india_term_spread" in out.columns:
+        out["india_credit_spread"] = compute_credit_spread_proxy(out["india_term_spread"])
+    elif "india_10y" in out.columns and "india_91d_tbill" in out.columns:
+        term = pd.to_numeric(out["india_10y"], errors="coerce") - pd.to_numeric(
+            out["india_91d_tbill"], errors="coerce"
+        )
+        out["india_credit_spread"] = compute_credit_spread_proxy(term)
+    elif "india_credit_spread" not in out.columns:
         out["india_credit_spread"] = np.nan
 
     return out
@@ -100,6 +116,20 @@ def spread_factor_rows_from_dict(factors: dict) -> list[dict]:
                     "source": "spread_features",
                 }
             )
+        except (TypeError, ValueError):
+            pass
+    elif factors.get("india_10y") is not None and factors.get("india_91d_tbill") is not None:
+        try:
+            term = float(factors["india_10y"]) - float(factors["india_91d_tbill"])
+            proxy = compute_credit_spread_proxy(term)
+            if not pd.isna(proxy):
+                rows.append(
+                    {
+                        "factor": "india_credit_spread",
+                        "value": float(proxy),
+                        "source": "spread_features_proxy",
+                    }
+                )
         except (TypeError, ValueError):
             pass
     return rows

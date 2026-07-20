@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from trade_integrations.dataflows.index_research.sources.india_rates import (
+    cold_tier_credit_spread_series,
     cold_tier_rbi_rate_series,
     fetch_india_10y_fred_series,
 )
@@ -356,7 +357,18 @@ def _append_repo_and_india_rates(frame: pd.DataFrame) -> pd.DataFrame:
     if credit_override:
         out["india_credit_spread"] = float(credit_override)
     else:
-        out["india_credit_spread"] = np.nan
+        dates = out["date"].astype(str).tolist()
+        cold_credit = cold_tier_credit_spread_series(dates)
+        if not cold_credit.empty and cold_credit.notna().any():
+            mapped = out["date"].map(cold_credit)
+            if "india_credit_spread" in out.columns:
+                out["india_credit_spread"] = mapped.combine_first(
+                    pd.to_numeric(out["india_credit_spread"], errors="coerce")
+                )
+            else:
+                out["india_credit_spread"] = mapped
+        elif "india_credit_spread" not in out.columns:
+            out["india_credit_spread"] = np.nan
 
     return out
 

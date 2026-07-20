@@ -49,3 +49,34 @@ def test_credit_spread_proxy_from_term_spread():
     out = enrich_spread_columns(frame)
     assert out["india_credit_spread"].iloc[0] == pytest.approx(0.576, rel=0.01)
     assert float(compute_credit_spread_proxy(1.0)) == pytest.approx(0.63, rel=0.01)
+
+
+@pytest.mark.unit
+def test_cold_tier_credit_spread_overrides_proxy(tmp_path, monkeypatch):
+    from trade_integrations.dataflows.index_research.spread_features import enrich_spread_columns
+
+    hub = tmp_path / "hub"
+    (hub / "_data" / "history").mkdir(parents=True)
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(hub))
+    pd.DataFrame(
+        {
+            "date": ["2026-07-01", "2026-07-10"],
+            "india_credit_spread": [1.25, 1.30],
+        }
+    ).to_parquet(hub / "_data" / "history" / "india_credit_spread_daily.parquet", index=False)
+
+    frame = pd.DataFrame(
+        {
+            "date": ["2026-07-10", "2026-07-11"],
+            "india_10y": [7.2, 7.4],
+            "india_91d_tbill": [6.5, 6.5],
+        }
+    )
+    from trade_integrations.dataflows.index_research.panel_enrichment import _append_repo_and_india_rates
+
+    with_rates = _append_repo_and_india_rates(frame.copy())
+    assert float(with_rates.loc[with_rates["date"] == "2026-07-10", "india_credit_spread"].iloc[0]) == pytest.approx(
+        1.30
+    )
+    out = enrich_spread_columns(with_rates)
+    assert float(out.loc[out["date"] == "2026-07-10", "india_credit_spread"].iloc[0]) == pytest.approx(1.30)

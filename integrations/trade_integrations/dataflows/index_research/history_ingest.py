@@ -363,6 +363,31 @@ def sync_india_rbi_wss_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
     return save_history_dataset("india_rbi_wss_weekly", frame)
 
 
+def sync_india_credit_spread_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
+    """Persist CRISIL / corporate credit spread series from repo into cold tier."""
+    from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
+    from trade_integrations.nse_browser.repository import repo_root as default_repo_root
+
+    root = repo_root or default_repo_root()
+    path = historic_data_dir(root) / "india_credit_spread_daily.parquet"
+    if not path.is_file():
+        return {"status": "skipped", "reason": "missing_file", "dataset": "india_credit_spread_daily"}
+    frame = pd.read_parquet(path)
+    if frame.empty or "date" not in frame.columns:
+        return {"status": "skipped", "reason": "empty_frame", "dataset": "india_credit_spread_daily"}
+    col = None
+    for candidate in ("india_credit_spread", "credit_spread", "baa_aaa_spread", "spread"):
+        if candidate in frame.columns:
+            col = candidate
+            break
+    if col is None:
+        return {"status": "skipped", "reason": "missing_spread_column", "dataset": "india_credit_spread_daily"}
+    out = frame[["date", col]].copy()
+    if col != "india_credit_spread":
+        out = out.rename(columns={col: "india_credit_spread"})
+    return save_history_dataset("india_credit_spread_daily", out)
+
+
 def sync_historic_news_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
     """Persist aggregated news sentiment from historic_data into cold tier."""
     from trade_integrations.nse_browser.parsers.historic_data import load_india_news_sentiment_daily
@@ -435,6 +460,7 @@ def sync_repo_to_cold_tier(
     results["historic_news"] = sync_historic_news_to_cold_tier()
     results["india_cpi"] = sync_india_cpi_to_cold_tier()
     results["india_rbi_wss"] = sync_india_rbi_wss_to_cold_tier()
+    results["india_credit_spread_daily"] = sync_india_credit_spread_to_cold_tier()
     results["nifty50_valuation_daily"] = sync_valuation_to_cold_tier()
     results["sector_index_daily"] = sync_sector_indices_to_cold_tier()
     results["historic_derivatives"] = sync_historic_derivatives_to_cold_tier(start=start, end=end)
