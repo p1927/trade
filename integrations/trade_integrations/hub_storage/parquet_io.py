@@ -11,6 +11,18 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def concat_dataframes(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
+    """Concatenate capture frames without pandas empty/all-NA concat warnings."""
+    if existing.empty:
+        return incoming.copy()
+    if incoming.empty:
+        return existing.copy()
+    columns = list(dict.fromkeys(list(existing.columns) + list(incoming.columns)))
+    existing = existing.reindex(columns=columns)
+    incoming = incoming.reindex(columns=columns)
+    return pd.DataFrame(existing.to_dict("records") + incoming.to_dict("records"))
+
+
 def read_dataframe(path: Path) -> pd.DataFrame:
     parquet_exc: Exception | None = None
     if path.is_file():
@@ -63,7 +75,7 @@ def upsert_by_keys(
     elif incoming.empty:
         merged = existing.copy()
     else:
-        merged = pd.concat([existing, incoming], ignore_index=True)
+        merged = concat_dataframes(existing, incoming)
     keys = [k for k in dedupe_keys if k in merged.columns]
     if not keys:
         return merged

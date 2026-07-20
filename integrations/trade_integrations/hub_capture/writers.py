@@ -12,7 +12,7 @@ import pandas as pd
 
 from trade_integrations.hub_capture.gate import should_capture
 from trade_integrations.hub_capture.registry import capture_base_dir, get_entity
-from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, read_dataframe, write_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +46,8 @@ def _append_rows(
     day = str(rows[0].get("captured_at") or _now_iso())[:10]
     path = _daily_path(entity_id, series, day)
     existing = read_dataframe(path)
-    if existing.empty:
-        frame = pd.DataFrame(rows)
-    else:
-        frame = pd.concat([existing, pd.DataFrame(rows)], ignore_index=True)
+    incoming = pd.DataFrame(rows)
+    frame = concat_dataframes(existing, incoming) if not existing.empty else incoming
     if dedupe_keys:
         frame["_dedupe"] = frame.apply(lambda r: _dedupe_key(r.to_dict(), dedupe_keys), axis=1)
         before = len(frame)
