@@ -102,8 +102,12 @@ def load_history_dataset(name: str) -> pd.DataFrame:
     return out.sort_values(keys).drop_duplicates(keys, keep="last").reset_index(drop=True)
 
 
-def save_history_dataset(name: str, frame: pd.DataFrame) -> dict[str, Any]:
-    """Persist a cold-tier dataset and update manifest."""
+def save_history_dataset(name: str, frame: pd.DataFrame, *, merge: bool | None = None) -> dict[str, Any]:
+    """Persist a cold-tier dataset and update manifest.
+
+    When ``merge=True`` (default for real-time datasets via ingest_policy), new rows
+    are merged with the existing cold tier on dedupe keys — no full replace bloat.
+    """
     if frame.empty:
         return {"status": "skipped", "reason": "empty_frame", "dataset": name}
     out = frame.copy()
@@ -111,6 +115,17 @@ def save_history_dataset(name: str, frame: pd.DataFrame) -> dict[str, Any]:
         return {"status": "error", "reason": "missing_date_column", "dataset": name}
     out = _normalize_date_column(name, out)
     keys = _dedupe_keys(name, out)
+    if merge is None:
+        try:
+            from trade_integrations.dataflows.ingest_policy import merge_on_save_default
+
+            merge = merge_on_save_default(name)
+        except ImportError:
+            merge = False
+    if merge:
+        existing = load_history_dataset(name)
+        if not existing.empty:
+            out = pd.concat([existing, out], ignore_index=True)
     out = out.sort_values(keys).drop_duplicates(keys, keep="last").reset_index(drop=True)
     path = history_path(name)
     _write_parquet(out, path)

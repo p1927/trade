@@ -95,8 +95,9 @@ def _prepare_nse_repository_layers(
         seed_counts = sync_all_repo_seed_layers(
             allow_live_fetch=allow_live_fetch,
             enrich_days=enrich_days,
+            explicit=True,
         )
-        hub_counts = ingest_repository_to_hub(allow_live_fetch=False, enrich_days=enrich_days)
+        hub_counts = ingest_repository_to_hub(allow_live_fetch=False, enrich_days=enrich_days, explicit=True)
         return {"seed": seed_counts, "hub": hub_counts}
     except Exception as exc:
         logger.warning("NSE repository sync failed: %s", exc)

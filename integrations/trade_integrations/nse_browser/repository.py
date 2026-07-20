@@ -157,9 +157,18 @@ def load_repo_dataset(dataset_id: str) -> pd.DataFrame:
     return frame
 
 
-def ingest_repository_to_hub(*, allow_live_fetch: bool = True, enrich_days: int = 365) -> dict[str, int]:
+def ingest_repository_to_hub(
+    *,
+    allow_live_fetch: bool = True,
+    enrich_days: int = 365,
+    explicit: bool = False,
+) -> dict[str, int]:
     """Sync repo parquet files into reports/hub/_data/nse_browser/."""
-    sync_all_repo_seed_layers(allow_live_fetch=allow_live_fetch, enrich_days=enrich_days)
+    sync_all_repo_seed_layers(
+        allow_live_fetch=allow_live_fetch,
+        enrich_days=enrich_days,
+        explicit=explicit,
+    )
     counts: dict[str, int] = {}
     hub = hub_root()
     hub.mkdir(parents=True, exist_ok=True)
@@ -413,8 +422,20 @@ def sync_niftyinvest_api_flow(*, days: int = 365) -> dict[str, Any]:
     return seed_niftyinvest_flow_to_repo(days=days)
 
 
-def sync_all_repo_seed_layers(*, allow_live_fetch: bool = True, enrich_days: int = 365) -> dict[str, int]:
-    """Apply all git-tracked CSV seed layers into repo parquet."""
+def sync_all_repo_seed_layers(
+    *,
+    allow_live_fetch: bool = True,
+    enrich_days: int = 365,
+    explicit: bool = False,
+) -> dict[str, int]:
+    """Apply all git-tracked CSV seed layers into repo parquet.
+
+    Expensive live fetch paths require ``explicit=True`` (CLI/scripts) unless
+    ``TRADE_ALLOW_BATCH_INGEST=1``.
+    """
+    from trade_integrations.dataflows.ingest_policy import require_explicit_batch
+
+    require_explicit_batch(explicit=explicit, operation="sync_all_repo_seed_layers")
     from trade_integrations.nse_browser.parsers.historic_data import ingest_historic_data_folder
 
     counts: dict[str, int] = {}

@@ -42,6 +42,7 @@ def main() -> int:
         results["repo"] = sync_all_repo_seed_layers(
             allow_live_fetch=not args.offline,
             enrich_days=365,
+            explicit=True,
         )
 
     if run_all or args.cold_tier:
@@ -61,6 +62,7 @@ def main() -> int:
         results["hub"] = ingest_repository_to_hub(
             allow_live_fetch=not args.offline,
             enrich_days=365,
+            explicit=True,
         )
 
     if run_all or args.panel:
