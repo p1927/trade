@@ -602,6 +602,8 @@ def merge_flow_derivatives_frame(
     latest = fetch_mrchartist_latest_session(allow_live_fetch=allow_live_fetch)
     nse = fetch_nselib_fii_dii_frame(start, end, allow_live_fetch=allow_live_fetch)
     cache = load_flow_cash_cache()
+    fo_bhav = load_fo_bhavcopy_derivatives_frame(start=start, end=end)
+    oi_daily = load_nifty_oi_daily_frame(start=start, end=end)
     cold_deriv = pd.DataFrame()
     try:
         from trade_integrations.dataflows.index_research.history_store import load_history_dataset
@@ -614,11 +616,22 @@ def merge_flow_derivatives_frame(
     except Exception:
         cold_deriv = pd.DataFrame()
 
-    # Per-date last wins (listed low → high priority): flow cache, web snapshots,
-    # Mr. Chartist, NSE today, git repo parquet, nse_browser hub rows, cold-tier deriv.
+    # Per-date last wins (listed low → high priority): FO bhavcopy, OI daily, flow cache,
+    # web snapshots, Mr. Chartist, NSE today, git repo parquet, nse_browser hub rows, cold-tier deriv.
     frames = [
         f
-        for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow, cold_deriv)
+        for f in (
+            fo_bhav,
+            oi_daily,
+            cache,
+            web_flow,
+            mr,
+            latest,
+            nse,
+            repo_flow,
+            browser_flow,
+            cold_deriv,
+        )
         if f is not None and not f.empty
     ]
     if not frames:
@@ -727,6 +740,27 @@ def _save_fao_backfill_progress(completed: set[str]) -> None:
     )
 
 
+def load_fo_bhavcopy_derivatives_frame(*, start: str, end: str) -> pd.DataFrame:
+    """Daily PCR / fut ratio from Nifty50 stock F&O bhavcopy CSV in repo."""
+    try:
+        from trade_integrations.nse_browser.repository import repo_root
+        from trade_integrations.nse_browser.parsers.fo_derivatives import parse_nifty50_fo_bhavcopy_csv
+
+        root = repo_root()
+        for name in ("nifty50_fo_data_filtered.csv", "nifty50_fo_panel.csv"):
+            path = root / name
+            if path.is_file():
+                frame = parse_nifty50_fo_bhavcopy_csv(path)
+                if not frame.empty:
+                    out = frame.copy()
+                    out["date"] = out["date"].astype(str).str[:10]
+                    out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
+                    return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+    except Exception as exc:
+        logger.debug("FO bhavcopy deriv load failed: %s", exc)
+    return pd.DataFrame()
+
+
 def backfill_nse_fao_to_cold_tier(
     *,
     start: str = "2007-01-01",
@@ -782,6 +816,17 @@ def backfill_nse_fao_to_cold_tier(
     fetched_rows: list[dict] = []
     for idx, day in enumerate(missing):
         frame = fetch_nse_fao_participant_oi_for_date(day)
+        if frame.empty:
+            try:
+                from trade_integrations.dataflows.index_research.participant_oi_backfill import (
+                    fetch_participant_oi_day,
+                )
+
+                payload = fetch_participant_oi_day(day)
+                if payload:
+                    frame = pd.DataFrame([payload])
+            except Exception as exc:
+                logger.debug("nselib FAO fallback failed %s: %s", day, exc)
         if not frame.empty:
             fetched_rows.append(frame.iloc[0].to_dict())
             completed.add(day[:10])
@@ -816,9 +861,17 @@ def backfill_nse_fao_to_cold_tier(
 def load_nifty_oi_daily_frame(*, start: str, end: str) -> pd.DataFrame:
     """Load historic nifty OI daily (PCR proxy) from repo parquet."""
     try:
-        from trade_integrations.nse_browser.repository import load_repo_dataset
+        from pathlib import Path
 
-        frame = load_repo_dataset("nifty_oi_daily")
+        from trade_integrations.nse_browser.repository import repo_root
+
+        path = repo_root() / "nifty_oi_daily.parquet"
+        if path.is_file():
+            frame = pd.read_parquet(path)
+        else:
+            from trade_integrations.nse_browser.repository import load_repo_dataset
+
+            frame = load_repo_dataset("nifty_oi_daily")
     except Exception:
         return pd.DataFrame()
     if frame.empty or "date" not in frame.columns:
