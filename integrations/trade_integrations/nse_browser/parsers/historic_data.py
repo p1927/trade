@@ -1257,10 +1257,39 @@ def load_nifty_intraday(repo_root: Path, interval: str) -> pd.DataFrame:
 
 def load_india_news_sentiment_daily(repo_root: Path) -> pd.DataFrame:
     frame = _read_dataset(_dataset_path(repo_root, "india_news_sentiment_daily"))
-    if not frame.empty:
-        return frame
-    articles = parse_news_sentiment_csv(historic_data_dir(repo_root) / "News_sentiment_Jan2017_to_Apr2021.csv")
-    return aggregate_news_sentiment_daily(articles)
+    if frame.empty:
+        articles = parse_news_sentiment_csv(historic_data_dir(repo_root) / "News_sentiment_Jan2017_to_Apr2021.csv")
+        frame = aggregate_news_sentiment_daily(articles)
+
+    indic = _read_dataset(_dataset_path(repo_root, "indic_finance_sentiment_daily"))
+    if indic.empty:
+        indic_path = historic_data_dir(repo_root) / "indic_finance_sentiment_daily.csv"
+        if indic_path.is_file():
+            try:
+                indic = pd.read_csv(indic_path)
+            except Exception:
+                indic = pd.DataFrame()
+
+    if not indic.empty and "date" in indic.columns:
+        ext = indic.copy()
+        ext["date"] = ext["date"].astype(str).str[:10]
+        if "sentiment_mean" not in ext.columns:
+            for candidate in ("sentiment_mean", "sentiment", "mean_sentiment"):
+                if candidate in ext.columns:
+                    ext = ext.rename(columns={candidate: "sentiment_mean"})
+                    break
+        ext = ext[ext["date"] > "2021-04-15"]
+        if not ext.empty and "sentiment_mean" in ext.columns:
+            if frame.empty:
+                frame = ext.sort_values("date").drop_duplicates("date", keep="last")
+            else:
+                legacy = frame.copy()
+                legacy["date"] = legacy["date"].astype(str).str[:10]
+                combined = pd.concat([legacy, ext], ignore_index=True)
+                combined = combined.sort_values("date").drop_duplicates("date", keep="last")
+                frame = combined.reset_index(drop=True)
+
+    return frame
 
 
 def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:

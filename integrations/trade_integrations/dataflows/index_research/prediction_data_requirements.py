@@ -59,6 +59,26 @@ REQUIRED_COLD_DATASETS: dict[str, dict[str, Any]] = {
         "factors": NEWS_EVENT_FACTOR_KEYS,
         "tracks": ("event_overlay", "scenario_anchor", "quant_ridge when news ridge on"),
     },
+    "india_cpi_monthly_yoy": {
+        "source": "MoSPI CPI via historic_data repo",
+        "factors": ("cpi_yoy_proxy",),
+        "tracks": ("quant_ridge", "macro_only"),
+    },
+    "india_rbi_wss_weekly": {
+        "source": "RBI WSS Table 5 FBIL G-Sec yields",
+        "factors": ("india_10y", "india_91d_tbill", "india_term_spread"),
+        "tracks": ("quant_ridge", "macro_only"),
+    },
+    "nifty50_valuation_daily": {
+        "source": "Nifty50 PE/PB/DIV CSV + curated ingest",
+        "factors": ("nifty_pe", "nifty_pb", "nifty_dividend_yield", "equity_risk_premium"),
+        "tracks": ("quant_ridge", "macro_only"),
+    },
+    "india_news_sentiment_daily": {
+        "source": "News sentiment CSV + indic_finance extension",
+        "factors": ("index_sentiment",),
+        "tracks": ("quant_ridge", "bottom_up", "event_overlay"),
+    },
 }
 
 # Derived at panel materialize time (no separate cold dataset).
