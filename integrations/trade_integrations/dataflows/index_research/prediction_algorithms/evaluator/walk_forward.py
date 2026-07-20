@@ -33,19 +33,20 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.promotion
 from trade_integrations.dataflows.index_research.prediction_algorithms.registry import run_all_tracks
 from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
     BACKTEST_COMBINER_IDS,
-    BACKTEST_TRACK_IDS,
     CANONICAL_TRACK_IDS,
     COMBINER_THREE_TRACK_IDS,
     INVERSE_MAE_WINDOWS,
     SCOREBOARD_SCHEMA_VERSION,
     TRACK_BACKTEST_ELIGIBLE,
+    debate_backtest_eligible,
+    walk_forward_track_ids,
 )
 from trade_integrations.dataflows.index_research.prediction_algorithms.context_builder import build_track_context
 from trade_integrations.dataflows.index_research.views import classify_index_view
 
 logger = logging.getLogger(__name__)
 
-_WALK_FORWARD_TRACK_IDS = BACKTEST_TRACK_IDS
+_WALK_FORWARD_TRACK_IDS = walk_forward_track_ids()  # default; overridden per run with ticker
 _COMBINER_IDS = BACKTEST_COMBINER_IDS
 
 
@@ -143,6 +144,7 @@ def run_track_walk_forward(
     eval_rows: list[dict[str, Any]] = []
     hybrid_eval_dates = 0
     combiner_weight_history: list[dict[str, Any]] = []
+    track_ids = list(walk_forward_track_ids(ticker=ticker))
 
     for i in indices:
         train = frame.iloc[:i].copy()
@@ -191,6 +193,14 @@ def run_track_walk_forward(
             as_of_day=day_str,
         )
 
+        debate_payload = None
+        try:
+            from trade_integrations.context.hub import load_agent_debate_json
+
+            debate_payload = load_agent_debate_json(ticker.strip().upper(), as_of_day=day_str)
+        except Exception:
+            debate_payload = None
+
         ctx = build_track_context(
             ticker=ticker,
             spot=close,
@@ -199,12 +209,13 @@ def run_track_walk_forward(
             signals=signals,
             scenarios=scenarios,
             scenario_anchor=scenario_anchor,
+            debate_payload=debate_payload,
             as_of_day=day_str,
             legacy_prediction=legacy_pred,
         )
         ctx.model_artifact = artifact
 
-        tracks = run_all_tracks(ctx, track_ids=list(_WALK_FORWARD_TRACK_IDS))
+        tracks = run_all_tracks(ctx, track_ids=track_ids)
 
         for track_id, track in tracks.items():
             if not track.available:
@@ -286,11 +297,19 @@ def run_track_walk_forward(
     }
 
     track_summary = {tid: summarize_track_metrics(eval_rows, tid) for tid in CANONICAL_TRACK_IDS}
+    debate_eligible = debate_backtest_eligible(ticker)
     for tid, row in track_summary.items():
-        row["backtest_eligible"] = TRACK_BACKTEST_ELIGIBLE.get(tid, False)
+        eligible = TRACK_BACKTEST_ELIGIBLE.get(tid, False)
         if tid == "debate_numeric":
-            row["live_only"] = True
-            row.setdefault("note", "No historical debate archive — live hub only")
+            eligible = debate_eligible
+            row["live_only"] = not debate_eligible
+            row.setdefault(
+                "note",
+                "No historical debate archive — live hub only"
+                if not debate_eligible
+                else "Walk-forward uses agent_debate/history/{date}.json",
+            )
+        row["backtest_eligible"] = eligible
     combiner_summary = {
         cid: summarize_track_metrics(eval_rows, f"combiner:{cid}") for cid in _COMBINER_IDS
     }
