@@ -11,7 +11,11 @@ from typing import Any
 
 import pandas as pd
 
-from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+from trade_integrations.hub_storage.parquet_io import (
+    combine_first_numeric,
+    concat_dataframes,
+    concat_frames,
+)
 
 from trade_integrations.nse_browser.parsers.structural_adjustments import (
     apply_symbol_succession_to_weights_wide,
@@ -575,8 +579,9 @@ def parse_mrchartist_history_json(path: Path) -> pd.DataFrame:
     if long_oi is not None and short_oi is not None:
         frame["fii_fut_long_short_ratio"] = long_oi / short_oi.replace(0, pd.NA)
     if "fii_idx_put_oi" in frame.columns and "fii_idx_call_oi" in frame.columns:
-        frame["nifty_pcr"] = frame["nifty_pcr"].combine_first(
-            frame["fii_idx_put_oi"] / frame["fii_idx_call_oi"].replace(0, pd.NA)
+        frame["nifty_pcr"] = combine_first_numeric(
+            frame["nifty_pcr"],
+            frame["fii_idx_put_oi"] / frame["fii_idx_call_oi"].replace(0, pd.NA),
         )
     return frame.reset_index(drop=True)
 

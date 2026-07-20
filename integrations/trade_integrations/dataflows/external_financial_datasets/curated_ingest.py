@@ -18,7 +18,11 @@ from trade_integrations.dataflows.throttled_http import fetch_delay_sec, fetch_t
 
 import pandas as pd
 
-from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+from trade_integrations.hub_storage.parquet_io import (
+    combine_first_numeric,
+    concat_dataframes,
+    concat_frames,
+)
 from trade_integrations.http import HTTPError
 
 logger = logging.getLogger(__name__)
@@ -136,7 +140,7 @@ def _merge_valuation_panels(existing: pd.DataFrame, incoming: pd.DataFrame) -> p
     for col in right_idx.columns:
         if col not in merged.columns:
             merged[col] = pd.NA
-        merged[col] = right_idx[col].combine_first(merged[col])
+        merged[col] = combine_first_numeric(right_idx[col], merged[col])
     return merged.reset_index().sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
 
 
@@ -270,7 +274,10 @@ def ingest_nifty50_valuation_github(*, force_fetch: bool = False) -> dict[str, A
             merged = concat_frames(frames)
             merged = merged.merge(basic, on="date", how="outer", suffixes=("", "_basic"))
             if "nifty_close_basic" in merged.columns:
-                merged["nifty_close"] = merged["nifty_close"].combine_first(merged["nifty_close_basic"])
+                merged["nifty_close"] = combine_first_numeric(
+                    merged["nifty_close"],
+                    merged["nifty_close_basic"],
+                )
                 merged = merged.drop(columns=["nifty_close_basic"])
             panel = merged
         else:
@@ -691,7 +698,7 @@ def ingest_nifty_technicals_panel() -> dict[str, Any]:
             new_col = f"{col}_new"
             if new_col in merged.columns:
                 if col in merged.columns:
-                    merged[col] = merged[col].combine_first(merged[new_col])
+                    merged[col] = combine_first_numeric(merged[col], merged[new_col])
                 else:
                     merged[col] = merged[new_col]
                 merged = merged.drop(columns=[new_col])

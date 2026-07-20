@@ -8,7 +8,11 @@ from typing import Any
 
 import pandas as pd
 
-from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+from trade_integrations.hub_storage.parquet_io import (
+    combine_first_numeric,
+    concat_dataframes,
+    concat_frames,
+)
 
 _DERIV_COLUMNS: tuple[str, ...] = (
     "nifty_pcr",
@@ -111,13 +115,15 @@ def parse_nifty50_fo_bhavcopy_csv(
 
     if {"fii_idx_put_oi", "fii_idx_call_oi"}.issubset(grouped.columns):
         call_oi = grouped["fii_idx_call_oi"].replace(0, pd.NA)
-        grouped["nifty_pcr"] = grouped["nifty_pcr"].combine_first(
-            grouped["fii_idx_put_oi"] / call_oi
+        grouped["nifty_pcr"] = combine_first_numeric(
+            grouped["nifty_pcr"],
+            grouped["fii_idx_put_oi"] / call_oi,
         )
     if {"fii_idx_fut_long", "fii_idx_fut_short"}.issubset(grouped.columns):
         short = grouped["fii_idx_fut_short"].replace(0, pd.NA)
-        grouped["fii_fut_long_short_ratio"] = grouped["fii_fut_long_short_ratio"].combine_first(
-            grouped["fii_idx_fut_long"] / short
+        grouped["fii_fut_long_short_ratio"] = combine_first_numeric(
+            grouped["fii_fut_long_short_ratio"],
+            grouped["fii_idx_fut_long"] / short,
         )
 
     grouped["source"] = source

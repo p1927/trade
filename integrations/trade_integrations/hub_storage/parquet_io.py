@@ -40,6 +40,19 @@ def concat_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
     return merged
 
 
+def combine_first_numeric(left: pd.Series, right: pd.Series) -> pd.Series:
+    """Prefer non-null values in left; fill from right. Avoids pandas 2.x empty-entry FutureWarning."""
+    return pd.to_numeric(left, errors="coerce").combine_first(pd.to_numeric(right, errors="coerce"))
+
+
+def combine_first_strings(left: pd.Series, right: pd.Series) -> pd.Series:
+    """Prefer non-empty strings in left; fill from right."""
+    l = left.astype("string")
+    r = right.astype("string")
+    missing = l.isna() | (l.str.len() == 0)
+    return l.where(~missing, r)
+
+
 def append_daily_rows(
     path: Path,
     rows: list[dict[str, Any]],

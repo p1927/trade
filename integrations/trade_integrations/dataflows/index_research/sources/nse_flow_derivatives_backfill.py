@@ -10,7 +10,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+from trade_integrations.hub_storage.parquet_io import (
+    combine_first_numeric,
+    concat_dataframes,
+    concat_frames,
+)
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.history_ingest import _frames_for_concat
@@ -151,8 +155,9 @@ def fetch_mrchartist_flow_frame(
     if long_oi is not None and short_oi is not None:
         frame["fii_fut_long_short_ratio"] = long_oi / short_oi.replace(0, pd.NA)
     if "fii_idx_put_oi" in frame.columns and "fii_idx_call_oi" in frame.columns:
-        frame["nifty_pcr"] = frame["nifty_pcr"].combine_first(
-            frame["fii_idx_put_oi"] / frame["fii_idx_call_oi"].replace(0, pd.NA)
+        frame["nifty_pcr"] = combine_first_numeric(
+            frame["nifty_pcr"],
+            frame["fii_idx_put_oi"] / frame["fii_idx_call_oi"].replace(0, pd.NA),
         )
     return frame
 
@@ -622,8 +627,9 @@ def merge_flow_derivatives_frame(
 
     frame = combined.sort_values("date").drop_duplicates("date", keep="last")
     if "fii_idx_fut_long" in frame.columns and "fii_idx_fut_short" in frame.columns:
-        frame["fii_fut_long_short_ratio"] = frame["fii_fut_long_short_ratio"].combine_first(
-            frame["fii_idx_fut_long"] / frame["fii_idx_fut_short"].replace(0, pd.NA)
+        frame["fii_fut_long_short_ratio"] = combine_first_numeric(
+            frame["fii_fut_long_short_ratio"],
+            frame["fii_idx_fut_long"] / frame["fii_idx_fut_short"].replace(0, pd.NA),
         )
     return frame.reset_index(drop=True)
 

@@ -11,6 +11,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import combine_first_numeric, combine_first_strings
 from trade_integrations.dataflows.index_research.sources.india_rates import (
     cold_tier_credit_spread_series,
     cold_tier_rbi_rate_series,
@@ -198,7 +199,7 @@ def _merge_flow_columns(
             return
         mapped = out["date"].map(series)
         if col in out.columns:
-            out[col] = mapped.combine_first(out[col])
+            out[col] = combine_first_numeric(mapped, out[col])
         else:
             out[col] = mapped
 
@@ -316,12 +317,15 @@ def _append_india_10y_with_sources(out: pd.DataFrame, *, ten_y_override: str) ->
 
     mapped = pd.Series(values, index=dates)
     if "india_10y" in out.columns:
-        out["india_10y"] = out["date"].map(mapped).combine_first(pd.to_numeric(out["india_10y"], errors="coerce"))
+        out["india_10y"] = combine_first_numeric(out["date"].map(mapped), out["india_10y"])
     else:
         out["india_10y"] = out["date"].map(mapped)
     source_mapped = pd.Series(sources, index=dates)
     if "india_10y_source" in out.columns:
-        out["india_10y_source"] = out["date"].map(source_mapped).combine_first(out["india_10y_source"])
+        out["india_10y_source"] = combine_first_strings(
+            out["date"].map(source_mapped),
+            out["india_10y_source"],
+        )
     else:
         out["india_10y_source"] = out["date"].map(source_mapped)
     return out
@@ -345,7 +349,7 @@ def _append_repo_and_india_rates(frame: pd.DataFrame) -> pd.DataFrame:
             dates = out["date"].astype(str).tolist()
             rbi_tbill = cold_tier_rbi_rate_series(dates, "india_91d_tbill")
             if not rbi_tbill.empty and rbi_tbill.notna().any():
-                out["india_91d_tbill"] = out["date"].map(rbi_tbill).combine_first(out["repo_rate"])
+                out["india_91d_tbill"] = combine_first_numeric(out["date"].map(rbi_tbill), out["repo_rate"])
             else:
                 out["india_91d_tbill"] = out["repo_rate"]
 
@@ -362,9 +366,7 @@ def _append_repo_and_india_rates(frame: pd.DataFrame) -> pd.DataFrame:
         if not cold_credit.empty and cold_credit.notna().any():
             mapped = out["date"].map(cold_credit)
             if "india_credit_spread" in out.columns:
-                out["india_credit_spread"] = mapped.combine_first(
-                    pd.to_numeric(out["india_credit_spread"], errors="coerce")
-                )
+                out["india_credit_spread"] = combine_first_numeric(mapped, out["india_credit_spread"])
             else:
                 out["india_credit_spread"] = mapped
         elif "india_credit_spread" not in out.columns:

@@ -8,6 +8,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import combine_first_numeric
 from trade_integrations.dataflows.index_research.calendar_features import last_thursday_of_month
 
 
@@ -63,7 +64,7 @@ def enrich_adjusted_constituent_prices(frame: pd.DataFrame) -> pd.DataFrame:
     out["close_raw"] = pd.to_numeric(out["close"], errors="coerce")
     if "adj_close" in out.columns:
         adj = pd.to_numeric(out["adj_close"], errors="coerce")
-        out["close"] = adj.combine_first(out["close_raw"])
+        out["close"] = combine_first_numeric(adj, out["close_raw"])
         out["price_basis"] = np.where(adj.notna(), "adj_close", "close")
     else:
         out["price_basis"] = "close"
@@ -180,7 +181,7 @@ def adjust_institutional_flow_expiry_settlement(frame: pd.DataFrame) -> pd.DataF
         baseline = raw.where(~out["is_fo_monthly_expiry"]).rolling(5, min_periods=2).median().shift(1)
         adjusted = raw.copy()
         adjusted.loc[out["is_fo_monthly_expiry"]] = baseline.loc[out["is_fo_monthly_expiry"]]
-        adjusted = adjusted.combine_first(raw)
+        adjusted = combine_first_numeric(adjusted, raw)
         out[f"{col}_settlement_adj"] = adjusted
         out[col] = adjusted
 

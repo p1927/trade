@@ -9,7 +9,11 @@ from typing import Any
 
 import pandas as pd
 
-from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+from trade_integrations.hub_storage.parquet_io import (
+    combine_first_numeric,
+    concat_dataframes,
+    concat_frames,
+)
 
 
 def _parse_nse_date(raw: Any) -> str | None:
@@ -159,7 +163,7 @@ def overlay_derivative_columns(base: pd.DataFrame, overlay: pd.DataFrame) -> pd.
             continue
         mapped = out["date"].map(indexed[col])
         if col in out.columns:
-            out[col] = out[col].combine_first(mapped)
+            out[col] = combine_first_numeric(out[col], mapped)
         else:
             out[col] = mapped
 

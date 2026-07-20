@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import combine_first_numeric
 from trade_integrations.dataflows.index_research.history_store import save_history_dataset
 from trade_integrations.dataflows.index_research.technical_features import enrich_nifty_technical_columns
 
@@ -124,7 +125,7 @@ def backfill_macro_history(
         if not series.empty:
             mapped = macro["date"].map(series)
             if factor in macro.columns:
-                macro[factor] = mapped.combine_first(macro[factor])
+                macro[factor] = combine_first_numeric(mapped, macro[factor])
             else:
                 macro[factor] = mapped
             macro[factor] = macro[factor].ffill()
