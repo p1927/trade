@@ -399,6 +399,22 @@ def sync_nifty_ohlcv_overlay(*, start: str = "2006-01-01", end: str | None = Non
     return save_history_dataset("nifty_ohlcv_daily", merged)
 
 
+def sync_valuation_to_cold_tier() -> dict[str, Any]:
+    """Refresh nifty50_valuation_daily from repo historic_data drop (PE/PB/div yield)."""
+    try:
+        from trade_integrations.nse_browser.repository import repo_root
+
+        repo_path = repo_root() / "historic_data" / "nifty50_valuation_daily.parquet"
+        if not repo_path.is_file():
+            return {"status": "skipped", "reason": "missing_repo_parquet", "dataset": "nifty50_valuation_daily"}
+        frame = pd.read_parquet(repo_path)
+        if frame.empty or "date" not in frame.columns:
+            return {"status": "skipped", "reason": "empty_frame", "dataset": "nifty50_valuation_daily"}
+        return save_history_dataset("nifty50_valuation_daily", frame)
+    except Exception as exc:
+        return {"status": "error", "error": str(exc), "dataset": "nifty50_valuation_daily"}
+
+
 def sync_repo_to_cold_tier(
     *,
     start: str = "2006-01-01",
@@ -419,7 +435,9 @@ def sync_repo_to_cold_tier(
     results["historic_news"] = sync_historic_news_to_cold_tier()
     results["india_cpi"] = sync_india_cpi_to_cold_tier()
     results["india_rbi_wss"] = sync_india_rbi_wss_to_cold_tier()
+    results["nifty50_valuation_daily"] = sync_valuation_to_cold_tier()
     results["sector_index_daily"] = sync_sector_indices_to_cold_tier()
+    results["historic_derivatives"] = sync_historic_derivatives_to_cold_tier(start=start, end=end)
     results["repo_flows"] = sync_repo_flows_to_cold_tier(start=start, end=end)
 
     if include_macro_backfill:
@@ -457,4 +475,95 @@ def sync_repo_to_cold_tier(
 
     results["curated_market_data"] = ingest_curated_market_data(force_fetch=False, include_kaggle=True)
 
+    return {"status": "ok", "datasets": results}
+
+
+def sync_historic_derivatives_to_cold_tier(
+    *,
+    start: str = "2006-01-01",
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Merge historic OI / FO bhavcopy / MrChartist JSON into flow_derivatives_daily."""
+    from datetime import datetime, timezone
+
+    from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+        load_fo_bhavcopy_derivatives_frame,
+        load_nifty_oi_daily_frame,
+        load_participant_oi_cache_frame,
+    )
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+    from trade_integrations.nse_browser.parsers.historic_data import (
+        historic_data_dir,
+        parse_mrchartist_history_json,
+    )
+    from trade_integrations.nse_browser.repository import repo_root
+
+    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    existing = load_history_dataset("flow_derivatives_daily")
+    merged = existing.copy() if not existing.empty else pd.DataFrame()
+
+    for loader in (
+        lambda: load_nifty_oi_daily_frame(start=start, end=end_day),
+        lambda: load_fo_bhavcopy_derivatives_frame(start=start, end=end_day),
+    ):
+        frame = loader()
+        if frame is not None and not frame.empty:
+            merged = overlay_derivative_columns(merged, frame)
+
+    json_path = historic_data_dir(repo_root()) / "mrchartist_history_full.json"
+    if json_path.is_file():
+        mr = parse_mrchartist_history_json(json_path)
+        if not mr.empty:
+            mr = mr[(mr["date"] >= start[:10]) & (mr["date"] <= end_day)]
+            merged = overlay_derivative_columns(merged, mr)
+
+    poi = load_participant_oi_cache_frame(start=start[:10], end=end_day)
+    if poi is not None and not poi.empty:
+        merged = overlay_derivative_columns(merged, poi)
+
+    if merged.empty:
+        return {"status": "skipped", "reason": "empty_frame", "dataset": "flow_derivatives_daily"}
+
+    result = save_history_dataset("flow_derivatives_daily", merged)
+    pcr_days = int(merged["nifty_pcr"].notna().sum()) if "nifty_pcr" in merged.columns else 0
+    return {"status": "ok", "pcr_days": pcr_days, **result}
+
+
+def history_incremental_sync_enabled() -> bool:
+    import os
+
+    return os.getenv("HISTORY_INCREMENTAL_SYNC", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def run_history_incremental_sync(*, days: int = 30, explicit: bool = False) -> dict[str, Any]:
+    """Lightweight append: recent flows/derivatives/sector + hub mirror (no yfinance 2006 refetch)."""
+    from datetime import date, timedelta
+
+    if not history_incremental_sync_enabled():
+        return {"status": "skipped", "reason": "HISTORY_INCREMENTAL_SYNC disabled"}
+
+    end = date.today().isoformat()
+    start = (date.today() - timedelta(days=max(1, days))).isoformat()
+    results: dict[str, Any] = {
+        "start": start,
+        "end": end,
+        "sector_index_daily": sync_sector_indices_to_cold_tier(),
+        "historic_derivatives": sync_historic_derivatives_to_cold_tier(start=start, end=end),
+        "repo_flows": sync_repo_flows_to_cold_tier(start=start, end=end),
+    }
+    try:
+        from trade_integrations.nse_browser.repository import ingest_repository_to_hub
+
+        results["hub"] = ingest_repository_to_hub(
+            allow_live_fetch=False,
+            explicit=explicit,
+            skip_repo_sync=True,
+        )
+    except Exception as exc:
+        results["hub"] = {"status": "error", "error": str(exc)}
     return {"status": "ok", "datasets": results}

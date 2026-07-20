@@ -523,6 +523,16 @@ def flow_effective_start(frame: pd.DataFrame) -> str | None:
     return None
 
 
+def pcr_effective_start(frame: pd.DataFrame) -> str | None:
+    """First date with Nifty PCR in merged derivatives frame."""
+    if frame.empty or "nifty_pcr" not in frame.columns:
+        return None
+    hits = frame[frame["nifty_pcr"].notna()]
+    if hits.empty:
+        return None
+    return str(hits["date"].astype(str).iloc[0])[:10]
+
+
 def load_nse_browser_fii_dii_frame(start: str, end: str) -> pd.DataFrame:
     """Load FII/DII daily rows persisted by the nse_browser module."""
     try:
@@ -604,6 +614,7 @@ def merge_flow_derivatives_frame(
     cache = load_flow_cash_cache()
     fo_bhav = load_fo_bhavcopy_derivatives_frame(start=start, end=end)
     oi_daily = load_nifty_oi_daily_frame(start=start, end=end)
+    poi_cache = load_participant_oi_cache_frame(start=start, end=end)
     cold_deriv = pd.DataFrame()
     try:
         from trade_integrations.dataflows.index_research.history_store import load_history_dataset
@@ -616,45 +627,29 @@ def merge_flow_derivatives_frame(
     except Exception:
         cold_deriv = pd.DataFrame()
 
-    # Per-date last wins (listed low → high priority): FO bhavcopy, OI daily, flow cache,
-    # web snapshots, Mr. Chartist, NSE today, git repo parquet, nse_browser hub rows, cold-tier deriv.
-    frames = [
+    cash_frames = [
         f
-        for f in (
-            fo_bhav,
-            oi_daily,
-            cache,
-            web_flow,
-            mr,
-            latest,
-            nse,
-            repo_flow,
-            browser_flow,
-            cold_deriv,
-        )
+        for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow)
         if f is not None and not f.empty
     ]
-    if not frames:
+    if not cash_frames:
+        combined = pd.DataFrame(columns=["date"])
+    else:
+        combined = pd.concat(cash_frames, ignore_index=True)
+        combined["date"] = combined["date"].astype(str).str[:10]
+        combined = combined.sort_values("date").drop_duplicates("date", keep="last")
+
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+    for deriv_frame in (fo_bhav, oi_daily, cold_deriv, mr, cache, poi_cache):
+        if deriv_frame is not None and not deriv_frame.empty:
+            combined = overlay_derivative_columns(combined, deriv_frame)
+
+    combined = combined[(combined["date"] >= start[:10]) & (combined["date"] <= end[:10])]
+    if combined.empty:
         return pd.DataFrame()
 
-    combined = pd.concat(frames, ignore_index=True)
-    combined = combined.sort_values("date").drop_duplicates("date", keep="last")
-
-    dates = set(combined["date"].astype(str).tolist())
-    rows: list[dict] = []
-    for day in sorted(dates):
-        if day < start[:10] or day > end[:10]:
-            continue
-        day_rows = combined[combined["date"].astype(str) == day[:10]]
-        if day_rows.empty:
-            continue
-        merged = day_rows.iloc[-1].to_dict()
-        merged["date"] = day[:10]
-        rows.append(merged)
-
-    if not rows:
-        return pd.DataFrame()
-    frame = pd.DataFrame(rows).sort_values("date").drop_duplicates("date", keep="last")
+    frame = combined.sort_values("date").drop_duplicates("date", keep="last")
     if "fii_idx_fut_long" in frame.columns and "fii_idx_fut_short" in frame.columns:
         frame["fii_fut_long_short_ratio"] = frame["fii_fut_long_short_ratio"].combine_first(
             frame["fii_idx_fut_long"] / frame["fii_idx_fut_short"].replace(0, pd.NA)
@@ -740,6 +735,31 @@ def _save_fao_backfill_progress(completed: set[str]) -> None:
     )
 
 
+def load_participant_oi_cache_frame(*, start: str, end: str) -> pd.DataFrame:
+    """Load cached nselib participant OI JSON rows from hub."""
+    cache_dir = get_hub_dir() / "_data" / "participant_oi"
+    if not cache_dir.is_dir():
+        return pd.DataFrame()
+    rows: list[dict] = []
+    for path in sorted(cache_dir.glob("*.json")):
+        day = path.stem[:10]
+        if day < start[:10] or day > end[:10]:
+            continue
+        try:
+            import json
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and payload.get("date"):
+                rows.append(payload)
+        except Exception:
+            continue
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    frame["date"] = frame["date"].astype(str).str[:10]
+    return frame.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
 def load_fo_bhavcopy_derivatives_frame(*, start: str, end: str) -> pd.DataFrame:
     """Daily PCR / fut ratio from Nifty50 stock F&O bhavcopy CSV in repo."""
     try:
@@ -748,15 +768,18 @@ def load_fo_bhavcopy_derivatives_frame(*, start: str, end: str) -> pd.DataFrame:
         from trade_integrations.nse_browser.repository import repo_root
 
         root = historic_data_dir(repo_root())
-        for name in ("nifty50_fo_data_filtered.csv", "nifty50_fo_panel.csv"):
-            path = root / name
-            if path.is_file():
-                frame = parse_nifty50_fo_bhavcopy_csv(path)
-                if not frame.empty:
-                    out = frame.copy()
-                    out["date"] = out["date"].astype(str).str[:10]
-                    out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
-                    return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+        path = root / "nifty50_fo_data_filtered.csv"
+        if not path.is_file():
+            return pd.DataFrame()
+        frame = parse_nifty50_fo_bhavcopy_csv(path)
+        if frame.empty:
+            return pd.DataFrame()
+        out = frame.copy()
+        out["date"] = out["date"].astype(str).str[:10]
+        out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
+        if out.empty:
+            return pd.DataFrame()
+        return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
     except Exception as exc:
         logger.debug("FO bhavcopy deriv load failed: %s", exc)
     return pd.DataFrame()
@@ -864,16 +887,29 @@ def load_nifty_oi_daily_frame(*, start: str, end: str) -> pd.DataFrame:
     try:
         from pathlib import Path
 
-        from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
+        from trade_integrations.nse_browser.parsers.historic_data import (
+            historic_data_dir,
+            parse_nifty_fo_oi_daily_csv,
+        )
         from trade_integrations.nse_browser.repository import repo_root
 
-        path = historic_data_dir(repo_root()) / "nifty_oi_daily.parquet"
+        root = historic_data_dir(repo_root())
+        path = root / "nifty_oi_daily.parquet"
         if path.is_file():
             frame = pd.read_parquet(path)
         else:
             from trade_integrations.nse_browser.repository import load_repo_dataset
 
             frame = load_repo_dataset("nifty_oi_daily")
+
+        if frame.empty or len(frame) < 200:
+            for name in ("nifty_oi_ data.csv", "nifty_oi_data.csv", "Nifty_oi_data.csv"):
+                csv_path = root / name
+                if csv_path.is_file():
+                    parsed = parse_nifty_fo_oi_daily_csv(csv_path)
+                    if not parsed.empty:
+                        frame = parsed if frame.empty else pd.concat([frame, parsed], ignore_index=True)
+                        break
     except Exception:
         return pd.DataFrame()
     if frame.empty or "date" not in frame.columns:
@@ -883,6 +919,9 @@ def load_nifty_oi_daily_frame(*, start: str, end: str) -> pd.DataFrame:
     out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
     if "pcr" in out.columns and "nifty_pcr" not in out.columns:
         out["nifty_pcr"] = pd.to_numeric(out["pcr"], errors="coerce")
+    if "nifty_pcr" not in out.columns and {"put_oi", "call_oi"}.issubset(out.columns):
+        call_oi = pd.to_numeric(out["call_oi"], errors="coerce").replace(0, pd.NA)
+        out["nifty_pcr"] = pd.to_numeric(out["put_oi"], errors="coerce") / call_oi
     return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
 
 

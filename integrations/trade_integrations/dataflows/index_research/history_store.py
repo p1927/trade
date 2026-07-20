@@ -37,13 +37,30 @@ def panel_path(name: str) -> Path:
 
 def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
     try:
-        frame.to_parquet(path, index=False)
-    except ImportError:
-        frame.to_csv(path.with_suffix(".csv"), index=False)
-    csv_path = path.with_suffix(".csv")
-    if not csv_path.is_file():
-        frame.to_csv(csv_path, index=False)
+        import fcntl
+
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                try:
+                    frame.to_parquet(path, index=False)
+                except ImportError:
+                    frame.to_csv(path.with_suffix(".csv"), index=False)
+                csv_path = path.with_suffix(".csv")
+                if not csv_path.is_file():
+                    frame.to_csv(csv_path, index=False)
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        try:
+            frame.to_parquet(path, index=False)
+        except ImportError:
+            frame.to_csv(path.with_suffix(".csv"), index=False)
+        csv_path = path.with_suffix(".csv")
+        if not csv_path.is_file():
+            frame.to_csv(csv_path, index=False)
 
 
 def _read_parquet(path: Path) -> pd.DataFrame:

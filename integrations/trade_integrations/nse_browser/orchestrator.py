@@ -120,7 +120,7 @@ def get_nse_browser_data(
             "status": "error",
             "error": f"unknown dataset {dataset!r}",
             "available": list(DATASETS.keys()),
-            "aliases_hint": "fii, dii, fpi, nsdl, mf_sebi, fii_sebi, bulk_deals, delivery, pe_pb",
+            "aliases_hint": "fii, dii, fpi, nsdl, mf_sebi, fii_sebi, bulk_deals, delivery, pe_pb, sector_indices",
         }
 
     default_start, default_end = _default_dates()

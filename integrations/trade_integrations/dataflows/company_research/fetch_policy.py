@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
-_nifty50_batch: ContextVar[bool] = ContextVar("nifty50_batch", default=False)
+from trade_integrations.tiered_api.registry import TIERED_SOURCE_KEYS
 
-TIERED_SOURCE_KEYS = frozenset({"tapetide", "alpha_vantage"})
+_nifty50_batch: ContextVar[bool] = ContextVar("nifty50_batch", default=False)
 
 # News backends safe for parallel Nifty 50 batch (no paid/rate-tier quotas).
 NIFTY50_BATCH_NEWS_SOURCES: tuple[str, ...] = ("searxng",)

@@ -100,7 +100,16 @@ ARCHIVE_DATASETS: dict[str, dict[str, Any]] = {
 }
 
 # Canonical dataset ids exposed via MCP / orchestrator
-DatasetId = Literal["fii_dii", "fpi", "mf_sebi", "fii_sebi", "bulk_deals", "delivery", "pe_pb"]
+DatasetId = Literal[
+    "fii_dii",
+    "fpi",
+    "mf_sebi",
+    "fii_sebi",
+    "bulk_deals",
+    "delivery",
+    "pe_pb",
+    "sector_indices",
+]
 
 DATASET_ALIASES: dict[str, DatasetId] = {
     "fii_dii": "fii_dii",
@@ -131,6 +140,10 @@ DATASET_ALIASES: dict[str, DatasetId] = {
     "pe": "pe_pb",
     "pb": "pe_pb",
     "pe_ratio": "pe_pb",
+    "sector_indices": "sector_indices",
+    "sector_index": "sector_indices",
+    "sector": "sector_indices",
+    "nifty_sector": "sector_indices",
 }
 
 
@@ -187,6 +200,12 @@ DATASETS: dict[str, DatasetSpec] = {
         mission_id="market_archives",
         parquet_rel="archives/pe_pb.parquet",
         label="Index P/E P/B",
+    ),
+    "sector_indices": DatasetSpec(
+        id="sector_indices",
+        mission_id="market_archives",
+        parquet_rel="sector_index_daily.parquet",
+        label="NSE sector index OHLC (nifty50 CSV archive)",
     ),
 }
 

@@ -150,10 +150,13 @@ def load_repo_dataset(dataset_id: str) -> pd.DataFrame:
     if "date" in frame.columns:
         frame = frame.copy()
         frame["date"] = frame["date"].astype(str).str[:10]
+        dedupe_keys = ["date"]
+        if "index_slug" in frame.columns:
+            dedupe_keys.append("index_slug")
         if "granularity" in frame.columns:
             frame["granularity"] = frame["granularity"].fillna("daily").astype(str)
-            return frame.sort_values("date").drop_duplicates(["date", "granularity"], keep="last")
-        return frame.sort_values("date").drop_duplicates("date", keep="last")
+            dedupe_keys.append("granularity")
+        return frame.sort_values("date").drop_duplicates(dedupe_keys, keep="last")
     return frame
 
 
@@ -162,13 +165,20 @@ def ingest_repository_to_hub(
     allow_live_fetch: bool = True,
     enrich_days: int = 365,
     explicit: bool = False,
+    skip_repo_sync: bool = False,
 ) -> dict[str, int]:
     """Sync repo parquet files into reports/hub/_data/nse_browser/."""
-    sync_all_repo_seed_layers(
-        allow_live_fetch=allow_live_fetch,
-        enrich_days=enrich_days,
-        explicit=explicit,
-    )
+    if not skip_repo_sync:
+        sync_all_repo_seed_layers(
+            allow_live_fetch=allow_live_fetch,
+            enrich_days=enrich_days,
+            explicit=explicit,
+        )
+    return _ingest_repository_parquet_to_hub()
+
+
+def _ingest_repository_parquet_to_hub() -> dict[str, int]:
+    """Mirror repo parquet files into reports/hub/_data/nse_browser/ (no repo seed sync)."""
     counts: dict[str, int] = {}
     hub = hub_root()
     hub.mkdir(parents=True, exist_ok=True)

@@ -150,4 +150,8 @@ def load_aligned_panel_history(
         frame = frame[frame["date"] >= start[:10]]
     if days > 0:
         frame = frame.tail(max(1, days))
+    if not frame.empty:
+        from trade_integrations.dataflows.index_research.panel_enrichment import enrich_prediction_panel
+
+        frame = enrich_prediction_panel(frame, allow_live_fetch=False)
     return frame.reset_index(drop=True)

@@ -62,78 +62,86 @@ def upsert_daily_parquet(
     When a ``granularity`` column is present on incoming or existing rows, dedupe
     uses ``(date, granularity)`` so monthly aggregates can coexist with daily rows
     on the same calendar date (e.g. month-end).
+
+    When ``index_slug`` is present, dedupe uses ``(date, index_slug)`` so sector
+    index panels keep one row per index per day.
     """
     if frame.empty or date_col not in frame.columns:
         return 0
     incoming = frame.copy()
     incoming[date_col] = incoming[date_col].astype(str).str[:10]
     existing = _read_parquet_or_csv(path) if path.is_file() or path.with_suffix(".csv").is_file() else pd.DataFrame()
+
     use_granularity = "granularity" in incoming.columns or (
         not existing.empty and "granularity" in existing.columns
     )
+    use_index_slug = "index_slug" in incoming.columns or (
+        not existing.empty and "index_slug" in existing.columns
+    )
+
+    dedupe = [date_col]
+    if use_index_slug:
+        if "index_slug" not in incoming.columns:
+            incoming["index_slug"] = ""
+        if not existing.empty and "index_slug" not in existing.columns:
+            existing = existing.copy()
+            existing["index_slug"] = ""
+        dedupe.append("index_slug")
     if use_granularity:
         if "granularity" not in incoming.columns:
             incoming["granularity"] = "daily"
         if not existing.empty and "granularity" not in existing.columns:
             existing = existing.copy()
             existing["granularity"] = "daily"
-        dedupe = [date_col, "granularity"]
-    else:
-        dedupe = [date_col]
+        if "granularity" not in dedupe:
+            dedupe.append("granularity")
 
     if existing.empty:
         merged = incoming
     else:
         existing[date_col] = existing[date_col].astype(str).str[:10]
-        if use_granularity:
-            incoming_keys = {
-                tuple(str(row[c]) for c in dedupe) for _, row in incoming[dedupe].iterrows()
-            }
-            keep_mask = ~existing.apply(
-                lambda row: tuple(str(row[c]) for c in dedupe) in incoming_keys, axis=1
-            )
-            keep = existing[keep_mask]
-        else:
-            keep = existing[~existing[date_col].isin(incoming[date_col])]
+        incoming_keys = {tuple(str(row[c]) for c in dedupe) for _, row in incoming[dedupe].iterrows()}
+        keep_mask = ~existing.apply(
+            lambda row: tuple(str(row[c]) for c in dedupe) in incoming_keys, axis=1
+        )
+        keep = existing[keep_mask]
         merged = pd.concat([keep, incoming], ignore_index=True)
     merged = merged.sort_values(dedupe).drop_duplicates(dedupe, keep="last")
     _write_parquet(merged, path)
     return len(incoming)
 
 
+def _dedupe_daily_frame(frame: pd.DataFrame, *, date_col: str = "date") -> pd.DataFrame:
+    """Drop duplicate keys preserving last row per trading day (and slug/granularity when present)."""
+    if frame.empty or date_col not in frame.columns:
+        return frame
+    out = frame.copy()
+    out[date_col] = out[date_col].astype(str).str[:10]
+    dedupe = [date_col]
+    if "index_slug" in out.columns:
+        dedupe.append("index_slug")
+    if "granularity" in out.columns:
+        out["granularity"] = out["granularity"].fillna("daily").astype(str)
+        dedupe.append("granularity")
+    return out.sort_values(dedupe).drop_duplicates(dedupe, keep="last")
+
+
 def load_fii_dii_daily() -> pd.DataFrame:
     path = hub_root() / "fii_dii_daily.parquet"
     frame = _read_parquet_or_csv(path)
-    if frame.empty:
-        return frame
-    if "date" in frame.columns:
-        frame["date"] = frame["date"].astype(str).str[:10]
-    return frame.sort_values("date").drop_duplicates("date", keep="last")
+    return _dedupe_daily_frame(frame)
 
 
 def load_fpi_daily() -> pd.DataFrame:
     path = hub_root() / "fpi_daily.parquet"
     frame = _read_parquet_or_csv(path)
-    if frame.empty:
-        return frame
-    if "date" in frame.columns:
-        frame["date"] = frame["date"].astype(str).str[:10]
-    return frame.sort_values("date").drop_duplicates("date", keep="last")
+    return _dedupe_daily_frame(frame)
 
 
 def load_hub_parquet(name: str) -> pd.DataFrame:
     path = hub_root() / name
     frame = _read_parquet_or_csv(path)
-    if frame.empty:
-        return frame
-    if "date" in frame.columns:
-        frame = frame.copy()
-        frame["date"] = frame["date"].astype(str).str[:10]
-        if "granularity" in frame.columns:
-            frame["granularity"] = frame["granularity"].fillna("daily").astype(str)
-            return frame.sort_values("date").drop_duplicates(["date", "granularity"], keep="last")
-        return frame.sort_values("date").drop_duplicates("date", keep="last")
-    return frame
+    return _dedupe_daily_frame(frame)
 
 
 def load_archive_dataset(dataset: str) -> pd.DataFrame:
@@ -157,7 +165,7 @@ def load_dataset_frame(dataset_id: str) -> pd.DataFrame:
         return load_fii_dii_daily()
     if spec.id == "fpi":
         return load_fpi_daily()
-    if spec.id in ("mf_sebi", "fii_sebi"):
+    if spec.id in ("mf_sebi", "fii_sebi", "sector_indices"):
         return load_hub_parquet(Path(spec.parquet_rel).name)
     return load_archive_dataset(spec.id)
 

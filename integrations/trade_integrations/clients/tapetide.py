@@ -6,18 +6,18 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import requests
+
+from trade_integrations.tiered_api import TieredRequest, tiered_fetch
+from trade_integrations.tiered_api.errors import TieredApiBudgetExhausted, TieredApiDisabledError
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MCP_URL = "https://mcp.tapetide.com/mcp"
 REQUEST_TIMEOUT = 45
 PROFILE_CACHE_TTL_SEC = 15 * 60
-DISK_CACHE_DEFAULT_MINUTES = 60
 
 _profile_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _events_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -33,12 +33,14 @@ class TapetideRateLimitError(RuntimeError):
 
 
 def _token() -> str:
-    token = os.getenv("TAPETIDE_TOKEN", "").strip() or os.getenv("TAPETIDE_API_TOKEN", "").strip()
-    if not token:
+    from trade_integrations.tiered_api.registry import resolve_credential
+
+    try:
+        return resolve_credential("tapetide")
+    except Exception as exc:
         raise TapetideNotConfiguredError(
             "TAPETIDE_TOKEN is not set. Get a free token at https://tapetide.com/settings/tokens"
-        )
-    return token
+        ) from exc
 
 
 def is_enabled() -> bool:
@@ -47,11 +49,9 @@ def is_enabled() -> bool:
 
 
 def is_configured() -> bool:
-    try:
-        _token()
-        return True
-    except TapetideNotConfiguredError:
-        return False
+    from trade_integrations.tiered_api.registry import is_configured as tiered_configured
+
+    return tiered_configured("tapetide")
 
 
 def is_rate_limited() -> bool:
@@ -65,72 +65,6 @@ def is_active(*, batch: bool | None = None) -> bool:
 
 def _mcp_url() -> str:
     return os.getenv("TAPETIDE_MCP_URL", DEFAULT_MCP_URL).rstrip("/")
-
-
-def _disk_cache_dir() -> Path:
-    from trade_integrations.context.hub import get_hub_dir
-
-    return get_hub_dir() / "_data" / "tapetide_cache"
-
-
-def _disk_cache_minutes() -> int:
-    try:
-        return max(0, int(os.getenv("TAPETIDE_CACHE_MINUTES", str(DISK_CACHE_DEFAULT_MINUTES))))
-    except ValueError:
-        return DISK_CACHE_DEFAULT_MINUTES
-
-
-def _disk_cache_path(tool: str, symbol: str) -> Path:
-    safe = symbol.strip().upper().replace("/", "_")
-    return _disk_cache_dir() / f"{safe}_{tool}.json"
-
-
-def _load_disk_cache(tool: str, symbol: str) -> dict[str, Any] | None:
-    minutes = _disk_cache_minutes()
-    if minutes <= 0:
-        return None
-    path = _disk_cache_path(tool, symbol)
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    saved_at = payload.get("saved_at")
-    data = payload.get("data")
-    if not isinstance(data, dict) or not saved_at:
-        return None
-    try:
-        ts = datetime.fromisoformat(str(saved_at))
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        age_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
-    except ValueError:
-        return None
-    if age_min > minutes:
-        return None
-    return data
-
-
-def _save_disk_cache(tool: str, symbol: str, data: dict[str, Any]) -> None:
-    minutes = _disk_cache_minutes()
-    if minutes <= 0 or not data:
-        return
-    path = _disk_cache_path(tool, symbol)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {"saved_at": datetime.now(timezone.utc).isoformat(), "data": data},
-                indent=2,
-                default=str,
-            ),
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        logger.debug("Tapetide disk cache write failed for %s: %s", symbol, exc)
 
 
 def is_rate_limit_message(text: str) -> bool:
@@ -174,11 +108,14 @@ def _parse_mcp_body(text: str) -> dict[str, Any]:
     return json.loads(text)
 
 
-def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
-    """Invoke one Tapetide MCP tool and return parsed result content."""
-    if is_rate_limited():
-        raise TapetideRateLimitError("Tapetide calls paused after rate limit (retry in ~1 hour).")
-
+def _execute_mcp_call(tool_name: str, arguments: dict[str, Any]) -> Any:
+    """Direct HTTP MCP call (invoked only on tiered_fetch hub miss)."""
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
     response = requests.post(
         _mcp_url(),
         headers={
@@ -186,12 +123,7 @@ def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         },
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        },
+        json=body,
         timeout=REQUEST_TIMEOUT,
     )
     if response.status_code == 401:
@@ -226,6 +158,38 @@ def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         return {"raw_text": combined}
 
 
+def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
+    """Invoke one Tapetide MCP tool via tiered queue + hub cache."""
+    if is_rate_limited():
+        raise TapetideRateLimitError("Tapetide calls paused after rate limit (retry in ~1 hour).")
+
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+    req = TieredRequest(
+        method="POST",
+        url=_mcp_url(),
+        body=json.dumps(body, sort_keys=True, separators=(",", ":")),
+        extra={"tool": tool_name, "arguments": arguments},
+    )
+
+    try:
+        result = tiered_fetch(
+            "tapetide",
+            req,
+            lambda: _execute_mcp_call(tool_name, arguments),
+        )
+        return result.data
+    except TieredApiBudgetExhausted as exc:
+        _mark_rate_limited(str(exc))
+        raise TapetideRateLimitError(str(exc)) from exc
+    except TieredApiDisabledError:
+        raise
+
+
 def _cache_get(cache: dict[str, tuple[float, dict[str, Any]]], key: str) -> dict[str, Any] | None:
     row = cache.get(key)
     if not row:
@@ -243,16 +207,10 @@ def _cache_set(cache: dict[str, tuple[float, dict[str, Any]]], key: str, payload
 
 def get_company_profile(symbol: str, *, include_peers: bool = True) -> dict[str, Any]:
     symbol_upper = symbol.upper()
-    # One MCP profile call per symbol (always include peers); callers ignore peers when unused.
     cache_key = f"{symbol_upper}:profile"
     cached = _cache_get(_profile_cache, cache_key)
     if cached is not None:
         return cached
-
-    disk_cached = _load_disk_cache("profile_peers", symbol_upper)
-    if disk_cached is not None:
-        _cache_set(_profile_cache, cache_key, disk_cached)
-        return disk_cached
 
     data = call_tool(
         "get_company_profile",
@@ -264,7 +222,6 @@ def get_company_profile(symbol: str, *, include_peers: bool = True) -> dict[str,
         raise TapetideRateLimitError(str(result["raw_text"]))
 
     _cache_set(_profile_cache, cache_key, result)
-    _save_disk_cache("profile_peers", symbol_upper, result)
     return result
 
 
@@ -274,11 +231,6 @@ def get_stock_events(symbol: str, *, limit: int = 20) -> dict[str, Any]:
     cached = _cache_get(_events_cache, cache_key)
     if cached is not None:
         return cached
-
-    disk_cached = _load_disk_cache("events", symbol_upper)
-    if disk_cached is not None:
-        _cache_set(_events_cache, cache_key, disk_cached)
-        return disk_cached
 
     data = call_tool(
         "get_stock_events",
@@ -290,5 +242,4 @@ def get_stock_events(symbol: str, *, limit: int = 20) -> dict[str, Any]:
         raise TapetideRateLimitError(str(result["raw_text"]))
 
     _cache_set(_events_cache, cache_key, result)
-    _save_disk_cache("events", symbol_upper, result)
     return result

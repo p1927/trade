@@ -52,6 +52,9 @@ Data (historic / prediction cold tier):
   data ingest [--offline] [--incremental] [--audit]   Load historic_data + cold tier
   data audit [--write]                              Prediction factor coverage audit
 
+Tiered APIs (queue + hub cache):
+  tiered-api status [--json]   Per-source daily budget, queue depth, config
+
 Maintenance:
   sync [target]         Sync submodules (all|tradingagents|openalgo|status)
   sync-ports            Apply stack/ports.yaml to .env, compose, OpenAlgo/Vibe
@@ -311,6 +314,25 @@ EOF
         ;;
       *)
         echo "Unknown data subcommand: $sub (try: ingest, audit)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  tiered-api)
+    sub="${1:-status}"
+    shift || true
+    py="$ROOT/.venv/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    case "$sub" in
+      status)
+        exec "$py" "$ROOT/scripts/tiered_api_status.py" "$@"
+        ;;
+      -h|--help|help|"")
+        echo "Usage: trade tiered-api status [--json]"
+        ;;
+      *)
+        echo "Unknown tiered-api subcommand: $sub (try: status)" >&2
         exit 1
         ;;
     esac

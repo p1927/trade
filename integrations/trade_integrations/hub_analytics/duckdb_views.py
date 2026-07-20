@@ -9,6 +9,7 @@ from typing import Any
 import duckdb
 
 from trade_integrations.context.hub import get_hub_dir
+from trade_integrations.dataflows.index_research.history_store import get_history_dir, get_panel_dir
 
 HUB_VIEWS = (
     "index_predictions",
@@ -26,6 +27,15 @@ HUB_VIEWS = (
     "capture_derivatives",
     "capture_flows",
     "capture_vix",
+    "history_india_macro_annual",
+    "history_nifty_ohlcv",
+    "history_macro_daily",
+    "history_flows",
+    "history_sector_indices",
+    "history_panel",
+    "history_manifest",
+    "tiered_api_manifest",
+    "tiered_api_ledger",
 )
 
 _BUILTIN_QUERIES: dict[str, str] = {
@@ -141,6 +151,17 @@ _BUILTIN_QUERIES: dict[str, str] = {
         ORDER BY published_at DESC
         LIMIT 50
     """,
+    "history_coverage": """
+        SELECT
+            f.dataset,
+            f.rows,
+            f.date_range.start AS start_date,
+            f.date_range.end AS end_date,
+            f.updated_at
+        FROM history_manifest,
+        unnest(files) AS t(f)
+        ORDER BY f.dataset
+    """,
 }
 
 _FORBIDDEN_SQL = re.compile(
@@ -187,6 +208,20 @@ def _register_daily_glob_view(
         )
     else:
         con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT NULL WHERE false")
+
+
+def history_data_paths() -> dict[str, Path]:
+    history = get_history_dir()
+    panel = get_panel_dir()
+    return {
+        "history_india_macro_annual": history / "india_macro_annual.parquet",
+        "history_nifty_ohlcv": history / "nifty_ohlcv_daily.parquet",
+        "history_macro_daily": history / "macro_daily.parquet",
+        "history_flows": history / "flow_cash_daily.parquet",
+        "history_sector_indices": history / "sector_index_daily.parquet",
+        "history_panel": panel / "NIFTY_2006_present.parquet",
+        "history_manifest": history / "manifest.json",
+    }
 
 
 def hub_data_paths() -> dict[str, Path]:
@@ -277,6 +312,53 @@ def register_hub_views(con: duckdb.DuckDBPyConnection) -> list[str]:
     ):
         _register_daily_glob_view(con, view_name, paths[key])
         registered.append(view_name)
+
+    history_paths = history_data_paths()
+    for view_name, path in history_paths.items():
+        if view_name == "history_manifest":
+            resolved = _resolve_readable_path(path)
+            if resolved is None:
+                con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT NULL WHERE false")
+            else:
+                escaped = str(resolved).replace("'", "''")
+                con.execute(
+                    f"CREATE OR REPLACE VIEW {view_name} AS "
+                    f"SELECT * FROM read_json_auto('{escaped}')"
+                )
+        else:
+            resolved = _resolve_readable_path(path)
+            if resolved is None:
+                con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT NULL WHERE false")
+            else:
+                source = _read_fn(path)
+                con.execute(f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM {source}")
+        registered.append(view_name)
+
+    tiered_root = get_hub_dir() / "_data" / "tiered_api"
+    manifest_path = tiered_root / "manifest.json"
+    manifest_resolved = _resolve_readable_path(manifest_path)
+    if manifest_resolved is None:
+        con.execute("CREATE OR REPLACE VIEW tiered_api_manifest AS SELECT NULL WHERE false")
+    else:
+        escaped = str(manifest_resolved).replace("'", "''")
+        con.execute(
+            f"CREATE OR REPLACE VIEW tiered_api_manifest AS "
+            f"SELECT * FROM read_json_auto('{escaped}')"
+        )
+    registered.append("tiered_api_manifest")
+
+    ledger_glob = tiered_root / "ledger" / "*" / "*.json"
+    ledger_resolved = _resolve_readable_path(ledger_glob)
+    if ledger_resolved is None:
+        con.execute("CREATE OR REPLACE VIEW tiered_api_ledger AS SELECT NULL WHERE false")
+    else:
+        escaped = str(ledger_glob).replace("'", "''")
+        con.execute(
+            f"CREATE OR REPLACE VIEW tiered_api_ledger AS "
+            f"SELECT * FROM read_json_auto('{escaped}', union_by_name=true)"
+        )
+    registered.append("tiered_api_ledger")
+
     return registered
 
 
