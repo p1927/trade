@@ -35,6 +35,7 @@ def load_cached(
     req_hash: str,
     *,
     force: bool = False,
+    allow_stale: bool = False,
 ) -> dict[str, Any] | None:
     """Return cached payload dict or None if miss/stale."""
     if force:
@@ -59,10 +60,10 @@ def load_cached(
     except ValueError:
         return None
     ttl_h = hub_ttl_hours(source)
-    if ttl_h <= 0:
+    if ttl_h <= 0 and not allow_stale:
         return None
     age = datetime.now(timezone.utc) - ts
-    if age > timedelta(hours=ttl_h):
+    if ttl_h > 0 and age > timedelta(hours=ttl_h) and not allow_stale:
         return None
     return envelope
 

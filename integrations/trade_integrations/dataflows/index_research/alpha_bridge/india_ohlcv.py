@@ -11,6 +11,18 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _normalize_nse_symbol(symbol: str) -> str | None:
+    """Map aliases and skip symbols with no India OHLCV source."""
+    from trade_integrations.openalgo.symbols import _INDMONEY_UNAVAILABLE, _OPENALGO_ALIASES
+
+    base = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
+    if not base or base in _INDMONEY_UNAVAILABLE:
+        return None
+    if base in _OPENALGO_ALIASES:
+        base = _OPENALGO_ALIASES[base][0]
+    return base
+
+
 def _normalize_history_frame(raw: pd.DataFrame) -> pd.DataFrame:
     if raw is None or raw.empty:
         return pd.DataFrame(columns=["date", "close"])
@@ -110,7 +122,9 @@ def load_symbols_ohlcv(
 
     out: dict[str, pd.DataFrame] = {}
     for idx, symbol in enumerate(symbols):
-        base = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
+        base = _normalize_nse_symbol(symbol)
+        if not base:
+            continue
         frame = load_symbol_ohlcv(base, start_date=start_date, end_date=end_date)
         if not frame.empty:
             out[base] = frame

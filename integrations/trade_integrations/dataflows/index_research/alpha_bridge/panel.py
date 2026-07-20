@@ -12,24 +12,10 @@ from trade_integrations.dataflows.index_research.constituents import load_nifty5
 
 logger = logging.getLogger(__name__)
 
-_NIFTY50_FALLBACK = (
-    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "SBIN", "BHARTIARTL",
-    "KOTAKBANK", "LT", "HINDUNILVR", "AXISBANK", "BAJFINANCE", "ASIANPAINT", "MARUTI",
-    "SUNPHARMA", "TITAN", "ULTRACEMCO", "NESTLEIND", "WIPRO", "HCLTECH", "POWERGRID",
-    "NTPC", "TATAMOTORS", "M&M", "ADANIENT", "JSWSTEEL", "TATASTEEL", "COALINDIA",
-    "ONGC", "GRASIM", "TECHM", "HDFCLIFE", "SBILIFE", "BAJAJFINSV", "INDUSINDBK",
-    "CIPLA", "DRREDDY", "APOLLOHOSP", "EICHERMOT", "HEROMOTOCO", "BRITANNIA",
-    "DIVISLAB", "TATACONSUM", "BPCL", "HINDALCO", "ADANIPORTS", "LTIM", "BEL",
-)
-
 
 def _constituent_symbols() -> list[str]:
     rows = load_nifty50_constituents()
-    symbols = [row.symbol.upper().strip() for row in rows if row.symbol]
-    if symbols:
-        return symbols
-    logger.warning("alpha_bridge: using Nifty 50 fallback symbol list")
-    return list(_NIFTY50_FALLBACK)
+    return [row.symbol.upper().strip() for row in rows if row.symbol]
 
 
 def _wide_from_long(
@@ -68,8 +54,9 @@ def build_nifty50_panel(
     from trade_integrations.dataflows.index_research.alpha_bridge.india_ohlcv import (
         load_symbols_ohlcv,
     )
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
 
-    end = (as_of_day or pd.Timestamp.today().date().isoformat())[:10]
+    end = (as_of_day or india_trading_date_iso())[:10]
     days = lookback if lookback is not None else lookback_days()
     start = (pd.Timestamp(end) - pd.Timedelta(days=days)).date().isoformat()
 

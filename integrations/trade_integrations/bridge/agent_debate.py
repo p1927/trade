@@ -107,11 +107,23 @@ def run_agent_debate(
         infer_debate_asset_type,
     )
     from trade_integrations.context.hub import save_agent_debate
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
 
     display_ticker = ticker.strip().upper()
     resolved_asset = infer_debate_asset_type(display_ticker, asset_type)
     graph_ticker = to_tradingagents_ticker(display_ticker)
-    analysis_date = trade_date or datetime.now().strftime("%Y-%m-%d")
+    analysis_date = trade_date or india_trading_date_iso()
+
+    if not is_index_ticker(display_ticker):
+        try:
+            from tradingagents.dataflows.errors import NoMarketDataError
+            from tradingagents.dataflows.stockstats_utils import load_ohlcv
+
+            load_ohlcv(graph_ticker, analysis_date)
+        except NoMarketDataError as exc:
+            raise ValueError(
+                f"Agent debate unavailable for {display_ticker}: no OHLCV history"
+            ) from exc
 
     config = _build_graph_config()
     if is_index_ticker(display_ticker):

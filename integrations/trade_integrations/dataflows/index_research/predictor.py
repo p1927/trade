@@ -538,8 +538,9 @@ def predict_nifty(
 ) -> dict[str, Any]:
     """Hybrid forecast: bottom-up constituent attribution + macro Ridge delta."""
     from trade_integrations.dataflows.index_research.event_overlay import enrich_macro_with_news_features
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
 
-    as_of = (as_of_day or datetime.now(timezone.utc).date().isoformat())[:10]
+    as_of = (as_of_day or india_trading_date_iso())[:10]
     macro_factors = enrich_macro_with_news_features(macro_factors, as_of_day=as_of)
 
     artifact = model_artifact or load_stored_model_artifact()
@@ -637,7 +638,7 @@ def predict_nifty(
         "direction_view": direction_view,
         "direction_confidence": direction_prob,
         "direction_confidence_raw": direction_prob_raw,
-        "direction_model_score": direction_prob,
+        "direction_model_score": direction_prob_raw,
         "sign_conflict": sign_conflict,
         "direction_hit_rate_oos": walk_forward_hit,
         "direction_hit_rate_walk_forward": walk_forward_hit,

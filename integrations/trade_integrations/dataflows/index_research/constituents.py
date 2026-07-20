@@ -19,6 +19,17 @@ logger = logging.getLogger(__name__)
 
 _EQUAL_WEIGHT = 1.0 / 50.0
 
+# Last-resort fallback when nselib and data/nse/historic_data are unavailable.
+_NIFTY50_HARDCODED: tuple[str, ...] = (
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK", "BAJAJ-AUTO",
+    "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL", "CIPLA", "COALINDIA", "DRREDDY",
+    "EICHERMOT", "ETERNAL", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE", "HINDALCO",
+    "HINDUNILVR", "ICICIBANK", "ITC", "INFY", "INDIGO", "JSWSTEEL", "JIOFIN", "KOTAKBANK",
+    "LT", "M&M", "MARUTI", "MAXHEALTH", "NTPC", "NESTLEIND", "ONGC", "POWERGRID",
+    "RELIANCE", "SBILIFE", "SHRIRAMFIN", "SBIN", "SUNPHARMA", "TCS", "TATACONSUM",
+    "TMPV", "TATASTEEL", "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO",
+)
+
 
 def get_weights_cache_path() -> Path:
     """Return path to cached Nifty 50 weights JSON."""
@@ -76,6 +87,65 @@ def _save_weights_cache(
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _symbols_from_json_payload(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("symbols")
+    if not isinstance(raw, list):
+        return []
+    return [str(symbol).upper().strip() for symbol in raw if str(symbol).strip()]
+
+
+def _rows_from_symbols(symbols: list[str], *, source: str = "local") -> list[dict[str, str]]:
+    return [
+        {"symbol": symbol, "name": symbol, "sector": "", "source": source}
+        for raw in symbols
+        if (symbol := str(raw).upper().strip())
+    ]
+
+
+def _fetch_local_nifty50_rows() -> list[dict[str, str]]:
+    """Fallback when nselib is unavailable — repo JSON/CSV then hub curated cache."""
+    from trade_integrations.dataflows.external_financial_datasets.curated_ingest import hub_dir
+    from trade_integrations.nse_browser.parsers.historic_data import (
+        _LOCAL_NIFTY50_LIST_NAMES,
+        historic_data_dir,
+        parse_ind_nifty50_list_csv,
+    )
+    from trade_integrations.nse_browser.repository import repo_root
+
+    hist_dir = historic_data_dir(repo_root())
+    candidates: list[tuple[Path, str]] = [
+        (hist_dir / "ind_nifty50_constituents_current.json", "nse_historic_data_ind_nifty50list"),
+        (hub_dir() / "nifty50" / "constituents_current.json", "hub_constituents_current"),
+    ]
+    for path, source in candidates:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.info("constituents local JSON unreadable (%s): %s", path, exc)
+            continue
+        if not isinstance(payload, dict):
+            continue
+        symbols = _symbols_from_json_payload(payload)
+        if symbols:
+            return _rows_from_symbols(symbols, source=source)
+
+    for name in _LOCAL_NIFTY50_LIST_NAMES:
+        parsed = parse_ind_nifty50_list_csv(hist_dir / name)
+        if parsed.get("status") == "ok" and parsed.get("symbols"):
+            return _rows_from_symbols(list(parsed["symbols"]), source="ind_nifty50list_csv")
+    return []
+
+
+def nifty50_fallback_symbols() -> tuple[str, ...]:
+    """Last-resort symbol list when load_nifty50_constituents returns empty."""
+    rows = _fetch_local_nifty50_rows()
+    if rows:
+        return tuple(row["symbol"] for row in rows)
+    return _NIFTY50_HARDCODED
+
+
 def _fetch_nselib_rows() -> list[dict[str, str]]:
     try:
         from nselib import capital_market
@@ -111,6 +181,29 @@ def _fetch_nselib_rows() -> list[dict[str, str]]:
             }
         )
     return rows
+
+
+def _fetch_hardcoded_nifty50_rows() -> list[dict[str, str]]:
+    return _rows_from_symbols(list(_NIFTY50_HARDCODED), source="hardcoded")
+
+
+def _fetch_nifty50_rows() -> tuple[list[dict[str, str]], str]:
+    rows = _fetch_nselib_rows()
+    if rows:
+        return rows, "nselib"
+    rows = _fetch_local_nifty50_rows()
+    if rows:
+        logger.warning(
+            "Nifty 50 constituents: nselib unavailable; using local historic_data (%d symbols)",
+            len(rows),
+        )
+        return rows, "local_historic_data"
+    rows = _fetch_hardcoded_nifty50_rows()
+    logger.warning(
+        "Nifty 50 constituents: nselib and local data unavailable; using hardcoded fallback (%d symbols)",
+        len(rows),
+    )
+    return rows, "hardcoded"
 
 
 def _resolve_weights(
@@ -180,7 +273,7 @@ def _merge_constituents(
 
 def load_nifty50_constituents(*, force_refresh: bool = False) -> list[ConstituentRow]:
     """Load Nifty 50 constituents with normalized index weights."""
-    rows = _fetch_nselib_rows()
+    rows, _source_tier = _fetch_nifty50_rows()
     if not rows:
         return []
 

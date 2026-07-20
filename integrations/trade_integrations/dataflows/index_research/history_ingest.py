@@ -42,13 +42,26 @@ def _source_rank(frame: pd.DataFrame) -> pd.Series:
     return frame["source"].astype(str).map(lambda s: _SOURCE_RANK.get(s, 0)).fillna(0)
 
 
+def _frames_for_concat(frames: list[pd.DataFrame]) -> list[pd.DataFrame]:
+    """Drop empty frames and all-NA columns before concat (pandas 2.x compat)."""
+    out: list[pd.DataFrame] = []
+    for frame in frames:
+        if frame is None or frame.empty:
+            continue
+        trimmed = frame.dropna(how="all", axis=1)
+        if trimmed.empty:
+            continue
+        out.append(trimmed)
+    return out
+
+
 def merge_with_priority(
     frames: list[pd.DataFrame],
     *,
     on: list[str],
 ) -> pd.DataFrame:
     """Concat frames, prefer higher-ranked source on duplicate keys."""
-    valid = [f for f in frames if f is not None and not f.empty]
+    valid = _frames_for_concat(frames)
     if not valid:
         return pd.DataFrame()
     combined = pd.concat(valid, ignore_index=True)

@@ -386,8 +386,20 @@ def parse_nifty_fo_oi_daily_csv(path: Path) -> pd.DataFrame:
     date_col = cols.get("date")
     if date_col is None:
         return pd.DataFrame()
-    work = pd.DataFrame({"date": raw[date_col].astype(str).str.replace("_", "-", regex=False)})
-    work["date"] = pd.to_datetime(work["date"], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
+    raw_dates = raw[date_col].astype(str).str.strip()
+    intraday_mask = raw_dates.str.match(r"^\d{2}_\d{2}_\d{2}$", na=False)
+    parsed_dates = pd.Series(pd.NaT, index=raw_dates.index, dtype="datetime64[ns]")
+    if intraday_mask.any():
+        parsed_dates.loc[intraday_mask] = pd.to_datetime(
+            raw_dates.loc[intraday_mask],
+            format="%d_%m_%y",
+            errors="coerce",
+        )
+    iso_mask = ~intraday_mask
+    if iso_mask.any():
+        iso_values = raw_dates.loc[iso_mask].str.replace("_", "-", regex=False)
+        parsed_dates.loc[iso_mask] = pd.to_datetime(iso_values, errors="coerce", dayfirst=True)
+    work = pd.DataFrame({"date": parsed_dates.dt.strftime("%Y-%m-%d")})
     for src, dest in (("calloi", "call_oi"), ("putoi", "put_oi"), ("pcr", "pcr"), ("niftyspot", "nifty_spot")):
         col = cols.get(src)
         if col:

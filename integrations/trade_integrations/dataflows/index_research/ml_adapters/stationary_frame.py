@@ -43,5 +43,5 @@ def to_stationary_pct_change(
         if col not in out.columns:
             continue
         series = pd.to_numeric(out[col], errors="coerce")
-        out[f"{col}{_STATIONARY_SUFFIX}"] = series.pct_change(periods=periods) * 100.0
+        out[f"{col}{_STATIONARY_SUFFIX}"] = series.pct_change(periods=periods, fill_method=None) * 100.0
     return out

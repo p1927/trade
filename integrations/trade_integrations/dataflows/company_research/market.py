@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date, datetime
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 from trade_integrations.dataflows.openalgo import resolve_openalgo_symbol
 
@@ -132,3 +134,23 @@ def normalize_ticker(
         yfinance_symbol=yfinance_symbol,
         display_symbol=display_symbol,
     )
+
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def india_now() -> datetime:
+    """Current wall-clock time in Asia/Kolkata (IST)."""
+    return datetime.now(IST)
+
+
+def india_trading_date(*, now: datetime | None = None) -> date:
+    """Calendar date in IST — use for NSE/Nifty pipeline as_of_day."""
+    instant = now or india_now()
+    if instant.tzinfo is None:
+        return instant.date()
+    return instant.astimezone(IST).date()
+
+
+def india_trading_date_iso(*, now: datetime | None = None) -> str:
+    return india_trading_date(now=now).isoformat()

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from trade_integrations.tiered_api import budget, hub_store, queue
-from trade_integrations.tiered_api.errors import TieredApiDisabledError
+from trade_integrations.tiered_api.errors import TieredApiBudgetExhausted, TieredApiDisabledError
 from trade_integrations.tiered_api.registry import get_spec, is_configured, tiered_api_enabled
 from trade_integrations.tiered_api.request_key import TieredRequest, request_hash
 
@@ -90,7 +90,23 @@ def tiered_fetch(
 
     bypass_budget = force and _force_bypasses_budget()
     if not bypass_budget:
-        budget.check_budget_headroom(source)
+        try:
+            budget.check_budget_headroom(source)
+        except TieredApiBudgetExhausted:
+            stale = hub_store.load_cached(source, req_hash, allow_stale=True)
+            if stale is not None:
+                logger.info(
+                    "tiered_api %s: daily budget exhausted; serving stale hub cache",
+                    source,
+                )
+                return TieredResult(
+                    data=stale.get("data"),
+                    cache_hit=True,
+                    source=source.strip().lower(),
+                    req_hash=req_hash,
+                    budget=budget.get_budget_status(source),
+                )
+            raise
 
     queue.acquire_drain_slot(source)
     try:

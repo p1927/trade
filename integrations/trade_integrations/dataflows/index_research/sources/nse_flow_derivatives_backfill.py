@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
+from trade_integrations.dataflows.index_research.history_ingest import _frames_for_concat
 
 logger = logging.getLogger(__name__)
 
@@ -587,7 +588,7 @@ def fetch_web_flow_cash_frame(
         pass
     if not frames:
         return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
+    combined = pd.concat(_frames_for_concat(frames), ignore_index=True)
     combined = combined.sort_values("date").drop_duplicates("date", keep="last")
     return combined.reset_index(drop=True)
 
@@ -627,11 +628,9 @@ def merge_flow_derivatives_frame(
     except Exception:
         cold_deriv = pd.DataFrame()
 
-    cash_frames = [
-        f
-        for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow)
-        if f is not None and not f.empty
-    ]
+    cash_frames = _frames_for_concat(
+        [f for f in (cache, web_flow, mr, latest, nse, repo_flow, browser_flow) if f is not None]
+    )
     if not cash_frames:
         combined = pd.DataFrame(columns=["date"])
     else:
@@ -881,7 +880,7 @@ def backfill_nse_fao_to_cold_tier(
                 batch_overlay = pd.DataFrame(fetched_rows)
                 existing = load_history_dataset("flow_derivatives_daily")
                 merged_batch = overlay_derivative_columns(existing, batch_overlay)
-                save_history_dataset("flow_derivatives_daily", merged_batch)
+                save_history_dataset("flow_derivatives_daily", merged_batch, merge=False)
                 batch_start = min(r["date"][:10] for r in fetched_rows if r.get("date"))
                 batch_end = max(r["date"][:10] for r in fetched_rows if r.get("date"))
                 try:
@@ -926,7 +925,7 @@ def backfill_nse_fao_to_cold_tier(
         overlay = pd.DataFrame(fetched_rows)
         existing = load_history_dataset("flow_derivatives_daily")
         merged = overlay_derivative_columns(existing, overlay)
-        result = save_history_dataset("flow_derivatives_daily", merged)
+        result = save_history_dataset("flow_derivatives_daily", merged, merge=False)
         try:
             from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
                 sync_flow_factors_from_merge,

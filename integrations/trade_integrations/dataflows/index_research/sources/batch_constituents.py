@@ -60,7 +60,9 @@ def _upcoming_events(
     lookahead_days: int,
 ) -> list[dict[str, Any]]:
     """Keep calendar rows with dates from today through the lookahead window."""
-    today = date.today()
+    from trade_integrations.dataflows.company_research.market import india_trading_date
+
+    today = india_trading_date()
     end = today + timedelta(days=max(lookahead_days, 1))
     upcoming: list[dict[str, Any]] = []
     for event in events:

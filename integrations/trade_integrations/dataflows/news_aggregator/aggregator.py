@@ -69,6 +69,22 @@ def _fetch_from_source(
         logger.info("Alpha Vantage not configured; skipping in news aggregator.")
         return []
 
+    if source_name == "alpha_vantage":
+        try:
+            from trade_integrations.tiered_api import budget
+
+            status = budget.get_budget_status("alpha_vantage")
+            if status["limit"] > 0 and status["remaining"] <= 0:
+                logger.debug(
+                    "Source %r skipped (daily budget exhausted: %s/%s).",
+                    source_name,
+                    status["calls"],
+                    status["limit"],
+                )
+                return []
+        except ImportError:
+            pass
+
     try:
         from trade_integrations.dataflows.company_research.fetch_policy import (
             tiered_source_allowed,

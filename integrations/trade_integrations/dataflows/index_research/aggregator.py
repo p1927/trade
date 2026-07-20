@@ -128,6 +128,9 @@ def run_index_research(
     """Build a full index research dossier with prediction, scenarios, and ledger entry."""
     log = pipeline or PipelineLogger()
     now = _stage_now()
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
+    trading_day = india_trading_date_iso()
     sym = ticker.strip().upper()
     horizon = resolve_horizon(horizon_days)
     stages: list[StageResult] = []
@@ -380,7 +383,7 @@ def run_index_research(
         signals=signals,
         macro_factors=macro_factors,
         horizon=horizon,
-        as_of_day=now.date().isoformat(),
+        as_of_day=trading_day,
         scenario_anchor_return_pct=scenario_anchor,
         macro_trust_multiplier=macro_trust_multiplier,
     ) if spot > 0 else {}
@@ -531,7 +534,7 @@ def run_index_research(
             signals=signals,
             scenarios=scenarios,
             scenario_anchor=scenario_anchor,
-            as_of_day=now.date().isoformat(),
+            as_of_day=trading_day,
             macro_trust_multiplier=macro_trust_multiplier,
             debate_payload=debate_raw if debate_struct else None,
             pre_reconcile_snapshot=pre_reconcile_snapshot,
@@ -645,13 +648,11 @@ def run_index_research(
     except Exception as exc:
         log.info("news_impact", f"skipped: {exc}")
 
-    from trade_integrations.context.hub import load_index_research_json
-
     cached_doc = load_index_research_json(sym) if not refresh_constituents else None
     constituent_news_as_of = (
         now.isoformat()
         if refresh_constituents
-        else str((cached_doc or {}).get("as_of") or now.isoformat())
+        else str(getattr(cached_doc, "as_of", None) or now.isoformat())
     )
     if news_impact:
         news_impact = {**news_impact, "constituent_news_as_of": constituent_news_as_of}
