@@ -41,6 +41,7 @@ options = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-timeout>=2.3",
 ]
 nse-browser = [
     "nodriver>=0.38",
@@ -67,7 +68,8 @@ include = ["trade_integrations*", "nautilus_openalgo_bridge*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "tradingagents/tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --timeout=120"
+timeout = 120
 markers = [
     "unit: fast isolated unit tests",
     "integration: tests requiring external services",

@@ -108,8 +108,26 @@ Straightforward fixes are tracked in the fix plan; **do not implement here witho
 
 ---
 
+## Decided — 2026-07-20 (quality-first + no-bloat ingest)
+
+### Ingest policy (user directive)
+
+| Rule | Decision |
+|------|----------|
+| Expensive batch ingest | **Only on explicit user/script request** (`explicit=True` or `TRADE_ALLOW_BATCH_INGEST=1`) |
+| Real-time data | **Always merge** with existing cold tier on dedupe keys — no full-replace bloat |
+| Read/query paths | **No ingest-on-read** side effects |
+
+### Implementation status
+
+See plan [`pending_decisions_implementation_2f127018.plan.md`](../../.cursor/plans/pending_decisions_implementation_2f127018.plan.md).
+
+Key decisions recorded: fail-closed execution (R12-*), multi-agent scoping (R2-*), verified-only `query_verified_news` (R8-03), defer handoff until plan approval (R7-04), US autonomous gate + FINNIFTY debate block, mandatory rich research (no `tools_only`), watch hot path direct multiquote + async tick capture.
+
+---
+
 ## How to use this doc
 
-1. Reply with decisions per theme (e.g. "R12-01: option B").
+1. ~~Reply with decisions per theme~~ — **Done 2026-07-20**
 2. Move decided items into a new implementation plan or master-todo.
 3. Keep undecided rows here until resolved.
