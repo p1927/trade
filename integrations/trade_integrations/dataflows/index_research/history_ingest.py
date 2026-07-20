@@ -335,10 +335,11 @@ def sync_historic_intraday_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
 
 def sync_india_cpi_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
     """Persist india CPI monthly YoY from repo into cold tier."""
+    from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
     from trade_integrations.nse_browser.repository import repo_root as default_repo_root
 
     root = repo_root or default_repo_root()
-    path = root / "india_cpi_monthly_yoy.parquet"
+    path = historic_data_dir(root) / "india_cpi_monthly_yoy.parquet"
     if not path.is_file():
         return {"status": "skipped", "reason": "missing_file", "dataset": "india_cpi_monthly_yoy"}
     frame = pd.read_parquet(path)
@@ -349,10 +350,11 @@ def sync_india_cpi_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
 
 def sync_india_rbi_wss_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
     """Persist RBI WSS weekly rates from repo into cold tier."""
+    from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
     from trade_integrations.nse_browser.repository import repo_root as default_repo_root
 
     root = repo_root or default_repo_root()
-    path = root / "india_rbi_wss_weekly.parquet"
+    path = historic_data_dir(root) / "india_rbi_wss_weekly.parquet"
     if not path.is_file():
         return {"status": "skipped", "reason": "missing_file", "dataset": "india_rbi_wss_weekly"}
     frame = pd.read_parquet(path)

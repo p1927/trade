@@ -743,10 +743,11 @@ def _save_fao_backfill_progress(completed: set[str]) -> None:
 def load_fo_bhavcopy_derivatives_frame(*, start: str, end: str) -> pd.DataFrame:
     """Daily PCR / fut ratio from Nifty50 stock F&O bhavcopy CSV in repo."""
     try:
-        from trade_integrations.nse_browser.repository import repo_root
         from trade_integrations.nse_browser.parsers.fo_derivatives import parse_nifty50_fo_bhavcopy_csv
+        from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
+        from trade_integrations.nse_browser.repository import repo_root
 
-        root = repo_root()
+        root = historic_data_dir(repo_root())
         for name in ("nifty50_fo_data_filtered.csv", "nifty50_fo_panel.csv"):
             path = root / name
             if path.is_file():
@@ -863,9 +864,10 @@ def load_nifty_oi_daily_frame(*, start: str, end: str) -> pd.DataFrame:
     try:
         from pathlib import Path
 
+        from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
         from trade_integrations.nse_browser.repository import repo_root
 
-        path = repo_root() / "nifty_oi_daily.parquet"
+        path = historic_data_dir(repo_root()) / "nifty_oi_daily.parquet"
         if path.is_file():
             frame = pd.read_parquet(path)
         else:

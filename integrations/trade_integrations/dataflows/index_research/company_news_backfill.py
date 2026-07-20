@@ -214,3 +214,47 @@ def backfill_nifty_constituent_news(
         "start": trading_days[0],
         "end": trading_days[-1],
     }
+
+
+def backfill_company_research_history(
+    *,
+    days: int = 730,
+    sample_every: int = 7,
+    symbols: list[str] | None = None,
+    sleep_seconds: float = 0.35,
+    overwrite: bool = False,
+) -> dict[str, int | str]:
+    """Weekly-sampled company_research/history for bottom-up walk-forward."""
+    nifty = load_nifty_history(days=days)
+    if nifty.empty:
+        return {"status": "error", "reason": "no_nifty_history"}
+
+    trading_days = nifty["date"].astype(str).tolist()[:: max(1, sample_every)]
+    constituents = symbols or [row.symbol for row in load_nifty50_constituents() if row.symbol.upper() != "LTIM"]
+    if not constituents:
+        return {"status": "error", "reason": "no_constituents"}
+
+    written = 0
+    skipped = 0
+    errors = 0
+    for sym in constituents:
+        for day in trading_days:
+            try:
+                if backfill_constituent_news_day(sym, day, overwrite=overwrite):
+                    written += 1
+                else:
+                    skipped += 1
+            except Exception as exc:
+                logger.debug("company research %s %s: %s", sym, day, exc)
+                errors += 1
+            time.sleep(sleep_seconds)
+
+    return {
+        "status": "ok",
+        "symbols": len(constituents),
+        "sample_days": len(trading_days),
+        "written": written,
+        "skipped": skipped,
+        "errors": errors,
+        "ltim_note": "LTIM excluded — not in INDmoney master; document in audit manifest",
+    }
