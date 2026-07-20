@@ -41,6 +41,7 @@ echo "  Vite UI      Vite HMR"
 echo "  OpenAlgo     FLASK_DEBUG=1 (openalgo/)"
 echo "  Env change   trade reload env"
 echo "  Nautilus     runs independently of trade dev; trade reload nautilus after handoff/watch_spec changes; trade status shows watch PID"
+echo "  Long runs    use ./trade up (no hot reload) for index-prediction Run analysis"
 echo ""
 
 if ! stack_validate_ports_registry; then

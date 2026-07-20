@@ -533,3 +533,83 @@ def test_headline_legacy_includes_debate_flag():
     )
     track = run_all_tracks(ctx, track_ids=["headline_legacy"])["headline_legacy"]
     assert track.provenance.get("debate_merged") is True
+
+
+@pytest.mark.unit
+def test_xgboost_train_does_not_warn_on_feature_names():
+    import warnings
+
+    import numpy as np
+
+    from trade_integrations.dataflows.index_research.prediction_algorithms.tracks.xgboost_macro import (
+        _predict_xgb,
+        _train_xgb,
+    )
+
+    rows_x = np.random.default_rng(0).normal(size=(24, 3))
+    rows_y = np.random.default_rng(1).normal(size=(24,))
+    names = ["usd_inr", "oil_brent", "india_vix"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model = _train_xgb(rows_x, rows_y, names)
+        _predict_xgb(model, rows_x[-1])
+    feature_warns = [w for w in caught if "feature_names" in str(w.message).lower()]
+    assert not feature_warns
+
+
+@pytest.mark.unit
+def test_arimax_macro_unavailable_when_not_converged(monkeypatch):
+    import pandas as pd
+
+    from trade_integrations.dataflows.index_research.prediction_algorithms.tracks import arimax_macro
+
+    panel = pd.DataFrame(
+        {
+            "close": [100.0 + i * 0.1 for i in range(150)],
+            "fii_net_5d": [1.0] * 150,
+            "india_vix": [14.0] * 150,
+        }
+    )
+    monkeypatch.setattr(arimax_macro, "load_aligned_factor_history", lambda **k: panel)
+
+    class _Fit:
+        mle_retvals = {"converged": False}
+
+        def forecast(self, steps, exog):
+            return pd.Series([0.0])
+
+    class _Model:
+        def fit(self, **kwargs):
+            return _Fit()
+
+    class _SM:
+        class tsa:
+            class statespace:
+                class SARIMAX:
+                    def __init__(self, *a, **k):
+                        pass
+
+                    def fit(self, **kwargs):
+                        return _Fit()
+
+    monkeypatch.setattr(arimax_macro, "resolve_direction_oos_pct", lambda _t: 40.0)
+    monkeypatch.setattr(arimax_macro, "should_run_experiment", lambda *_a, **_k: True)
+    ctx = _base_context()
+    track = arimax_macro.run_arimax_macro(ctx)
+    assert track.available is False
+    assert track.provenance.get("reason") == "arimax_not_converged"
+
+
+@pytest.mark.unit
+def test_distill_extract_reads_reasoning_content():
+    from trade_integrations.dataflows.index_research.news_distillation import _extract_message_text
+
+    msg = MagicMock(
+        content="",
+        reasoning_content="<title>Title</title><summary>Body</summary>",
+        model_extra={},
+        additional_kwargs={},
+    )
+    text = _extract_message_text(msg)
+    assert "<title>Title</title>" in text
+

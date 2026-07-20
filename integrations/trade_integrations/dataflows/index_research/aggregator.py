@@ -27,6 +27,7 @@ from trade_integrations.dataflows.index_research.prediction_ledger import (
     compute_accuracy_metrics,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
+from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
 from trade_integrations.ml_runtime_env import ensure_libomp_loaded
 
 ensure_libomp_loaded()
@@ -50,6 +51,11 @@ from trade_integrations.dataflows.index_research.sources.history_loader import l
 from trade_integrations.dataflows.index_research.upcoming_events import build_upcoming_events
 
 logger = logging.getLogger(__name__)
+
+
+def _pipeline_checkpoint() -> None:
+    """Raise when API shutdown/reload requested cooperative cancel."""
+    check_pipeline_cancel()
 
 
 def _stage_now() -> datetime:
@@ -145,6 +151,7 @@ def run_index_research(
         ticker=sym,
         refresh_constituents=refresh_constituents,
     )
+    _pipeline_checkpoint()
 
     log.info(
         "data_completeness",
@@ -535,7 +542,8 @@ def run_index_research(
             debate_merged=bool(debate_struct),
         )
 
-    if run_forecast_lab and spot > 0 and prediction:
+    if spot > 0 and prediction and run_forecast_lab:
+        _pipeline_checkpoint()
         log.info("forecast_lab", "Running forecast lab tracks (quant_ridge, debate, combiner)…")
         from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
             attach_forecast_lab,
@@ -611,6 +619,7 @@ def run_index_research(
         log.info("ledger", "Appended forecast to prediction ledger")
 
     log.info("done", "Pipeline complete — saving hub artifact")
+    _pipeline_checkpoint()
     upcoming_events = build_upcoming_events(
         signals,
         macro_factors,
@@ -625,6 +634,7 @@ def run_index_research(
 
     news_impact: dict[str, Any] = {}
     try:
+        _pipeline_checkpoint()
         from trade_integrations.dataflows import news_hub_bridge
 
         macro_map = {

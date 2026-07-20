@@ -136,7 +136,7 @@ TRACK_IMPLEMENTATION_NOTES: dict[str, str] = {
     "lightgbm_macro": "Deferred LightGBM macro experiment — gated by ml_experiments_defer (Phase G)",
     "xgboost_macro": "XGBoost tabular macro experiment — shared tabular_track_base",
     "arimax_macro": "statsmodels SARIMAX with macro exogenous factors",
-    "darts_macro": "Darts RegressionModel with past covariates",
+    "darts_macro": "Darts SKLearnModel with past covariates",
     "automl_cached": "Offline PyCaret/AutoGluon artifact reader — no hot-path import",
     "headline_legacy": "predict → scenario reconcile → finalize → optional debate merge",
 }

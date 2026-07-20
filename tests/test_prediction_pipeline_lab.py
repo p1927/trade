@@ -139,7 +139,7 @@ def test_combine_mode_does_not_override_headline_without_promotion(monkeypatch):
 
 
 @pytest.mark.unit
-def test_run_index_research_skips_forecast_lab_by_default(monkeypatch):
+def test_run_index_research_runs_forecast_lab_in_pipeline(monkeypatch):
     pytest.importorskip("sklearn")
     from trade_integrations.dataflows.index_research.aggregator import run_index_research
     from trade_integrations.dataflows.index_research.models import ConstituentSignal
@@ -153,6 +153,10 @@ def test_run_index_research_skips_forecast_lab_by_default(monkeypatch):
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab.attach_forecast_lab",
         fake_attach,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab.lab_enabled",
+        lambda: True,
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.data_completeness.ensure_factor_data_complete",
@@ -202,5 +206,5 @@ def test_run_index_research_skips_forecast_lab_by_default(monkeypatch):
         lambda **kwargs: {"items": [], "summary": {"approved_count": 0}},
     )
 
-    run_index_research("NIFTY", horizon_days=14, refresh_constituents=True, run_forecast_lab=False)
-    assert attach_calls == []
+    run_index_research("NIFTY", horizon_days=14, refresh_constituents=True, run_forecast_lab=True)
+    assert attach_calls == [True]

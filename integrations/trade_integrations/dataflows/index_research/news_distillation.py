@@ -132,6 +132,27 @@ def _distill_max_tokens() -> int:
         return 800
 
 
+def _extract_message_text(message: Any) -> str:
+    """Read MiniMax answer text from content or reasoning channels."""
+    content = str(getattr(message, "content", None) or "")
+    if content.strip():
+        return content
+    reasoning = getattr(message, "reasoning_content", None)
+    if reasoning:
+        return str(reasoning)
+    extra = getattr(message, "model_extra", None) or {}
+    if isinstance(extra, dict):
+        rc = extra.get("reasoning_content")
+        if rc:
+            return str(rc)
+    kwargs = getattr(message, "additional_kwargs", None) or {}
+    if isinstance(kwargs, dict):
+        rc = kwargs.get("reasoning_content")
+        if rc:
+            return str(rc)
+    return ""
+
+
 def _call_distill_model(
     prompt: str,
     *,
@@ -149,8 +170,15 @@ def _call_distill_model(
     if reasoning_split:
         kwargs["extra_body"] = {"reasoning_split": True}
     response = chat_completions_create(**kwargs)
-    text = str(response.choices[0].message.content or "")
-    return _parse_llm_distill(text)
+    message = response.choices[0].message
+    text = _extract_message_text(message)
+    parsed = _parse_llm_distill(text)
+    if not parsed.get("title") and not parsed.get("content") and text.strip():
+        logger.debug(
+            "MiniMax distillation unparseable response snippet: %s",
+            text[:240],
+        )
+    return parsed
 
 
 def _llm_distill(
@@ -181,9 +209,9 @@ def _llm_distill(
 
     base_tokens = _distill_max_tokens()
     attempts: list[tuple[int, bool]] = [
-        (base_tokens, True),
-        (max(base_tokens + 400, 1200), True),
         (base_tokens, False),
+        (max(base_tokens + 400, 1200), False),
+        (base_tokens, True),
     ]
     try:
         for max_tokens, reasoning_split in attempts:

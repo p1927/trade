@@ -1,4 +1,4 @@
-"""darts_macro — Darts RegressionModel with past covariates from factor panel."""
+"""darts_macro — Darts SKLearnModel with past covariates from factor panel."""
 
 from __future__ import annotations
 
@@ -36,12 +36,12 @@ def run_darts_macro(ctx: TrackContext) -> ForecastTrack:
 
     try:
         from darts import TimeSeries
-        from darts.models import RegressionModel
+        from darts.models import SKLearnModel
     except ImportError:
         return _unavailable("darts_not_installed", direction_oos=direction_oos)
 
     try:
-        pred_pct, prov = _predict_darts(ctx, TimeSeries=TimeSeries, RegressionModel=RegressionModel)
+        pred_pct, prov = _predict_darts(ctx, TimeSeries=TimeSeries, SKLearnModel=SKLearnModel)
     except Exception as exc:
         logger.warning("darts_macro failed: %s", exc)
         return _unavailable("train_predict_failed", error=str(exc))
@@ -91,7 +91,7 @@ def _prepare_darts_frame(
     return df
 
 
-def _predict_darts(ctx: TrackContext, *, TimeSeries, RegressionModel) -> tuple[float, dict]:
+def _predict_darts(ctx: TrackContext, *, TimeSeries, SKLearnModel) -> tuple[float, dict]:
     panel = load_aligned_factor_history(days=400)
     if panel is None or panel.empty or "close" not in panel.columns or "date" not in panel.columns:
         raise ValueError("insufficient_panel_rows:0")
@@ -116,11 +116,11 @@ def _predict_darts(ctx: TrackContext, *, TimeSeries, RegressionModel) -> tuple[f
             random_state=42,
             verbose=-1,
         )
-        model = RegressionModel(model=lgb_model, lags=5, lags_past_covariates=3)
+        model = SKLearnModel(model=lgb_model, lags=5, lags_past_covariates=3)
     except ImportError:
         from sklearn.linear_model import Ridge
 
-        model = RegressionModel(model=Ridge(alpha=1.0), lags=5, lags_past_covariates=3)
+        model = SKLearnModel(model=Ridge(alpha=1.0), lags=5, lags_past_covariates=3)
 
     model.fit(series_y, past_covariates=past_cov)
     pred_series = model.predict(n=1, series=series_y, past_covariates=past_cov)

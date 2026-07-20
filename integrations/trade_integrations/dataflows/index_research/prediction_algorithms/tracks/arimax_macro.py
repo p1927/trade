@@ -42,6 +42,11 @@ def run_arimax_macro(ctx: TrackContext) -> ForecastTrack:
 
     try:
         pred_pct, prov = _predict_arimax(ctx, sm_module=sm)
+    except ValueError as exc:
+        if str(exc) == "arimax_not_converged":
+            return _unavailable("arimax_not_converged", direction_oos=direction_oos)
+        logger.warning("arimax_macro failed: %s", exc)
+        return _unavailable("train_predict_failed", error=str(exc))
     except Exception as exc:
         logger.warning("arimax_macro failed: %s", exc)
         return _unavailable("train_predict_failed", error=str(exc))
@@ -87,7 +92,10 @@ def _predict_arimax(ctx: TrackContext, *, sm_module) -> tuple[float, dict]:
         enforce_stationarity=False,
         enforce_invertibility=False,
     )
-    fit = model.fit(disp=False, maxiter=50)
+    fit = model.fit(disp=False, maxiter=200, method="lbfgs")
+    mle_retvals = getattr(fit, "mle_retvals", None) or {}
+    if not mle_retvals.get("converged", True):
+        raise ValueError("arimax_not_converged")
     live_exog = np.array(
         [[float(ctx.macro_factors.get(c, 0.0) or 0.0) for c in exog_cols]],
         dtype=float,
