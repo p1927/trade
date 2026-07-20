@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 # Registered Vibe tool: trading_place_order (prompts use this name consistently).
@@ -91,10 +92,17 @@ def prompt_fragment_for(
     if turn_kind == "strategy_revision":
         return _revision_flow(fragment_id, agent_id=agent_id, focus=focus, threshold=threshold)
     if turn_kind == "research":
-        return (
-            "## Required flow\n"
-            "Scheduled research is disabled for autonomous agents. "
-            "Do not call trade widget tools. Reply with a one-line ack only.\n"
+        if not _research_on_schedule_enabled():
+            return (
+                "## Required flow\n"
+                "Scheduled research is disabled for autonomous agents. "
+                "Do not call trade widget tools. Reply with a one-line ack only.\n"
+            )
+        return _research_flow(
+            fragment_id,
+            agent_id=agent_id,
+            focus=focus,
+            threshold=threshold,
         )
     template = _FRAGMENTS.get(fragment_id) or _FRAGMENTS["in_options_paper"]
     return template.format(
@@ -130,6 +138,9 @@ def kind_note_for(fragment_id: str, turn_kind: str) -> str:
     if turn_kind == "strategy_revision":
         return _REVISION_NOTE
     if turn_kind == "research":
+        if _research_on_schedule_enabled():
+            notes = _KIND_NOTES.get(fragment_id) or _KIND_NOTES.get("in_options_paper", {})
+            return notes.get("research") or "Scheduled deep research turn."
         return _RESEARCH_SKIP_NOTE
     notes = _KIND_NOTES.get(fragment_id) or _KIND_NOTES.get("in_options_paper", {})
     return notes.get(turn_kind) or notes.get("default") or "Autonomous reasoning turn."
@@ -167,6 +178,42 @@ def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: i
         order_tool=_US_ORDER_TOOL,
         order_tool_live=_US_ORDER_TOOL_LIVE,
     )
+
+
+def _research_on_schedule_enabled() -> bool:
+    return os.getenv("AUTONOMOUS_RESEARCH_ON_SCHEDULE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _research_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: int) -> str:
+    if fragment_id == "in_equity_paper":
+        asset = "stock"
+        widget = f'`get_stock_trade_widget(ticker="{focus}")`'
+        research = f'`get_research_status(ticker="{focus}", asset_type="{asset}")`'
+    elif fragment_id == "in_options_paper":
+        asset = "options"
+        widget = f'`get_options_trade_widget(ticker="{focus}")`'
+        research = f'`get_research_status(ticker="{focus}", asset_type="{asset}")`'
+    elif fragment_id.startswith("us_"):
+        return f"""## Required flow (scheduled research — US)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")` — refresh live context
+3. Refine thesis; state confidence 0–100
+4. If strategy changed: update `set_agent_watch_spec` and `record_autonomous_decision` with REVISE | HOLD"""
+    else:
+        widget = "trade widget tools"
+        research = "`get_research_status`"
+    return f"""## Required flow (scheduled research)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. {research} — refresh hub when stale; proceed when overall status is `complete`
+3. {widget} once — refresh plan/charges if strategy or legs changed
+4. Refine thesis; state confidence 0–100
+5. If strategy changed: `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)`
+6. `record_autonomous_decision` with REVISE | HOLD | ENTER (confidence ≥ {threshold} for entry)"""
 
 
 def _revision_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: int) -> str:
