@@ -41,6 +41,29 @@ stack_docker_available() {
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 }
 
+stack_require_docker() {
+  if stack_docker_available; then
+    return 0
+  fi
+  echo "[stack] ERROR: Docker is required but not running" >&2
+  echo "[stack]   macOS: open -a Docker   (wait until Docker Desktop is ready)" >&2
+  echo "[stack]   Then: ./trade heal" >&2
+  return 1
+}
+
+stack_searxng_enabled() {
+  local v="${STACK_START_SEARXNG:-1}"
+  v="$(_sdl_lc "$v")"
+  [[ "$v" != "0" && "$v" != "false" && "$v" != "no" && "$v" != "off" ]]
+}
+
+stack_timescale_should_ensure() {
+  stack_timescale_enabled || return 1
+  local v="${STACK_START_TIMESCALE:-1}"
+  v="$(_sdl_lc "$v")"
+  [[ "$v" != "0" && "$v" != "false" && "$v" != "no" && "$v" != "off" ]]
+}
+
 stack_timescale_enabled() {
   local flag="${TIMESCALE_ENABLED:-}"
   flag="$(_sdl_lc "$flag")"
@@ -174,9 +197,8 @@ stack_ensure_searxng() {
   fi
 
   if ! stack_docker_available; then
-    echo "[stack] SearXNG not running and Docker is unavailable" >&2
-    echo "[stack] News search will fall back to yfinance/alpha_vantage only" >&2
-    return 0
+    stack_require_docker
+    return 1
   fi
 
   echo "[stack] starting SearXNG via Docker ..."
@@ -229,8 +251,9 @@ stack_ensure_timescale() {
   fi
 
   if ! stack_docker_available; then
-    echo "[stack] TimescaleDB enabled but Docker is unavailable — hot ticks disabled" >&2
-    return 0
+    echo "[stack] TimescaleDB enabled but Docker is unavailable" >&2
+    stack_require_docker
+    return 1
   fi
 
   echo "[stack] starting TimescaleDB via Docker ..."
@@ -316,12 +339,13 @@ stack_ensure_redis_docker() {
   compose="$(stack_docker_compose_file)"
   if [[ ! -f "$compose" ]]; then
     echo "[stack] Redis needed but $compose missing" >&2
-    return 0
+    return 1
   fi
 
   if ! stack_docker_available; then
-    echo "[stack] Redis needed — start Docker or: brew services start redis" >&2
-    return 0
+    echo "[stack] Redis needed but Docker is unavailable" >&2
+    stack_require_docker
+    return 1
   fi
 
   echo "[stack] starting Redis via Docker ..."
@@ -336,23 +360,53 @@ stack_ensure_redis_docker() {
   done
 
   echo "[stack] Redis did not become ready — Nautilus watch may fail" >&2
-  return 0
+  return 1
 }
 
 # Ensure all hub Docker services (SearXNG, Timescale, Redis) based on env flags.
 stack_ensure_hub_docker() {
-  local ok=0 start_searxng="${STACK_START_SEARXNG:-1}"
-  start_searxng="$(_sdl_lc "$start_searxng")"
+  local ok=0 ready=0 total=0
+  local searxng_mark="·" redis_mark="·" timescale_mark="·"
 
-  if [[ "$start_searxng" != "0" && "$start_searxng" != "false" && "$start_searxng" != "no" && "$start_searxng" != "off" ]]; then
-    stack_ensure_searxng || ok=1
+  if stack_searxng_enabled; then
+    total=$((total + 1))
+    if stack_ensure_searxng; then
+      searxng_mark="✓"
+      ready=$((ready + 1))
+    else
+      searxng_mark="✗"
+      ok=1
+    fi
   fi
 
-  if [[ "${STACK_START_TIMESCALE:-1}" != "0" ]]; then
-    stack_ensure_timescale || ok=1
+  if stack_timescale_should_ensure; then
+    total=$((total + 1))
+    if stack_ensure_timescale; then
+      timescale_mark="✓"
+      ready=$((ready + 1))
+    else
+      timescale_mark="✗"
+      ok=1
+    fi
   fi
 
-  stack_ensure_redis_docker || true
+  if stack_redis_enabled; then
+    total=$((total + 1))
+    if stack_ensure_redis_docker; then
+      redis_mark="✓"
+      ready=$((ready + 1))
+    else
+      redis_mark="✗"
+      ok=1
+    fi
+  fi
+
+  if (( total > 0 )); then
+    echo "[stack] hub docker: $ready/$total ready ($searxng_mark SearXNG $redis_mark Redis $timescale_mark Timescale)"
+  fi
+  if (( ok )); then
+    echo "[stack] fix: start Docker Desktop if needed, then: ./trade heal" >&2
+  fi
   return "$ok"
 }
 
@@ -408,7 +462,13 @@ stack_hub_docker_stop_graceful() {
     return 0
   fi
   echo "[stack] stopping hub Docker services (graceful SIGTERM) ..."
-  docker compose -f "$compose" stop timescaledb redis 2>/dev/null || true
+  local stop_searxng="${STACK_STOP_SEARXNG:-0}"
+  stop_searxng="$(_sdl_lc "$stop_searxng")"
+  if [[ "$stop_searxng" == "1" || "$stop_searxng" == "true" || "$stop_searxng" == "yes" || "$stop_searxng" == "on" ]]; then
+    docker compose -f "$compose" stop timescaledb redis searxng 2>/dev/null || true
+  else
+    docker compose -f "$compose" stop timescaledb redis 2>/dev/null || true
+  fi
 }
 
 stack_status_hub_docker() {
@@ -483,7 +543,8 @@ PY
 
   echo "══════════════════════════════════════════════════════════"
   if (( ok )); then return 0; fi
-  echo "  Fix: trade restart   (heals hub Docker + app tier)"
+  echo "  Fix: ./trade heal   (starts missing hub Docker services)"
+  echo "  Full reset: ./trade restart --force"
   echo "══════════════════════════════════════════════════════════"
   return 1
 }

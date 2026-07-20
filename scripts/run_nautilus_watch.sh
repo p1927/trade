@@ -8,11 +8,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="${ROOT}/.venv-nautilus"
 PY="${ROOT}/.venv/bin/python"
 
-if [[ -x "${VENV}/bin/python" ]]; then
-  PY="${VENV}/bin/python"
-elif ! command -v "$PY" >/dev/null 2>&1; then
-  PY="python3"
-fi
+_pick_python() {
+  local candidate
+  for candidate in "${VENV}/bin/python" "${ROOT}/.venv/bin/python" python3; do
+    [[ -x "$candidate" ]] || continue
+    if "$candidate" -c "import nautilus_openalgo_bridge" 2>/dev/null; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  echo "[run_nautilus_watch] nautilus_openalgo_bridge not importable — run: ./scripts/setup_nautilus.sh" >&2
+  return 1
+}
+
+PY="$(_pick_python)" || exit 1
 
 if [[ -f "${ROOT}/.env" ]]; then
   set -a

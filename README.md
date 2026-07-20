@@ -108,13 +108,18 @@ Use **`./trade`** for the background stack (OpenAlgo + Vibe API + Vite UI + hub 
 
 ```bash
 ./trade doctor              # preflight — run before first start or after .env changes
+./trade doctor --hub        # hub Docker probes only (SearXNG, Redis, Timescale)
 ./trade up                  # start/heal background stack (recommended)
-./trade status              # health + claimed PIDs
+./trade status              # heal hub tier + health summary
+./trade status --json       # machine-readable dependency matrix
+./trade heal                # start missing services
+./trade heal --hub-only     # hub Docker tier only (SearXNG, Redis, Timescale)
 ./trade restart             # heal — start only what's down
 ./trade restart --force     # full stop + preflight + start
 ./trade down                # stop stack (releases claims)
 ./trade down --all          # stop stack + hub Docker + tunnels
-./trade dev                 # dev mode: auto-reload API/UI + OpenAlgo debug (foreground UI)
+./trade down --hub          # stop hub Docker only (app tier keeps running)
+./trade dev                 # dev mode: auto-reload API/UI (blocks if hub deps down)
 ./trade reload app          # restart app tier after code edits (if not using trade dev)
 ```
 
@@ -132,7 +137,18 @@ Foreground / special modes (`start.sh`):
 | Vibe API | http://localhost:8899 | Backend for the UI |
 | OpenAlgo | http://127.0.0.1:5001 | Broker bridge, option chain, execution |
 
-**PID claims:** `log/claims/{openalgo,vibe-api,vibe-ui,nautilus-watch}.claim` — written on start, removed on `trade down`. Summary: `log/stack.instance`. If a port is held by an unclaimed process, `trade up` fails fast with a clear message instead of killing it.
+**PID claims:** `log/claims/{openalgo,vibe-api,vibe-ui,nautilus-watch}.claim` — written on start, removed on `trade down`. Session stamp: `log/stack.session`. Summary: `log/stack.instance`. If a port is held by an unclaimed process, `trade up` fails fast with a clear message instead of killing it.
+
+**Hub Docker env flags** (see `stack/ports.yaml`):
+
+| Variable | Default | Role |
+|----------|---------|------|
+| `STACK_START_SEARXNG` | `1` | Start/probe SearXNG on `:5556` |
+| `TIMESCALE_ENABLED` | off | Enable TimescaleDB hot ticks |
+| `STACK_START_TIMESCALE` | `1` | Start Timescale when enabled |
+| `NAUTILUS_WATCH_ENABLE` | `1` | Requires Redis when on |
+| `STACK_CLEAN_HUB_ON_BOOT` | `0` | Force-recreate hub containers on `trade up` |
+| `STACK_HEAL_DAEMON` | `1` | Background `trade heal` every 60s (daemon mode) |
 
 **Autonomous agents:** Hub UI at `/autonomous` — create agents in chat, confirm proposals, then bootstrap runs immediately (watch summary + first research turn in agent chat). Cards show `initializing` → `scheduler ok`, Nautilus `poll` / `expected` / `node_on`, and `watch ready` vs `position tracked`.
 

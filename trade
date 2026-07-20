@@ -15,7 +15,8 @@ Usage:
 Stack (one lifecycle — use these):
   up                    Start background stack (preflight + heal)
   heal                  Heal missing services only (no preflight noise)
-  down [--all]          Stop OpenAlgo + Vibe ( --all: + hub Docker + tunnels )
+  down [--all|--hub]          Stop OpenAlgo + Vibe ( --all: + hub Docker + tunnels; --hub: hub Docker only )
+  heal [--hub-only]           Heal missing services (hub tier only with --hub-only)
   restart [--force]     Heal missing services ( --force: full stop + start )
   status                Vibe + hub Docker health
   doctor                Preflight checks before start (no start)
@@ -135,15 +136,26 @@ EOF
   esac
 }
 
+_stack_trade_prelude() {
+  local cmd="$1"
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/stack_lib.sh"
+  STACK_ROOT="$ROOT"
+  stack_load_env
+  stack_maybe_heal_before_command "$cmd"
+}
+
 cmd="${1:-}"
 shift || true
 
 case "$cmd" in
   up)
+    _stack_trade_prelude up
     exec "$ROOT/scripts/stack_ctl.sh" up "$@"
     ;;
 
   heal)
+    _stack_trade_prelude heal
     exec "$ROOT/scripts/stack_ctl.sh" ensure "$@"
     ;;
 
@@ -152,6 +164,7 @@ case "$cmd" in
     ;;
 
   start)
+    _stack_trade_prelude start
     mode="${1:-vibe}"
     shift || true
     case "$mode" in
@@ -181,14 +194,17 @@ case "$cmd" in
     ;;
 
   status)
+    _stack_trade_prelude status
     exec "$ROOT/scripts/stack_ctl.sh" status "$@"
     ;;
 
   status-vibe)
+    _stack_trade_prelude status
     exec "$ROOT/scripts/stack_ctl.sh" status "$@"
     ;;
 
   status-hub)
+    _stack_trade_prelude status-hub
     exec "$ROOT/scripts/status_hub_stack.sh" "$@"
     ;;
 
@@ -197,14 +213,17 @@ case "$cmd" in
     ;;
 
   dev)
+    _stack_trade_prelude dev
     exec "$ROOT/scripts/stack_dev.sh" "$@"
     ;;
 
   reload)
+    _stack_trade_prelude reload
     exec "$ROOT/scripts/reload_vibe_stack.sh" "$@"
     ;;
 
   restart)
+    _stack_trade_prelude restart
     exec "$ROOT/scripts/stack_ctl.sh" restart "$@"
     ;;
 
@@ -281,6 +300,7 @@ case "$cmd" in
     ;;
 
   research)
+    _stack_trade_prelude research
     ticker="${1:-}"
     if [[ -z "$ticker" || "$ticker" == "-h" || "$ticker" == "--help" ]]; then
       echo "Usage: trade research <ticker> [--days N] [--json]"
@@ -293,6 +313,7 @@ case "$cmd" in
     ;;
 
   data)
+    _stack_trade_prelude data
     sub="${1:-}"
     shift || true
     py="$ROOT/.venv/bin/python"
@@ -324,6 +345,7 @@ EOF
     ;;
 
   tiered-api)
+    _stack_trade_prelude tiered-api
     sub="${1:-status}"
     shift || true
     py="$ROOT/.venv/bin/python"
@@ -343,6 +365,7 @@ EOF
     ;;
 
   data-router)
+    _stack_trade_prelude data-router
     sub="${1:-status}"
     shift || true
     py="$ROOT/.venv/bin/python"

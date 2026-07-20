@@ -27,6 +27,7 @@ _reload_app() {
 }
 
 _reload_app_inner() {
+  stack_refuse_if_dev_mode
   echo "[stack] restarting OpenAlgo + Vibe API + Vibe UI ..."
   local log_dir ok=0
   log_dir="$(stack_log_dir)"
@@ -53,13 +54,22 @@ case "$TARGET" in
     _reload_app
     ;;
   nautilus)
-    echo "[stack] restarting Nautilus watch ..."
-    stack_stop_nautilus_watch
-    stack_ensure_nautilus_watch || true
+    stack_reconcile_nautilus_watch_pid
+    local watch_pid
+    watch_pid="$(stack_read_pid "$(stack_log_dir)/nautilus-watch.pid")"
+    if stack_nautilus_pid_valid "$watch_pid"; then
+      echo "[stack] Nautilus watch already running (pid $watch_pid)"
+      stack_sync_nautilus_claim
+    else
+      echo "[stack] restarting Nautilus watch ..."
+      stack_stop_nautilus_watch
+      stack_ensure_nautilus_watch || true
+    fi
     ;;
   hub)
     echo "[stack] ensuring hub Docker tier ..."
-    stack_ensure_hub_docker || true
+    stack_ensure_dependencies hub || exit 1
+    stack_verify_dependencies hub || exit 1
     ;;
   all)
     _reload_env

@@ -281,7 +281,12 @@ stack_reconcile_stale_claims() {
         continue
       fi
       if [[ -z "$port" ]]; then
-        continue
+        if [[ "$service" == "nautilus-watch" ]] && stack_nautilus_pid_valid "$claimed_pid"; then
+          continue
+        fi
+        if [[ "$service" != "nautilus-watch" ]] && stack_process_in_trade_repo "$claimed_pid"; then
+          continue
+        fi
       fi
       if [[ -n "$port" ]] && stack_http_ok "http://127.0.0.1:${port}/"; then
         listener="$(stack_port_listener_pid "$port")"
@@ -333,6 +338,10 @@ stack_claim_valid() {
     fi
     return 1
   fi
+  if [[ "$service" == "nautilus-watch" ]]; then
+    stack_nautilus_pid_valid "$claimed_pid"
+    return
+  fi
   stack_pid_alive "$claimed_pid"
 }
 
@@ -354,6 +363,18 @@ stack_process_in_trade_repo() {
     return 0
   fi
   return 1
+}
+
+stack_nautilus_pid_valid() {
+  local pid="$1" args
+  [[ -n "$pid" ]] || return 1
+  stack_pid_alive "$pid" || return 1
+  args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  [[ "$args" == *"run_watch_node"* || "$args" == *"run_nautilus_watch"* || "$args" == *"nautilus_openalgo_bridge"* ]]
+}
+
+stack_nautilus_registry_present() {
+  [[ -f "$(stack_log_dir)/nautilus-watch.agents.json" ]]
 }
 
 stack_listener_matches_claim() {
@@ -457,14 +478,24 @@ stack_stop_claimed() {
   fi
 
   if [[ -n "$claimed_pid" ]] && stack_pid_alive "$claimed_pid"; then
-    echo "[stack] stopping $name (claimed pid $claimed_pid) ..."
-    kill "$claimed_pid" 2>/dev/null || true
-    for _ in $(seq 1 15); do
-      stack_pid_alive "$claimed_pid" || break
-      sleep 0.5
-    done
-    if stack_pid_alive "$claimed_pid"; then
-      kill -9 "$claimed_pid" 2>/dev/null || true
+    local should_kill=0
+    if stack_process_in_trade_repo "$claimed_pid"; then
+      should_kill=1
+    elif [[ -n "$port" ]] && stack_listener_matches_claim "$claimed_pid" "$port"; then
+      should_kill=1
+    fi
+    if (( should_kill )); then
+      echo "[stack] stopping $name (claimed pid $claimed_pid) ..."
+      kill "$claimed_pid" 2>/dev/null || true
+      for _ in $(seq 1 15); do
+        stack_pid_alive "$claimed_pid" || break
+        sleep 0.5
+      done
+      if stack_pid_alive "$claimed_pid"; then
+        kill -9 "$claimed_pid" 2>/dev/null || true
+      fi
+    else
+      echo "[stack] releasing stale claim for $name (pid $claimed_pid is not a trade process)"
     fi
   fi
 
@@ -535,7 +566,46 @@ elif st.get('enabled'):
 " 2>/dev/null || true
 }
 
+stack_sync_nautilus_registry_pid() {
+  local pid="$1"
+  local py root
+  [[ -n "$pid" ]] || return 0
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  PYTHONPATH="$root/integrations" "$py" - "$pid" <<'PY' 2>/dev/null || true
+import sys
+from trade_integrations.autonomous_agents.nautilus_watch import load_registry, save_registry
+
+reg = load_registry()
+reg["node_pid"] = int(sys.argv[1])
+save_registry(reg)
+PY
+}
+
+stack_adopt_running_nautilus_watch() {
+  local log_dir pidfile existing
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/nautilus-watch.pid"
+  existing="$(stack_read_pid "$pidfile")"
+  if stack_nautilus_pid_valid "$existing"; then
+    stack_sync_nautilus_registry_pid "$existing"
+    stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch --registry"
+    return 0
+  fi
+  local orphan
+  orphan="$(pgrep -f "nautilus_openalgo_bridge.runtime.run_watch_node" 2>/dev/null | head -1 || true)"
+  if [[ -n "$orphan" ]] && stack_nautilus_pid_valid "$orphan"; then
+    stack_write_pidfile "$pidfile" "$orphan"
+    stack_sync_nautilus_registry_pid "$orphan"
+    stack_write_claim "nautilus-watch" "$orphan" "" "nautilus watch --registry"
+    echo "[stack] adopted running Nautilus watch (pid $orphan)"
+    return 0
+  fi
+  return 1
+}
+
 stack_sync_nautilus_claim() {
+  stack_reconcile_nautilus_watch_pid
   local log_dir pidfile reg_file py reg_pid
   log_dir="$(stack_log_dir)"
   pidfile="$log_dir/nautilus-watch.pid"
@@ -556,7 +626,7 @@ if isinstance(pid, int) and pid > 0:
     print(pid)
 PY
 )"
-  if [[ -n "$reg_pid" ]] && stack_pid_alive "$reg_pid"; then
+  if [[ -n "$reg_pid" ]] && stack_nautilus_pid_valid "$reg_pid"; then
     stack_write_pidfile "$pidfile" "$reg_pid"
     stack_write_claim "nautilus-watch" "$reg_pid" "" "nautilus watch"
     return 0
@@ -856,15 +926,19 @@ stack_start_vibe_api() {
     return 0
   fi
 
-  # Root responds but index probe failed — often a busy worker (SSE analysis), not a dead API.
+  # Root responds but index probe failed — often a busy worker (SSE analysis).
   if stack_http_ok "$base/" && stack_vibe_api_listener_alive "$port"; then
-    if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/"; then
-      echo "[stack] Vibe API on :$port is busy but listening — leaving it running"
+    if stack_vibe_api_http_ok "$port"; then
+      if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/"; then
+        echo "[stack] Vibe API on :$port is busy but healthy — leaving it running"
+        return 0
+      fi
+      stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli._legacy serve"
+      echo "[stack] Vibe API on :$port is busy but healthy — leaving running (synced claim)"
       return 0
     fi
-    stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli._legacy serve"
-    echo "[stack] Vibe API on :$port is busy — leaving running (synced claim)"
-    return 0
+    echo "[stack] Vibe API on :$port listens but /health failed — use: trade restart --force" >&2
+    return 1
   fi
 
   if stack_http_ok "$base/"; then
@@ -1032,7 +1106,11 @@ stack_start_heal_daemon() {
       if [[ -f '$root/log/stack.mode' ]] && [[ \"\$(tr -d '[:space:]' <'$root/log/stack.mode')\" == 'dev' ]]; then
         continue
       fi
-      '$root/trade' heal >>'$logfile' 2>&1 || true
+      '$root/trade' heal >>'$logfile' 2>&1
+      heal_rc=$?
+      if (( heal_rc != 0 )); then
+        echo \"[\$(date -Iseconds)] heal failed (exit \$heal_rc)\" >>'$logfile'
+      fi
     done
   " >>"$logfile" 2>&1 < /dev/null &
   pid=$!
@@ -1053,6 +1131,55 @@ stack_stop_data_worker() {
   pid="$(stack_read_pid "$pidfile")"
   if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
     echo "[stack] stopping data router worker (pid $pid) ..."
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
+}
+
+stack_start_dev_nautilus_heal() {
+  if ! stack_dev_mode_flagged; then
+    return 0
+  fi
+  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
+    return 0
+  fi
+  local root log_dir pidfile logfile pid interval
+  root="$(stack_root)"
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/stack-nautilus-heal.pid"
+  logfile="$log_dir/stack-nautilus-heal.log"
+  interval="${STACK_NAUTILUS_HEAL_INTERVAL_SEC:-120}"
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
+    return 0
+  fi
+  echo "[stack] starting dev Nautilus heal (every ${interval}s while dev mode) ..."
+  : >>"$logfile"
+  nohup bash -c "
+    while [[ -f '$root/log/stack.mode' ]] && [[ \"\$(tr -d '[:space:]' <'$root/log/stack.mode')\" == 'dev' ]]; do
+      sleep $interval
+      watch_pid=\$(tr -d '[:space:]' <'$log_dir/nautilus-watch.pid' 2>/dev/null || true)
+      if [[ -n \"\$watch_pid\" ]] && ps -p \"\$watch_pid\" >/dev/null 2>&1; then
+        args=\$(ps -p \"\$watch_pid\" -o args= 2>/dev/null || true)
+        if [[ \"\$args\" == *run_watch_node* ]]; then
+          continue
+        fi
+      fi
+      '$root/trade' heal --hub-only >>'$logfile' 2>&1 || true
+      '$root/trade' reload nautilus >>'$logfile' 2>&1 || true
+    done
+  " >>"$logfile" 2>&1 < /dev/null &
+  pid=$!
+  disown "$pid" 2>/dev/null || true
+  stack_write_pidfile "$pidfile" "$pid"
+}
+
+stack_stop_dev_nautilus_heal() {
+  local log_dir pidfile pid
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/stack-nautilus-heal.pid"
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
     kill "$pid" 2>/dev/null || true
   fi
   rm -f "$pidfile"
@@ -1084,10 +1211,11 @@ stack_start_data_worker() {
 }
 
 stack_stop_vibe_stack() {
-  local log_dir api_port ui_port openalgo_port stop_docker stop_all=0
+  local log_dir api_port ui_port openalgo_port stop_docker stop_all=0 stop_hub=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --all|-a) stop_all=1 ;;
+      --hub) stop_hub=1 ;;
     esac
     shift
   done
@@ -1107,6 +1235,7 @@ stack_stop_vibe_stack() {
   stack_kill_openalgo_ws_proxy
   stack_stop_heal_daemon
   stack_stop_data_worker
+  stack_stop_dev_nautilus_heal
   stack_clear_stack_mode
   stack_clear_instance_manifest
 
@@ -1120,6 +1249,8 @@ stack_stop_vibe_stack() {
       echo "[stack] stopping exposure tunnels ..."
       "$exposure_stop" stop 2>/dev/null || true
     fi
+  elif (( stop_hub )); then
+    stack_docker_stop_all
   elif [[ "$stop_docker" == "1" || "$stop_docker" == "true" || "$stop_docker" == "yes" || "$stop_docker" == "on" ]]; then
     stack_hub_docker_stop_graceful
   fi
@@ -1178,30 +1309,42 @@ stack_ensure_vibe_config() {
 }
 
 stack_ensure_vibe_stack() {
-  local ok=0
-  stack_validate_ports_registry || ok=1
+  local clean_hub=0
+  if [[ "${STACK_CLEAN_HUB_ON_BOOT:-0}" == "1" || "${STACK_CLEAN_HUB_ON_BOOT:-}" == "true" ]]; then
+    clean_hub=1
+  fi
+  stack_validate_ports_registry || return 1
   stack_check_port_listeners || true
-  stack_ensure_hub_docker || ok=1
-  stack_ensure_hub_storage || true
-  stack_ensure_vibe_config || true
-  stack_start_openalgo || ok=1
-  stack_start_vibe_api || ok=1
-  stack_start_vibe_ui || ok=1
-  stack_ensure_nautilus_watch || true
-  stack_sync_nautilus_claim
-  return "$ok"
+  if (( clean_hub )); then
+    stack_ensure_dependencies all --clean-hub
+  else
+    stack_ensure_dependencies all
+  fi
 }
 
 stack_ensure_nautilus_watch() {
   local agent_id="${1:-$(stack_primary_nautilus_agent_id)}"
-  if [[ -z "$agent_id" ]]; then
+  stack_reconcile_nautilus_watch_pid
+  if [[ -z "$agent_id" ]] && ! stack_nautilus_registry_present; then
     return 0
   fi
-  stack_ensure_redis || true
-  stack_start_nautilus_watch "$agent_id" || {
-    echo "[stack] Nautilus watch not started — bootstrap poll ticks still run via Vibe scheduler" >&2
-    return 0
-  }
+  if stack_redis_enabled; then
+    stack_ensure_redis || {
+      echo "[stack] Redis required for Nautilus watch but unavailable" >&2
+      return 1
+    }
+  fi
+  if [[ -n "$agent_id" ]]; then
+    stack_start_nautilus_watch "$agent_id" || {
+      echo "[stack] Nautilus watch failed to start — see $(stack_log_dir)/nautilus-watch.log" >&2
+      return 1
+    }
+  else
+    stack_start_nautilus_watch || {
+      echo "[stack] Nautilus watch failed to start (registry) — see $(stack_log_dir)/nautilus-watch.log" >&2
+      return 1
+    }
+  fi
 }
 
 stack_print_ready() {
@@ -1224,11 +1367,25 @@ stack_print_ready() {
 }
 
 stack_status_vibe_stack() {
-  local log_dir openalgo_port api_port ui_port ok=1
+  local log_dir openalgo_port api_port ui_port ok=1 json_mode=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json_mode=1 ;;
+    esac
+    shift
+  done
+  if [[ "${STACK_STATUS_JSON:-0}" == "1" ]]; then
+    json_mode=1
+  fi
+  if (( json_mode )); then
+    stack_status_json
+    return $?
+  fi
   stack_load_env
   log_dir="$(stack_log_dir)"
-  stack_reconcile_stale_dev_mode
-  stack_reconcile_stale_claims
+  stack_reconcile_all
+  stack_ensure_dependencies hub || ok=0
+  stack_sync_nautilus_claim
   openalgo_port="$(stack_openalgo_port)"
   api_port="$(stack_vibe_api_port)"
   ui_port="$(stack_vibe_ui_port)"
@@ -1305,7 +1462,7 @@ print(", ".join(agents) if agents else "")
 PY
 )"
   fi
-  if stack_pid_alive "$nautilus_pid"; then
+  if stack_nautilus_pid_valid "$nautilus_pid"; then
     local nautilus_claim
     nautilus_claim="$(stack_claim_pid nautilus-watch)"
     if [[ -n "$registry_summary" ]]; then
@@ -1316,8 +1473,22 @@ PY
   elif [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
     echo "  · Nautilus watch  disabled (NAUTILUS_WATCH_ENABLE=0)"
   else
-    echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (expected — enabled by default)"
-    ok=0
+    if ! stack_nautilus_pid_valid "$nautilus_pid"; then
+      stack_ensure_nautilus_watch || true
+      stack_sync_nautilus_claim
+      nautilus_pid="$(stack_read_pid "$log_dir/nautilus-watch.pid")"
+    fi
+    if stack_nautilus_pid_valid "$nautilus_pid"; then
+      nautilus_claim="$(stack_claim_pid nautilus-watch)"
+      if [[ -n "$registry_summary" ]]; then
+        echo "  ✓ Nautilus watch  pid=${nautilus_pid} claim=${nautilus_claim:-?} (started, agents: ${registry_summary})"
+      else
+        echo "  ✓ Nautilus watch  pid=${nautilus_pid} claim=${nautilus_claim:-?} (started)"
+      fi
+    else
+      echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (expected — enabled by default)"
+      ok=0
+    fi
   fi
 
   echo "══════════════════════════════════════════════════════════"
@@ -1326,13 +1497,17 @@ PY
     hub_ok=1
   fi
   if (( ok && hub_ok )); then return 0; fi
-  if stack_dev_mode_flagged && stack_dev_tier_alive; then
+  if stack_dev_mode_active; then
     echo "  Dev mode: keep the ./trade dev terminal open for hot reload"
-  elif stack_dev_mode_flagged; then
+    echo "  Fix hub/app issues above, then restart dev (Ctrl+C → ./trade dev)"
+    echo "  Or switch to daemon: Ctrl+C then ./trade up"
+    return 1
+  fi
+  if stack_dev_mode_flagged; then
     echo "  Dev mode flag was stale — run: ./trade dev"
   else
-    echo "  Fix: ./trade dev   (hot reload while coding)"
-    echo "  Or:  ./trade restart   (background daemon)"
+    echo "  Fix: ./trade heal   (starts missing services)"
+    echo "  Or:  ./trade dev   (hot reload while coding)"
   fi
   echo "  Full reset: ./trade restart --force"
   echo "  Full stop: ./trade down"
@@ -1385,6 +1560,13 @@ stack_start_nautilus_watch() {
     return 0
   fi
 
+  stack_reconcile_nautilus_watch_pid
+
+  if stack_adopt_running_nautilus_watch; then
+    echo "[stack] Nautilus watch already running (pid $(stack_read_pid "$pidfile"), registry mode)"
+    return 0
+  fi
+
   if [[ ! -x "$launch_script" ]]; then
     echo "[stack] missing $launch_script" >&2
     return 1
@@ -1395,7 +1577,7 @@ stack_start_nautilus_watch() {
   if [[ -f "$agent_id_file" ]]; then
     bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
   fi
-  if stack_pid_alive "$existing"; then
+  if stack_nautilus_pid_valid "$existing"; then
     if [[ -f "$log_dir/nautilus-watch.agents.json" ]] && [[ -n "$(stack_read_pid "$pidfile")" ]]; then
       stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch --registry"
       echo "[stack] Nautilus watch already running (pid $existing, registry mode)"
@@ -1447,13 +1629,14 @@ PY
 
   sleep 2
   existing="$(stack_read_pid "$pidfile")"
-  if ! stack_pid_alive "$existing"; then
+  if ! stack_nautilus_pid_valid "$existing"; then
     echo "[stack] Nautilus watch failed to stay up — see $logfile" >&2
     tail -8 "$logfile" 2>/dev/null >&2 || true
     rm -f "$pidfile" "$agent_id_file"
     stack_release_claim "nautilus-watch"
     return 1
   fi
+  stack_sync_nautilus_registry_pid "$existing"
   stack_write_claim "nautilus-watch" "$existing" "" "${cmd[*]}"
 }
 
@@ -1461,3 +1644,6 @@ stack_stop_nautilus_watch() {
   stack_stop_claimed "Nautilus watch" "nautilus-watch" "$(stack_log_dir)/nautilus-watch.pid"
   rm -f "$(stack_log_dir)/nautilus-watch.agent_id"
 }
+
+# shellcheck disable=SC1091
+source "$(stack_root)/scripts/stack_deps.sh"

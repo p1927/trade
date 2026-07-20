@@ -76,13 +76,29 @@ def _dev_mode_flagged(*, root: Path | None = None) -> bool:
 
 
 def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
-    """Heal dead OpenAlgo/Vibe via ``trade heal`` when unreachable (never during dev mode)."""
+    """Heal hub + app tier via ``trade heal`` when OpenAlgo is unreachable."""
     if not _stack_auto_heal_enabled():
         return False
 
     base = root or trade_repo_root()
     if _dev_mode_flagged(root=base):
         return False
+
+    trade_cli = base / "trade"
+    if not trade_cli.is_file():
+        return False
+
+    import subprocess
+
+    subprocess.run(
+        [str(trade_cli), "heal", "--hub-only"],
+        cwd=str(base),
+        timeout=120,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
     cfg = ensure_openalgo_env(root=base)
     host = cfg["host"].rstrip("/")
 
@@ -90,15 +106,10 @@ def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
         import urllib.request
 
         with urllib.request.urlopen(f"{host}/", timeout=3) as resp:
-            return 200 <= getattr(resp, "status", 200) < 500
+            if 200 <= getattr(resp, "status", 200) < 500:
+                return True
     except Exception:
         pass
-
-    trade_cli = base / "trade"
-    if not trade_cli.is_file():
-        return False
-
-    import subprocess
 
     subprocess.run(
         [str(trade_cli), "heal"],
