@@ -17,15 +17,18 @@ _INDEX_YF = {
     "BANKNIFTY": "^NSEBANK",
     "FINNIFTY": "^CNXFIN",
     "MIDCPNIFTY": "^NSEMDCP50",
+    "NIFTYMIDSELECT": "^NSEMDCP50",
+    "NIFTYIT": "^CNXIT",
     "SENSEX": "^BSESN",
     "^NSEI": "^NSEI",
     "^BSESN": "^BSESN",
     "^CNXFIN": "^CNXFIN",
     "^NSEMDCP50": "^NSEMDCP50",
+    "^CNXIT": "^CNXIT",
 }
 
 # Indices without confirmed yfinance symbols — block debate until mapped.
-_DEBATE_BLOCKED_INDICES = frozenset({"NIFTYIT", "NIFTYMIDSELECT"})
+_DEBATE_BLOCKED_INDICES: frozenset[str] = frozenset()
 
 
 def debate_eligible_for_ticker(ticker: str) -> tuple[bool, str | None]:
