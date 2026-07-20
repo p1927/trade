@@ -13,6 +13,7 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.track_con
     BACKTEST_TRACK_IDS,
     CANONICAL_TRACK_IDS,
     COMBINER_THREE_TRACK_IDS,
+    EXPERIMENTAL_TRACK_IDS,
     SCOREBOARD_SCHEMA_VERSION,
     TRACK_BACKTEST_ELIGIBLE,
     TRACK_IMPLEMENTATION_NOTES,
@@ -51,7 +52,8 @@ def normalize_scoreboard_report(report: dict[str, Any]) -> dict[str, Any]:
     """Ensure all canonical tracks/combiners appear in summary tables."""
     out = dict(report)
     tracks = dict(out.get("tracks") or {})
-    for tid in CANONICAL_TRACK_IDS:
+    catalog_ids = CANONICAL_TRACK_IDS + EXPERIMENTAL_TRACK_IDS
+    for tid in catalog_ids:
         tracks.setdefault(tid, {"track_id": tid, "eval_count": 0, "backtest_eligible": TRACK_BACKTEST_ELIGIBLE.get(tid, False)})
     for tid, row in tracks.items():
         row.setdefault("backtest_eligible", TRACK_BACKTEST_ELIGIBLE.get(tid, False))
@@ -67,9 +69,10 @@ def normalize_scoreboard_report(report: dict[str, Any]) -> dict[str, Any]:
             "label": tid.replace("_", " "),
             "implementation": TRACK_IMPLEMENTATION_NOTES.get(tid, ""),
             "backtest_eligible": TRACK_BACKTEST_ELIGIBLE.get(tid, False),
+            "experimental": tid in EXPERIMENTAL_TRACK_IDS,
             "metrics": tracks.get(tid) or {},
         }
-        for tid in CANONICAL_TRACK_IDS
+        for tid in catalog_ids
     }
     out.setdefault("schema_version", SCOREBOARD_SCHEMA_VERSION)
     return enrich_track_metrics_from_daily(out)
@@ -113,6 +116,7 @@ def summarize_track_metrics(
     if not preds:
         return {"track_id": track_id, "eval_count": 0}
     errors = [abs(float(r.get("error_pct") or 0.0)) for r in preds]
+    sq_errors = [float(r.get("error_pct") or 0.0) ** 2 for r in preds]
     dir_hits = sum(1 for r in preds if r.get("direction_hit"))
     if any(r.get("view_hit") is not None for r in preds):
         view_hits = sum(1 for r in preds if r.get("view_hit"))
@@ -128,6 +132,7 @@ def summarize_track_metrics(
         "track_id": track_id,
         "eval_count": total,
         "mae_pct": round(sum(errors) / total, 4),
+        "rmse_pct": round((sum(sq_errors) / total) ** 0.5, 4),
         "direction_hit_rate": round(dir_hits / total, 4) if total else None,
         "view_hit_rate": round(view_hits / total, 4) if total else None,
         "direction_hit_count": dir_hits,

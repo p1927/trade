@@ -343,7 +343,127 @@ def test_naive_momentum_horizon_aware():
 
 
 @pytest.mark.unit
-def test_debate_numeric_parses_pct():
+def test_equal_weight_quant_3_uses_split_quant_track():
+    from trade_integrations.dataflows.index_research.prediction_algorithms.combiners import run_combiner
+    from trade_integrations.dataflows.index_research.prediction_algorithms.types import ForecastTrack
+
+    def _t(tid, val):
+        return ForecastTrack(track_id=tid, expected_return_pct=val, view="neutral", available=True)
+
+    tracks = {
+        "quant_ridge_no_overlay": _t("quant_ridge_no_overlay", 2.0),
+        "scenario_anchor": _t("scenario_anchor", -1.0),
+        "event_overlay": _t("event_overlay", 1.0),
+    }
+    result = run_combiner("equal_weight_quant_3", tracks)
+    assert set(result.tracks_used) == {"quant_ridge_no_overlay", "scenario_anchor", "event_overlay"}
+    assert result.expected_return_pct == pytest.approx(0.6667, abs=1e-3)
+
+
+@pytest.mark.unit
+def test_walk_forward_track_ids_excludes_debate_until_archive(monkeypatch):
+    from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
+        walk_forward_track_ids,
+    )
+
+    monkeypatch.setattr(
+        "trade_integrations.context.hub.count_agent_debate_history",
+        lambda _t: 10,
+    )
+    ids = walk_forward_track_ids(ticker="NIFTY")
+    assert "debate_numeric" not in ids
+
+    monkeypatch.setattr(
+        "trade_integrations.context.hub.count_agent_debate_history",
+        lambda _t: 60,
+    )
+    ids_ok = walk_forward_track_ids(ticker="NIFTY")
+    assert "debate_numeric" in ids_ok
+
+
+@pytest.mark.unit
+def test_agent_debate_history_roundtrip(tmp_path, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: tmp_path)
+    payload = {"as_of": "2026-07-17", "final_trade_decision": "Bullish +1.0%"}
+    hub_mod.save_agent_debate("NIFTY", payload)
+    assert hub_mod.count_agent_debate_history("NIFTY") == 1
+    loaded = hub_mod.load_agent_debate_json("NIFTY", as_of_day="2026-07-17")
+    assert loaded is not None
+    assert loaded["final_trade_decision"] == "Bullish +1.0%"
+    missing = tmp_path / "NIFTY" / "agent_debate" / "history" / "2026-07-18.json"
+    assert not missing.is_file()
+
+
+@pytest.mark.unit
+def test_lightgbm_macro_deferred_when_phase3_gate_passed(monkeypatch):
+    monkeypatch.setenv("INDEX_PREDICTION_DIRECTION_OOS_PCT", "50")
+    monkeypatch.setenv("INDEX_PREDICTION_EXPERIMENTAL_TRACKS", "0")
+    monkeypatch.setenv("INDEX_PREDICTION_ML_WALKFORWARD", "0")
+    ctx = _base_context()
+    track = run_all_tracks(ctx, track_ids=["lightgbm_macro"])["lightgbm_macro"]
+    assert track.available is False
+    assert track.provenance.get("reason") == "deferred_phase3_gate_passed"
+
+
+@pytest.mark.unit
+def test_xgboost_macro_deferred_when_phase3_gate_passed(monkeypatch):
+    monkeypatch.setenv("INDEX_PREDICTION_DIRECTION_OOS_PCT", "50")
+    monkeypatch.setenv("INDEX_PREDICTION_EXPERIMENTAL_TRACKS", "0")
+    monkeypatch.setenv("INDEX_PREDICTION_ML_WALKFORWARD", "0")
+    ctx = _base_context()
+    track = run_all_tracks(ctx, track_ids=["xgboost_macro"])["xgboost_macro"]
+    assert track.available is False
+    assert track.provenance.get("experiment_id") == "xgboost_ensemble"
+
+
+@pytest.mark.unit
+def test_automl_cached_missing_artifact():
+    ctx = _base_context()
+    track = run_all_tracks(ctx, track_ids=["automl_cached"])["automl_cached"]
+    assert track.available is False
+    assert track.provenance.get("reason") == "artifact_missing"
+
+
+@pytest.mark.unit
+def test_walk_forward_track_ids_include_ml_by_default(monkeypatch):
+    from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
+        walk_forward_track_ids,
+    )
+
+    monkeypatch.delenv("INDEX_PREDICTION_ML_WALKFORWARD", raising=False)
+    extended = walk_forward_track_ids()
+    assert "xgboost_macro" in extended
+    assert "automl_cached" not in extended
+
+    monkeypatch.setenv("INDEX_PREDICTION_ML_WALKFORWARD", "0")
+    base = walk_forward_track_ids()
+    assert "xgboost_macro" not in base
+
+
+@pytest.mark.unit
+def test_walk_forward_track_ids_include_ml_when_flag(monkeypatch):
+    from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
+        walk_forward_track_ids,
+    )
+
+    monkeypatch.setenv("INDEX_PREDICTION_ML_WALKFORWARD", "0")
+    base = walk_forward_track_ids()
+    assert "xgboost_macro" not in base
+
+    monkeypatch.setenv("INDEX_PREDICTION_ML_WALKFORWARD", "1")
+    extended = walk_forward_track_ids()
+    assert "xgboost_macro" in extended
+    assert "automl_cached" not in extended
+
+
+@pytest.mark.unit
+def test_debate_numeric_parses_pct(monkeypatch):
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.prediction_algorithms.tracks.debate_numeric.debate_backtest_eligible",
+        lambda _t: True,
+    )
     ctx = _base_context(
         debate_payload={
             "rating": 7,
@@ -354,7 +474,7 @@ def test_debate_numeric_parses_pct():
     track = run_all_tracks(ctx, track_ids=["debate_numeric"])["debate_numeric"]
     assert track.available is True
     assert track.expected_return_pct == pytest.approx(2.5)
-    assert track.backtest_eligible is False
+    assert track.backtest_eligible is True
 
 
 @pytest.mark.unit

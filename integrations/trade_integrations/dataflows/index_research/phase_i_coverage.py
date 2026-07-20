@@ -49,6 +49,10 @@ def audit_phase_i_coverage(frame: pd.DataFrame) -> dict[str, Any]:
         "row_count": rows,
         "min_rows": _MIN_HISTORY_ROWS,
         "min_coverage_pct": _MIN_COVERAGE_RATIO * 100,
+        "ablation_note": (
+            "Per-group +3 pp walk-forward ablation is manual via scripts/run_track_backtest.py "
+            "and equation_diagnostics.block_ablation; coverage gate selects Ridge candidates only."
+        ),
     }
 
 

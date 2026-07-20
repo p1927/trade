@@ -16,6 +16,21 @@ DEFERRED_EXPERIMENTS: tuple[dict[str, str], ...] = (
         "skip_if": "Phase 3 ablation passes +3pp gate",
     },
     {
+        "id": "xgboost_ensemble",
+        "when": "Tabular gradient boosting alternative to LightGBM",
+        "skip_if": "Phase 3 ablation passes +3pp gate",
+    },
+    {
+        "id": "arimax_macro",
+        "when": "Classical exogenous ARIMAX for macro channels",
+        "skip_if": "Phase 3 ablation passes +3pp gate",
+    },
+    {
+        "id": "darts_macro",
+        "when": "Sequential covariate model via Darts",
+        "skip_if": "Phase 3 ablation passes +3pp gate",
+    },
+    {
         "id": "lstm_auxiliary_2_3d",
         "when": "User wants tactical horizon and rule-based TA insufficient",
         "skip_if": "OOS rejects LSTM auxiliary on walk-forward",
@@ -39,7 +54,43 @@ def phase3_gate_passed(direction_oos_pct: float) -> bool:
 
 
 def should_run_experiment(experiment_id: str, *, direction_oos_pct: float) -> bool:
-    """Gate deferred ML experiments behind documented Phase 3 OOS failure."""
+    """Run ML experiments when enabled (default on) — parallel with quant_ridge."""
     if experiment_id == "quantmuse_import":
         return False
+    from trade_integrations.dataflows.index_research.prediction_algorithms.config import (
+        experimental_tracks_enabled,
+        ml_walkforward_enabled,
+    )
+
+    if experimental_tracks_enabled() or ml_walkforward_enabled():
+        return True
     return not phase3_gate_passed(direction_oos_pct)
+
+
+def resolve_direction_oos_pct(ticker: str = "NIFTY") -> float:
+    """Direction hit rate for gating — scoreboard quant_ridge, env override, or baseline."""
+    import os
+
+    env_raw = os.getenv("INDEX_PREDICTION_DIRECTION_OOS_PCT", "").strip()
+    if env_raw:
+        try:
+            return float(env_raw)
+        except ValueError:
+            pass
+
+    try:
+        from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.scoreboard import (
+            load_scoreboard,
+        )
+
+        board = load_scoreboard(ticker.strip().upper())
+        if board:
+            tracks = board.get("tracks") or {}
+            quant = tracks.get("quant_ridge") or {}
+            rate = quant.get("direction_hit_rate")
+            if rate is not None:
+                return float(rate) * 100.0
+    except Exception:
+        pass
+
+    return PHASE3_OOS_BASELINE_DIRECTION_PCT

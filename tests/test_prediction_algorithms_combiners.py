@@ -9,7 +9,10 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.combiners
     equal_weight_combine,
     inverse_mae_combine,
 )
-from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import evaluate_promotion
+from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import (
+    bootstrap_view_margin_ci,
+    evaluate_promotion,
+)
 from trade_integrations.dataflows.index_research.prediction_algorithms.types import ForecastTrack
 
 
@@ -68,6 +71,35 @@ def test_stress_conditional_high_stress():
     assert calm.combiner_id == "quant_only" or calm.tracks_used == ["quant_ridge"]
     assert stressed.combiner_id == "stress_conditional"
     assert len(stressed.tracks_used) >= 2
+
+
+@pytest.mark.unit
+def test_bootstrap_view_margin_ci_passes_strong_combiner():
+    daily = []
+    for i in range(40):
+        day = f"2026-01-{i + 1:02d}"
+        daily.append({"date": day, "track_id": "quant_ridge", "view_hit": i % 2 == 0})
+        daily.append({"date": day, "track_id": "combiner:equal_weight_2", "view_hit": True})
+    ci = bootstrap_view_margin_ci(daily, "equal_weight_2")
+    assert ci["passes"] is True
+    assert ci["lower_bound_pp"] >= 3.0
+
+
+@pytest.mark.unit
+def test_promotion_includes_debate_archive_rule(monkeypatch):
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.prediction_algorithms.promotion.debate_backtest_eligible",
+        lambda _t: False,
+    )
+    board = {
+        "eval_count": 65,
+        "tracks": {"quant_ridge": {"direction_hit_rate": 0.50, "view_hit_rate": 0.50}},
+        "combiners": {"equal_weight_2": {"direction_hit_rate": 0.54, "view_hit_rate": 0.54}},
+        "promotion_run_history": [{"promoted": ["equal_weight_2"]}, {"promoted": ["equal_weight_2"]}],
+    }
+    promo = evaluate_promotion(board, ticker="NIFTY")
+    assert promo["debate_archive_eligible"] is False
+    assert promo["debate_numeric_promotion_blocked"] is True
 
 
 @pytest.mark.unit

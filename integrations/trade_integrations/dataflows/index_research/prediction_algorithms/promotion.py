@@ -16,12 +16,18 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator
 from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
     COMBINER_THREE_TRACK_IDS,
     INVERSE_MAE_WINDOWS,
+    ML_SEQUENTIAL_TRACK_IDS,
+    ML_TABULAR_TRACK_IDS,
+    debate_backtest_eligible,
 )
 
 _MIN_EVAL_COUNT = 60
 _VIEW_MARGIN = 0.03
 _WEIGHT_STABILITY_MAX_STD = 0.25
 _CONSECUTIVE_RUNS_REQUIRED = 2
+_BOOTSTRAP_SAMPLES = 500
+_BOOTSTRAP_CONFIDENCE = 0.95
+_BOOTSTRAP_MIN_PAIRS = 30
 _WEIGHT_STABILITY_COMBINERS = frozenset(
     {"inverse_mae_w6", "inverse_mae_w12", "shrinkage_50", "alignment_grid"},
 )
@@ -49,6 +55,75 @@ def _weight_stability_ok(weight_history: list[dict[str, Any]], combiner_id: str)
         if var**0.5 > _WEIGHT_STABILITY_MAX_STD:
             return False
     return True
+
+
+def _paired_view_hits(
+    daily_evaluations: list[dict[str, Any]],
+    combiner_id: str,
+    *,
+    quant_track_id: str = "quant_ridge",
+) -> list[tuple[bool, bool]]:
+    """Align combiner vs quant view_hit booleans by evaluation date."""
+    combiner_track = f"combiner:{combiner_id}"
+    by_date: dict[str, dict[str, bool]] = {}
+    for row in daily_evaluations:
+        tid = str(row.get("track_id") or "")
+        if tid not in (combiner_track, quant_track_id):
+            continue
+        day = str(row.get("date") or "")[:10]
+        if not day:
+            continue
+        hit = row.get("view_hit")
+        if hit is None:
+            continue
+        by_date.setdefault(day, {})[tid] = bool(hit)
+    pairs: list[tuple[bool, bool]] = []
+    for hits in by_date.values():
+        if combiner_track in hits and quant_track_id in hits:
+            pairs.append((hits[combiner_track], hits[quant_track_id]))
+    return pairs
+
+
+def bootstrap_view_margin_ci(
+    daily_evaluations: list[dict[str, Any]],
+    combiner_id: str,
+    *,
+    quant_track_id: str = "quant_ridge",
+    n_samples: int = _BOOTSTRAP_SAMPLES,
+    confidence: float = _BOOTSTRAP_CONFIDENCE,
+    margin: float = _VIEW_MARGIN,
+) -> dict[str, Any]:
+    """Bootstrap lower bound on combiner view-hit rate minus quant (premortem M1)."""
+    pairs = _paired_view_hits(daily_evaluations, combiner_id, quant_track_id=quant_track_id)
+    n_pairs = len(pairs)
+    if n_pairs < _BOOTSTRAP_MIN_PAIRS:
+        return {
+            "passes": False,
+            "reason": "insufficient_pairs",
+            "n_pairs": n_pairs,
+            "min_pairs": _BOOTSTRAP_MIN_PAIRS,
+        }
+
+    import random
+
+    rng = random.Random(42)
+    deltas: list[float] = []
+    for _ in range(n_samples):
+        sample = [pairs[rng.randrange(n_pairs)] for _ in range(n_pairs)]
+        comb_rate = sum(1 for c, _q in sample if c) / n_pairs
+        quant_rate = sum(1 for _c, q in sample if q) / n_pairs
+        deltas.append(comb_rate - quant_rate)
+    deltas.sort()
+    lower_idx = max(0, int((1.0 - confidence) / 2.0 * n_samples))
+    lower = deltas[lower_idx]
+    return {
+        "passes": lower >= margin,
+        "lower_bound_pp": round(lower * 100.0, 2),
+        "margin_pp": round(margin * 100.0, 2),
+        "n_pairs": n_pairs,
+        "confidence": confidence,
+        "n_samples": n_samples,
+    }
 
 
 def _append_promotion_run_history(scoreboard: dict[str, Any], raw_promoted: list[str]) -> list[dict[str, Any]]:
@@ -86,15 +161,20 @@ def _stable_from_history(scoreboard: dict[str, Any]) -> list[str]:
     return stable
 
 
-def evaluate_promotion(scoreboard: dict[str, Any]) -> dict[str, Any]:
-    """Return promotion verdict for each combiner vs quant_ridge (view-aligned metric)."""
+_MAE_IMPROVEMENT_RATIO = 0.98
+
+
+def evaluate_promotion(scoreboard: dict[str, Any], *, ticker: str = "NIFTY") -> dict[str, Any]:
+    """Return promotion verdict for each combiner vs quant_ridge (view + MAE)."""
     tracks = scoreboard.get("tracks") or {}
     combiners = scoreboard.get("combiners") or {}
     quant = tracks.get("quant_ridge") or {}
     if quant.get("backtest_eligible") is False:
         quant = {}
     quant_view = float(quant.get("view_hit_rate") or quant.get("direction_hit_rate") or 0.0)
+    quant_mae = float(quant.get("mae_pct") or 999.0)
     eval_count = int(scoreboard.get("eval_count") or quant.get("eval_count") or 0)
+    debate_archive_ok = debate_backtest_eligible(ticker)
 
     verdicts: dict[str, Any] = {}
     equal = combiners.get("equal_weight_2") or {}
@@ -106,15 +186,21 @@ def evaluate_promotion(scoreboard: dict[str, Any]) -> dict[str, Any]:
             continue
         hit = float(row.get("view_hit_rate") or row.get("direction_hit_rate") or 0.0)
         dir_hit = float(row.get("direction_hit_rate") or 0.0)
+        row_mae = float(row.get("mae_pct") or 999.0)
+        mae_passes = row_mae <= quant_mae * _MAE_IMPROVEMENT_RATIO if quant_mae < 900 else True
         passes = (
             eval_count >= _MIN_EVAL_COUNT
             and hit >= quant_view + _VIEW_MARGIN
             and hit >= equal_view
+            and mae_passes
         )
         verdicts[cid] = {
             "promoted": passes,
             "view_hit_rate": hit,
             "direction_hit_rate": dir_hit,
+            "mae_pct": row_mae,
+            "quant_mae_pct": quant_mae if quant_mae < 900 else None,
+            "mae_passes": mae_passes,
             "delta_vs_quant_pp": round((hit - quant_view) * 100, 2),
             "eval_count": eval_count,
             "insufficient_evidence": eval_count < _MIN_EVAL_COUNT,
@@ -126,17 +212,35 @@ def evaluate_promotion(scoreboard: dict[str, Any]) -> dict[str, Any]:
         key=lambda c: (-float(verdicts[c].get("view_hit_rate") or 0.0), c),
     )
     stable = _stable_from_history(scoreboard)
+    daily = scoreboard.get("daily_evaluations") or []
+    bootstrap_by_combiner: dict[str, Any] = {}
+    if not daily:
+        stable_bootstrap = stable
+    else:
+        bootstrap_ok: list[str] = []
+        for cid in raw_promoted:
+            ci = bootstrap_view_margin_ci(daily, cid)
+            bootstrap_by_combiner[cid] = ci
+            if ci.get("passes"):
+                bootstrap_ok.append(cid)
+        stable_bootstrap = [c for c in stable if c in bootstrap_ok]
 
     return {
         "eval_count": eval_count,
         "quant_view_hit_rate": quant_view,
         "quant_direction_hit_rate": float(quant.get("direction_hit_rate") or 0.0),
+        "quant_mae_pct": quant_mae if quant_mae < 900 else None,
+        "mae_improvement_ratio": _MAE_IMPROVEMENT_RATIO,
         "verdicts": verdicts,
-        "promoted_combiners": stable,
+        "promoted_combiners": stable_bootstrap,
         "raw_promoted_combiners": raw_promoted,
-        "auto_promote_allowed": bool(stable) and eval_count >= _MIN_EVAL_COUNT,
+        "auto_promote_allowed": bool(stable_bootstrap) and eval_count >= _MIN_EVAL_COUNT,
         "min_eval_count_required": _MIN_EVAL_COUNT,
         "consecutive_runs_required": _CONSECUTIVE_RUNS_REQUIRED,
+        "bootstrap_ci": bootstrap_by_combiner,
+        "bootstrap_min_pairs": _BOOTSTRAP_MIN_PAIRS,
+        "debate_archive_eligible": debate_archive_ok,
+        "debate_numeric_promotion_blocked": not debate_archive_ok,
     }
 
 
@@ -147,10 +251,10 @@ def finalize_scoreboard_promotion(report: dict[str, Any], *, ticker: str = "NIFT
     if prev and prev.get("promotion_run_history"):
         out["promotion_run_history"] = list(prev["promotion_run_history"])
 
-    interim = evaluate_promotion(out)
+    interim = evaluate_promotion(out, ticker=ticker)
     raw = interim.get("raw_promoted_combiners") or []
     out["promotion_run_history"] = _append_promotion_run_history(out, raw)
-    promo = evaluate_promotion(out)
+    promo = evaluate_promotion(out, ticker=ticker)
     out["promotion"] = promo
     return out
 
@@ -167,11 +271,14 @@ def resolve_combiner_runtime_kwargs(
         return {}
     kwargs: dict[str, Any] = {}
     window = INVERSE_MAE_WINDOWS.get(combiner_id)
-    if window is not None or combiner_id == "shrinkage_50":
+    if window is not None or combiner_id in ("shrinkage_50", "stacked_ridge_meta", "equal_weight_ml_3"):
         w = window or INVERSE_MAE_WINDOWS.get("inverse_mae_w6", 6)
+        track_ids = list(COMBINER_THREE_TRACK_IDS)
+        if combiner_id in ("stacked_ridge_meta", "equal_weight_ml_3"):
+            track_ids = ["quant_ridge", *ML_TABULAR_TRACK_IDS, *ML_SEQUENTIAL_TRACK_IDS]
         kwargs["mae_by_track"] = mae_by_track_from_scoreboard(
             board,
-            track_ids=COMBINER_THREE_TRACK_IDS,
+            track_ids=track_ids,
             window=w,
             before_date=as_of_day,
         )
@@ -191,7 +298,7 @@ def resolve_active_combiner(*, default: str | None = None, ticker: str = "NIFTY"
     if not board:
         return "quant_only"
 
-    promo = evaluate_promotion(board)
+    promo = evaluate_promotion(board, ticker=ticker)
     if not promo.get("auto_promote_allowed"):
         return "quant_only"
 

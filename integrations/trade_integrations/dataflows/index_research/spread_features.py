@@ -32,6 +32,22 @@ def compute_level_momentum(series: pd.Series, days: int = 5) -> pd.Series:
     return series.astype(float) - series.astype(float).shift(days)
 
 
+def compute_credit_spread_proxy(term_spread: pd.Series | float) -> pd.Series | float:
+    """Documented BAA-AAA proxy when CRISIL series unavailable.
+
+    Maps India G-Sec term spread (10Y − 91D, %) to a corporate credit spread (%):
+    baseline 0.45% + 0.18 × term spread, floored at 0.35%.
+    """
+    if isinstance(term_spread, pd.Series):
+        spread = pd.to_numeric(term_spread, errors="coerce")
+        return (0.45 + 0.18 * spread).clip(lower=0.35)
+    try:
+        val = float(term_spread)
+    except (TypeError, ValueError):
+        return np.nan
+    return max(0.35, 0.45 + 0.18 * val)
+
+
 def enrich_spread_columns(frame: pd.DataFrame) -> pd.DataFrame:
     """Add velocity / momentum / spread columns."""
     if frame.empty:
@@ -55,8 +71,16 @@ def enrich_spread_columns(frame: pd.DataFrame) -> pd.DataFrame:
             out["india_91d_tbill"], errors="coerce"
         )
 
-    if "india_credit_spread" not in out.columns:
-        out["india_credit_spread"] = np.nan
+    if "india_credit_spread" not in out.columns or pd.to_numeric(out.get("india_credit_spread"), errors="coerce").isna().all():
+        if "india_term_spread" in out.columns:
+            out["india_credit_spread"] = compute_credit_spread_proxy(out["india_term_spread"])
+        elif "india_10y" in out.columns and "india_91d_tbill" in out.columns:
+            term = pd.to_numeric(out["india_10y"], errors="coerce") - pd.to_numeric(
+                out["india_91d_tbill"], errors="coerce"
+            )
+            out["india_credit_spread"] = compute_credit_spread_proxy(term)
+        else:
+            out["india_credit_spread"] = np.nan
 
     return out
 
@@ -79,6 +103,20 @@ def spread_factor_rows_from_dict(factors: dict) -> list[dict]:
                     "source": "spread_features",
                 }
             )
+        except (TypeError, ValueError):
+            pass
+    elif factors.get("india_10y") is not None and factors.get("india_91d_tbill") is not None:
+        try:
+            term = float(factors["india_10y"]) - float(factors["india_91d_tbill"])
+            proxy = compute_credit_spread_proxy(term)
+            if not pd.isna(proxy):
+                rows.append(
+                    {
+                        "factor": "india_credit_spread",
+                        "value": float(proxy),
+                        "source": "spread_features_proxy",
+                    }
+                )
         except (TypeError, ValueError):
             pass
     return rows

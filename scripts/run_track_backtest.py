@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 
@@ -15,7 +16,15 @@ def main() -> int:
     parser.add_argument("--horizon-days", type=int, default=None)
     parser.add_argument("--eval-step", type=int, default=5)
     parser.add_argument("--min-train-rows", type=int, default=40)
+    parser.add_argument(
+        "--include-ml-tracks",
+        action="store_true",
+        help="Set INDEX_PREDICTION_ML_WALKFORWARD=1 for experimental ML tracks",
+    )
     args = parser.parse_args()
+
+    if args.include_ml_tracks:
+        os.environ["INDEX_PREDICTION_ML_WALKFORWARD"] = "1"
 
     from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.walk_forward import (
         run_track_walk_forward,

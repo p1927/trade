@@ -21,7 +21,14 @@ def safe_run_track(
     eligible = TRACK_BACKTEST_ELIGIBLE.get(track_id, False)
     try:
         track = runner(ctx)
-        track.backtest_eligible = eligible
+        if track_id == "debate_numeric":
+            prov = track.provenance or {}
+            if prov.get("backtest_eligible") is not None:
+                track.backtest_eligible = bool(prov.get("backtest_eligible"))
+            else:
+                track.backtest_eligible = eligible
+        else:
+            track.backtest_eligible = eligible
         return track
     except Exception as exc:
         return ForecastTrack(

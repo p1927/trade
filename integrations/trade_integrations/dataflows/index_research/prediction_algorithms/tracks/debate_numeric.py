@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from trade_integrations.research.debate_synthesis import extract_structured_debate
 
+from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
+    debate_backtest_eligible,
+)
 from trade_integrations.dataflows.index_research.prediction_algorithms.types import ForecastTrack, TrackContext
 
 
 def run_debate_numeric(ctx: TrackContext) -> ForecastTrack:
+    archive_ok = debate_backtest_eligible(ctx.ticker)
     debate = extract_structured_debate(ctx.debate_payload)
     if not debate or debate.get("expected_return_pct") is None:
         return ForecastTrack(
@@ -16,7 +20,11 @@ def run_debate_numeric(ctx: TrackContext) -> ForecastTrack:
             view=str(debate.get("view") or "neutral") if debate else "neutral",
             available=False,
             backtest_eligible=False,
-            provenance={"reason": "debate_unavailable", "backtest_eligible": False},
+            provenance={
+                "reason": "debate_unavailable",
+                "backtest_eligible": False,
+                "debate_archive_eligible": archive_ok,
+            },
         )
 
     value = float(debate.get("expected_return_pct") or 0.0)
@@ -25,8 +33,12 @@ def run_debate_numeric(ctx: TrackContext) -> ForecastTrack:
         expected_return_pct=round(value, 4),
         view=str(debate.get("view") or "neutral"),
         confidence=_optional_float(debate.get("direction_confidence")),
-        backtest_eligible=False,
-        provenance={"source": "agent_debate", "backtest_eligible": False},
+        backtest_eligible=archive_ok,
+        provenance={
+            "source": "agent_debate",
+            "backtest_eligible": archive_ok,
+            "debate_archive_eligible": archive_ok,
+        },
     )
 
 

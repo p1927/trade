@@ -33,3 +33,23 @@ def scoreboard_auto_refresh() -> bool:
     if not lab_enabled():
         return False
     return _env_bool("INDEX_PREDICTION_SCOREBOARD_AUTO_REFRESH", default=True)
+
+
+def experimental_tracks_enabled() -> bool:
+    """Include ML experiment tracks in live forecast lab (parallel with canonical tracks)."""
+    return _env_bool("INDEX_PREDICTION_EXPERIMENTAL_TRACKS", default=True)
+
+
+def ml_walkforward_enabled() -> bool:
+    """Include ML experiment tracks in walk-forward backtest."""
+    return _env_bool("INDEX_PREDICTION_ML_WALKFORWARD", default=True)
+
+
+def exec_sim_enabled() -> bool:
+    """Enable execution simulation API and scripts."""
+    return _env_bool("INDEX_PREDICTION_EXEC_SIM_ENABLED", default=True)
+
+
+def pandas_ta_enabled() -> bool:
+    """Append pandas-ta columns during panel enrichment."""
+    return _env_bool("INDEX_PREDICTION_PANDAS_TA", default=True)

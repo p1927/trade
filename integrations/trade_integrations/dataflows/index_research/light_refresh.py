@@ -256,11 +256,17 @@ def run_index_light_refresh(
         )
 
         try:
-            from trade_integrations.nse_browser.repository import ingest_repository_to_hub
+            from trade_integrations.dataflows.index_research.history_ingest import run_history_incremental_sync
 
-            ingest_repository_to_hub()
+            run_history_incremental_sync(days=30, explicit=False)
         except Exception as ingest_exc:
-            logger.debug("nse repo ingest skipped: %s", ingest_exc)
+            logger.debug("history incremental sync skipped: %s", ingest_exc)
+            try:
+                from trade_integrations.nse_browser.repository import ingest_repository_to_hub
+
+                ingest_repository_to_hub(skip_repo_sync=True, allow_live_fetch=False, explicit=False)
+            except Exception as hub_exc:
+                logger.debug("nse repo ingest skipped: %s", hub_exc)
 
         today = _date.today().isoformat()
         if os.environ.get("NSE_BROWSER_ON_REFRESH", "").strip().lower() in {"1", "true", "yes"}:

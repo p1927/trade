@@ -71,7 +71,7 @@ def _cold_tier_rbi_rate_series(trading_dates: list[str], column: str) -> pd.Seri
 
 
 def _cold_tier_news_sentiment_series(trading_dates: list[str]) -> pd.Series:
-    """Map cold-tier news sentiment_mean to index_sentiment [-1, 1]."""
+    """Map cold-tier news sentiment_mean to index_sentiment [-1, 1] via merge_asof."""
     from trade_integrations.dataflows.index_research.history_store import load_history_dataset
 
     frame = load_history_dataset("india_news_sentiment_daily")
@@ -86,27 +86,9 @@ def _cold_tier_news_sentiment_series(trading_dates: list[str]) -> pd.Series:
     if col is None:
         return pd.Series(dtype=float)
     daily = frame[["date", col]].copy()
-    daily["date"] = daily["date"].astype(str).str[:10]
-    daily[col] = pd.to_numeric(daily[col], errors="coerce")
-    mapped = daily.set_index("date")[col]
-    out: dict[str, float] = {}
-    for day in trading_dates:
-        if day in mapped.index and pd.notna(mapped[day]):
-            out[day] = float(np.clip(mapped[day], -1.0, 1.0))
-    return pd.Series(out)
-
-
-def _cold_tier_nifty_pe_series(trading_dates: list[str]) -> pd.Series:
-    """Per-date trailing P/E from cold-tier valuation — no terminal-close scaling."""
-    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
-
-    frame = load_history_dataset("nifty50_valuation_daily")
-    if frame.empty or "nifty_pe" not in frame.columns:
-        return pd.Series(dtype=float)
-    daily = frame[["date", "nifty_pe"]].copy()
     daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
-    daily["nifty_pe"] = pd.to_numeric(daily["nifty_pe"], errors="coerce")
-    daily = daily.dropna(subset=["nifty_pe"]).sort_values("date").drop_duplicates("date", keep="last")
+    daily[col] = pd.to_numeric(daily[col], errors="coerce")
+    daily = daily.dropna(subset=[col]).sort_values("date").drop_duplicates("date", keep="last")
     if daily.empty:
         return pd.Series(dtype=float)
     trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
@@ -116,7 +98,36 @@ def _cold_tier_nifty_pe_series(trading_dates: list[str]) -> pd.Series:
         on="date",
         direction="backward",
     )
-    return pd.Series(merged["nifty_pe"].values, index=trading_dates)
+    values = np.clip(merged[col].astype(float), -1.0, 1.0)
+    return pd.Series(values.values, index=trading_dates)
+
+
+def _cold_tier_valuation_series(trading_dates: list[str], column: str) -> pd.Series:
+    """Per-date valuation column from cold-tier nifty50_valuation_daily (backward asof)."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    frame = load_history_dataset("nifty50_valuation_daily")
+    if frame.empty or column not in frame.columns:
+        return pd.Series(dtype=float)
+    daily = frame[["date", column]].copy()
+    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily[column] = pd.to_numeric(daily[column], errors="coerce")
+    daily = daily.dropna(subset=[column]).sort_values("date").drop_duplicates("date", keep="last")
+    if daily.empty:
+        return pd.Series(dtype=float)
+    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    merged = pd.merge_asof(
+        trading.sort_values("date"),
+        daily.sort_values("date"),
+        on="date",
+        direction="backward",
+    )
+    return pd.Series(merged[column].values, index=trading_dates)
+
+
+def _cold_tier_nifty_pe_series(trading_dates: list[str]) -> pd.Series:
+    """Per-date trailing P/E from cold-tier valuation — no terminal-close scaling."""
+    return _cold_tier_valuation_series(trading_dates, "nifty_pe")
 
 
 def _rolling_sum_on_trading_dates(
@@ -226,11 +237,17 @@ def _merge_flow_columns(
         if not cold_pe.empty:
             _map_series("nifty_pe", cold_pe)
 
-    if "index_sentiment" not in out.columns or pd.to_numeric(out.get("index_sentiment"), errors="coerce").isna().all():
-        news_sent = _cold_tier_news_sentiment_series(dates)
-        if not news_sent.empty:
-            _map_series("index_sentiment", news_sent)
-        elif "fii_sentiment_score" in out.columns:
+    for val_col in ("nifty_pb", "nifty_dividend_yield"):
+        if val_col not in out.columns or pd.to_numeric(out.get(val_col), errors="coerce").isna().all():
+            cold_val = _cold_tier_valuation_series(dates, val_col)
+            if not cold_val.empty:
+                _map_series(val_col, cold_val)
+
+    news_sent = _cold_tier_news_sentiment_series(dates)
+    if not news_sent.empty:
+        _map_series("index_sentiment", news_sent)
+    elif "index_sentiment" not in out.columns or pd.to_numeric(out.get("index_sentiment"), errors="coerce").isna().all():
+        if "fii_sentiment_score" in out.columns:
             scores = pd.to_numeric(out["fii_sentiment_score"], errors="coerce")
             out["index_sentiment"] = np.clip((scores - 50.0) / 50.0, -1.0, 1.0)
         elif "india_vix" in out.columns:
@@ -302,6 +319,13 @@ def _append_repo_and_india_rates(frame: pd.DataFrame) -> pd.DataFrame:
         or pd.to_numeric(out.get("india_credit_spread"), errors="coerce").isna().all()
     ):
         out["india_credit_spread"] = float(credit_override)
+    elif "india_credit_spread" not in out.columns or pd.to_numeric(out.get("india_credit_spread"), errors="coerce").isna().all():
+        from trade_integrations.dataflows.index_research.spread_features import compute_credit_spread_proxy
+
+        term = pd.to_numeric(out.get("india_10y"), errors="coerce") - pd.to_numeric(
+            out.get("india_91d_tbill"), errors="coerce"
+        )
+        out["india_credit_spread"] = compute_credit_spread_proxy(term)
 
     return out
 
@@ -317,4 +341,25 @@ def enrich_prediction_panel(
     out = frame.copy()
     out = _merge_flow_columns(out, allow_live_fetch=allow_live_fetch)
     out = _append_repo_and_india_rates(out)
+    try:
+        from trade_integrations.dataflows.index_research.fundamental_features import enrich_fundamental_columns
+        from trade_integrations.dataflows.index_research.spread_features import enrich_spread_columns
+
+        out = enrich_fundamental_columns(out)
+        out = enrich_spread_columns(out)
+    except Exception:
+        pass
+    try:
+        from trade_integrations.dataflows.index_research.ml_adapters.macro_lag_features import enrich_macro_lag_columns
+        from trade_integrations.dataflows.index_research.ml_adapters.stationary_frame import to_stationary_pct_change
+        from trade_integrations.dataflows.index_research.prediction_algorithms.config import pandas_ta_enabled
+
+        out = enrich_macro_lag_columns(out)
+        out = to_stationary_pct_change(out)
+        if pandas_ta_enabled():
+            from trade_integrations.dataflows.index_research.ml_adapters.ta_pandas_ta import enrich_pandas_ta_columns
+
+            out = enrich_pandas_ta_columns(out)
+    except Exception:
+        pass
     return out

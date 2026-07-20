@@ -79,6 +79,11 @@ REQUIRED_COLD_DATASETS: dict[str, dict[str, Any]] = {
         "factors": ("index_sentiment",),
         "tracks": ("quant_ridge", "bottom_up", "event_overlay"),
     },
+    "india_macro_annual": {
+        "source": "historic_data/India_Stock_Market_Data.xlsx",
+        "factors": ("gdp_growth_pct", "inflation_pct", "sensex_return_pct"),
+        "tracks": ("macro_only", "cause_layer"),
+    },
 }
 
 # Derived at panel materialize time (no separate cold dataset).
@@ -100,6 +105,15 @@ PANEL_DERIVED_FACTORS: tuple[str, ...] = (
     "is_budget_week",
     "is_results_season",
 )
+
+try:
+    from trade_integrations.dataflows.index_research.ml_adapters.macro_lag_features import (
+        MACRO_LAG_FACTOR_KEYS,
+    )
+
+    PANEL_DERIVED_FACTORS = PANEL_DERIVED_FACTORS + MACRO_LAG_FACTOR_KEYS
+except ImportError:
+    pass
 
 # Explicitly out of scope for index prediction cold tier.
 EXCLUDED_DATA: dict[str, str] = {

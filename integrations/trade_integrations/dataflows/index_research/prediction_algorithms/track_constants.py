@@ -29,6 +29,13 @@ COMBINER_THREE_TRACK_IDS: tuple[str, ...] = (
     "event_overlay",
 )
 
+# Fair quant combiner — Ridge hybrid without baked overlay + scenario + standalone overlay.
+COMBINER_QUANT_THREE_TRACK_IDS: tuple[str, ...] = (
+    "quant_ridge_no_overlay",
+    "scenario_anchor",
+    "event_overlay",
+)
+
 # Tracks used by 2-way combiners (macro with overlay baked in + scenario).
 COMBINER_TWO_TRACK_IDS: tuple[str, ...] = (
     "macro_only",
@@ -39,12 +46,34 @@ BACKTEST_COMBINER_IDS: tuple[str, ...] = (
     "quant_only",
     "equal_weight_2",
     "equal_weight_3",
+    "equal_weight_quant_3",
     "inverse_mae_w6",
     "inverse_mae_w12",
     "shrinkage_50",
     "alignment_grid",
     "stress_conditional",
     "fixed_legacy",
+    "stacked_ridge_meta",
+    "equal_weight_ml_3",
+)
+
+# Gated ML experiments — not in default walk-forward or combiner merge v1.
+EXPERIMENTAL_TRACK_IDS: tuple[str, ...] = (
+    "lightgbm_macro",
+    "xgboost_macro",
+    "arimax_macro",
+    "darts_macro",
+    "automl_cached",
+)
+
+ML_TABULAR_TRACK_IDS: tuple[str, ...] = (
+    "lightgbm_macro",
+    "xgboost_macro",
+)
+
+ML_SEQUENTIAL_TRACK_IDS: tuple[str, ...] = (
+    "arimax_macro",
+    "darts_macro",
 )
 
 TRACK_BACKTEST_ELIGIBLE: dict[str, bool] = {
@@ -59,6 +88,11 @@ TRACK_BACKTEST_ELIGIBLE: dict[str, bool] = {
     "naive_momentum": True,
     "debate_numeric": False,
     "headline_legacy": True,
+    "lightgbm_macro": True,
+    "xgboost_macro": True,
+    "arimax_macro": True,
+    "darts_macro": True,
+    "automl_cached": False,
 }
 
 _DEBATE_ARCHIVE_MIN_DATES = 60
@@ -76,9 +110,17 @@ def debate_backtest_eligible(ticker: str = "NIFTY") -> bool:
 
 def walk_forward_track_ids(*, ticker: str = "NIFTY") -> tuple[str, ...]:
     """Backtest track list; includes debate_numeric when archive threshold met."""
+    from trade_integrations.dataflows.index_research.prediction_algorithms.config import ml_walkforward_enabled
+
+    base: tuple[str, ...]
     if debate_backtest_eligible(ticker):
-        return CANONICAL_TRACK_IDS
-    return BACKTEST_TRACK_IDS
+        base = CANONICAL_TRACK_IDS
+    else:
+        base = BACKTEST_TRACK_IDS
+    if ml_walkforward_enabled():
+        extra = tuple(tid for tid in EXPERIMENTAL_TRACK_IDS if tid != "automl_cached")
+        return base + extra
+    return base
 
 TRACK_IMPLEMENTATION_NOTES: dict[str, str] = {
     "quant_ridge": "predict_nifty() — bottom-up + macro Ridge + overlay shrink",
@@ -90,7 +132,12 @@ TRACK_IMPLEMENTATION_NOTES: dict[str, str] = {
     "event_overlay": "Calibrated news_shock_calibration × topic intensity (needs shock calibration topics)",
     "naive_zero": "Intentional 0% return baseline — flat horizon forecast from anchor spot",
     "naive_momentum": "nifty_return_7d or 14d from factor snapshot",
-    "debate_numeric": "Live only — agent_debate/latest.json (no historical archive)",
+    "debate_numeric": "Structured agent debate — walk-forward uses history/{date}.json when archive ≥60",
+    "lightgbm_macro": "Deferred LightGBM macro experiment — gated by ml_experiments_defer (Phase G)",
+    "xgboost_macro": "XGBoost tabular macro experiment — shared tabular_track_base",
+    "arimax_macro": "statsmodels SARIMAX with macro exogenous factors",
+    "darts_macro": "Darts RegressionModel with past covariates",
+    "automl_cached": "Offline PyCaret/AutoGluon artifact reader — no hot-path import",
     "headline_legacy": "predict → scenario reconcile → finalize → optional debate merge",
 }
 
@@ -99,4 +146,4 @@ INVERSE_MAE_WINDOWS: dict[str, int] = {
     "inverse_mae_w12": 12,
 }
 
-SCOREBOARD_SCHEMA_VERSION = 4
+SCOREBOARD_SCHEMA_VERSION = 5

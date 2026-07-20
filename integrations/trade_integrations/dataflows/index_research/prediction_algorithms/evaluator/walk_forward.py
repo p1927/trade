@@ -35,7 +35,10 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.track_con
     BACKTEST_COMBINER_IDS,
     CANONICAL_TRACK_IDS,
     COMBINER_THREE_TRACK_IDS,
+    EXPERIMENTAL_TRACK_IDS,
     INVERSE_MAE_WINDOWS,
+    ML_SEQUENTIAL_TRACK_IDS,
+    ML_TABULAR_TRACK_IDS,
     SCOREBOARD_SCHEMA_VERSION,
     TRACK_BACKTEST_ELIGIBLE,
     debate_backtest_eligible,
@@ -250,6 +253,17 @@ def run_track_walk_forward(
             for tid in COMBINER_THREE_TRACK_IDS
         }
         alignment_lam = select_alignment_lambda(eval_rows, before_date=day_str)
+        mae_ml_pool = ["quant_ridge", *ML_TABULAR_TRACK_IDS, *ML_SEQUENTIAL_TRACK_IDS]
+        mae_by_track_ml = {
+            tid: summarize_track_metrics(
+                eval_rows,
+                tid,
+                window=INVERSE_MAE_WINDOWS["inverse_mae_w6"],
+                before_date=day_str,
+            ).get("mae_pct")
+            or 1.0
+            for tid in mae_ml_pool
+        }
         cause_stress = None
         try:
             from trade_integrations.dataflows.index_research.prediction_algorithms.causes.cause_stress_index import (
@@ -266,6 +280,8 @@ def run_track_walk_forward(
                 mae = mae_by_track_w6 if combiner_id == "inverse_mae_w6" else mae_by_track_w12
             elif combiner_id == "shrinkage_50":
                 mae = mae_by_track_w6
+            elif combiner_id in ("stacked_ridge_meta", "equal_weight_ml_3"):
+                mae = mae_by_track_ml
             combined = run_combiner(
                 combiner_id,
                 tracks,
@@ -297,6 +313,12 @@ def run_track_walk_forward(
     }
 
     track_summary = {tid: summarize_track_metrics(eval_rows, tid) for tid in CANONICAL_TRACK_IDS}
+    for tid in EXPERIMENTAL_TRACK_IDS:
+        if tid in track_ids:
+            row = summarize_track_metrics(eval_rows, tid)
+            row["backtest_eligible"] = TRACK_BACKTEST_ELIGIBLE.get(tid, False)
+            row["experimental"] = True
+            track_summary[tid] = row
     debate_eligible = debate_backtest_eligible(ticker)
     for tid, row in track_summary.items():
         eligible = TRACK_BACKTEST_ELIGIBLE.get(tid, False)

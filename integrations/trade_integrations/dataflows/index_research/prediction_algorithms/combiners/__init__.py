@@ -14,8 +14,11 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.combiners
     weighted_forecast,
 )
 from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
+    COMBINER_QUANT_THREE_TRACK_IDS,
     COMBINER_THREE_TRACK_IDS,
     COMBINER_TWO_TRACK_IDS,
+    ML_SEQUENTIAL_TRACK_IDS,
+    ML_TABULAR_TRACK_IDS,
 )
 from trade_integrations.dataflows.index_research.prediction_algorithms.types import (
     CombinationResult,
@@ -153,6 +156,54 @@ def combine_fixed_legacy(tracks: dict[str, ForecastTrack], **_kwargs) -> Combina
     return combine_quant_only(tracks)
 
 
+def _ml_track_pool() -> list[str]:
+    return ["quant_ridge", *ML_TABULAR_TRACK_IDS, *ML_SEQUENTIAL_TRACK_IDS]
+
+
+def combine_stacked_ridge_meta(
+    tracks: dict[str, ForecastTrack],
+    mae_by_track: dict[str, float] | None = None,
+) -> CombinationResult:
+    """Inverse-MAE weighted blend of quant_ridge + ML experiment tracks."""
+    pool = _ml_track_pool()
+    usable = available_tracks(tracks, pool)
+    if len(usable) < 2:
+        return combine_quant_only(tracks)
+    mae = mae_by_track or {t.track_id: 1.0 for t in usable}
+    value, weights = inverse_mae_combine(usable, mae)
+    return CombinationResult(
+        combiner_id="stacked_ridge_meta",
+        expected_return_pct=round(value, 4),
+        view=classify_combined(value),
+        weights=weights,
+        tracks_used=[t.track_id for t in usable],
+        provenance={"method": "inverse_mae_meta"},
+    )
+
+
+def combine_equal_weight_ml_3(
+    tracks: dict[str, ForecastTrack],
+    mae_by_track: dict[str, float] | None = None,
+) -> CombinationResult:
+    """Equal weight among best 3 ML tracks by inverse MAE (+ quant if in top 3)."""
+    pool = _ml_track_pool()
+    usable = available_tracks(tracks, pool)
+    if not usable:
+        return combine_quant_only(tracks)
+    mae = mae_by_track or {t.track_id: 1.0 for t in usable}
+    ranked = sorted(usable, key=lambda t: float(mae.get(t.track_id, 1.0)))
+    top = ranked[:3]
+    value, weights = equal_weight_combine(top)
+    return CombinationResult(
+        combiner_id="equal_weight_ml_3",
+        expected_return_pct=round(value, 4),
+        view=classify_combined(value),
+        weights=weights,
+        tracks_used=[t.track_id for t in top],
+        provenance={"method": "equal_weight_top3_ml"},
+    )
+
+
 COMBINER_REGISTRY: dict[str, CombinerFn] = {
     "quant_only": combine_quant_only,
     "equal_weight_2": lambda tracks, **kw: combine_equal_weight(
@@ -160,6 +211,9 @@ COMBINER_REGISTRY: dict[str, CombinerFn] = {
     ),
     "equal_weight_3": lambda tracks, **kw: combine_equal_weight(
         tracks, list(COMBINER_THREE_TRACK_IDS), "equal_weight_3"
+    ),
+    "equal_weight_quant_3": lambda tracks, **kw: combine_equal_weight(
+        tracks, list(COMBINER_QUANT_THREE_TRACK_IDS), "equal_weight_quant_3"
     ),
     "inverse_mae_w6": lambda tracks, **kw: combine_inverse_mae(
         tracks, list(COMBINER_THREE_TRACK_IDS), "inverse_mae_w6", kw.get("mae_by_track")
@@ -177,6 +231,8 @@ COMBINER_REGISTRY: dict[str, CombinerFn] = {
     "alignment_grid": lambda tracks, **kw: combine_alignment(tracks, lam=float(kw.get("lam") or 0.5)),
     "stress_conditional": lambda tracks, **kw: combine_stress_conditional(tracks, kw.get("cause_stress_index")),
     "fixed_legacy": combine_fixed_legacy,
+    "stacked_ridge_meta": lambda tracks, **kw: combine_stacked_ridge_meta(tracks, kw.get("mae_by_track")),
+    "equal_weight_ml_3": lambda tracks, **kw: combine_equal_weight_ml_3(tracks, kw.get("mae_by_track")),
 }
 
 

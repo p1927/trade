@@ -78,9 +78,19 @@ def resolve_india_10y(*, repo_rate: float | None = None) -> float | None:
     return None
 
 
-def resolve_india_credit_spread() -> float | None:
-    """Corporate credit spread proxy — env until CRISIL series wired."""
-    return _env_float("INDEX_INDIA_CREDIT_SPREAD")
+def resolve_india_credit_spread(*, repo_rate: float | None = None) -> float | None:
+    """Corporate credit spread — env override or term-spread proxy (no CRISIL CSV yet)."""
+    override = _env_float("INDEX_INDIA_CREDIT_SPREAD")
+    if override is not None:
+        return override
+    tbill = resolve_india_91d_tbill(repo_rate=repo_rate)
+    ten_y = resolve_india_10y(repo_rate=repo_rate)
+    if ten_y is not None and tbill is not None:
+        from trade_integrations.dataflows.index_research.spread_features import compute_credit_spread_proxy
+
+        proxy = compute_credit_spread_proxy(ten_y - tbill)
+        return float(proxy) if proxy is not None and not (isinstance(proxy, float) and proxy != proxy) else None
+    return None
 
 
 def india_rate_factor_rows(*, repo_rate: float | None = None) -> list[dict[str, Any]]:
@@ -88,14 +98,22 @@ def india_rate_factor_rows(*, repo_rate: float | None = None) -> list[dict[str, 
     rows: list[dict[str, Any]] = []
     tbill = resolve_india_91d_tbill(repo_rate=repo_rate)
     ten_y = resolve_india_10y(repo_rate=repo_rate)
-    credit = resolve_india_credit_spread()
+    credit = resolve_india_credit_spread(repo_rate=repo_rate)
 
     if tbill is not None:
         rows.append({"factor": "india_91d_tbill", "value": tbill, "source": "india_rates_proxy"})
     if ten_y is not None:
         rows.append({"factor": "india_10y", "value": ten_y, "source": "india_rates_proxy"})
     if credit is not None:
-        rows.append({"factor": "india_credit_spread", "value": credit, "source": "india_rates_env"})
+        rows.append(
+            {
+                "factor": "india_credit_spread",
+                "value": credit,
+                "source": "india_rates_env"
+                if _env_float("INDEX_INDIA_CREDIT_SPREAD") is not None
+                else "india_rates_proxy",
+            }
+        )
     if ten_y is not None and tbill is not None:
         rows.append(
             {
