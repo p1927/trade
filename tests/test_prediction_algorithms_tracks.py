@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -394,6 +395,49 @@ def test_agent_debate_history_roundtrip(tmp_path, monkeypatch):
     assert loaded["final_trade_decision"] == "Bullish +1.0%"
     missing = tmp_path / "NIFTY" / "agent_debate" / "history" / "2026-07-18.json"
     assert not missing.is_file()
+
+
+@pytest.mark.unit
+def test_seed_debate_archive_from_latest(tmp_path, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from scripts.seed_debate_archive_from_latest import seed_debate_archive_from_latest
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: tmp_path)
+    debate_dir = tmp_path / "NIFTY" / "agent_debate"
+    debate_dir.mkdir(parents=True)
+    latest = {"final_trade_decision": "Neutral", "confidence": 0.5}
+    (debate_dir / "latest.json").write_text('{"final_trade_decision":"Neutral","confidence":0.5}', encoding="utf-8")
+
+    result = seed_debate_archive_from_latest(ticker="NIFTY", days=5, step=1)
+    assert result["written"] == 5
+    assert hub_mod.count_agent_debate_history("NIFTY") == 5
+
+
+@pytest.mark.unit
+def test_causal_research_stubs_import_smoke():
+    from trade_integrations.dataflows.index_research.prediction_algorithms.causes.dowhy_stub import (
+        run_dowhy_stub,
+    )
+    from trade_integrations.dataflows.index_research.prediction_algorithms.causes.svar_stub import (
+        run_svar_stub,
+    )
+
+    assert run_svar_stub()["status"] == "not_run"
+    assert run_dowhy_stub()["status"] == "not_run"
+
+
+@pytest.mark.unit
+def test_scoreboard_includes_research_notes(tmp_path, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.scoreboard import (
+        save_scoreboard,
+    )
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: tmp_path)
+    path = save_scoreboard("NIFTY", {"tracks": {}, "daily_evaluations": []})
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "research_notes" in payload
+    assert "h2_svar" in payload["research_notes"]
 
 
 @pytest.mark.unit

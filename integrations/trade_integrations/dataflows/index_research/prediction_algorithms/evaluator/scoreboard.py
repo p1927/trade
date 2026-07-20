@@ -20,6 +20,11 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.track_con
 )
 from trade_integrations.dataflows.index_research.views import classify_index_view
 
+DEFAULT_RESEARCH_NOTES: dict[str, str] = {
+    "h2_svar": "SVAR impulse responses not run in production — see causes/svar_stub.py",
+    "h3_dowhy": "DoWhy causal estimates not run in production — see causes/dowhy_stub.py",
+}
+
 
 def scoreboard_path(ticker: str = "NIFTY") -> Path:
     return get_hub_dir() / ticker.strip().upper() / "index_research" / "track_scoreboard_latest.json"
@@ -87,6 +92,7 @@ def normalize_scoreboard_report(report: dict[str, Any]) -> dict[str, Any]:
         for tid in catalog_ids
     }
     out.setdefault("schema_version", SCOREBOARD_SCHEMA_VERSION)
+    out.setdefault("research_notes", dict(DEFAULT_RESEARCH_NOTES))
     return enrich_track_metrics_from_daily(out)
 
 
