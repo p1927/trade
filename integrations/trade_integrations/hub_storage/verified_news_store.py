@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
-from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, read_dataframe, write_dataframe
 
 _RECORDS_REL = Path("_data") / "news_verified" / "records.parquet"
 _IMPACT_LEDGER_REL = Path("_data") / "news_impact" / "ledger.parquet"
@@ -261,7 +261,7 @@ def seed_legacy_record(record: dict[str, Any]) -> None:
             if col in frame.columns:
                 frame.at[idx, col] = val
     else:
-        frame = pd.concat([frame, pd.DataFrame([incoming])], ignore_index=True)
+        frame = concat_dataframes(frame, pd.DataFrame([incoming]))
     write_dataframe(_coerce_records_frame(frame), verified_records_path())
 
 
@@ -402,13 +402,10 @@ def append_impact_ledger_row(row: dict[str, Any]) -> None:
     path = impact_ledger_path()
     new_frame = pd.DataFrame([row])
     existing = read_dataframe(path)
-    if existing.empty:
-        combined = new_frame
-    else:
-        combined = pd.concat([existing, new_frame], ignore_index=True)
-        key_cols = [c for c in ("canonical_story_id", "maturity_date", "reconciled_at") if c in combined.columns]
-        if key_cols:
-            combined = combined.drop_duplicates(subset=key_cols, keep="last")
+    combined = concat_dataframes(existing, new_frame) if not existing.empty else new_frame
+    key_cols = [c for c in ("canonical_story_id", "maturity_date", "reconciled_at") if c in combined.columns]
+    if key_cols:
+        combined = combined.drop_duplicates(subset=key_cols, keep="last")
     write_dataframe(_coerce_impact_ledger_frame(combined), path)
 
 

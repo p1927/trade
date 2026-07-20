@@ -12,7 +12,7 @@ import pandas as pd
 
 from trade_integrations.hub_capture.channel import record_channel_stat
 from trade_integrations.hub_capture.registry import capture_base_dir
-from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
+from trade_integrations.hub_storage.parquet_io import read_dataframe, upsert_by_keys, write_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -168,12 +168,9 @@ def write_cached_bars(
 
     path = _bars_path(entity)
     existing = read_dataframe(path)
-    if existing.empty:
-        merged = normalized
-    else:
+    if not existing.empty:
         existing["date"] = existing["date"].astype(str).str[:10]
-        merged = pd.concat([existing, normalized], ignore_index=True)
-        merged = merged.drop_duplicates(subset=["date"], keep="last").sort_values("date")
+    merged = upsert_by_keys(existing, normalized, dedupe_keys=["date"], sort_key="date")
 
     write_dataframe(merged, path)
     meta = {

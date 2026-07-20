@@ -21,7 +21,7 @@ from trade_integrations.hub_storage.news_event_models import (
     NewsReference,
     TimelineEntry,
 )
-from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, read_dataframe, write_dataframe
 
 _EVENTS_REL = Path("_data") / "news_events" / "events.parquet"
 
@@ -252,7 +252,7 @@ def upsert_event(event: DistilledNewsEvent) -> None:
         incoming["first_seen_at"] = incoming.get("first_seen_at") or now
         incoming["updated_at"] = now
         new_row = pd.DataFrame([incoming])
-        frame = pd.concat([frame, new_row], ignore_index=True)
+        frame = concat_dataframes(frame, new_row)
 
     write_dataframe(_coerce_events_frame(frame), events_path())
 
@@ -688,7 +688,7 @@ def upsert_hub_record(record: dict[str, Any]) -> None:
     else:
         incoming["first_seen_at"] = incoming.get("first_seen_at") or _now_iso()
         incoming["updated_at"] = _now_iso()
-        frame = pd.concat([frame, pd.DataFrame([incoming])], ignore_index=True)
+        frame = concat_dataframes(frame, pd.DataFrame([incoming]))
 
     write_dataframe(_coerce_events_frame(frame), events_path())
 

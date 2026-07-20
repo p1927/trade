@@ -13,7 +13,7 @@ import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.env import load_trade_env
-from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, read_dataframe, upsert_by_keys, write_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -223,9 +223,11 @@ def export_ticks_day(day: str, *, delete_after_export: bool = False) -> dict[str
 
     dest = ticks_daily_dir() / f"{day}.parquet"
     existing = read_dataframe(dest)
-    merged = pd.concat([existing, df], ignore_index=True) if not existing.empty else df
-    if not merged.empty:
-        merged = merged.drop_duplicates(subset=["ts", "symbol", "exchange", "source"], keep="last")
+    merged = upsert_by_keys(
+        existing,
+        df,
+        dedupe_keys=["ts", "symbol", "exchange", "source"],
+    )
     write_dataframe(merged, dest)
     summary["exported_rows"] = int(len(df))
     summary["total_rows"] = int(len(merged))

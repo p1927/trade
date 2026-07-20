@@ -13,7 +13,7 @@ import pandas as pd
 
 from trade_integrations.env import load_trade_env, trade_repo_root
 from trade_integrations.hub_storage.executions_store import fills_parquet_path
-from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, read_dataframe, write_dataframe
 
 _FILLS_COLUMNS = (
     "timestamp",
@@ -157,7 +157,7 @@ def export_openalgo_fills(*, dry_run: bool = False) -> dict[str, Any]:
         mask = ~incoming["trade_id"].astype(str).isin(known)
         new_rows = incoming[mask]
         summary["new_rows"] = int(len(new_rows))
-        merged = pd.concat([existing, new_rows], ignore_index=True) if len(new_rows) else existing
+        merged = concat_dataframes(existing, new_rows) if len(new_rows) else existing
 
     summary["total_rows"] = int(len(merged))
     if not dry_run:

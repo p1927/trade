@@ -8,10 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from trade_integrations.context.hub import get_hub_dir
-from trade_integrations.hub_storage.parquet_io import read_dataframe, write_dataframe
+from trade_integrations.hub_storage.parquet_io import append_daily_rows
 
 logger = logging.getLogger(__name__)
 
@@ -128,15 +126,7 @@ def _append_daily_rows(base: Path, day: str, rows: list[dict[str, Any]], dedupe_
     if not rows:
         return 0
     dest = _daily_path(base, day)
-    incoming = pd.DataFrame(rows)
-    existing = read_dataframe(dest)
-    merged = pd.concat([existing, incoming], ignore_index=True) if not existing.empty else incoming
-    if dedupe_keys and not merged.empty:
-        present = [key for key in dedupe_keys if key in merged.columns]
-        if present:
-            merged = merged.drop_duplicates(subset=present, keep="last")
-    write_dataframe(merged, dest)
-    return int(len(incoming))
+    return append_daily_rows(dest, rows, dedupe_keys=dedupe_keys or None)
 
 
 def archive_market_intelligence(*, as_of_date: str | None = None) -> dict[str, Any]:
