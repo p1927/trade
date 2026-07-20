@@ -128,6 +128,10 @@ Key decisions recorded: fail-closed execution (R12-*), multi-agent scoping (R2-*
 
 **Phases 6–10 complete 2026-07-20** — R11-04 charges refetch, M033 scheduler/prompt alignment, R1-15 idempotent Nautilus in dev, R1-10 `.stack.pids` removed, R9-07 NSE ingest gated + `nse-macro-refresh` job, R8-02 news facade lint, R4-04 stock `payoff_over_time`, FINNIFTY/MIDCPNIFTY yfinance map, parallel bootstrap prefetch, `execution_market` on hub docs, nightly CI extended.
 
+**Phases 11–17 complete 2026-07-20** — orchestrator closure, hub health + widget dedup, EXIT ledger + poll_loop v1 doc, prediction P0/5–7 + PCR gate, auto combiner + hub news freshness, SB equity loader + US path + NIFTYIT debate, parquet flock + data contract hygiene.
+
+**Deferred:** LightGBM full track (Phase G heavy) — backlog unless quick wrapper exists.
+
 ---
 
 ## How to use this doc

@@ -1,5 +1,7 @@
 # NautilusTrader ↔ OpenAlgo Bridge Implementation Plan
 
+> **Status (2026-07-20):** **v1 SHIPPED** — `integrations/nautilus_openalgo_bridge/runtime/poll_loop.py` is the production watch path (OpenAlgo quotes → rule eval → Vibe trigger → EXIT intents). TradingNode/WatchActor integration remains **v2 backlog**; do not block autonomous agents on full Nautilus node boot.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add NautilusTrader as the watch/state/risk maintainer; OpenAlgo remains the sole India data source and order executor; Vibe agents decide strategy on Nautilus alerts.
