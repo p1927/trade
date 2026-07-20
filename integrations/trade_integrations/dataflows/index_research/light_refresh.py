@@ -170,9 +170,14 @@ def _material_news_for_index(ticker: str) -> list[Any]:
         return []
 
 
-def _heavyweight_news(signals: list[ConstituentSignal]) -> bool:
+def _heavyweight_news(
+    signals: list[ConstituentSignal],
+    *,
+    headlines: list[Any] | None = None,
+) -> bool:
     try:
-        headlines = _material_news_for_index("NIFTY")
+        if headlines is None:
+            headlines = _material_news_for_index("NIFTY")
         if not headlines:
             return False
         top_symbols = {signal.symbol for signal in signals[:10]}
@@ -313,13 +318,28 @@ def run_index_light_refresh(
     macro_factors = dict(macro_stage.data.get("factors") or {})
     global_factors = list(macro_stage.data.get("factor_rows") or [])
 
-    headlines = _material_news_for_index(sym)
     macro_changed = _macro_factor_changed(
         previous_factors,
         macro_factors,
         threshold_pct=_macro_drift_threshold(),
     )
-    news_hit = bool(headlines) or _heavyweight_news(signals)
+
+    # Poll ticks run every 5 minutes: skip live news-aggregator I/O when macro is
+    # stable (hub news ingest handles material headlines separately).
+    if poll_mode and not force and cached_doc is not None and not macro_changed:
+        _check_light_refresh_budget(deadline, "before_spot_touch")
+        touched, reason = _try_spot_touch(sym, cached_doc, horizon=horizon)
+        if touched is not None and reason:
+            return touched, reason
+        fresh = _reload_index_doc(sym, cached_doc)
+        return fresh or cached_doc, "unchanged"
+
+    headlines: list[Any] = []
+    if poll_mode:
+        news_hit = False
+    else:
+        headlines = _material_news_for_index(sym)
+        news_hit = bool(headlines) or _heavyweight_news(signals, headlines=headlines)
 
     if not force and cached_doc is not None and not macro_changed and not news_hit:
         touched, reason = _try_spot_touch(sym, cached_doc, horizon=horizon)
