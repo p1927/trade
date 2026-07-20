@@ -1,0 +1,67 @@
+---
+description: Prediction tracks must not run on missing or corrupted factor data — ingest, audit, fix gaps before shipping model changes
+globs: integrations/trade_integrations/dataflows/index_research/**/*
+alwaysApply: false
+---
+
+# Prediction Data Completeness
+
+Predictions are only as good as the aligned panel. **Missing or corrupted data must be fixed at ingest/panel level — not worked around in model code** (dropping columns, zero-filling, suppressing warnings).
+
+## Before changing tracks, equations, or gates
+
+1. Run `python scripts/audit_prediction_data.py --days 500` and check `pinned_missing_or_sparse`.
+2. Read `prediction_data_requirements.py` — `REQUIRED_COLD_DATASETS`, `PANEL_DERIVED_FACTORS`, `_PINNED_FOR_AUDIT`.
+3. Confirm `load_aligned_factor_history(days=500)` has ≥45% coverage and non-zero std for pinned factors.
+
+## Panel invariants (never break)
+
+| Rule | Why |
+|------|-----|
+| **Daily beats annual** | `history_panel._join_annual_macro_by_year` must not replace daily columns (e.g. `usd_inr`) with annual snapshots — fill NaN only |
+| **Derived follows parent** | `usd_inr_momentum_5d`, `us_10y_velocity_3d` etc. are computed from parent series — fix parent first |
+| **Live vs panel parity** | Live snapshot (`macro_global`) and training panel must use the same factor semantics |
+
+## Pinned factors (must have ≥45% coverage, non-zero variance in 500d window)
+
+`oil_brent`, `usd_inr`, `sp500`, `us_10y`, `india_vix`, `fii_net_5d`, `dii_net_5d`, `nifty_pcr`, `repo_rate`, `nifty_pe`
+
+## When adding a new factor
+
+1. Add to `MACRO_FACTOR_KEYS` / track exog list only after cold-tier or derived path exists.
+2. Document source in `REQUIRED_COLD_DATASETS` or `PANEL_DERIVED_FACTORS`.
+3. Verify with audit script — do not ship if coverage <45% unless explicitly experimental and gated.
+
+## Free data sources (India index prediction)
+
+| Factor | Primary source | Backup |
+|--------|----------------|--------|
+| `usd_inr` | yfinance `INR=X` → `macro_daily` | FRED `DEXINUS`, GitHub exchange-rates CSV, RBI WSS weekly |
+| `us_10y`, `oil_brent`, `gold`, `sp500` | yfinance + FRED | `macro_daily` cold tier |
+| `india_vix` | nselib / yfinance `^INDIAVIX` | `india_vix_daily` |
+| `fii_net_5d`, `dii_net_5d` | NSE FII/DII + MrChartist | `flow_cash_daily` |
+| `nifty_pcr`, `fii_fut_long_short_ratio` | NSE F&O archive | `flow_derivatives_daily` |
+| `repo_rate`, `india_10y`, `india_91d_tbill` | RBI WSS / FBIL | `india_rbi_wss_weekly` |
+| `cpi_yoy_proxy` | MoSPI CPI parquet | `india_cpi_monthly_yoy` |
+
+After panel fixes: rematerialize with `python scripts/materialize_history_panel.py`.
+
+## Fail closed (data integrity guardrails)
+
+**Never save production panel or cold-tier data without passing invariants.**
+
+| Gate | Where enforced |
+|------|----------------|
+| Panel invariants | `panel_invariants.assert_panel_invariants` → `save_panel` (blocks promote) |
+| Audit script | `scripts/audit_prediction_data.py --days 500` exits 1 on invariant failure |
+| CI | `scripts/verify_prediction_pipeline.py` runs audit + `tests/test_history_panel.py` |
+
+Rules:
+
+1. **No join that drops daily columns** — annual/weekly joins fill NaN only; `ANNUAL_JOIN_BLOCKLIST` excludes `usd_inr` from annual join entirely.
+2. **No full-replace cold-tier save** when merge can preserve existing rows — use `merge=True` or `merge_with_priority`.
+3. **No panel save without WAP** — stage → invariant check → promote; previous generation kept as `{name}.previous.parquet`.
+4. **Force bypass only intentionally** — `INDEX_PANEL_SAVE_FORCE=1` or `--force` on materialize script; log in manifest.
+5. **PRs touching** `history_panel.py`, `history_store.py`, `history_ingest.py`, `panel_enrichment.py` must update `tests/test_history_panel.py` or invariant tests.
+
+Implementation: [`panel_invariants.py`](integrations/trade_integrations/dataflows/index_research/panel_invariants.py), [`COLUMN_GRANULARITY`](integrations/trade_integrations/dataflows/index_research/panel_invariants.py).
