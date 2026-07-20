@@ -5,17 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-_THINK_BLOCK = re.compile(
-    r"<\s*(?:redacted_)?think(?:ing)?\s*>.*?<\s*/\s*(?:redacted_)?think(?:ing)?\s*>",
-    re.DOTALL | re.IGNORECASE,
+from trade_integrations.nse_browser.minimax_agent import (
+    extract_message_content,
+    minimax_reasoning_split_enabled,
+    strip_minimax_thinking,
 )
-_THINK_OPEN = re.compile(r"<\s*(?:redacted_)?think(?:ing)?\s*>.*", re.DOTALL | re.IGNORECASE)
-
 from trade_integrations.dataflows.index_research.news_enrichment import (
     build_content_summary,
     build_structured_summary,
@@ -84,15 +82,6 @@ def _consensus_from_refs(
     }
 
 
-def strip_minimax_thinking(text: str | None) -> str:
-    """Remove MiniMax chain-of-thought blocks from model output."""
-    if not text:
-        return ""
-    cleaned = _THINK_BLOCK.sub("", text).strip()
-    cleaned = _THINK_OPEN.sub("", cleaned).strip()
-    return cleaned
-
-
 def is_distillation_leak(text: str | None) -> bool:
     """True when summary text still contains model reasoning artifacts."""
     if not text:
@@ -127,29 +116,14 @@ def _parse_llm_distill(text: str) -> dict[str, str]:
 
 def _distill_max_tokens() -> int:
     try:
-        return max(200, int(os.getenv("MINIMAX_DISTILL_MAX_TOKENS", "800")))
+        return max(512, int(os.getenv("MINIMAX_DISTILL_MAX_TOKENS", "2048")))
     except ValueError:
-        return 800
-
-
-def _distill_reasoning_split_enabled() -> bool:
-    """MiniMax-M3 thinking is on by default; split keeps it out of distill output."""
-    return os.getenv("MINIMAX_DISTILL_REASONING_SPLIT", "1").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+        return 2048
 
 
 def _extract_distill_answer(message: Any) -> str:
-    """Read distill answer from ``content`` only — never ``reasoning_content``.
-
-    With ``reasoning_split=True``, MiniMax puts chain-of-thought in
-    ``reasoning_content`` and the trader-facing title/summary in ``content``.
-    """
-    content = str(getattr(message, "content", None) or "")
-    return strip_minimax_thinking(content)
+    """Read distill answer from ``content`` only — never ``reasoning_content``."""
+    return extract_message_content(message)
 
 
 def _extract_message_text(message: Any) -> str:
@@ -170,8 +144,6 @@ def _call_distill_model(
         "max_tokens": max_tokens,
         "temperature": 0.1,
     }
-    if _distill_reasoning_split_enabled():
-        kwargs["extra_body"] = {"reasoning_split": True}
     response = chat_completions_create(**kwargs)
     message = response.choices[0].message
     text = _extract_distill_answer(message)
@@ -195,11 +167,58 @@ def call_minimax_text(prompt: str, *, max_tokens: int | None = None) -> str:
         "max_tokens": tokens,
         "temperature": 0.1,
     }
-    if _distill_reasoning_split_enabled():
-        kwargs["extra_body"] = {"reasoning_split": True}
     response = chat_completions_create(**kwargs)
     message = response.choices[0].message
     return _extract_distill_answer(message)
+
+
+def call_minimax_json_text(prompt: str, *, max_tokens: int | None = None) -> str:
+    """Run one MiniMax completion and return JSON/text from ``content`` only."""
+    tokens = max_tokens if max_tokens is not None else _distill_max_tokens()
+    from trade_integrations.nse_browser.minimax_agent import chat_completions_create, _model
+
+    kwargs: dict[str, Any] = {
+        "model": _model(),
+        "messages": [{"role": "user", "content": prompt[:12000]}],
+        "max_tokens": tokens,
+        "temperature": 0.1,
+    }
+    response = chat_completions_create(**kwargs)
+    message = response.choices[0].message
+    return _extract_distill_answer(message)
+
+
+def _format_adjudicated_claims(
+    refs: list[dict[str, Any]],
+    adjudication_summary: dict[str, Any] | None = None,
+) -> str:
+    lines: list[str] = []
+    if adjudication_summary:
+        cred = adjudication_summary.get("credibility")
+        fp = adjudication_summary.get("story_fingerprint")
+        if cred:
+            lines.append(f"credibility={cred}")
+        if fp:
+            lines.append(f"story_fingerprint={fp}")
+        for fact in adjudication_summary.get("shared_facts") or []:
+            if fact:
+                lines.append(f"- shared_fact: {fact}")
+    for ref in refs[-8:]:
+        adj = ref.get("adjudication")
+        if not isinstance(adj, dict):
+            continue
+        rid = str(adj.get("ref_id") or ref.get("ref_id") or "")
+        cred = adj.get("credibility")
+        align = adj.get("tape_alignment")
+        if rid:
+            lines.append(f"ref {rid}: credibility={cred} tape={align}")
+        for claim in (adj.get("claims") or [])[:4]:
+            if not isinstance(claim, dict):
+                continue
+            ctype = claim.get("type") or "claim"
+            value = claim.get("value") or claim.get("text") or ""
+            lines.append(f"- [{ctype}] {value}")
+    return "\n".join(lines[:24])
 
 
 def _llm_distill(
@@ -208,6 +227,7 @@ def _llm_distill(
     previous_content: str,
     refs: list[dict[str, Any]],
     market_context: dict[str, Any] | None = None,
+    adjudication_summary: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Always call MiniMax to distill/update the event narrative."""
     require_minimax_for_distillation()
@@ -225,21 +245,28 @@ def _llm_distill(
     previous_content = strip_minimax_thinking(previous_content)
     story = f"title: {previous_title}\nsummary: {previous_content}"
     tape = format_market_context_for_prompt(market_context)
+    claims_block = _format_adjudicated_claims(refs, adjudication_summary)
+    soften = ""
+    if adjudication_summary and adjudication_summary.get("credibility") == "exaggeration":
+        soften = " Headlines marked exaggeration must be softened to match supported facts. "
     prompt = (
         "You summarize financial market news for traders. Given prior story text in <story>, "
-        "new source articles in <context>, and market tape in <market>, update the story title "
-        "and summary. Reconcile conflicting numbers as ranges. Note when headline aligns or "
-        "conflicts with the market tape. Do not invent facts not present in sources. "
+        "adjudicated claims in <adjudicated_claims>, new source articles in <context>, "
+        "and market tape in <market>, update the story title and summary. "
+        "Drop contradicted or hoax claims. Reconcile conflicting numbers as ranges. "
+        "Note when headline aligns or conflicts with the market tape."
+        f"{soften}"
+        "Do not invent facts not present in sources. "
         "Do not include reasoning or analysis steps. "
         "Output <title>...</title> and <summary>...</summary> only.\n\n"
         f"<market>\n{tape}\n</market>\n\n"
+        f"<adjudicated_claims>\n{claims_block or 'none'}\n</adjudicated_claims>\n\n"
         f"<story>\n{story}\n</story>\n\n<context>\n" + "\n".join(context_lines) + "\n</context>"
     )
 
     base_tokens = _distill_max_tokens()
-    # MiniMax-M3 thinking enabled with reasoning_split so answer stays in content.
-    attempts = [base_tokens, max(base_tokens + 400, 1200)]
-    reasoning_split = _distill_reasoning_split_enabled()
+    attempts = [base_tokens, base_tokens + 1024, base_tokens + 2048]
+    reasoning_split = minimax_reasoning_split_enabled()
     try:
         for max_tokens in attempts:
             parsed = _call_distill_model(
@@ -279,6 +306,7 @@ def _rule_fallback_distill(
     *,
     refs: list[dict[str, Any]],
     previous: dict[str, Any] | None = None,
+    adjudication_summary: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Deterministic distillation when MiniMax is unavailable."""
     from trade_integrations.dataflows.index_research.news_claim_extraction import extract_claims
@@ -287,6 +315,17 @@ def _rule_fallback_distill(
     base = _keyword_fallback(normalized)
     claim_lines: list[str] = []
     for ref in normalized[-6:]:
+        adj = ref.get("adjudication")
+        if isinstance(adj, dict):
+            for claim in (adj.get("claims") or [])[:6]:
+                if not isinstance(claim, dict):
+                    continue
+                kind = claim.get("type") or claim.get("kind") or "claim"
+                value = claim.get("value") or claim.get("text") or ""
+                status = adj.get("tape_alignment") or "claimed"
+                claim_lines.append(f"- [{status}] {kind}: {value}")
+        if claim_lines:
+            continue
         for claim in extract_claims(
             str(ref.get("raw_title") or ref.get("title") or ""),
             str(ref.get("raw_summary") or ref.get("summary") or ""),
@@ -297,6 +336,8 @@ def _rule_fallback_distill(
             claim_lines.append(f"- [{status}] {kind}: {value}")
 
     facts = base.get("content") or ""
+    if adjudication_summary and adjudication_summary.get("credibility") == "exaggeration":
+        facts = f"[Exaggeration flagged — soften headline framing]\n{facts}"
     if claim_lines:
         facts = "Facts (claimed):\n" + "\n".join(claim_lines[:12])
     impact = "Impact (claimed): Market reaction not yet verified against factor panel."
@@ -314,6 +355,7 @@ def distill_event(
     refs: list[dict[str, Any]],
     previous: dict[str, Any] | None = None,
     market_context: dict[str, Any] | None = None,
+    adjudication_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build distilled title, content, timeline entry, and references list."""
     from trade_integrations.hub_storage.news_staging_store import minimax_configured, rule_fallback_distillation_enabled
@@ -341,13 +383,22 @@ def distill_event(
                 previous_content=prev_content,
                 refs=normalized_refs,
                 market_context=market_context,
+                adjudication_summary=adjudication_summary,
             )
         except Exception as exc:
             logger.warning("MiniMax distillation failed, using rule fallback: %s", exc)
-            llm_out = _rule_fallback_distill(refs=normalized_refs, previous=previous)
+            llm_out = _rule_fallback_distill(
+                refs=normalized_refs,
+                previous=previous,
+                adjudication_summary=adjudication_summary,
+            )
             distilled_by = "rule_fallback"
     elif rule_fallback_distillation_enabled():
-        llm_out = _rule_fallback_distill(refs=normalized_refs, previous=previous)
+        llm_out = _rule_fallback_distill(
+            refs=normalized_refs,
+            previous=previous,
+            adjudication_summary=adjudication_summary,
+        )
         distilled_by = "rule_fallback"
     else:
         raise RuntimeError("MiniMax not configured and rule-fallback distillation is disabled")
@@ -417,6 +468,8 @@ def distill_event(
         "ref_count": len(normalized_refs),
         "consensus": _consensus_from_refs(normalized_refs, tags=tags),
     }
+    if adjudication_summary:
+        event_meta["adjudication_summary"] = dict(adjudication_summary)
     if previous:
         prior_timeline = list(prior_meta.get("timeline") or [])
         prior_refs = list(prior_meta.get("references") or [])

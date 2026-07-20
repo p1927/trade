@@ -185,7 +185,7 @@ def _parse_relevance_json(text: str) -> dict[str, Any]:
 def llm_relevance_check(ref: dict[str, Any], *, ticker: str = "NIFTY") -> RelevanceVerdict:
     """MiniMax structured relevance verdict for NIFTY prediction."""
     from trade_integrations.dataflows.index_research.factor_catalog import NIFTY_FACTOR_CATALOG
-    from trade_integrations.nse_browser.minimax_agent import chat_completions_create, _model
+    from trade_integrations.nse_browser.minimax_agent import chat_completions_create, _model, extract_message_content
 
     factor_labels = [
         str(row.get("key") or row.get("label") or "")
@@ -212,10 +212,10 @@ def llm_relevance_check(ref: dict[str, Any], *, ticker: str = "NIFTY") -> Releva
         response = chat_completions_create(
             model=_model(),
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
-            temperature=0.0,
+            max_tokens=512,
+            temperature=0.01,
         )
-        raw = str(response.choices[0].message.content or "")
+        raw = extract_message_content(response.choices[0].message)
         payload = _parse_relevance_json(raw)
         relevant = bool(payload.get("relevant"))
         try:

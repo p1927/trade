@@ -106,6 +106,9 @@ def hub_news_pipeline_status(*, ticker: str = "NIFTY") -> dict[str, Any]:
         "worker_last": worker_last,
         "market_context": market_context,
         "llm_dedup_groups_last": worker_last.get("llm_dedup_groups"),
+        "adjudication_discarded_last": worker_last.get("adjudication_discarded"),
+        "adjudication_fallback_last": worker_last.get("adjudication_fallback"),
+        "story_groups_fallback_last": worker_last.get("story_groups_fallback"),
         "migration": migration,
         "llm_wiki": llm_wiki_block,
     }

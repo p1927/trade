@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "MiniMax-M3"
 _MAX_HTML_CHARS = int(os.environ.get("NSE_BROWSER_AGENT_MAX_HTML", "48000"))
+_THINK_BLOCK = re.compile(
+    r"<\s*(?:redacted_)?think(?:ing)?\s*>.*?<\s*/\s*(?:redacted_)?think(?:ing)?\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+_THINK_OPEN = re.compile(r"<\s*(?:redacted_)?think(?:ing)?\s*>.*", re.DOTALL | re.IGNORECASE)
 
 
 def _api_key() -> str:
@@ -29,6 +34,105 @@ def _model() -> str:
     return os.environ.get("NSE_BROWSER_AGENT_MODEL", _DEFAULT_MODEL).strip()
 
 
+def _is_minimax_model(model: str | None = None) -> bool:
+    name = (model or _model()).strip().lower()
+    return name.startswith("minimax")
+
+
+def _default_completion_tokens() -> int:
+    """When callers omit a limit, avoid MiniMax's tiny implicit output cap."""
+    try:
+        return max(256, int(os.getenv("MINIMAX_DEFAULT_COMPLETION_TOKENS", "4096")))
+    except ValueError:
+        return 4096
+
+
+def normalize_completion_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Map deprecated ``max_tokens`` → ``max_completion_tokens`` for MiniMax-M3."""
+    out = dict(kwargs)
+    model = str(out.get("model") or _model())
+    if not _is_minimax_model(model):
+        return out
+
+    if out.get("max_completion_tokens") is None:
+        if out.get("max_tokens") is not None:
+            out["max_completion_tokens"] = out.pop("max_tokens")
+        else:
+            out["max_completion_tokens"] = _default_completion_tokens()
+    else:
+        out.pop("max_tokens", None)
+
+    out.pop("max_tokens", None)
+    return out
+
+
+def strip_minimax_thinking(text: str | None) -> str:
+    """Remove MiniMax chain-of-thought blocks from model output."""
+    if not text:
+        return ""
+    cleaned = _THINK_BLOCK.sub("", text).strip()
+    cleaned = _THINK_OPEN.sub("", cleaned).strip()
+    return cleaned
+
+
+def extract_message_content(message: Any) -> str:
+    """Return user-facing text from ``content`` only — never ``reasoning_content``."""
+    content = str(getattr(message, "content", None) or "")
+    return strip_minimax_thinking(content)
+
+
+def _env_truthy(name: str, *, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def minimax_reasoning_split_enabled() -> bool:
+    """When True, thinking lands in ``reasoning_content`` / ``reasoning_details``, not ``content``."""
+    if "MINIMAX_REASONING_SPLIT" in os.environ:
+        return _env_truthy("MINIMAX_REASONING_SPLIT", default="1")
+    return _env_truthy("MINIMAX_DISTILL_REASONING_SPLIT", default="1")
+
+
+def minimax_thinking_disabled() -> bool:
+    """Opt-out for MiniMax adaptive thinking (default: reasoning enabled)."""
+    if _env_truthy("MINIMAX_THINKING_DISABLED", default="0"):
+        return True
+    if "MINIMAX_JSON_THINKING_DISABLED" in os.environ:
+        return _env_truthy("MINIMAX_JSON_THINKING_DISABLED", default="0")
+    return False
+
+
+def merge_minimax_extra_body(extra_body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Apply MiniMax-M3 defaults: adaptive thinking + reasoning_split.
+
+    See https://platform.minimax.io/docs/guides/text-m3-function-call
+    """
+    body = dict(extra_body or {})
+    if minimax_reasoning_split_enabled():
+        body.setdefault("reasoning_split", True)
+    if minimax_thinking_disabled():
+        body["thinking"] = {"type": "disabled"}
+    else:
+        body.setdefault("thinking", {"type": "adaptive"})
+    return body
+
+
+def apply_minimax_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize an OpenAI-compat chat/completions request body for MiniMax-M3."""
+    if payload.get("max_completion_tokens") is None:
+        if payload.get("max_tokens") is not None:
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
+        else:
+            payload["max_completion_tokens"] = _default_completion_tokens()
+    else:
+        payload.pop("max_tokens", None)
+
+    existing = payload.get("extra_body")
+    payload["extra_body"] = merge_minimax_extra_body(
+        existing if isinstance(existing, dict) else None,
+    )
+    return payload
+
+
 def minimax_configured() -> bool:
     return bool(_api_key())
 
@@ -43,7 +147,11 @@ def chat_completions_create(**kwargs: Any) -> Any:
     """Queue-backed MiniMax chat completion (serialized + rate-limit retry)."""
     from trade_integrations.nse_browser.minimax_queue import chat_completions_create as _queued_create
 
-    return _queued_create(_client(), **kwargs)
+    normalized = normalize_completion_kwargs(kwargs)
+    model = str(normalized.get("model") or _model())
+    if _is_minimax_model(model):
+        apply_minimax_request_payload(normalized)
+    return _queued_create(_client(), **normalized)
 
 
 def _strip_html(html: str) -> str:
@@ -118,7 +226,6 @@ def analyze_page(
                 {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
-            extra_body={"reasoning_split": True},
         )
     except Exception as exc:
         logger.warning("MiniMax API call failed: %s", exc)
@@ -126,7 +233,7 @@ def analyze_page(
 
     content = ""
     if response.choices:
-        content = response.choices[0].message.content or ""
+        content = extract_message_content(response.choices[0].message)
     return _parse_json_response(content)
 
 
@@ -217,7 +324,6 @@ def plan_browser_action(
                 {"role": "user", "content": user_parts if use_vision and screenshot_b64 else user_parts[0]["text"]},
             ],
             response_format={"type": "json_object"},
-            extra_body={"reasoning_split": True},
         )
     except Exception as exc:
         logger.warning("MiniMax plan_browser_action failed: %s", exc)
@@ -225,7 +331,7 @@ def plan_browser_action(
 
     content = ""
     if response.choices:
-        content = response.choices[0].message.content or ""
+        content = extract_message_content(response.choices[0].message)
     payload = _parse_json_response(content)
     action = str(payload.get("action") or "done").lower()
     if action not in {"click", "scroll", "wait", "done"}:

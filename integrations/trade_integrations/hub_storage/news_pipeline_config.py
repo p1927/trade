@@ -67,6 +67,12 @@ class NewsPipelineConfig:
     relevance_min_confidence: float = 0.60
     relevance_rule_first: bool = True
     discard_retention_days: int = 30
+    llm_adjudication_enabled: bool = True
+    llm_adjudication_batch_size: int = 8
+    adjudication_discard_contradicted: bool = True
+    adjudication_discard_hoax: bool = True
+    adjudication_max_tokens: int = 8192
+    story_dedup_max_tokens: int = 8192
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -98,6 +104,18 @@ class NewsPipelineConfig:
             base.entity_backpressure_threshold = int(base.entity_backpressure_threshold)
         except (TypeError, ValueError):
             base.entity_backpressure_threshold = 400
+        try:
+            base.llm_adjudication_batch_size = int(base.llm_adjudication_batch_size)
+        except (TypeError, ValueError):
+            base.llm_adjudication_batch_size = 8
+        try:
+            base.adjudication_max_tokens = int(base.adjudication_max_tokens)
+        except (TypeError, ValueError):
+            base.adjudication_max_tokens = 8192
+        try:
+            base.story_dedup_max_tokens = int(base.story_dedup_max_tokens)
+        except (TypeError, ValueError):
+            base.story_dedup_max_tokens = 8192
         return base
 
 
@@ -125,6 +143,12 @@ def env_defaults() -> NewsPipelineConfig:
         relevance_min_confidence=float(os.getenv("HUB_NEWS_RELEVANCE_MIN_CONFIDENCE", "0.60")),
         relevance_rule_first=_env_bool("HUB_NEWS_RELEVANCE_RULE_FIRST", True),
         discard_retention_days=_env_int("HUB_NEWS_DISCARD_RETENTION_DAYS", 30),
+        llm_adjudication_enabled=_env_bool("HUB_NEWS_LLM_ADJUDICATION_ENABLED", True),
+        llm_adjudication_batch_size=_env_int("HUB_NEWS_LLM_ADJUDICATION_BATCH_SIZE", 8),
+        adjudication_discard_contradicted=_env_bool("HUB_NEWS_ADJUDICATION_DISCARD_CONTRADICTED", True),
+        adjudication_discard_hoax=_env_bool("HUB_NEWS_ADJUDICATION_DISCARD_HOAX", True),
+        adjudication_max_tokens=_env_int("MINIMAX_ADJUDICATION_MAX_TOKENS", 8192),
+        story_dedup_max_tokens=_env_int("MINIMAX_STORY_DEDUP_MAX_TOKENS", 8192),
     )
 
 

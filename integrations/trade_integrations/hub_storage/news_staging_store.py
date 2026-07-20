@@ -135,15 +135,22 @@ def enqueue_raw_ref(row: dict[str, Any], *, ticker: str) -> tuple[str, bool]:
     return ref_id, True
 
 
+def _iter_pending_lines(pending_path: Path):
+    """Stream pending.jsonl lines without loading the whole file into memory."""
+    with pending_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if stripped:
+                yield stripped
+
+
 def list_pending_refs(*, ticker: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
     pending_path = _staging_dir() / _PENDING_FILE
     if not pending_path.is_file():
         return []
     sym = (ticker or "").strip().upper()
     out: list[dict[str, Any]] = []
-    for line in pending_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
+    for line in _iter_pending_lines(pending_path):
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
@@ -506,8 +513,8 @@ def staging_ref_to_headline(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def staging_queue_stats(*, ticker: str | None = None) -> dict[str, int]:
-    pending = list_pending_refs(ticker=ticker, limit=10_000)
-    return {"queued": len(pending)}
+    detail = staging_queue_detail(ticker=ticker)
+    return {"queued": int(detail.get("queued") or 0)}
 
 
 def _parse_iso_age_seconds(iso_value: str) -> float | None:
@@ -528,12 +535,27 @@ def _parse_iso_age_seconds(iso_value: str) -> float | None:
 
 def staging_queue_detail(*, ticker: str | None = None) -> dict[str, Any]:
     """Queue depth plus oldest pending ref age (seconds)."""
-    pending = list_pending_refs(ticker=ticker, limit=10_000)
-    ages = [_parse_iso_age_seconds(str(row.get("created_at") or "")) for row in pending]
-    ages = [age for age in ages if age is not None]
-    oldest_seconds = max(ages) if ages else 0.0
+    pending_path = _staging_dir() / _PENDING_FILE
+    if not pending_path.is_file():
+        return {"queued": 0, "oldest_pending_seconds": 0.0}
+    sym = (ticker or "").strip().upper()
+    queued = 0
+    oldest_seconds = 0.0
+    for line in _iter_pending_lines(pending_path):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("status") != "queued":
+            continue
+        if sym and str(row.get("ticker") or "").upper() != sym:
+            continue
+        queued += 1
+        age = _parse_iso_age_seconds(str(row.get("created_at") or ""))
+        if age is not None and age > oldest_seconds:
+            oldest_seconds = age
     return {
-        "queued": len(pending),
+        "queued": queued,
         "oldest_pending_seconds": round(oldest_seconds, 1),
     }
 

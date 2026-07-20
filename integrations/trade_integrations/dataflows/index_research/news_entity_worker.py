@@ -232,6 +232,7 @@ def process_staging_group(
     *,
     ticker: str | None = None,
     market_context: dict[str, Any] | None = None,
+    adjudication_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Match a deduped ref group to hub event, distill once, verify, and upsert."""
     if not refs:
@@ -276,6 +277,13 @@ def process_staging_group(
     enriched = [enrich_ref_summary_from_url(r) for r in enriched]
     ref = enriched[-1]
 
+    if adjudication_summary is None:
+        from trade_integrations.dataflows.index_research.news_llm_story_pipeline import (
+            adjudication_summary_from_refs,
+        )
+
+        adjudication_summary = adjudication_summary_from_refs(enriched)
+
     publish_day = publish_day_from_value(str(ref.get("published_at") or ""))
 
     ref_tags = ref.get("tags") if isinstance(ref.get("tags"), dict) else {}
@@ -314,6 +322,7 @@ def process_staging_group(
             refs=refs_for_distill,
             previous=matched,
             market_context=market_context,
+            adjudication_summary=adjudication_summary,
         )
         row = _apply_distilled_to_row(row, distilled)
         action = "update"
@@ -324,6 +333,7 @@ def process_staging_group(
             refs=enriched,
             previous=None,
             market_context=market_context,
+            adjudication_summary=adjudication_summary,
         )
         row = _apply_distilled_to_row(row, distilled)
         action = "create"
@@ -440,16 +450,29 @@ def process_staging_batch(
     except Exception as exc:
         logger.debug("tier-2 cluster dedupe skipped: %s", exc)
 
-    from trade_integrations.dataflows.index_research.news_llm_batch_dedup import (
-        llm_batch_dedup_groups,
-        mechanical_singleton_groups,
+    from trade_integrations.dataflows.index_research.news_llm_story_pipeline import (
+        run_story_pipeline_batch,
     )
 
     try:
-        groups = llm_batch_dedup_groups(pending, market_context=market_context)
+        groups, pipeline_stats = run_story_pipeline_batch(pending, market_context=market_context)
     except Exception as exc:
-        logger.warning("LLM batch dedup failed, using singleton groups: %s", exc)
+        logger.warning("Story pipeline failed, using singleton groups: %s", exc)
+        from trade_integrations.dataflows.index_research.news_llm_story_pipeline import (
+            mechanical_singleton_groups,
+        )
+
         groups = mechanical_singleton_groups(pending)
+        pipeline_stats = {
+            "adjudication_discarded": 0,
+            "adjudication_exaggerated": 0,
+            "adjudication_valid": 0,
+            "adjudication_rule_discarded": 0,
+            "adjudication_fallback": 0,
+            "story_groups_fallback": True,
+            "llm_dedup_groups": len(groups),
+            "mechanical_refs": len(pending),
+        }
 
     summary: dict[str, Any] = {
         "processed": 0,
@@ -458,10 +481,16 @@ def process_staging_batch(
         "skipped": 0,
         "errors": 0,
         "cluster_dedup": cluster_stats,
-        "llm_dedup_groups": len(groups),
-        "mechanical_refs": len(pending),
+        "llm_dedup_groups": pipeline_stats.get("llm_dedup_groups", len(groups)),
+        "mechanical_refs": pipeline_stats.get("mechanical_refs", len(pending)),
         "market_context_as_of": market_context.get("as_of"),
         "wiki_exports": 0,
+        "adjudication_discarded": pipeline_stats.get("adjudication_discarded", 0),
+        "adjudication_exaggerated": pipeline_stats.get("adjudication_exaggerated", 0),
+        "adjudication_valid": pipeline_stats.get("adjudication_valid", 0),
+        "adjudication_rule_discarded": pipeline_stats.get("adjudication_rule_discarded", 0),
+        "adjudication_fallback": pipeline_stats.get("adjudication_fallback", 0),
+        "story_groups_fallback": pipeline_stats.get("story_groups_fallback", False),
     }
     for group in groups:
         group_refs = group.get("refs")
@@ -475,6 +504,9 @@ def process_staging_batch(
                 group_refs,
                 ticker=ticker,
                 market_context=market_context,
+                adjudication_summary=group.get("adjudication_summary")
+                if isinstance(group.get("adjudication_summary"), dict)
+                else None,
             )
             summary["processed"] += int(result.get("ref_count") or len(group_refs))
             action = result.get("action")

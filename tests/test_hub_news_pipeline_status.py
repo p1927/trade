@@ -96,8 +96,22 @@ def test_hub_news_pipeline_status(hub_tmp, monkeypatch):
         lambda: {"ok": True, "status": "running", "version": "0.6.4"},
     )
 
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge._pipeline_status.load_worker_last_summary",
+        lambda: {
+            "llm_dedup_groups": 3,
+            "adjudication_discarded": 2,
+            "adjudication_fallback": 1,
+            "story_groups_fallback": False,
+        },
+    )
+
     status = hub_news_pipeline_status(ticker="NIFTY")
     assert status["ssot"] == "events.parquet"
+    assert status["llm_dedup_groups_last"] == 3
+    assert status["adjudication_discarded_last"] == 2
+    assert status["adjudication_fallback_last"] == 1
+    assert status["story_groups_fallback_last"] is False
     assert "staging" in status
     assert status["llm_wiki"]["project_dir"].endswith("llm-wiki")
     assert status["llm_wiki"]["health"]["ok"] is True
