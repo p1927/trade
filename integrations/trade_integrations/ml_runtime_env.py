@@ -95,7 +95,20 @@ def ml_runtime_env() -> dict[str, str]:
         if libdir not in parts:
             parts.insert(0, libdir)
         env["DYLD_LIBRARY_PATH"] = ":".join(parts)
+        env.setdefault("YF_DISABLE_CURL_CFFI", "1")
     return env
+
+
+def _configure_yfinance_requests_fallback() -> None:
+    """Prefer requests over curl_cffi for yfinance when libomp DYLD is injected on macOS.
+
+    curl_cffi bundles BoringSSL; prepending libomp to DYLD_LIBRARY_PATH can break its
+    TLS handshake (curl error 35 / OPENSSL_internal invalid library). yfinance reads
+    YF_DISABLE_CURL_CFFI at import time and falls back to requests.
+    """
+    if sys.platform != "darwin":
+        return
+    os.environ.setdefault("YF_DISABLE_CURL_CFFI", "1")
 
 
 def ensure_libomp_loaded() -> bool:
@@ -110,6 +123,7 @@ def ensure_libomp_loaded() -> bool:
     existing = os.environ.get("DYLD_LIBRARY_PATH", "")
     if libdir not in existing.split(":"):
         os.environ["DYLD_LIBRARY_PATH"] = f"{libdir}:{existing}" if existing else libdir
+    _configure_yfinance_requests_fallback()
     _LIBOMP_LOADED = True
     return True
 
