@@ -9,7 +9,7 @@
         "start": "2007-01-06",
         "end": "2026-07-17"
       },
-      "fetched_at": "2026-07-20T01:26:07.745024+00:00",
+      "fetched_at": "2026-07-20T18:51:50.002662+00:00",
       "source": "nse_monthly_cash"
     },
     {
@@ -21,7 +21,7 @@
         "start": "2024-01-31",
         "end": "2026-06-30"
       },
-      "fetched_at": "2026-07-20T01:26:07.756125+00:00",
+      "fetched_at": "2026-07-20T18:51:50.046098+00:00",
       "source": "nse_mf_sebi_monthly"
     },
     {
@@ -33,21 +33,46 @@
         "start": "2024-01-31",
         "end": "2026-06-30"
       },
-      "fetched_at": "2026-07-20T01:26:07.763840+00:00",
+      "fetched_at": "2026-07-20T18:51:50.063718+00:00",
       "source": "nse_fii_sebi_monthly"
     },
     {
       "path": "sector_indices/sector_index_daily.parquet",
       "dataset": "sector_indices",
-      "sha256": "2d266bb3761e9f275dd8071203e23b8df484461627703c1948fbd1892d656a8c",
+      "sha256": "93d1157d8b70b195c05bea5f844ff0f841541209cde10f595b0b2b49889a85aa",
       "rows": 2450,
       "date_range": {
         "start": "2025-07-18",
         "end": "2026-07-16"
       },
-      "fetched_at": "2026-07-20T01:26:08.053533+00:00",
+      "fetched_at": "2026-07-20T21:25:49.912154+00:00",
       "source": "nse_sector_csv"
     }
   ],
-  "updated_at": "2026-07-20T01:26:08.053664+00:00"
+  "updated_at": "2026-07-20T21:25:52.384023+00:00",
+  "seed_layers": {
+    "fii_dii": {
+      "fingerprint": "4a33944aac11a98eb4e4853b08129076c307131b13370631f5457a2c7d96a870",
+      "updated_at": "2026-07-20T21:25:49.524254+00:00"
+    },
+    "sebi_monthly": {
+      "fingerprint": "04814e3065e9a808150d6c89c7a42568b2315c2f0840fc9cc53edc13ba62724b",
+      "updated_at": "2026-07-20T21:25:49.545320+00:00"
+    },
+    "sector_indices": {
+      "fingerprint": "d54855ff711c1a5008fb140dedc20ac8d3dad3f7218ec89e35033d0d23644026",
+      "updated_at": "2026-07-20T21:25:49.912197+00:00"
+    }
+  },
+  "hub_sync": {
+    "fingerprint": "4e4df2ad1434819c0f7bb8790d905ba8cc5239c1ba0cd57849c08954fca588e9",
+    "updated_at": "2026-07-20T21:25:52.383970+00:00",
+    "last_counts": {
+      "fii_dii": 4164,
+      "fpi": 1,
+      "mf_sebi": 30,
+      "fii_sebi": 30,
+      "sector_indices": 2450
+    }
+  }
 }

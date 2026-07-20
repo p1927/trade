@@ -132,7 +132,7 @@ EXCLUDED_DATA: dict[str, str] = {
     "indian_market_data_clone": "Use pip/API only if NSE PE archive needed later; PE proxy suffices today",
 }
 
-_PINNED_FOR_AUDIT: frozenset[str] = frozenset(
+PINNED_FOR_AUDIT: frozenset[str] = frozenset(
     {
         "oil_brent",
         "usd_inr",
@@ -146,6 +146,11 @@ _PINNED_FOR_AUDIT: frozenset[str] = frozenset(
         "nifty_pe",
     }
 )
+_PINNED_FOR_AUDIT = PINNED_FOR_AUDIT  # backward compat
+
+
+def pinned_factors() -> frozenset[str]:
+    return PINNED_FOR_AUDIT
 
 
 def required_factor_keys() -> tuple[str, ...]:

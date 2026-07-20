@@ -1,0 +1,55 @@
+{
+  "datasets": {
+    "india_equity_closes_26y_wide": {
+      "source_path": "26YRS_closes_20260420_171303.csv",
+      "source_mtime": 1776681716000000000,
+      "source_sha256": "cffccf32face9319d8856daec117af65b38ca5a0253c42be8799d793bf425c82",
+      "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/india_equity_closes_26y_wide.parquet",
+      "rows": 6489,
+      "symbols": 4690,
+      "start": "2000-04-03",
+      "end": "2026-03-30"
+    },
+    "india_equity_volume_26y_wide": {
+      "source_path": "26YRS_volume_20260420_171303.csv",
+      "source_mtime": 1776681722000000000,
+      "source_sha256": "fef64c6170e439200b467070694b2a50cde51b52e514367b4196eec37659a9a7",
+      "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/india_equity_volume_26y_wide.parquet",
+      "rows": 6489,
+      "symbols": 4690,
+      "start": "2000-04-03",
+      "end": "2026-03-30"
+    },
+    "india_equity_closes_gt10y_wide": {
+      "source_path": "gt_10_yrs_data.csv",
+      "source_mtime": 1776681732000000000,
+      "source_sha256": "c2672188751cc806c86844de95f3952adb2b3c22da5ce8da7bf5093213d3a63c",
+      "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/india_equity_closes_gt10y_wide.parquet",
+      "rows": 4940,
+      "symbols": 2226,
+      "start": "2004-09-06",
+      "end": "2024-08-30"
+    },
+    "india_equity_closes_all20y_wide": {
+      "source_path": "all_20_yrs_data.csv",
+      "source_mtime": 1776681726000000000,
+      "source_sha256": "9cf029aa8c0b8cbde5c2b6841eaaeedeed46abb47b6c0f239779a2dc593c718c",
+      "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/india_equity_closes_all20y_wide.parquet",
+      "rows": 4940,
+      "symbols": 1152,
+      "start": "2004-09-06",
+      "end": "2024-08-30"
+    },
+    "india_equity_closes_combined_wide": {
+      "source_path": "combined_stock_data.csv",
+      "source_mtime": 1776681728000000000,
+      "source_sha256": "4e502806e66d7f018b280a118b513f0dbd5ab4d7bf54a6bffefe39e74af909f6",
+      "path": "/Users/pratyushmishra/Documents/GitHub/Trade/data/nse/historic_data/india_equity_closes_combined_wide.parquet",
+      "rows": 4940,
+      "symbols": 3988,
+      "start": "2004-09-06",
+      "end": "2024-08-30"
+    }
+  },
+  "updated_at": "2026-07-20T19:03:12.593699+00:00"
+}
