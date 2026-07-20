@@ -1,6 +1,6 @@
 {
   "status": "ok",
-  "as_of": "2026-07-19",
+  "as_of": "2026-07-20",
   "source": "nse_historic_data_ind_nifty50list",
   "source_file": "ind_nifty50list.csv",
   "symbols": [

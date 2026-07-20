@@ -242,6 +242,8 @@ stack/searxng/certs/*.pem
 data/nse/raw/
 !data/nse/manifest.json
 !data/nse/**/*.parquet
+# Wide constituent CSV export exceeds GitHub 100MB limit — use parquet only
+data/nse/historic_data/nifty50_constituent_ohlcv_daily.csv
 
 # Stack runtime artifacts (daemon pidfiles, Nautilus registry, local logs)
 log/
