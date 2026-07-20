@@ -24,6 +24,28 @@ def test_apply_redundancy_prune_drops_pair_members():
 
 
 @pytest.mark.unit
+def test_apply_redundancy_prune_prefers_research_primary_in_groups():
+    cols = [
+        "india_term_spread",
+        "india_credit_spread",
+        "india_10y",
+        "nifty_stoch_k",
+        "nifty_williams_r",
+        "nifty_macd_histogram",
+        "nifty_macd_line",
+        "fii_net_5d",
+        "institutional_net_5d",
+    ]
+    pruned = _apply_redundancy_prune(cols)
+    assert pruned == [
+        "india_term_spread",
+        "nifty_stoch_k",
+        "nifty_macd_histogram",
+        "fii_net_5d",
+    ]
+
+
+@pytest.mark.unit
 def test_select_macro_columns_excludes_redundant():
     horizon = resolve_horizon(14)
     frame = pd.DataFrame(

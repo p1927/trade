@@ -29,6 +29,7 @@ _DEFAULT_MAE_PCT = 1.5
 _MACRO_DELTA_CAP_PCT = 5.0
 _MACRO_SHRINK_THRESHOLD_PCT = 3.0
 _RIDGE_ALPHA = 50.0
+_RIDGE_SOLVER = "lsqr"
 _MACRO_TRUST_MAE_GOOD = 1.5
 _MACRO_TRUST_MAE_POOR = 7.0
 from trade_integrations.dataflows.index_research.views import classify_index_view
@@ -36,6 +37,9 @@ from trade_integrations.dataflows.index_research.views import classify_index_vie
 _DIRECTION_PROB_BULL = 0.55
 _DIRECTION_PROB_BEAR = 0.45
 _MIN_WALK_FORWARD_TRAIN = 15
+_DIRECTION_LOGISTIC_C = 0.5
+_DIRECTION_LOGISTIC_MAX_ITER = 2000
+_DIRECTION_LOGISTIC_TOL = 1e-4
 
 
 def cap_macro_delta(macro_delta: float) -> float:
@@ -155,6 +159,39 @@ def _finite_float(raw: Any, default: float = 0.0) -> float:
     return value
 
 
+def _direction_logistic_c(*, n_samples: int, n_features: int) -> float:
+    """Scale L2 inverse-strength when p >> n so the direction head stays identifiable."""
+    if n_features <= n_samples:
+        return _DIRECTION_LOGISTIC_C
+    ratio = max(n_samples / n_features, 0.01)
+    return _DIRECTION_LOGISTIC_C * ratio
+
+
+def _make_ridge_regressor():
+    """Ridge return head — lsqr avoids Cholesky overflow on collinear macro panels."""
+    Ridge, _, _, _, _, _ = _require_sklearn()
+    return Ridge(alpha=_RIDGE_ALPHA, solver=_RIDGE_SOLVER)
+
+
+def _make_direction_classifier(*, n_samples: int, n_features: int):
+    """Binary direction head tuned for high-dimensional polynomial macro features.
+
+    sklearn's default ``lbfgs`` solver is unstable when interaction-expanded features
+    (~900) exceed walk-forward train rows (~200). ``liblinear`` with the dual
+    formulation is the recommended choice for small-sample, high-dimensional L2
+    logistic regression.
+    """
+    _, LogisticRegression, _, _, _, _ = _require_sklearn()
+    use_dual = n_features >= n_samples
+    return LogisticRegression(
+        C=_direction_logistic_c(n_samples=n_samples, n_features=n_features),
+        solver="liblinear",
+        dual=use_dual,
+        max_iter=_DIRECTION_LOGISTIC_MAX_ITER,
+        tol=_DIRECTION_LOGISTIC_TOL,
+    )
+
+
 def _macro_trust_weight(mae: float) -> float:
     if mae <= _MACRO_TRUST_MAE_GOOD:
         return 1.0
@@ -245,9 +282,15 @@ def _walk_forward_metrics(
             continue
         X_train_raw = X[:i]
         X_test_raw = X[i : i + 1]
+        if not np.all(np.isfinite(X_train_raw)) or not np.all(np.isfinite(y[:i])):
+            continue
+        if X_train_raw.shape[0] < 2 or float(np.nanstd(X_train_raw)) < 1e-12:
+            continue
         train_means, train_stds = _fit_feature_scaler(X_train_raw)
         X_train = _scale_features(X_train_raw, train_means, train_stds)
         X_test = _scale_features(X_test_raw, train_means, train_stds)
+        if not np.all(np.isfinite(X_train)) or not np.all(np.isfinite(X_test)):
+            continue
         poly = PolynomialFeatures(
             degree=poly_degree,
             interaction_only=True,
@@ -255,9 +298,17 @@ def _walk_forward_metrics(
         )
         X_train_poly = poly.fit_transform(X_train)
         X_test_poly = poly.transform(X_test)
-        model = Ridge(alpha=_RIDGE_ALPHA)
-        model.fit(X_train_poly, y[:i])
-        oos_pred.append(float(model.predict(X_test_poly)[0]))
+        if not np.all(np.isfinite(X_train_poly)) or not np.all(np.isfinite(X_test_poly)):
+            continue
+        model = _make_ridge_regressor()
+        try:
+            model.fit(X_train_poly, y[:i])
+            pred_val = float(model.predict(X_test_poly)[0])
+        except (ValueError, FloatingPointError):
+            continue
+        if not np.isfinite(pred_val):
+            continue
+        oos_pred.append(pred_val)
         oos_true.append(float(y[i]))
 
     if len(oos_true) < 2:
@@ -275,7 +326,7 @@ def _walk_forward_direction_hit_rate(
     poly_degree: int,
 ) -> float | None:
     """Out-of-sample direction hit rate for a logistic regression head."""
-    _, LogisticRegression, _, _, PolynomialFeatures, _ = _require_sklearn()
+    _, _, _, _, PolynomialFeatures, _ = _require_sklearn()
     holdout = max(3, min(len(y) // 5, 15))
     start = len(y) - holdout
     if start < _MIN_WALK_FORWARD_TRAIN:
@@ -292,9 +343,15 @@ def _walk_forward_direction_hit_rate(
             continue
         X_train_raw = X[:i]
         X_test_raw = X[i : i + 1]
+        if not np.all(np.isfinite(X_train_raw)) or not np.all(np.isfinite(y[:i])):
+            continue
+        if X_train_raw.shape[0] < 2 or float(np.nanstd(X_train_raw)) < 1e-12:
+            continue
         train_means, train_stds = _fit_feature_scaler(X_train_raw)
         X_train = _scale_features(X_train_raw, train_means, train_stds)
         X_test = _scale_features(X_test_raw, train_means, train_stds)
+        if not np.all(np.isfinite(X_train)) or not np.all(np.isfinite(X_test)):
+            continue
         poly = PolynomialFeatures(
             degree=poly_degree,
             interaction_only=True,
@@ -302,9 +359,16 @@ def _walk_forward_direction_hit_rate(
         )
         X_train_poly = poly.fit_transform(X_train)
         X_test_poly = poly.transform(X_test)
-        clf = LogisticRegression(C=0.5, max_iter=1000)
-        clf.fit(X_train_poly, labels[:i])
-        prob = float(clf.predict_proba(X_test_poly)[0, 1])
+        if not np.all(np.isfinite(X_train_poly)) or not np.all(np.isfinite(X_test_poly)):
+            continue
+        clf = _make_direction_classifier(n_samples=i, n_features=X_train_poly.shape[1])
+        try:
+            clf.fit(X_train_poly, labels[:i])
+            prob = float(clf.predict_proba(X_test_poly)[0, 1])
+        except (ValueError, FloatingPointError):
+            continue
+        if not np.isfinite(prob):
+            continue
         pred_up = prob >= 0.5
         actual_up = labels[i] == 1
         hits += int(pred_up == actual_up)
@@ -319,11 +383,10 @@ def _train_direction_head(
     y: np.ndarray,
     poly_names: list[str],
 ) -> tuple[dict[str, float], float]:
-    _, LogisticRegression, _, _, _, _ = _require_sklearn()
     labels = (y > 0).astype(int)
     if len(set(labels.tolist())) < 2:
         return {}, 0.0
-    clf = LogisticRegression(C=0.5, max_iter=1000)
+    clf = _make_direction_classifier(n_samples=len(y), n_features=X_poly.shape[1])
     clf.fit(X_poly, labels)
     coefficients = {
         str(name): float(coef)
@@ -388,7 +451,7 @@ def train_macro_ridge(
         include_bias=False,
     )
     X_poly = poly.fit_transform(X_scaled)
-    model = Ridge(alpha=_RIDGE_ALPHA)
+    model = _make_ridge_regressor()
     model.fit(X_poly, y)
 
     oos_mae, oos_r2 = _walk_forward_metrics(X, y, poly_degree=horizon.poly_degree)

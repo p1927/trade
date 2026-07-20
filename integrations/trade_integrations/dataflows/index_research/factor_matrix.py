@@ -72,8 +72,11 @@ _MAX_FEATURES = 40
 _MIN_ABS_CORR = 0.05
 _MIN_COLUMN_COVERAGE_RATIO = 0.45
 _MIN_COLUMN_COVERAGE_ROWS = 10
+_MIN_FEATURE_STD = 1e-12
 
 # Always include in Ridge training when present in history (flows, vol, oil).
+# Keep FII + DII legs separately (distinct foreign vs domestic signals); omit
+# institutional_net_5d because it is algebraically FII + DII.
 _PINNED_MACRO_FACTORS: frozenset[str] = frozenset(
     {
         "fii_net_5d",
@@ -81,7 +84,6 @@ _PINNED_MACRO_FACTORS: frozenset[str] = frozenset(
         "oil_brent",
         "india_vix",
         "nifty_pcr",
-        "institutional_net_5d",
         "dii_absorption_ratio",
     }
 )
@@ -111,16 +113,51 @@ _REDUNDANCY_PAIRS: tuple[tuple[str, str], ...] = (
     ("nifty_return_7d", "nifty_return_14d"),  # prefer shorter horizon when both correlate
     ("nifty_earnings_yield", "nifty_pe"),
     ("nifty_book_to_market", "nifty_pb"),
+    # FII + DII are distinct flow drivers; combined net is their sum (MDPI 2026, NiftyPulse).
+    ("fii_net_5d", "institutional_net_5d"),
+)
+
+# Within each group keep the first present member; drop the rest (TA multicollinearity guidance).
+_REDUNDANCY_GROUPS: tuple[tuple[str, ...], ...] = (
+    # India curve: term spread (10Y − T-Bill) beats level + affine credit proxy.
+    ("india_term_spread", "india_credit_spread", "india_10y", "india_91d_tbill"),
+    # Oscillators: stochastic %K; Williams %R is a linear transform (StockSharp / TA-Lib studies).
+    ("nifty_stoch_k", "nifty_williams_r", "nifty_stoch_d", "nifty_bb_percent_b"),
+    # MACD: histogram is line − signal; keep the actionable residual.
+    ("nifty_macd_histogram", "nifty_macd_line", "nifty_macd_signal"),
+    # Valuation stretch: equity risk premium over long MA distance.
+    ("equity_risk_premium", "nifty_ma200_distance_pct"),
+    ("nifty_book_to_market", "nifty_pb_zscore_5y"),
 )
 
 
+def _safe_abs_corr(series: pd.Series, target: pd.Series) -> float | None:
+    """Pearson |r| with guards for zero-variance columns (avoids numpy divide warnings)."""
+    aligned = pd.concat([series, target], axis=1).dropna()
+    if len(aligned) < 3:
+        return None
+    a = aligned.iloc[:, 0].astype(float)
+    b = aligned.iloc[:, 1].astype(float)
+    if float(a.std(ddof=0)) < _MIN_FEATURE_STD or float(b.std(ddof=0)) < _MIN_FEATURE_STD:
+        return None
+    corr = a.corr(b)
+    if corr is None or np.isnan(corr):
+        return None
+    return abs(float(corr))
+
+
 def _apply_redundancy_prune(columns: list[str]) -> list[str]:
-    """Drop redundant pair members already excluded or superseded."""
+    """Drop redundant pair/group members already excluded or superseded."""
     present = set(columns)
     drop: set[str] = set()
     for keep, discard in _REDUNDANCY_PAIRS:
         if keep in present and discard in present:
             drop.add(discard)
+    for group in _REDUNDANCY_GROUPS:
+        keep = next((name for name in group if name in present), None)
+        if keep is None:
+            continue
+        drop |= {name for name in group if name != keep and name in present}
     drop |= _EXCLUDED_REDUNDANT & present
     return [c for c in columns if c not in drop]
 
@@ -130,6 +167,7 @@ def redundancy_audit() -> dict[str, Any]:
     return {
         "excluded_redundant": sorted(_EXCLUDED_REDUNDANT),
         "redundancy_pairs": [list(pair) for pair in _REDUNDANCY_PAIRS],
+        "redundancy_groups": [list(group) for group in _REDUNDANCY_GROUPS],
     }
 
 
@@ -257,10 +295,10 @@ def build_factor_matrix(
     selected: list[str] = []
     for col in macro_cols:
         series = usable[col]
-        if series.notna().sum() < 3 or series.std(ddof=0, skipna=True) == 0:
+        if series.notna().sum() < 3 or float(series.std(ddof=0, skipna=True)) < _MIN_FEATURE_STD:
             continue
-        corr = abs(series.corr(y_all))
-        if corr is None or np.isnan(corr) or corr < _MIN_ABS_CORR:
+        corr = _safe_abs_corr(series, y_all)
+        if corr is None or corr < _MIN_ABS_CORR:
             continue
         selected.append(col)
 
@@ -269,7 +307,7 @@ def build_factor_matrix(
     else:
         ranked = sorted(
             selected,
-            key=lambda name: abs(usable[name].corr(y_all)),
+            key=lambda name: _safe_abs_corr(usable[name], y_all) or 0.0,
             reverse=True,
         )
         selected = ranked[:_MAX_FEATURES]
@@ -283,6 +321,8 @@ def build_factor_matrix(
     for col in force_keys:
         if col in frame.columns and col not in selected:
             selected.append(col)
+
+    selected = _apply_redundancy_prune(selected)
 
     final = usable.dropna(subset=["target"] + selected).copy()
     if len(final) < 3:
