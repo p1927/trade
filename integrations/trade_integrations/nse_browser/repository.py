@@ -162,12 +162,25 @@ def load_repo_dataset(dataset_id: str) -> pd.DataFrame:
     return frame
 
 
+def repo_hub_sync_fingerprint() -> str:
+    """Fingerprint repo parquet + seed layers for conditional hub mirror."""
+    manifest = _load_manifest()
+    digest = hashlib.sha256()
+    digest.update(json.dumps(manifest.get("seed_layers", {}), sort_keys=True, default=str).encode("utf-8"))
+    for entry in sorted(manifest.get("files", []), key=lambda item: str(item.get("path", ""))):
+        if isinstance(entry, dict):
+            digest.update(str(entry.get("sha256", "")).encode("utf-8"))
+            digest.update(str(entry.get("rows", "")).encode("utf-8"))
+    return digest.hexdigest()
+
+
 def ingest_repository_to_hub(
     *,
     allow_live_fetch: bool = True,
     enrich_days: int = 365,
     explicit: bool = False,
     skip_repo_sync: bool = False,
+    force_hub_mirror: bool = False,
 ) -> dict[str, int]:
     """Sync repo parquet files into reports/hub/_data/nse_browser/."""
     if not skip_repo_sync:
@@ -176,7 +189,27 @@ def ingest_repository_to_hub(
             enrich_days=enrich_days,
             explicit=explicit,
         )
-    return _ingest_repository_parquet_to_hub()
+    if skip_repo_sync and not force_hub_mirror:
+        manifest = _load_manifest()
+        fingerprint = repo_hub_sync_fingerprint()
+        hub_sync = manifest.get("hub_sync") if isinstance(manifest.get("hub_sync"), dict) else {}
+        if hub_sync.get("fingerprint") == fingerprint:
+            logger.debug("skipping unchanged hub mirror (fingerprint match)")
+            last_counts = hub_sync.get("last_counts")
+            if isinstance(last_counts, dict):
+                return {str(k): int(v) for k, v in last_counts.items()}
+            return {"hub_mirror_skipped": 1}
+
+    counts = _ingest_repository_parquet_to_hub()
+    if skip_repo_sync or force_hub_mirror:
+        manifest = _load_manifest()
+        manifest["hub_sync"] = {
+            "fingerprint": repo_hub_sync_fingerprint(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "last_counts": counts,
+        }
+        _save_manifest(manifest)
+    return counts
 
 
 def _ingest_repository_parquet_to_hub() -> dict[str, int]:
@@ -336,8 +369,73 @@ def seed_nse_monthly_cash_fii_dii() -> int:
     return upsert_repo_parquet(merged, dataset_id="fii_dii", source="nse_monthly_cash")
 
 
-def sync_fii_dii_repo_layers() -> dict[str, int]:
+def _fingerprint_paths(paths: list[Path]) -> str:
+    """Hash source file names and content for seed-layer skip decisions."""
+    digest = hashlib.sha256()
+    for path in sorted(paths):
+        if not path.is_file():
+            continue
+        digest.update(path.name.encode("utf-8"))
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fii_dii_seed_fingerprint() -> str:
+    from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
+
+    root = repo_root()
+    paths = [
+        historic_fii_dii_trading_activity_path(),
+        nifty50_fo_filtered_path(),
+        monthly_cash_csv_path(),
+    ]
+    try:
+        from trade_integrations.nse_browser.parsers.aeron7_intraday import aeron7_intraday_roots
+
+        paths.extend(aeron7_intraday_roots(historic_data_dir(root)))
+    except Exception:
+        pass
+    return _fingerprint_paths(paths)
+
+
+def _sebi_seed_fingerprint() -> str:
+    return _fingerprint_paths([mf_sebi_monthly_csv_path(), fii_sebi_monthly_csv_path()])
+
+
+def _sector_seed_fingerprint() -> str:
+    nifty_dir = repo_root() / "nifty50"
+    if not nifty_dir.is_dir():
+        return ""
+    return _fingerprint_paths(sorted(nifty_dir.glob("*.csv")))
+
+
+def _should_skip_seed_layer(manifest: dict[str, Any], layer_key: str, fingerprint: str) -> bool:
+    if not fingerprint:
+        return False
+    prev = (manifest.get("seed_layers") or {}).get(layer_key)
+    if not isinstance(prev, dict):
+        return False
+    return prev.get("fingerprint") == fingerprint
+
+
+def _record_seed_layer(manifest: dict[str, Any], layer_key: str, fingerprint: str) -> None:
+    seed_layers = manifest.setdefault("seed_layers", {})
+    seed_layers[layer_key] = {
+        "fingerprint": fingerprint,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def sync_fii_dii_repo_layers(*, force: bool = False) -> dict[str, int]:
     """Apply all repo seed layers: historic CSV → monthly cash → Mr Chartist gap fill."""
+    manifest = _load_manifest()
+    fingerprint = _fii_dii_seed_fingerprint()
+    if not force and _should_skip_seed_layer(manifest, "fii_dii", fingerprint):
+        logger.debug("skipping unchanged fii_dii seed layers")
+        return {"fii_dii_skipped": 1}
+
     counts: dict[str, int] = {}
     counts["historic_trading_activity"] = seed_historic_fii_dii_trading_activity()
     counts["historic_nifty50_fo"] = seed_historic_nifty50_fo_derivatives()
@@ -352,6 +450,8 @@ def sync_fii_dii_repo_layers() -> dict[str, int]:
         daily_rows = len(existing)
     if daily_rows < int(os.environ.get("NSE_FII_DII_MIN_HISTORY_DAYS", "100")):
         counts["mrchartist"] = seed_mrchartist_fii_dii()
+    _record_seed_layer(manifest, "fii_dii", fingerprint)
+    _save_manifest(manifest)
     return counts
 
 
@@ -417,12 +517,20 @@ def seed_nse_fii_sebi_monthly() -> int:
     return upsert_repo_parquet(merged, dataset_id="fii_sebi", source="nse_fii_sebi_monthly")
 
 
-def sync_sebi_monthly_repo_layers() -> dict[str, int]:
+def sync_sebi_monthly_repo_layers(*, force: bool = False) -> dict[str, int]:
     """Apply MF and FII SEBI monthly CSV seeds."""
-    return {
+    manifest = _load_manifest()
+    fingerprint = _sebi_seed_fingerprint()
+    if not force and _should_skip_seed_layer(manifest, "sebi_monthly", fingerprint):
+        logger.debug("skipping unchanged sebi monthly seed layers")
+        return {"sebi_monthly_skipped": 1}
+    counts = {
         "mf_sebi": seed_nse_mf_sebi_monthly(),
         "fii_sebi": seed_nse_fii_sebi_monthly(),
     }
+    _record_seed_layer(manifest, "sebi_monthly", fingerprint)
+    _save_manifest(manifest)
+    return counts
 
 
 def sync_niftyinvest_api_flow(*, days: int = 365) -> dict[str, Any]:
@@ -432,6 +540,35 @@ def sync_niftyinvest_api_flow(*, days: int = 365) -> dict[str, Any]:
     )
 
     return seed_niftyinvest_flow_to_repo(days=days)
+
+
+def sync_light_repo_seed_layers(
+    *,
+    allow_live_fetch: bool = True,
+    enrich_days: int = 365,
+    skip_niftyinvest_fetch: bool = False,
+) -> dict[str, int]:
+    """Sync FII/DII, SEBI monthly, and sector indices without batch historic re-parse."""
+    counts: dict[str, int] = {}
+    counts.update(sync_fii_dii_repo_layers())
+    counts.update(sync_sebi_monthly_repo_layers())
+    counts["sector_indices"] = seed_sector_indices_from_nifty50()
+    if allow_live_fetch and not skip_niftyinvest_fetch:
+        ni = sync_niftyinvest_api_flow(days=enrich_days)
+        if isinstance(ni, dict) and ni.get("status") == "ok":
+            counts["niftyinvest_api"] = int(ni.get("rows") or 0)
+    if allow_live_fetch:
+        try:
+            from trade_integrations.dataflows.index_research.sources.nselib_fetch import (
+                backfill_nifty50_ohlcv_gaps,
+            )
+
+            ohlcv = backfill_nifty50_ohlcv_gaps(repo_root(), allow_live_fetch=True)
+            if ohlcv.get("status") == "ok":
+                counts["nselib_nifty50_ohlcv"] = int(ohlcv.get("rows_added") or 0)
+        except Exception as exc:
+            logger.debug("nselib nifty50 ohlcv gap fill skipped: %s", exc)
+    return counts
 
 
 def sync_all_repo_seed_layers(
@@ -450,7 +587,10 @@ def sync_all_repo_seed_layers(
     require_explicit_batch(explicit=explicit, operation="sync_all_repo_seed_layers")
     from trade_integrations.nse_browser.parsers.historic_data import ingest_historic_data_folder
 
-    counts: dict[str, int] = {}
+    counts = sync_light_repo_seed_layers(
+        allow_live_fetch=allow_live_fetch,
+        enrich_days=enrich_days,
+    )
     historic = ingest_historic_data_folder(repo_root())
     if historic.get("status") == "ok":
         counts["historic_data"] = int(historic.get("rows") or 0)
@@ -459,23 +599,6 @@ def sync_all_repo_seed_layers(
                 row_count = int(meta.get("rows") or meta.get("months") or meta.get("membership_rows") or 0)
                 if row_count:
                     counts[f"historic_{name}"] = row_count
-    counts.update(sync_fii_dii_repo_layers())
-    counts.update(sync_sebi_monthly_repo_layers())
-    counts["sector_indices"] = seed_sector_indices_from_nifty50()
-    if allow_live_fetch:
-        ni = sync_niftyinvest_api_flow(days=enrich_days)
-        if isinstance(ni, dict) and ni.get("status") == "ok":
-            counts["niftyinvest_api"] = int(ni.get("rows") or 0)
-        try:
-            from trade_integrations.dataflows.index_research.sources.nselib_fetch import (
-                backfill_nifty50_ohlcv_gaps,
-            )
-
-            ohlcv = backfill_nifty50_ohlcv_gaps(repo_root(), allow_live_fetch=True)
-            if ohlcv.get("status") == "ok":
-                counts["nselib_nifty50_ohlcv"] = int(ohlcv.get("rows_added") or 0)
-        except Exception as exc:
-            logger.debug("nselib nifty50 ohlcv gap fill skipped: %s", exc)
     return counts
 
 
@@ -500,9 +623,16 @@ def load_sector_indices_frame(start: str | None = None, end: str | None = None) 
     return out.sort_values(["date", "index_slug"]).reset_index(drop=True)
 
 
-def seed_sector_indices_from_nifty50() -> int:
+def seed_sector_indices_from_nifty50(*, force: bool = False) -> int:
     """Parse data/nse/nifty50/*.csv into sector_index_daily.parquet."""
     from trade_integrations.nse_browser.parsers.sector_indices import load_nifty50_sector_csvs
+
+    manifest = _load_manifest()
+    fingerprint = _sector_seed_fingerprint()
+    if not force and _should_skip_seed_layer(manifest, "sector_indices", fingerprint):
+        logger.debug("skipping unchanged sector index seed layer")
+        existing = load_sector_indices_frame()
+        return len(existing)
 
     frame = load_nifty50_sector_csvs(repo_root())
     if frame.empty:
@@ -523,9 +653,9 @@ def seed_sector_indices_from_nifty50() -> int:
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "source": "nse_sector_csv",
     }
-    manifest = _load_manifest()
     files = [f for f in manifest.get("files", []) if f.get("path") != rel]
     files.append(entry)
     manifest["files"] = files
+    _record_seed_layer(manifest, "sector_indices", fingerprint)
     _save_manifest(manifest)
     return rows

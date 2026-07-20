@@ -19,7 +19,11 @@ from trade_integrations.nse_browser.hub_writer import (
 )
 from trade_integrations.nse_browser.missions import run_mission
 from trade_integrations.nse_browser.registry import DATASETS, get_dataset, get_mission
-from trade_integrations.nse_browser.repository import ingest_repository_to_hub, repo_root
+from trade_integrations.nse_browser.repository import (
+    ingest_repository_to_hub,
+    repo_root,
+    sync_light_repo_seed_layers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,17 @@ def _build_summary(dataset_id: str, records: list[dict[str, Any]]) -> str:
     return f"{len(records)} {dataset_id} row(s) returned."
 
 
+def _ingest_repo_for_query(*, refresh: bool, backfill_historical: bool) -> dict[str, Any]:
+    """Mirror repo to hub without re-parsing historic_data unless explicitly backfilling."""
+    if backfill_historical:
+        return {"hub": ingest_repository_to_hub(explicit=True, allow_live_fetch=True)}
+    if refresh or batch_ingest_allowed(explicit=False):
+        seed = sync_light_repo_seed_layers(allow_live_fetch=refresh)
+        hub = ingest_repository_to_hub(skip_repo_sync=True, allow_live_fetch=False)
+        return {"seed": seed, "hub": hub}
+    return {}
+
+
 def get_nse_browser_data(
     dataset: str,
     *,
@@ -111,9 +126,10 @@ def get_nse_browser_data(
 
     Primary entry point for MCP and Vibe agents.
     """
-    ingest_counts: dict[str, Any] = {}
-    if refresh or backfill_historical or batch_ingest_allowed(explicit=False):
-        ingest_counts = ingest_repository_to_hub()
+    ingest_counts: dict[str, Any] = _ingest_repo_for_query(
+        refresh=refresh,
+        backfill_historical=backfill_historical,
+    )
     spec = get_dataset(dataset)
     if spec is None:
         return {
@@ -156,7 +172,7 @@ def get_nse_browser_data(
             agent_fallback=agent_fallback,
             backfill_historical=backfill_historical,
         )
-        ingest_repository_to_hub()
+        ingest_repository_to_hub(skip_repo_sync=True, allow_live_fetch=False)
         source = "fresh_fetch"
         frame = load_dataset_frame(spec.id)
     elif ingest_counts.get(spec.id):
@@ -224,9 +240,11 @@ def get_nse_browser_data(
 
 def ingest_nse_repository() -> dict[str, Any]:
     """Sync git-tracked data/nse parquet into hub without browser fetch."""
-    counts = ingest_repository_to_hub()
+    seed = sync_light_repo_seed_layers(allow_live_fetch=False)
+    hub = ingest_repository_to_hub(skip_repo_sync=True, allow_live_fetch=False)
     return {
-        "status": "ok" if counts else "partial",
-        "ingested": counts,
+        "status": "ok" if hub else "partial",
+        "seed_layers": seed,
+        "ingested": hub,
         "repo_root": str(repo_root()),
     }

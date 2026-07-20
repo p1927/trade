@@ -85,10 +85,16 @@ def main() -> int:
         parser.error("Specify --all, --mission, --ingest-only, or --summary")
         return 2
 
-    ingest_repository_to_hub()
+    from trade_integrations.nse_browser.repository import (
+        ingest_repository_to_hub,
+        sync_all_repo_seed_layers,
+    )
+
+    seed = sync_all_repo_seed_layers(explicit=True, allow_live_fetch=True)
     out = {
         "mission_result": result,
-        "ingested": ingest_repository_to_hub(),
+        "ingested": ingest_repository_to_hub(skip_repo_sync=True, allow_live_fetch=False),
+        "seed_layers": seed,
         "repo": _repo_summary(),
     }
     print(json.dumps(out, indent=2, default=str))
