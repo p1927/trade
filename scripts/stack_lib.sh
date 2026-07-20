@@ -57,6 +57,12 @@ stack_dev_tier_alive() {
   stack_vibe_api_listener_alive "$api_port"
 }
 
+stack_vibe_api_http_ok() {
+  local port="${1:-$(stack_vibe_api_port)}"
+  curl -sf -o /dev/null -m 3 "http://127.0.0.1:${port}/health" 2>/dev/null && return 0
+  stack_vibe_api_listener_alive "$port"
+}
+
 # Clear orphaned dev flag when the dev tier is down (terminal closed, Ctrl+C, etc.).
 stack_reconcile_stale_dev_mode() {
   if stack_dev_tier_alive || ! stack_dev_mode_flagged; then
@@ -673,7 +679,7 @@ stack_preflight_start() {
   ui_port="$(stack_vibe_ui_port)"
   openalgo_port="$(stack_openalgo_port)"
   if stack_http_ok "http://127.0.0.1:${openalgo_port}/" \
-    && stack_http_ok "http://127.0.0.1:${api_port}/" \
+    && stack_vibe_api_http_ok "$api_port" \
     && stack_http_ok "http://127.0.0.1:${ui_port}/"; then
     echo "[stack] preflight: stack ports already serving — skipping foreign-port check"
   elif ! STACK_PORTS_STRICT=1 stack_check_port_listeners; then
@@ -821,8 +827,8 @@ stack_start_vibe_api() {
   fi
 
   if stack_http_ok "$base/"; then
-    echo "[stack] Vibe API on :$port responds but is not ready — leaving running; use: trade restart --force" >&2
-    return 0
+    echo "[stack] Vibe API on :$port responds but is not ready — use: trade restart --force" >&2
+    return 1
   fi
 
   if ! stack_assert_port_for_start "vibe-api" "$port"; then
@@ -942,6 +948,57 @@ stack_kill_openalgo_ws_proxy() {
   stack_kill_unclaimed_port 8765
 }
 
+stack_heal_daemon_enabled() {
+  local v="${STACK_HEAL_DAEMON:-1}"
+  v="$(_stack_lc "$v")"
+  [[ "$v" != "0" && "$v" != "false" && "$v" != "no" && "$v" != "off" ]]
+}
+
+stack_stop_heal_daemon() {
+  local log_dir pidfile pid
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/stack-heal.pid"
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
+    echo "[stack] stopping stack heal daemon (pid $pid) ..."
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
+}
+
+stack_start_heal_daemon() {
+  if ! stack_heal_daemon_enabled; then
+    return 0
+  fi
+  if stack_dev_mode_flagged; then
+    return 0
+  fi
+  local root log_dir pidfile logfile pid interval
+  root="$(stack_root)"
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/stack-heal.pid"
+  logfile="$log_dir/stack-heal.log"
+  interval="${STACK_HEAL_INTERVAL_SEC:-60}"
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
+    return 0
+  fi
+  echo "[stack] starting stack heal daemon (every ${interval}s) ..."
+  : >>"$logfile"
+  nohup bash -c "
+    while true; do
+      sleep $interval
+      if [[ -f '$root/log/stack.mode' ]] && [[ \"\$(tr -d '[:space:]' <'$root/log/stack.mode')\" == 'dev' ]]; then
+        continue
+      fi
+      '$root/trade' heal >>'$logfile' 2>&1 || true
+    done
+  " >>"$logfile" 2>&1 < /dev/null &
+  pid=$!
+  disown "$pid" 2>/dev/null || true
+  stack_write_pidfile "$pidfile" "$pid"
+}
+
 stack_stop_vibe_stack() {
   local log_dir api_port ui_port openalgo_port stop_docker stop_all=0
   while [[ $# -gt 0 ]]; do
@@ -964,6 +1021,7 @@ stack_stop_vibe_stack() {
   stack_stop_nautilus_watch
   stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
   stack_kill_openalgo_ws_proxy
+  stack_stop_heal_daemon
   stack_clear_stack_mode
   stack_clear_instance_manifest
 
@@ -1151,7 +1209,9 @@ stack_status_vibe_stack() {
   nautilus_pid="$(stack_read_pid "$log_dir/nautilus-watch.pid")"
   registry_file="$log_dir/nautilus-watch.agents.json"
   if [[ -f "$registry_file" ]]; then
-    registry_summary="$(stack_pick_python - "$registry_file" <<'PY' 2>/dev/null || true
+    local py
+    py="$(stack_pick_python)"
+    registry_summary="$("$py" - "$registry_file" <<'PY' 2>/dev/null || true
 import json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())

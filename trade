@@ -287,7 +287,9 @@ case "$cmd" in
     ;;
 
   sync-ports)
-    exec "$ROOT/.venv/bin/python" "$ROOT/scripts/sync_stack_ports.py" --apply "$@"
+    py="$ROOT/.venv/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    exec "$py" "$ROOT/scripts/sync_stack_ports.py" --apply "$@"
     ;;
 
   setup)

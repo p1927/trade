@@ -51,6 +51,7 @@ stack_ctl_up_inner() {
     exit 1
   fi
   stack_write_instance_manifest
+  stack_start_heal_daemon
   stack_print_ready
   stack_status_vibe_stack
 }
@@ -97,6 +98,7 @@ stack_ctl_restart_inner() {
     exit 1
   fi
   stack_write_instance_manifest
+  stack_start_heal_daemon
   stack_print_ready
   stack_status_vibe_stack
 }
@@ -114,6 +116,7 @@ stack_ctl_ensure_inner() {
     exit 1
   fi
   stack_write_instance_manifest
+  stack_start_heal_daemon
   stack_print_ready
   stack_status_vibe_stack
 }
