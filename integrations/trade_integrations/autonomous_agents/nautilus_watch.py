@@ -225,21 +225,28 @@ def remove_agent_from_registry(agent_id: str) -> dict[str, Any]:
     return save_registry(registry)
 
 
-def stop_nautilus_watch_completely() -> dict[str, Any]:
-    """Stop the detached Nautilus watch process and clear the agent registry."""
+def stop_nautilus_watch_node(*, clear_agents: bool = False) -> dict[str, Any]:
+    """Stop the watch process and clear node_pid; optionally clear agent registry."""
     reconcile_stale_watch_pid()
     had_pid = _read_pid() is not None
     _stop_existing()
-    registry = load_registry()
-    cleared_agents = len(registry.get("agents") or [])
-    registry["agents"] = []
-    registry["node_pid"] = None
-    save_registry(registry)
+    cleared_agents = 0
+    if clear_agents:
+        registry = load_registry()
+        cleared_agents = len(registry.get("agents") or [])
+        registry["agents"] = []
+        registry["node_pid"] = None
+        save_registry(registry)
     return {
         "stopped": True,
         "had_process": had_pid,
         "registry_agents_cleared": cleared_agents,
     }
+
+
+def stop_nautilus_watch_completely() -> dict[str, Any]:
+    """Stop the detached Nautilus watch process and clear the agent registry."""
+    return stop_nautilus_watch_node(clear_agents=True)
 
 
 def reconcile_stale_watch_pid() -> bool:
