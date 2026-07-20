@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from trade_integrations.openalgo.freshness import FreshnessPolicy
@@ -106,26 +107,32 @@ class OpenAlgoQuoteFeed:
 
         quotes = parse_multiquote_response(payload, requests)
         if quotes:
-            try:
-                from trade_integrations.hub_capture.gate import should_capture
-                from trade_integrations.hub_storage.timescale_ticks import record_quote_snapshots
-
-                if should_capture("NIFTY", "ticks"):
-                    record_quote_snapshots(quotes, source="openalgo_watch")
-            except Exception:
-                logger.debug("timescale tick record skipped", exc_info=True)
+            threading.Thread(
+                target=self._async_record_ticks,
+                args=(quotes,),
+                daemon=True,
+                name="openalgo-tick-record",
+            ).start()
             return quotes
         fallback = self._poll_fallback(watch_symbols)
         if fallback:
-            try:
-                from trade_integrations.hub_capture.gate import should_capture
-                from trade_integrations.hub_storage.timescale_ticks import record_quote_snapshots
-
-                if should_capture("NIFTY", "ticks"):
-                    record_quote_snapshots(fallback, source="openalgo_watch")
-            except Exception:
-                logger.debug("timescale tick record skipped", exc_info=True)
+            threading.Thread(
+                target=self._async_record_ticks,
+                args=(fallback,),
+                daemon=True,
+                name="openalgo-tick-record",
+            ).start()
         return fallback
+
+    def _async_record_ticks(self, quotes: dict[str, QuoteSnapshot]) -> None:
+        try:
+            from trade_integrations.hub_capture.gate import should_capture
+            from trade_integrations.hub_storage.timescale_ticks import record_quote_snapshots
+
+            if should_capture("NIFTY", "ticks"):
+                record_quote_snapshots(quotes, source="openalgo_watch")
+        except Exception:
+            logger.debug("timescale tick record skipped", exc_info=True)
 
     def _poll_fallback(self, watch_symbols: list[str]) -> dict[str, QuoteSnapshot]:
         out: dict[str, QuoteSnapshot] = {}

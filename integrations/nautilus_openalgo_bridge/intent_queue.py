@@ -72,37 +72,43 @@ def process_pending_intents(
 ) -> list[dict[str, Any]]:
     """Execute queued intents and move to processed/."""
     from nautilus_openalgo_bridge.execute import execute_intent
+    from nautilus_openalgo_bridge.queue_lock import intent_queue_lock
 
     oa = client or get_openalgo_client()
     results: list[dict[str, Any]] = []
-    for path in list_pending_intents()[:max_count]:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            intent = ExecutionIntent.from_dict(payload)
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            logger.warning("skip invalid intent file %s: %s", path.name, exc)
-            path.unlink(missing_ok=True)
-            continue
+    with intent_queue_lock() as locked:
+        if not locked:
+            logger.warning("intent queue lock not acquired — skipping batch")
+            return results
+        pending = list_pending_intents()[:max_count]
+        for path in pending:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                intent = ExecutionIntent.from_dict(payload)
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                logger.warning("skip invalid intent file %s: %s", path.name, exc)
+                path.unlink(missing_ok=True)
+                continue
 
-        agent_id = (intent.agent_id or "").strip()
-        if agent_id and is_trading_halted(agent_id):
-            logger.warning("skip intent %s — trading halted for %s", path.name, agent_id)
-            archive_halted_intent(intent)
-            path.unlink(missing_ok=True)
-            results.append({"intent_id": intent.intent_id, "status": "halted_skipped"})
-            continue
+            agent_id = (intent.agent_id or "").strip()
+            if agent_id and is_trading_halted(agent_id):
+                logger.warning("skip intent %s — trading halted for %s", path.name, agent_id)
+                archive_halted_intent(intent)
+                path.unlink(missing_ok=True)
+                results.append({"intent_id": intent.intent_id, "status": "halted_skipped"})
+                continue
 
-        dedupe_key = intent.intent_id or json.dumps(intent.to_dict(), sort_keys=True)
-        if agent_id and should_skip_intent(agent_id, dedupe_key):
-            logger.warning("skip duplicate intent %s for %s", path.name, agent_id)
-            archive_intent(intent, {"status": "duplicate_skipped"})
-            path.unlink(missing_ok=True)
-            results.append({"intent_id": intent.intent_id, "status": "duplicate_skipped"})
-            continue
+            dedupe_key = intent.intent_id or json.dumps(intent.to_dict(), sort_keys=True)
+            if agent_id and should_skip_intent(agent_id, dedupe_key):
+                logger.warning("skip duplicate intent %s for %s", path.name, agent_id)
+                archive_intent(intent, {"status": "duplicate_skipped"})
+                path.unlink(missing_ok=True)
+                results.append({"intent_id": intent.intent_id, "status": "duplicate_skipped"})
+                continue
 
-        result = execute_intent(intent, client=oa, persist=False)
-        archive_intent(intent, result)
-        path.unlink(missing_ok=True)
-        results.append({"intent_id": intent.intent_id, **result})
-        logger.info("processed intent %s → %s", intent.intent_id, result.get("status"))
+            result = execute_intent(intent, client=oa, persist=False)
+            archive_intent(intent, result)
+            path.unlink(missing_ok=True)
+            results.append({"intent_id": intent.intent_id, **result})
+            logger.info("processed intent %s → %s", intent.intent_id, result.get("status"))
     return results

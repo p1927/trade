@@ -24,7 +24,7 @@ class BridgeConfig:
     openalgo_api_key: str = ""
     vibe_backend_url: str = "http://127.0.0.1:8899"
     vibe_api_key: str = ""
-    quote_poll_ms: int = 2_000
+    quote_poll_ms: int = 1_000
     watch_symbols: tuple[str, ...] = ("NIFTY", "BANKNIFTY", "INDIAVIX")
     alert_cooldown_sec: int = 300
     redis_url: str | None = None
@@ -59,7 +59,7 @@ def get_bridge_config() -> BridgeConfig:
         openalgo_api_key=api_key,
         vibe_backend_url=vibe_url,
         vibe_api_key=os.getenv("VIBE_API_AUTH_KEY", os.getenv("API_AUTH_KEY", "")).strip(),
-        quote_poll_ms=max(500, int(os.getenv("NAUTILUS_QUOTE_POLL_MS", "2000"))),
+        quote_poll_ms=max(500, int(os.getenv("NAUTILUS_QUOTE_POLL_MS", "1000"))),
         watch_symbols=_parse_symbols(os.getenv("NAUTILUS_WATCH_SYMBOLS", "NIFTY,BANKNIFTY,INDIAVIX")),
         alert_cooldown_sec=max(30, int(os.getenv("NAUTILUS_ALERT_COOLDOWN_SEC", "300"))),
         redis_url=redis_raw or None,
