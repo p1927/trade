@@ -45,8 +45,12 @@ if (( ! hub_only )); then
     if bash "$ROOT/scripts/setup_nautilus.sh" --verify 2>/dev/null; then
       echo "  ✓ setup_nautilus.sh --verify"
     else
-      echo "  ⚠ setup_nautilus.sh --verify (optional — poll loop fallback available)"
+      echo "  ✗ setup_nautilus.sh --verify failed — run: trade setup"
+      failures=$((failures + 1))
     fi
+  else
+    echo "  ✗ setup_nautilus.sh missing"
+    failures=$((failures + 1))
   fi
 
   if "$py" "$ROOT/scripts/verify_hub_integration.py"; then
@@ -107,5 +111,5 @@ if (( failures == 0 )); then
   echo "  Start stack: trade up   |   Dev: trade dev"
   exit 0
 fi
-echo "  Doctor: $failures critical check(s) failed — fix above, then: trade up"
+echo "  Doctor: $failures critical check(s) failed — fix above, then: trade setup && trade up"
 exit 1

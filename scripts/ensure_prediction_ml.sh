@@ -16,6 +16,16 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     brew install libomp
   fi
   stack_export_ml_runtime_env
+  "$PY" - <<PY
+import sys
+sys.path.insert(0, "${ROOT}/integrations")
+from trade_integrations.ml_runtime_env import ensure_libomp_symlink
+
+ok, message = ensure_libomp_symlink()
+print(f"[prediction-ml] libomp: {message}")
+if not ok:
+    print(f"[prediction-ml] note: {message}", file=sys.stderr)
+PY
 fi
 
 echo "[prediction-ml] installing Python packages into $(dirname "$PY") ..."
@@ -30,20 +40,16 @@ echo "[prediction-ml] installing Python packages into $(dirname "$PY") ..."
   "backtrader>=1.9"
 
 echo "[prediction-ml] verifying imports ..."
+stack_verify_prediction_ml
 "$PY" - <<'PY'
-import lightgbm
-import xgboost
 import statsmodels
 import pandas_ta
-import darts
 import vectorbt
 import backtrader
 
 print(
-    "ok:",
-    f"lightgbm={lightgbm.__version__}",
-    f"xgboost={xgboost.__version__}",
-    f"darts={darts.__version__}",
+    "ok extras:",
+    f"statsmodels={statsmodels.__version__}",
     f"vectorbt={vectorbt.__version__}",
 )
 PY

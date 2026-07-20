@@ -63,9 +63,12 @@ Data router (unified fetch + backlog worker):
 Maintenance:
   sync [target]         Sync submodules (all|tradingagents|openalgo|status)
   sync-ports            Apply stack/ports.yaml to .env, compose, OpenAlgo/Vibe
+  setup [target]        Bootstrap deps on a fresh machine (all|vibe|verify)
   setup vibe            Wire OpenAlgo MCP into Vibe agent config
 
 Examples:
+  trade setup                       # fresh machine — install all deps + verify
+  trade setup verify                # re-check without installing
   trade up                          # background stack (recommended)
   trade heal                        # start only what's down (quiet heal)
   trade doctor && trade up          # verify deps, then start
@@ -160,6 +163,7 @@ case "$cmd" in
     ;;
 
   down)
+    _stack_trade_prelude down
     exec "$ROOT/scripts/stack_ctl.sh" down "$@"
     ;;
 
@@ -403,19 +407,30 @@ EOF
     ;;
 
   setup)
-    sub="${1:-}"
+    sub="${1:-all}"
     shift || true
     case "$sub" in
+      all|"")
+        exec bash "$ROOT/scripts/setup_trade_stack.sh" "$@"
+        ;;
+      verify)
+        exec bash "$ROOT/scripts/setup_trade_stack.sh" --verify-only "$@"
+        ;;
       vibe)
         py="$ROOT/.venv/bin/python"
         [[ -x "$py" ]] || py="python3"
         exec "$py" "$ROOT/scripts/setup_vibe.py" "$@"
         ;;
       -h|--help|help|"")
-        echo "Usage: trade setup vibe"
+        cat <<'EOF'
+Usage:
+  trade setup              Full stack bootstrap (venv, ML, OpenAlgo, frontend, verify)
+  trade setup verify       Run trade doctor checks only
+  trade setup vibe         Sync ~/.vibe-trading operator config only
+EOF
         ;;
       *)
-        echo "Unknown setup target: $sub (try: vibe)" >&2
+        echo "Unknown setup target: $sub (try: all, verify, vibe)" >&2
         exit 1
         ;;
     esac

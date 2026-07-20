@@ -47,6 +47,11 @@ if ! stack_validate_ports_registry; then
   exit 1
 fi
 
+stack_preflight_start || {
+  echo "[stack] dev blocked: fix preflight issues first — run: trade doctor" >&2
+  exit 1
+}
+
 stack_preflight_dependencies --strict || {
   echo "[stack] dev blocked: fix hub dependencies before starting (Docker, compose file)" >&2
   exit 1

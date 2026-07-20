@@ -208,8 +208,8 @@ bootstrap_tradingagents() {
     log "Installing TradingAgents engine + trade integrations ..."
     "$ROOT/.venv/bin/pip" install -q -e "$AGENTS_DIR"
     "$ROOT/.venv/bin/pip" install -q -e ".[dev,research]"
-    if [[ -x "$ROOT/scripts/ensure_prediction_ml.sh" ]]; then
-      bash "$ROOT/scripts/ensure_prediction_ml.sh" || warn "prediction ML extras partial — run: ./scripts/ensure_prediction_ml.sh"
+  if [[ -x "$ROOT/scripts/ensure_prediction_ml.sh" ]]; then
+      bash "$ROOT/scripts/ensure_prediction_ml.sh" || fail "prediction ML setup failed — run: trade setup"
     fi
     "$vpy" -c "import trade_integrations"
   fi
@@ -612,7 +612,11 @@ vibe_frontend_dir() {
 }
 
 setup_vibe_config() {
-  log "Syncing Vibe operator config (OpenAlgo MCP + trade-stack skill) ..."
+  log "Syncing stack .env + Vibe operator config (OpenAlgo MCP + trade-stack skill) ..."
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/stack_lib.sh"
+  STACK_ROOT="$ROOT"
+  stack_sync_env || true
   "$(pick_python)" "$ROOT/scripts/setup_vibe.py"
 }
 
@@ -650,6 +654,14 @@ start_vibe_web() {
     fail "Vibe frontend not found at $frontend"
     return 1
   fi
+
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/stack_lib.sh"
+  stack_load_env
+  stack_preflight_start || {
+    fail "Stack preflight failed — run: trade doctor"
+    return 1
+  }
 
   if daemon_vibe_running; then
     if (( DEV_UI_ONLY )) || [[ "${STACK_DEV_FOREGROUND_VIBE:-0}" == "1" ]]; then

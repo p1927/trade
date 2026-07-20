@@ -49,7 +49,7 @@ stack_ctl_up_inner() {
   stack_refuse_if_dev_mode
   echo "[stack] starting background stack ..."
   stack_preflight_start || {
-    echo "[stack] fix issues above, then: trade doctor" >&2
+    echo "[stack] fix issues above, then: trade setup" >&2
     exit 1
   }
   stack_preflight_dependencies --strict || {

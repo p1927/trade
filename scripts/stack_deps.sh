@@ -32,9 +32,57 @@ stack_reconcile_orphan_lock() {
 
 stack_reconcile_all() {
   stack_reconcile_stale_dev_mode
+  stack_reconcile_orphan_watchdogs
+  stack_recover_stale_scheduler_jobs
   stack_reconcile_stale_claims
   stack_reconcile_nautilus_watch_pid
   stack_reconcile_orphan_lock
+}
+
+stack_reconcile_orphan_watchdogs() {
+  local log_dir pid pidfile name
+  log_dir="$(stack_log_dir)"
+  for name in stack-heal stack-nautilus-heal; do
+    pidfile="$log_dir/${name}.pid"
+    [[ -f "$pidfile" ]] || continue
+    pid="$(stack_read_pid "$pidfile")"
+    if [[ -z "$pid" ]] || ! stack_pid_alive "$pid"; then
+      echo "[stack] clearing stale watchdog pidfile ${name}.pid (pid ${pid:-none})"
+      rm -f "$pidfile"
+    fi
+  done
+}
+
+stack_recover_stale_scheduler_jobs() {
+  local py root recovered
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  recovered="$(
+    PYTHONPATH="$root/vibetrading/agent:$root/integrations" "$py" -c "
+from src.scheduled_research.lifecycle import recover_scheduler_jobs_on_stack_boot
+count = recover_scheduler_jobs_on_stack_boot()
+print(count or '', end='')
+" 2>/dev/null || true
+  )"
+  if [[ -n "$recovered" && "$recovered" != "0" ]]; then
+    echo "[stack] recovered $recovered stale scheduled research job(s) from RUNNING"
+  fi
+}
+
+stack_recover_scheduler_jobs_on_shutdown() {
+  local py root recovered
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  recovered="$(
+    PYTHONPATH="$root/vibetrading/agent:$root/integrations" "$py" -c "
+from src.scheduled_research.lifecycle import recover_scheduler_jobs_on_stack_shutdown
+count = recover_scheduler_jobs_on_stack_shutdown()
+print(count or '', end='')
+" 2>/dev/null || true
+  )"
+  if [[ -n "$recovered" && "$recovered" != "0" ]]; then
+    echo "[stack] reset $recovered scheduled research job(s) stuck in RUNNING on shutdown"
+  fi
 }
 
 stack_preflight_dependencies() {

@@ -137,9 +137,36 @@ stack_export_ml_runtime_env() {
     "/usr/local/opt/libomp/lib" \
     "$HOME/.homebrew/opt/libomp/lib"; do
     [[ -n "$libdir" && -f "$libdir/libomp.dylib" ]] || continue
+    export LIBOMP_LIB="$libdir"
     export DYLD_LIBRARY_PATH="${libdir}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
     return 0
   done
+}
+
+stack_verify_prediction_ml() {
+  local root py
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  stack_export_ml_runtime_env
+  "$py" "$root/scripts/verify_prediction_ml.py"
+}
+
+stack_sync_env() {
+  local root py
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  echo "[stack] syncing .env across root, OpenAlgo, and Vibe agent ..."
+  "$py" "$root/scripts/sync_stack_ports.py" --apply
+}
+
+stack_verify_nautilus() {
+  local root
+  root="$(stack_root)"
+  if [[ ! -x "$root/scripts/setup_nautilus.sh" ]]; then
+    echo "[stack] Nautilus setup script missing" >&2
+    return 1
+  fi
+  bash "$root/scripts/setup_nautilus.sh" --verify
 }
 
 stack_openalgo_port() {
@@ -667,6 +694,8 @@ stack_launch_detached() {
   local expect_port="${STACK_LAUNCH_EXPECT_PORT:-}"
   local service="${STACK_LAUNCH_SERVICE:-}"
 
+  stack_export_ml_runtime_env
+
   mkdir -p "$(dirname "$pidfile")" "$(dirname "$logfile")"
 
   if [[ -n "$service" && -n "$expect_port" ]]; then
@@ -777,6 +806,8 @@ stack_preflight_start() {
 
   echo "[stack] preflight ..."
   stack_reconcile_stale_claims
+  stack_sync_env || true
+  stack_load_env
 
   if ! stack_validate_ports_registry; then
     failures=$((failures + 1))
@@ -797,8 +828,9 @@ stack_preflight_start() {
   if [[ ! -x "$root/.venv/bin/vibe-trading" ]]; then
     echo "[stack] preflight: vibe-trading missing — pip install -e vibetrading/" >&2
     failures=$((failures + 1))
-  elif ! ( stack_export_ml_runtime_env; "$py" -c "import lightgbm, xgboost, darts" 2>/dev/null ); then
-    echo "[stack] preflight: prediction ML deps missing — run: ./scripts/ensure_prediction_ml.sh" >&2
+  elif ! stack_verify_prediction_ml >/dev/null; then
+    echo "[stack] preflight: prediction ML runtime not ready — run: ./scripts/ensure_prediction_ml.sh" >&2
+    stack_verify_prediction_ml 2>&1 | sed 's/^/[stack] preflight: /' >&2 || true
     failures=$((failures + 1))
   fi
 
@@ -811,19 +843,23 @@ stack_preflight_start() {
   fi
 
   if [[ -x "$root/scripts/setup_vibe.py" ]]; then
-    if ! "$py" "$root/scripts/setup_vibe.py" --verify 2>/dev/null; then
-      echo "[stack] preflight: setup_vibe.py --verify failed — run: trade setup vibe" >&2
+    if [[ ! -x "$root/openalgo/.venv/bin/python" ]]; then
+      echo "[stack] preflight: OpenAlgo venv missing — run: trade setup" >&2
+      failures=$((failures + 1))
+    elif ! "$py" "$root/scripts/setup_vibe.py" --verify 2>/dev/null; then
+      echo "[stack] preflight: OpenAlgo MCP / Vibe wiring failed — run: trade setup" >&2
       failures=$((failures + 1))
     fi
   fi
 
-  if [[ ! -x "$root/openalgo/.venv/bin/python" ]]; then
-    echo "[stack] preflight: OpenAlgo venv missing — run setup in openalgo/ (uv sync or python -m venv .venv)" >&2
+  if ! stack_verify_nautilus >/dev/null 2>&1; then
+    echo "[stack] preflight: Nautilus watch venv not ready — run: trade setup" >&2
+    stack_verify_nautilus 2>&1 | sed 's/^/[stack] preflight: /' >&2 || true
     failures=$((failures + 1))
   fi
 
   if (( failures > 0 )); then
-    echo "[stack] preflight failed ($failures issue(s)) — run: trade doctor" >&2
+    echo "[stack] preflight failed ($failures issue(s)) — run: trade setup" >&2
     return 1
   fi
 
@@ -1220,6 +1256,8 @@ stack_stop_vibe_stack() {
     shift
   done
   log_dir="$(stack_log_dir)"
+  stack_reconcile_orphan_watchdogs
+  stack_recover_scheduler_jobs_on_shutdown
   stack_reconcile_stale_claims
   stop_docker="${STACK_STOP_DOCKER:-0}"
   stop_docker="$(_stack_lc "$stop_docker")"
@@ -1234,8 +1272,9 @@ stack_stop_vibe_stack() {
   stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
   stack_kill_openalgo_ws_proxy
   stack_stop_heal_daemon
-  stack_stop_data_worker
   stack_stop_dev_nautilus_heal
+  stack_stop_data_worker
+  stack_reconcile_orphan_watchdogs
   stack_clear_stack_mode
   stack_clear_instance_manifest
 
@@ -1302,6 +1341,7 @@ stack_ensure_vibe_config() {
   local root py
   root="$(stack_root)"
   py="$(stack_pick_python)"
+  stack_sync_env || true
   if [[ -x "$root/scripts/setup_vibe.py" ]]; then
     echo "[stack] syncing Vibe operator config ..."
     "$py" "$root/scripts/setup_vibe.py" 2>/dev/null || true
@@ -1643,6 +1683,13 @@ PY
 stack_stop_nautilus_watch() {
   stack_stop_claimed "Nautilus watch" "nautilus-watch" "$(stack_log_dir)/nautilus-watch.pid"
   rm -f "$(stack_log_dir)/nautilus-watch.agent_id"
+  local py root
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  PYTHONPATH="$root/integrations" "$py" -c "
+from trade_integrations.autonomous_agents.nautilus_watch import reconcile_stale_watch_pid
+reconcile_stale_watch_pid()
+" 2>/dev/null || true
 }
 
 # shellcheck disable=SC1091

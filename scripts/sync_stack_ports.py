@@ -133,27 +133,13 @@ def main() -> int:
             _update_dotenv_keys(dotenv, env_map, set(env_map))
             print(f"updated port keys in {dotenv.relative_to(ROOT)}")
 
-        openalgo_env = ROOT / "openalgo" / ".env"
-        openalgo_keys = {
-            "FLASK_PORT",
-            "ZMQ_PORT",
-            "WEBSOCKET_PORT",
-            "WEBSOCKET_URL",
-            "OPENALGO_HOST",
-        }
-        if openalgo_env.is_file():
-            _update_dotenv_keys(openalgo_env, env_map, openalgo_keys)
-            print(f"updated OpenAlgo port keys in {openalgo_env.relative_to(ROOT)}")
+        from trade_integrations.stack_env_sync import sync_stack_env_files
 
-        vibe_env = ROOT / "vibetrading" / "agent" / ".env"
-        vibe_keys = {
-            "OPENALGO_HOST",
-            "VIBE_BACKEND_URL",
-            "NAUTILUS_REDIS_URL",
-        }
-        if vibe_env.is_file():
-            _update_dotenv_keys(vibe_env, env_map, vibe_keys)
-            print(f"updated Vibe agent port keys in {vibe_env.relative_to(ROOT)}")
+        env_report = sync_stack_env_files(root=ROOT, apply=True)
+        for rel in env_report.get("created") or []:
+            print(f"created {rel}")
+        for rel in env_report.get("updated") or []:
+            print(f"synced env keys in {rel}")
 
     if not any((args.check, args.apply, args.write_env, args.shell)):
         parser.print_help()

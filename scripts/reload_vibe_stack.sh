@@ -13,10 +13,10 @@ STACK_ROOT="$ROOT"
 stack_load_env
 
 _reload_env() {
-  echo "[stack] syncing ports + Vibe env from root .env ..."
+  echo "[stack] syncing .env across root, OpenAlgo, and Vibe ..."
+  stack_sync_env || true
   local py
   py="$(stack_pick_python)"
-  "$py" "$ROOT/scripts/sync_stack_ports.py" --apply || true
   "$py" "$ROOT/scripts/setup_vibe.py" || true
   stack_validate_ports_registry || true
   stack_load_env
