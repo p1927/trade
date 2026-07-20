@@ -504,8 +504,11 @@ def run_walk_forward_backtest(
         except ImportError:
             pass
 
+    scope = "hybrid" if include_bottom_up and hybrid_total > 0 else "macro_only"
+
     report = {
         "status": "ok",
+        "scope": scope,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "ticker": "NIFTY",
         "horizon_days": horizon.days,

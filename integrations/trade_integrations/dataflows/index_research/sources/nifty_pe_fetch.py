@@ -23,9 +23,12 @@ def _fetch_yfinance_index_pe() -> dict[str, Any] | None:
         return None
     if value <= 0:
         return None
+    from datetime import datetime, timezone
+
     return {
         "value": value,
         "source": "yfinance",
+        "as_of": datetime.now(timezone.utc).date().isoformat(),
         "metadata": {"symbol": "^NSEI", "field": "trailingPE"},
     }
 

@@ -162,7 +162,7 @@ def build_dii_net_5d_series(
 
 
 def build_nifty_pe_proxy_series(nifty: pd.DataFrame) -> pd.Series:
-    """Scale current trailing PE by historical Nifty close ratio."""
+    """Scale trailing PE by close ratio anchored at PE resolution date (no future-close leak)."""
     from trade_integrations.dataflows.index_research.sources.nifty_pe_fetch import (
         resolve_nifty_trailing_pe,
     )
@@ -175,13 +175,25 @@ def build_nifty_pe_proxy_series(nifty: pd.DataFrame) -> pd.Series:
     if current_pe is None:
         return pd.Series(dtype=float)
 
-    latest_close = float(nifty["close"].iloc[-1])
-    if latest_close <= 0:
+    dates = nifty["date"].astype(str).str[:10]
+    anchor_date = str(
+        (resolved or {}).get("as_of")
+        or (resolved or {}).get("metadata", {}).get("as_of")
+        or dates.iloc[-1]
+    )[:10]
+    anchor_mask = dates <= anchor_date
+    if not anchor_mask.any():
+        return pd.Series(dtype=float)
+
+    anchor_idx = anchor_mask[anchor_mask].index[-1]
+    anchor_close = float(nifty["close"].iloc[anchor_idx])
+    if anchor_close <= 0:
         return pd.Series(dtype=float)
 
     closes = nifty["close"].astype(float)
-    pe_series = float(current_pe) * (closes / latest_close)
-    return pd.Series(pe_series.values, index=nifty["date"].astype(str))
+    pe_series = pd.Series(float("nan"), index=nifty.index, dtype=float)
+    pe_series.loc[anchor_mask] = float(current_pe) * (closes.loc[anchor_mask] / anchor_close)
+    return pd.Series(pe_series.values, index=dates)
 
 
 def _yfinance_symbol(symbol: str) -> str:

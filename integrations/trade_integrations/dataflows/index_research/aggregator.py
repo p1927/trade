@@ -645,6 +645,22 @@ def run_index_research(
     except Exception as exc:
         log.info("news_impact", f"skipped: {exc}")
 
+    from trade_integrations.context.hub import load_index_research_json
+
+    cached_doc = load_index_research_json(sym) if not refresh_constituents else None
+    constituent_news_as_of = (
+        now.isoformat()
+        if refresh_constituents
+        else str((cached_doc or {}).get("as_of") or now.isoformat())
+    )
+    if news_impact:
+        news_impact = {**news_impact, "constituent_news_as_of": constituent_news_as_of}
+    log.info(
+        "meta",
+        "Constituent news freshness recorded",
+        constituent_news_as_of=constituent_news_as_of,
+    )
+
     return IndexResearchDoc(
         ticker=sym,
         as_of=now,
