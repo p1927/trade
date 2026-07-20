@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import format_date_series, parse_date_scalar, parse_date_series
 from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
 
 from trade_integrations.dataflows import source_availability
@@ -64,7 +65,7 @@ def normalize_index_ohlcv_frame(raw: pd.DataFrame, *, index_slug: str = "nifty50
             rename[cols[src_key]] = dst
 
     out = raw.rename(columns=rename)
-    out["date"] = pd.to_datetime(raw[date_col], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(raw[date_col], dayfirst=True)
     out = out.dropna(subset=["date"])
     for col in ("open", "high", "low", "close", "volume", "turnover_cr"):
         if col in out.columns:
@@ -191,7 +192,7 @@ def fetch_india_vix_range(start: str, end: str, *, sleep_seconds: float = 0.25) 
     )
     out = pd.DataFrame(
         {
-            "date": pd.to_datetime(raw[date_col], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d"),
+            "date": format_date_series(raw[date_col], dayfirst=True),
             "india_vix": pd.to_numeric(raw[value_col], errors="coerce"),
         }
     )

@@ -12,6 +12,7 @@ import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.data_router.types import FetchSpec
+from trade_integrations.hub_storage.date_parse import format_date_series
 from trade_integrations.hub_storage.parquet_io import read_dataframe, upsert_by_keys, write_dataframe
 from trade_integrations.tiered_api.cache_policy import should_cache_response
 
@@ -58,7 +59,7 @@ def normalize_ohlcv_frame(frame: pd.DataFrame, *, source: str) -> pd.DataFrame:
         if src in out.columns and dst not in out.columns:
             out = out.rename(columns={src: dst})
     if "date" in out.columns:
-        out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        out["date"] = format_date_series(out["date"])
     out["source"] = source
     cols = [c for c in _OHLCV_COLUMNS if c in out.columns]
     out = out[cols].dropna(subset=["date"], how="any")

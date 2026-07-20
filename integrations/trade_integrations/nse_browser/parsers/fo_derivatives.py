@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import parse_date_scalar
 from trade_integrations.hub_storage.parquet_io import (
     combine_first_numeric,
     concat_dataframes,
@@ -24,26 +24,12 @@ _DERIV_COLUMNS: tuple[str, ...] = (
 )
 
 
-def _parse_bhavcopy_date(raw: Any) -> str | None:
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(text[:11], fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
-
-
 def _aggregate_fo_chunk(chunk: pd.DataFrame) -> pd.DataFrame:
     if chunk.empty or "TIMESTAMP" not in chunk.columns:
         return pd.DataFrame()
 
     work = chunk.copy()
-    work["date"] = work["TIMESTAMP"].map(_parse_bhavcopy_date)
+    work["date"] = work["TIMESTAMP"].map(parse_date_scalar)
     work = work[work["date"].notna()]
     if work.empty:
         return pd.DataFrame()

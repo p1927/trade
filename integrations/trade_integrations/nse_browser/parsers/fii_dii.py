@@ -9,27 +9,12 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import parse_date_scalar
 from trade_integrations.hub_storage.parquet_io import (
     combine_first_numeric,
     concat_dataframes,
     concat_frames,
 )
-
-
-def _parse_nse_date(raw: Any) -> str | None:
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    from datetime import datetime
-
-    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(text[:11], fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
 
 
 def _normalize_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -59,7 +44,7 @@ def _rows_from_category_frame(frame: pd.DataFrame, *, variant: str, source: str)
 
     rows: list[dict[str, Any]] = []
     for day, group in frame.groupby(date_col):
-        parsed_day = _parse_nse_date(day)
+        parsed_day = parse_date_scalar(day)
         if not parsed_day:
             continue
         row: dict[str, Any] = {
@@ -281,7 +266,7 @@ def parse_fii_dii_trading_activity_csv(
 
     rows: list[dict[str, Any]] = []
     for _, item in frame.iterrows():
-        day = _parse_nse_date(item.get(date_col))
+        day = parse_date_scalar(item.get(date_col))
         if not day:
             continue
         row: dict[str, Any] = {

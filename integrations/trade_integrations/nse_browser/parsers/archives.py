@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import format_date_series
 from trade_integrations.hub_storage.parquet_io import concat_dataframes
 
 
@@ -34,7 +35,7 @@ def parse_archive_csv(text: str, *, dataset: str) -> pd.DataFrame:
     frame["source"] = "nse_browser_archives"
     date_col = next((c for c in frame.columns if "date" in c or "traded" in c), None)
     if date_col:
-        frame["date"] = pd.to_datetime(frame[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+        frame["date"] = format_date_series(frame[date_col])
     return frame
 
 

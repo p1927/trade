@@ -9,7 +9,8 @@ from typing import Any
 
 import pandas as pd
 
-from trade_integrations.nse_browser.parsers.fii_dii import _parse_money, _parse_nse_date
+from trade_integrations.hub_storage.date_parse import parse_date_scalar
+from trade_integrations.nse_browser.parsers.fii_dii import _parse_money
 
 
 def _normalize_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -37,7 +38,7 @@ def parse_moneycontrol_cash_html(html: str) -> pd.DataFrame:
         r"([\d,]+\.?\d*)\D+([\d,]+\.?\d*)\D+(-?[\d,]+\.?\d*)"
     )
     for match in row_re.finditer(html):
-        day = _parse_nse_date(match.group(1))
+        day = parse_date_scalar(match.group(1))
         if not day:
             continue
         fii_buy = _parse_money(match.group(2))
@@ -89,7 +90,7 @@ def parse_moneycontrol_cash_html(html: str) -> pd.DataFrame:
             label = str(item.get(date_col) or "")
             if "month till" in label.lower():
                 continue
-            day = _parse_nse_date(label.split()[0] if label else "")
+            day = parse_date_scalar(label.split()[0] if label else "")
             if not day:
                 continue
             row = {
@@ -131,7 +132,7 @@ def parse_niftyinvest_cash_csv(text: str) -> pd.DataFrame:
     date_col = next((c for c in frame.columns if "date" in c or c == "d"), frame.columns[0])
     rows: list[dict[str, Any]] = []
     for _, item in frame.iterrows():
-        day = _parse_nse_date(item.get(date_col))
+        day = parse_date_scalar(item.get(date_col))
         if not day:
             try:
                 day = datetime.strptime(str(item.get(date_col))[:10], "%Y-%m-%d").date().isoformat()

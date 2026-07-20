@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import format_date_series
 from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
 
 from trade_integrations.context.hub import get_hub_dir
@@ -71,7 +72,7 @@ def _hf_resolve_url(repo_id: str, filename: str) -> str:
 
 def _aggregate_intraday_to_daily(frame: pd.DataFrame) -> pd.DataFrame:
     work = frame.copy()
-    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    work["date"] = format_date_series(work["date"])
     work["symbol"] = work["symbol"].astype(str).str.strip().str.upper()
     for col in ("open", "high", "low", "close", "volume"):
         if col in work.columns:

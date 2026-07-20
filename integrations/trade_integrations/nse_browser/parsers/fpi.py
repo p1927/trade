@@ -8,23 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import parse_date_scalar
 from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
-
-
-def _parse_date(raw: Any) -> str | None:
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    from datetime import datetime
-
-    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(text[:11], fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
 
 
 def _norm_cols(frame: pd.DataFrame) -> pd.DataFrame:
@@ -54,7 +39,7 @@ def parse_nsdl_fpi_html(html: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     date_match = re.search(r"FPI Investments on (\d{2}-[A-Za-z]{3}-\d{4})", html)
-    report_date = _parse_date(date_match.group(1)) if date_match else None
+    report_date = parse_date_scalar(date_match.group(1)) if date_match else None
     if not report_date:
         return pd.DataFrame()
 
@@ -114,7 +99,7 @@ def parse_fpi_investment_table(frame: pd.DataFrame, *, source: str = "nselib") -
 
     rows: list[dict[str, Any]] = []
     for _, item in work.iterrows():
-        day = _parse_date(item.get(date_col))
+        day = parse_date_scalar(item.get(date_col))
         if not day:
             continue
         asset = str(item.get(asset_col) or "total").strip().lower().replace(" ", "_")

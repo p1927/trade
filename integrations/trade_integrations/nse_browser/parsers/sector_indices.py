@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import parse_date_scalar
 from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
 
 _NIFTY50_DIR = "nifty50"
@@ -67,10 +68,9 @@ def parse_sector_index_csv(text: str, *, source_file: str = "") -> pd.DataFrame:
         index_name = str(item.get(name_col) or "").strip()
         if not index_name:
             continue
-        parsed = pd.to_datetime(item.get(date_col), errors="coerce", dayfirst=True)
-        if pd.isna(parsed):
+        day = parse_date_scalar(item.get(date_col))
+        if not day:
             continue
-        day = parsed.strftime("%Y-%m-%d")
         slug = index_slug(index_name)
         row: dict[str, Any] = {
             "date": day,

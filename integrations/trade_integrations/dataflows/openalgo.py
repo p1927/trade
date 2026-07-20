@@ -31,6 +31,7 @@ from trade_integrations.openalgo.market_data import (
 )
 from trade_integrations.openalgo.rest_client import openalgo_settings as _openalgo_settings
 from trade_integrations.openalgo.symbols import normalize_openalgo_expiry, resolve_openalgo_symbol
+from trade_integrations.hub_storage.date_parse import format_date_series
 from trade_integrations.dataflows.errors import NoMarketDataError, VendorNotConfiguredError, VendorRateLimitError
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ def to_index_research_frame(frame: pd.DataFrame) -> pd.DataFrame:
         date_series = working.iloc[:, 0]
 
     out = pd.DataFrame()
-    out["date"] = pd.to_datetime(date_series, errors="coerce").dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(date_series)
     for src_upper, src_lower, dst in (
         ("Close", "close", "close"),
         ("Open", "open", "open"),

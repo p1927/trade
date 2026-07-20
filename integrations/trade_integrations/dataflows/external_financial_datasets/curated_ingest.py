@@ -18,6 +18,7 @@ from trade_integrations.dataflows.throttled_http import fetch_delay_sec, fetch_t
 
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import format_date_series, parse_date_scalar
 from trade_integrations.hub_storage.parquet_io import (
     combine_first_numeric,
     concat_dataframes,
@@ -62,18 +63,7 @@ def _read_parquet(path: Path) -> pd.DataFrame:
 
 
 def _parse_nse_date(raw: Any) -> str | None:
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-        return None
-    text = str(raw).strip()
-    for fmt in ("%d-%b-%y", "%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(text, fmt).date().isoformat()
-        except ValueError:
-            continue
-    parsed = pd.to_datetime(text, errors="coerce", dayfirst=True)
-    if pd.isna(parsed):
-        return None
-    return parsed.date().isoformat()
+    return parse_date_scalar(raw)
 
 
 def _fetch_raw(url: str, dest: Path, *, force: bool = False, max_retries: int | None = None, timeout: float = 180) -> Path:
@@ -354,7 +344,7 @@ def ingest_nifty50_constituents_historical(*, force_fetch: bool = False) -> dict
     _fetch_raw(url, dest, force=force_fetch)
     wide = pd.read_csv(dest)
     wide = wide.rename(columns={"DATE": "date"})
-    wide["date"] = pd.to_datetime(wide["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    wide["date"] = format_date_series(wide["date"])
     wide = wide.dropna(subset=["date"]).sort_values("date")
 
     long_rows: list[dict[str, Any]] = []
@@ -398,7 +388,7 @@ def _current_constituents_from_vishalvx() -> dict[str, Any] | None:
             return None
         wide = pd.read_csv(cache)
         wide = wide.rename(columns={"DATE": "date"})
-        wide["date"] = pd.to_datetime(wide["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        wide["date"] = format_date_series(wide["date"])
 
     latest = wide.sort_values("date").iloc[-1]
     day = str(latest["date"])

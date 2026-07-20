@@ -13,6 +13,8 @@ from typing import Any
 import pandas as pd
 from trade_integrations.http import get
 
+from trade_integrations.hub_storage.date_parse import format_date_series, parse_date_scalar
+
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.github_datasets.config import DATASETS, raw_url
 from trade_integrations.dataflows.throttled_http import fetch_delay_sec, fetch_to_path
@@ -258,12 +260,10 @@ def _parse_mrchartist_fpi_monthly(payload: dict[str, Any]) -> pd.DataFrame:
         if not isinstance(item, dict):
             continue
         month = str(item.get("month") or "").strip()
-        parsed = pd.to_datetime(month, format="%d-%b-%Y", errors="coerce")
-        if pd.isna(parsed):
-            parsed = pd.to_datetime(month, errors="coerce", dayfirst=True)
-        if pd.isna(parsed):
+        iso_date = parse_date_scalar(month)
+        if not iso_date:
             continue
-        row = {"date": parsed.strftime("%Y-%m-%d"), "source": "mrchartist_fpi_monthly"}
+        row = {"date": iso_date, "source": "mrchartist_fpi_monthly"}
         for key in (
             "equity_gross_purchase",
             "equity_gross_sales",
@@ -318,7 +318,7 @@ def _ingest_vishalvx_all_indices(*, force_fetch: bool = False) -> dict[str, Any]
             fetch_to_path(url, cache, force=force_fetch, timeout=120)
             wide = pd.read_csv(cache)
             wide = wide.rename(columns={"DATE": "date"})
-            wide["date"] = pd.to_datetime(wide["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            wide["date"] = format_date_series(wide["date"])
             out = curated_hub() / "indices" / f"{slug}_weights_monthly_wide.parquet"
             _write_parquet(wide, out)
             results[slug] = {"status": "ok", "rows": len(wide), "path": str(out)}

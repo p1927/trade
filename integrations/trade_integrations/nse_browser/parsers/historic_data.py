@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -11,6 +12,13 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
+from trade_integrations.hub_storage.date_parse import (
+    format_date_series,
+    format_datetime_series,
+    parse_date_scalar,
+    parse_date_series,
+)
 from trade_integrations.hub_storage.parquet_io import (
     combine_first_numeric,
     concat_dataframes,
@@ -117,6 +125,188 @@ def _write_dataset(frame: pd.DataFrame, path: Path) -> None:
     except ImportError:
         frame.to_csv(path.with_suffix(".csv"), index=False)
     frame.to_csv(path.with_suffix(".csv"), index=False)
+
+
+def _historic_manifest_path(repo_root: Path) -> Path:
+    return historic_data_dir(repo_root) / "manifest.json"
+
+
+def _load_historic_manifest(repo_root: Path) -> dict[str, Any]:
+    path = _historic_manifest_path(repo_root)
+    if not path.is_file():
+        return {"datasets": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"datasets": {}}
+    if not isinstance(payload, dict):
+        return {"datasets": {}}
+    payload.setdefault("datasets", {})
+    return payload
+
+
+def _save_historic_manifest(repo_root: Path, manifest: dict[str, Any]) -> None:
+    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+    path = _historic_manifest_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _source_fingerprint(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "source_path": path.name,
+        "source_mtime": int(stat.st_mtime_ns),
+        "source_sha256": digest.hexdigest(),
+    }
+
+
+def _dataset_output_exists(out_path: Path) -> bool:
+    return out_path.is_file() or out_path.with_suffix(".csv").is_file()
+
+
+def _historic_parser_version() -> str:
+    """Fingerprint parser logic so manifest skip busts after code changes."""
+    digest = hashlib.sha256()
+    for module_path in (
+        Path(__file__).resolve(),
+        Path(__file__).resolve().parents[2] / "hub_storage" / "date_parse.py",
+    ):
+        if module_path.is_file():
+            digest.update(module_path.read_bytes())
+    return digest.hexdigest()
+
+
+def _should_skip_historic_dataset(
+    *,
+    manifest: dict[str, Any],
+    dataset_key: str,
+    source_path: Path,
+    out_path: Path,
+) -> bool:
+    if not source_path.is_file() or not _dataset_output_exists(out_path):
+        return False
+    prev = (manifest.get("datasets") or {}).get(dataset_key)
+    if not isinstance(prev, dict):
+        return False
+    current = _source_fingerprint(source_path)
+    parser_version = _historic_parser_version()
+    if prev.get("parser_version") != parser_version:
+        return False
+    return prev.get("source_sha256") == current["source_sha256"]
+
+
+def _record_historic_dataset(
+    manifest: dict[str, Any],
+    *,
+    dataset_key: str,
+    source_path: Path,
+    out_path: Path,
+    meta: dict[str, Any],
+) -> None:
+    datasets = manifest.setdefault("datasets", {})
+    entry = {
+        **_source_fingerprint(source_path),
+        "path": str(out_path),
+        "parser_version": _historic_parser_version(),
+        **meta,
+    }
+    datasets[dataset_key] = entry
+
+
+def _write_dataset_if_changed(
+    repo_root: Path,
+    manifest: dict[str, Any],
+    *,
+    dataset_key: str,
+    source_path: Path,
+    frame: pd.DataFrame,
+    out_path: Path,
+    meta: dict[str, Any],
+) -> bool:
+    """Write dataset when source changed or output missing. Returns True if written."""
+    if frame.empty:
+        return False
+    if _should_skip_historic_dataset(
+        manifest=manifest,
+        dataset_key=dataset_key,
+        source_path=source_path,
+        out_path=out_path,
+    ):
+        logger.debug("skipping unchanged historic dataset %s (%s)", dataset_key, source_path.name)
+        return False
+    _write_dataset(frame, out_path)
+    _record_historic_dataset(
+        manifest,
+        dataset_key=dataset_key,
+        source_path=source_path,
+        out_path=out_path,
+        meta=meta,
+    )
+    return True
+
+
+def _record_skipped_historic_dataset(
+    results: dict[str, Any],
+    manifest: dict[str, Any],
+    *,
+    dataset_key: str,
+    out_path: Path,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    prev = (manifest.get("datasets") or {}).get(dataset_key) or {}
+    payload: dict[str, Any] = {
+        "rows": int(prev.get("rows") or prev.get("symbols") or 0),
+        "path": str(out_path),
+        "skipped": True,
+        "start": prev.get("start"),
+        "end": prev.get("end"),
+    }
+    if extra:
+        payload.update(extra)
+    results["datasets"][dataset_key] = payload
+
+
+def _ingest_frame_with_manifest(
+    repo_root: Path,
+    manifest: dict[str, Any],
+    results: dict[str, Any],
+    *,
+    dataset_key: str,
+    source_path: Path,
+    frame: pd.DataFrame,
+    meta: dict[str, Any],
+) -> None:
+    if frame.empty:
+        return
+    out_path = _dataset_path(repo_root, dataset_key)
+    if _write_dataset_if_changed(
+        repo_root,
+        manifest,
+        dataset_key=dataset_key,
+        source_path=source_path,
+        frame=frame,
+        out_path=out_path,
+        meta=meta,
+    ):
+        results["datasets"][dataset_key] = {"path": str(out_path), **meta}
+    elif _should_skip_historic_dataset(
+        manifest=manifest,
+        dataset_key=dataset_key,
+        source_path=source_path,
+        out_path=out_path,
+    ):
+        _record_skipped_historic_dataset(
+            results,
+            manifest,
+            dataset_key=dataset_key,
+            out_path=out_path,
+            extra=meta,
+        )
 
 
 def _read_dataset(path: Path) -> pd.DataFrame:
@@ -245,13 +435,7 @@ def parse_nifty50_pe_pb_div_csv(path: Path) -> pd.DataFrame:
     if "date" not in out.columns:
         return pd.DataFrame()
 
-    parsed = pd.to_datetime(out["date"], format="%d-%b-%Y", errors="coerce")
-    bad = parsed.isna()
-    if bad.any():
-        parsed.loc[bad] = pd.to_datetime(out.loc[bad, "date"], format="%d-%b-%y", errors="coerce")
-    if bad.any():
-        still_bad = parsed.isna()
-        parsed.loc[still_bad] = pd.to_datetime(out.loc[still_bad, "date"], errors="coerce", dayfirst=True)
+    parsed = parse_date_series(out["date"])
     out["date"] = parsed.dt.strftime("%Y-%m-%d")
     out = out[out["date"].notna()].copy()
 
@@ -342,7 +526,7 @@ def parse_fii_dii_trading_activity_csv(path: Path) -> pd.DataFrame:
     date_col = cols.get("date")
     if date_col is None:
         return pd.DataFrame()
-    out = pd.DataFrame({"date": pd.to_datetime(raw[date_col], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")})
+    out = pd.DataFrame({"date": format_date_series(raw[date_col], dayfirst=True)})
     mapping = {
         "fii_gross_purchase": "fii_buy",
         "fii_gross_sales": "fii_sell",
@@ -372,7 +556,7 @@ def parse_india_cpi_monthly_csv(path: Path) -> pd.DataFrame:
     if "date" not in raw.columns:
         return pd.DataFrame()
     out = raw.copy()
-    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(out["date"])
     out = out.dropna(subset=["date"]).sort_values("date")
     out["source"] = "historic_data_india_cpi"
     out["source_file"] = path.name
@@ -404,7 +588,7 @@ def parse_nifty_fo_oi_daily_csv(path: Path) -> pd.DataFrame:
     iso_mask = ~intraday_mask
     if iso_mask.any():
         iso_values = raw_dates.loc[iso_mask].str.replace("_", "-", regex=False)
-        parsed_dates.loc[iso_mask] = pd.to_datetime(iso_values, errors="coerce", dayfirst=True)
+        parsed_dates.loc[iso_mask] = parse_date_series(iso_values, dayfirst=True)
     work = pd.DataFrame({"date": parsed_dates.dt.strftime("%Y-%m-%d")})
     for src, dest in (("calloi", "call_oi"), ("putoi", "put_oi"), ("pcr", "pcr"), ("niftyspot", "nifty_spot")):
         col = cols.get(src)
@@ -440,7 +624,7 @@ def parse_nifty50_fo_panel_csv(path: Path, *, max_rows: int = 500_000) -> pd.Dat
         return pd.DataFrame()
     out = raw.copy()
     if "TIMESTAMP" in out.columns:
-        out["date"] = pd.to_datetime(out["TIMESTAMP"], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
+        out["date"] = format_date_series(out["TIMESTAMP"])
     out["source"] = "historic_data_nifty50_fo"
     out["source_file"] = path.name
     return out
@@ -459,7 +643,7 @@ def _parse_historic_csv(path: Path) -> pd.DataFrame:
     if date_col is None:
         return pd.DataFrame()
     out = raw.copy()
-    out["date"] = pd.to_datetime(out[date_col], errors="coerce", dayfirst=False).dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(out[date_col])
     out = out.dropna(subset=["date"])
     if out.empty:
         return pd.DataFrame()
@@ -497,7 +681,7 @@ def parse_niftyindices_price_csv(path: Path, *, index_slug: str = "nifty50") -> 
             rename[cols[src]] = dst
 
     out = raw.rename(columns=rename)
-    out["date"] = pd.to_datetime(out["date"], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(out["date"], dayfirst=True)
     out = out.dropna(subset=["date"])
     if out.empty:
         return pd.DataFrame()
@@ -531,13 +715,11 @@ def parse_mrchartist_history_json(path: Path) -> pd.DataFrame:
         if not isinstance(item, dict):
             continue
         raw_date = str(item.get("d") or item.get("date") or "").strip()
-        parsed = pd.to_datetime(raw_date, format="%d-%b-%Y", errors="coerce")
-        if pd.isna(parsed):
-            parsed = pd.to_datetime(raw_date, errors="coerce", dayfirst=True)
-        if pd.isna(parsed):
+        iso_date = parse_date_scalar(raw_date)
+        if not iso_date:
             continue
         row: dict[str, Any] = {
-            "date": parsed.date().isoformat(),
+            "date": iso_date,
             "source": "mrchartist_history_full",
             "source_file": path.name,
         }
@@ -605,7 +787,7 @@ def parse_indic_finance_csv(path: Path) -> pd.DataFrame:
 
     out = pd.DataFrame(
         {
-            "date": pd.to_datetime(raw[date_col], errors="coerce").dt.strftime("%Y-%m-%d"),
+            "date": format_date_series(raw[date_col]),
             "title": raw[cols["headline"]] if "headline" in cols else "",
             "symbol": raw[cols["ticker"]].map(_normalize_symbol) if "ticker" in cols else "",
             "url": raw[cols["url"]] if "url" in cols else "",
@@ -656,11 +838,8 @@ def parse_rbi_wss_ratios_csv(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = raw.rename(columns={"date": "raw_date"}).copy()
-    out["date"] = pd.to_datetime(out["raw_date"], format="%b. %d, %Y", errors="coerce")
-    bad = out["date"].isna()
-    if bad.any():
-        out.loc[bad, "date"] = pd.to_datetime(out.loc[bad, "raw_date"], errors="coerce")
-    out["date"] = out["date"].dt.strftime("%Y-%m-%d")
+    parsed_dates = parse_date_series(out["raw_date"])
+    out["date"] = parsed_dates.dt.strftime("%Y-%m-%d")
     out = out.dropna(subset=["date"]).sort_values("date")
 
     def _first_float(series: pd.Series) -> pd.Series:
@@ -719,7 +898,7 @@ def parse_index_ohlcv_csv(path: Path, *, index_slug: str) -> pd.DataFrame:
     if "date" not in out.columns:
         return parse_niftyindices_price_csv(path, index_slug=index_slug)
 
-    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(out["date"])
     out = out.dropna(subset=["date"])
     if out.empty:
         return pd.DataFrame()
@@ -756,7 +935,7 @@ def parse_constituent_ohlcv_csv(path: Path, *, index_slug: str) -> pd.DataFrame:
     if "date" not in frame.columns:
         return pd.DataFrame()
 
-    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    frame["date"] = format_date_series(frame["date"])
     frame["symbol"] = frame["Ticker"].map(_normalize_symbol)
     frame = frame.dropna(subset=["date", "symbol"])
     if frame.empty:
@@ -810,7 +989,7 @@ def parse_figshare_weights_csv(
 
     date_col = "DATE" if "DATE" in raw.columns else "date"
     wide = raw.rename(columns={date_col: "date"}).copy()
-    wide["date"] = pd.to_datetime(wide["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    wide["date"] = format_date_series(wide["date"])
     wide = wide.dropna(subset=["date"]).sort_values("date")
     if wide.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -883,10 +1062,10 @@ def parse_nifty50_constituents_summary_csv(
     out = pd.DataFrame(
         {
             "symbol": raw[ticker_col].map(_normalize_symbol),
-            "first_date": pd.to_datetime(raw[first_col], errors="coerce").dt.strftime("%Y-%m-%d")
+            "first_date": format_date_series(raw[first_col])
             if first_col
             else pd.NA,
-            "last_date": pd.to_datetime(raw[last_col], errors="coerce").dt.strftime("%Y-%m-%d")
+            "last_date": format_date_series(raw[last_col])
             if last_col
             else pd.NA,
             "nonzero_count": pd.to_numeric(raw[count_col], errors="coerce").astype("Int64")
@@ -1046,7 +1225,7 @@ def parse_global_india_daily_macro(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = raw.copy()
-    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(out["date"])
     out = out.dropna(subset=["date"]).sort_values("date")
     rename = {
         "nifty50_close": "nifty_close",
@@ -1077,7 +1256,7 @@ def parse_global_india_monthly_macro(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = raw.copy()
-    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(out["date"])
     out = out.dropna(subset=["date"]).sort_values("date")
     for col in out.columns:
         if col not in {"date", "source", "source_file", "granularity"}:
@@ -1107,8 +1286,7 @@ def parse_nifty_intraday_csv(path: Path, *, interval: str) -> pd.DataFrame:
 
     rename = {cols[std]: std for std in ("open", "high", "low", "close", "volume") if std in cols}
     out = raw.rename(columns=rename)
-    out["date"] = pd.to_datetime(raw[date_col], errors="coerce", utc=True).dt.tz_convert(None)
-    out["date"] = out["date"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    out["date"] = format_datetime_series(raw[date_col], utc=True)
     out = out.dropna(subset=["date"])
     for col in ("open", "high", "low", "close", "volume"):
         if col in out.columns:
@@ -1136,15 +1314,18 @@ def parse_wide_equity_panel_csv(path: Path, *, value_kind: str) -> pd.DataFrame:
     if date_col is None:
         return pd.DataFrame()
     out = raw.rename(columns={date_col: "date"}).copy()
-    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    out["date"] = format_date_series(out["date"])
     out = out.dropna(subset=["date"]).sort_values("date")
     symbol_cols = [c for c in out.columns if c != "date"]
     out = out.rename(columns={col: str(col).upper() for col in symbol_cols})
-    for col in [c for c in out.columns if c != "date"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce")
-    out["value_kind"] = value_kind
-    out["source"] = "historic_data_archive7"
-    out["source_file"] = path.name
+    numeric_cols = [c for c in out.columns if c != "date"]
+    if numeric_cols:
+        out[numeric_cols] = out[numeric_cols].apply(pd.to_numeric, errors="coerce")
+    out = out.assign(
+        value_kind=value_kind,
+        source="historic_data_archive7",
+        source_file=path.name,
+    )
     return out.drop_duplicates("date", keep="last").reset_index(drop=True)
 
 
@@ -1199,7 +1380,7 @@ def parse_news_sentiment_csv(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
     out = pd.DataFrame(
         {
-            "date": pd.to_datetime(raw[date_col], errors="coerce", dayfirst=True).dt.strftime("%Y-%m-%d"),
+            "date": format_date_series(raw[date_col], dayfirst=True),
             "title": raw[cols["title"]] if "title" in cols else "",
             "url": raw[cols["url"]] if "url" in cols else "",
             "sentiment": raw[cols["sentiment"]].astype(str).str.upper() if "sentiment" in cols else "",
@@ -1247,7 +1428,7 @@ def parse_indian_financial_news_csv(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
     out = pd.DataFrame(
         {
-            "date": pd.to_datetime(raw[date_col], errors="coerce", format="mixed").dt.strftime("%Y-%m-%d"),
+            "date": format_date_series(raw[date_col]),
             "title": raw[cols["title"]] if "title" in cols else "",
             "description": raw[cols["description"]] if "description" in cols else "",
             "source": "historic_data_financial_news",
@@ -1313,15 +1494,18 @@ def load_india_news_sentiment_daily(repo_root: Path) -> pd.DataFrame:
 
 def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
     """Parse all files in historic_data/ and persist repo parquets."""
+    check_pipeline_cancel()
     root = historic_data_dir(repo_root)
     if not root.is_dir():
         return {"status": "skipped", "reason": "missing_dir", "datasets": {}}
 
+    manifest = _load_historic_manifest(repo_root)
     results: dict[str, Any] = {"status": "ok", "datasets": {}}
     unmapped: list[str] = []
 
     annual_frames: list[pd.DataFrame] = []
     for path in scan_historic_data_dir(repo_root):
+        check_pipeline_cancel()
         rel = path.relative_to(root)
         if rel.parts and rel.parts[0] in _HANDLED_SUBDIRS:
             continue
@@ -1358,13 +1542,30 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
             else:
                 unmapped.append(str(rel))
         elif path.name == "Fii Dii Trading activity.csv":
-            parsed = parse_fii_dii_trading_activity_csv(path)
-            if not parsed.empty:
-                out_path = _dataset_path(repo_root, "fii_dii_trading_activity")
-                _write_dataset(parsed, out_path)
-                results["datasets"]["fii_dii_trading_activity"] = {"rows": len(parsed), "path": str(out_path)}
+            out_path = _dataset_path(repo_root, "fii_dii_trading_activity")
+            if _should_skip_historic_dataset(
+                manifest=manifest,
+                dataset_key="fii_dii_trading_activity",
+                source_path=path,
+                out_path=out_path,
+            ):
+                _record_skipped_historic_dataset(
+                    results,
+                    manifest,
+                    dataset_key="fii_dii_trading_activity",
+                    out_path=out_path,
+                )
             else:
-                unmapped.append(str(rel))
+                parsed = parse_fii_dii_trading_activity_csv(path)
+                _ingest_frame_with_manifest(
+                    repo_root,
+                    manifest,
+                    results,
+                    dataset_key="fii_dii_trading_activity",
+                    source_path=path,
+                    frame=parsed,
+                    meta={"rows": len(parsed)},
+                )
         elif path.name == "india_cpi_monthly_yoy.csv":
             parsed = parse_india_cpi_monthly_csv(path)
             if not parsed.empty:
@@ -1382,13 +1583,31 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
             else:
                 unmapped.append(str(rel))
         elif path.name == "nifty50_fo_data_filtered.csv":
-            parsed = parse_nifty50_fo_panel_csv(path)
-            if not parsed.empty:
-                out_path = _dataset_path(repo_root, "nifty50_fo_panel")
-                _write_dataset(parsed, out_path)
-                results["datasets"]["nifty50_fo_panel"] = {"rows": len(parsed), "path": str(out_path), "note": "capped_rows"}
+            out_path = _dataset_path(repo_root, "nifty50_fo_panel")
+            if _should_skip_historic_dataset(
+                manifest=manifest,
+                dataset_key="nifty50_fo_panel",
+                source_path=path,
+                out_path=out_path,
+            ):
+                _record_skipped_historic_dataset(
+                    results,
+                    manifest,
+                    dataset_key="nifty50_fo_panel",
+                    out_path=out_path,
+                    extra={"note": "capped_rows"},
+                )
             else:
-                unmapped.append(str(rel))
+                parsed = parse_nifty50_fo_panel_csv(path)
+                _ingest_frame_with_manifest(
+                    repo_root,
+                    manifest,
+                    results,
+                    dataset_key="nifty50_fo_panel",
+                    source_path=path,
+                    frame=parsed,
+                    meta={"rows": len(parsed), "note": "capped_rows"},
+                )
         elif path.suffix.lower() == ".csv":
             unmapped.append(str(rel))
 
@@ -1410,32 +1629,75 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
     archive_dir = root / _ARCHIVE_DIR
     for filename, index_slug in _INDEX_OHLCV_FILES.items():
         path = archive_dir / filename
+        dataset_key = f"{index_slug}_ohlcv_daily"
+        out_path = _dataset_path(repo_root, dataset_key)
+        if _should_skip_historic_dataset(
+            manifest=manifest,
+            dataset_key=dataset_key,
+            source_path=path,
+            out_path=out_path,
+        ):
+            _record_skipped_historic_dataset(
+                results,
+                manifest,
+                dataset_key=dataset_key,
+                out_path=out_path,
+            )
+            continue
         frame = parse_index_ohlcv_csv(path, index_slug=index_slug)
         if frame.empty:
             continue
-        out_path = _dataset_path(repo_root, f"{index_slug}_ohlcv_daily")
-        _write_dataset(frame, out_path)
-        results["datasets"][f"{index_slug}_ohlcv_daily"] = {
+        meta = {
             "rows": len(frame),
-            "path": str(out_path),
             "start": str(frame["date"].iloc[0]),
             "end": str(frame["date"].iloc[-1]),
         }
+        _ingest_frame_with_manifest(
+            repo_root,
+            manifest,
+            results,
+            dataset_key=dataset_key,
+            source_path=path,
+            frame=frame,
+            meta=meta,
+        )
 
     for filename, index_slug in _CONSTITUENT_OHLCV_FILES.items():
         path = archive_dir / filename
+        dataset_key = f"{index_slug}_constituent_ohlcv_daily"
+        out_path = _dataset_path(repo_root, dataset_key)
+        if _should_skip_historic_dataset(
+            manifest=manifest,
+            dataset_key=dataset_key,
+            source_path=path,
+            out_path=out_path,
+        ):
+            _record_skipped_historic_dataset(
+                results,
+                manifest,
+                dataset_key=dataset_key,
+                out_path=out_path,
+                extra={"symbols": int((manifest.get("datasets") or {}).get(dataset_key, {}).get("symbols") or 0)},
+            )
+            continue
         frame = parse_constituent_ohlcv_csv(path, index_slug=index_slug)
         if frame.empty:
             continue
-        out_path = _dataset_path(repo_root, f"{index_slug}_constituent_ohlcv_daily")
-        _write_dataset(frame, out_path)
-        results["datasets"][f"{index_slug}_constituent_ohlcv_daily"] = {
+        meta = {
             "rows": len(frame),
             "symbols": int(frame["symbol"].nunique()),
-            "path": str(out_path),
             "start": str(frame["date"].iloc[0]),
             "end": str(frame["date"].iloc[-1]),
         }
+        _ingest_frame_with_manifest(
+            repo_root,
+            manifest,
+            results,
+            dataset_key=dataset_key,
+            source_path=path,
+            frame=frame,
+            meta=meta,
+        )
 
     figshare_dir = root / _FIGSHARE_DIR
     constituents_dir = root / _CONSTITUENTS_NIFTY50_DIR
@@ -1511,17 +1773,39 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
 
     intraday_dir = root / _INTRADAY_DIR
     for interval, filename in (("5min", "5min_N50_10yr.csv"), ("30min", "30min_N50_10yr.csv")):
-        frame = parse_nifty_intraday_csv(intraday_dir / filename, interval=interval)
+        path = intraday_dir / filename
+        dataset_key = f"nifty50_intraday_{interval}"
+        out_path = _dataset_path(repo_root, dataset_key)
+        if _should_skip_historic_dataset(
+            manifest=manifest,
+            dataset_key=dataset_key,
+            source_path=path,
+            out_path=out_path,
+        ):
+            _record_skipped_historic_dataset(
+                results,
+                manifest,
+                dataset_key=dataset_key,
+                out_path=out_path,
+            )
+            continue
+        frame = parse_nifty_intraday_csv(path, interval=interval)
         if frame.empty:
             continue
-        out_path = _dataset_path(repo_root, f"nifty50_intraday_{interval}")
-        _write_dataset(frame, out_path)
-        results["datasets"][f"nifty50_intraday_{interval}"] = {
+        meta = {
             "rows": len(frame),
-            "path": str(out_path),
             "start": str(frame["date"].iloc[0]),
             "end": str(frame["date"].iloc[-1]),
         }
+        _ingest_frame_with_manifest(
+            repo_root,
+            manifest,
+            results,
+            dataset_key=dataset_key,
+            source_path=path,
+            frame=frame,
+            meta=meta,
+        )
 
     equity_dir = root / _EQUITY_PANEL_DIR
     panel_specs = [
@@ -1532,19 +1816,44 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
         ("combined_stock_data.csv", "india_equity_closes_combined_wide", "close"),
     ]
     for filename, stem, value_kind in panel_specs:
+        check_pipeline_cancel()
         path = equity_dir / filename
+        out_path = _dataset_path(repo_root, stem)
+        if _should_skip_historic_dataset(
+            manifest=manifest,
+            dataset_key=stem,
+            source_path=path,
+            out_path=out_path,
+        ):
+            prev = (manifest.get("datasets") or {}).get(stem) or {}
+            results["datasets"][stem] = {
+                "rows": int(prev.get("rows") or 0),
+                "symbols": int(prev.get("symbols") or 0),
+                "path": str(out_path),
+                "skipped": True,
+                "start": prev.get("start"),
+                "end": prev.get("end"),
+            }
+            continue
         frame = parse_wide_equity_panel_csv(path, value_kind=value_kind)
         if frame.empty:
             continue
-        out_path = _dataset_path(repo_root, stem)
-        _write_dataset(frame, out_path)
-        results["datasets"][stem] = {
+        meta = {
             "rows": len(frame),
             "symbols": len([c for c in frame.columns if c not in {"date", "source", "source_file", "value_kind"}]),
-            "path": str(out_path),
             "start": str(frame["date"].iloc[0]),
             "end": str(frame["date"].iloc[-1]),
         }
+        if _write_dataset_if_changed(
+            repo_root,
+            manifest,
+            dataset_key=stem,
+            source_path=path,
+            frame=frame,
+            out_path=out_path,
+            meta=meta,
+        ):
+            results["datasets"][stem] = {"path": str(out_path), **meta}
 
     symbol_list = parse_india_symbol_list_csv(equity_dir / "INDIA_LIST.csv")
     if not symbol_list.empty:
@@ -1556,21 +1865,46 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
         }
 
     news_path = root / "News_sentiment_Jan2017_to_Apr2021.csv"
-    articles = parse_news_sentiment_csv(news_path)
-    if not articles.empty:
-        articles_path = _dataset_path(repo_root, "india_news_sentiment_articles")
-        _write_dataset(articles, articles_path)
-        daily_sentiment = aggregate_news_sentiment_daily(articles)
-        daily_path = _dataset_path(repo_root, "india_news_sentiment_daily")
-        _write_dataset(daily_sentiment, daily_path)
-        results["datasets"]["india_news_sentiment"] = {
-            "articles": len(articles),
-            "daily_rows": len(daily_sentiment),
-            "articles_path": str(articles_path),
-            "daily_path": str(daily_path),
-            "start": str(daily_sentiment["date"].iloc[0]),
-            "end": str(daily_sentiment["date"].iloc[-1]),
-        }
+    articles_path = _dataset_path(repo_root, "india_news_sentiment_articles")
+    daily_path = _dataset_path(repo_root, "india_news_sentiment_daily")
+    if _should_skip_historic_dataset(
+        manifest=manifest,
+        dataset_key="india_news_sentiment_daily",
+        source_path=news_path,
+        out_path=daily_path,
+    ):
+        _record_skipped_historic_dataset(
+            results,
+            manifest,
+            dataset_key="india_news_sentiment",
+            out_path=daily_path,
+        )
+    else:
+        articles = parse_news_sentiment_csv(news_path)
+        if not articles.empty:
+            _write_dataset(articles, articles_path)
+            daily_sentiment = aggregate_news_sentiment_daily(articles)
+            _write_dataset(daily_sentiment, daily_path)
+            _record_historic_dataset(
+                manifest,
+                dataset_key="india_news_sentiment_daily",
+                source_path=news_path,
+                out_path=daily_path,
+                meta={
+                    "rows": len(daily_sentiment),
+                    "articles": len(articles),
+                    "start": str(daily_sentiment["date"].iloc[0]),
+                    "end": str(daily_sentiment["date"].iloc[-1]),
+                },
+            )
+            results["datasets"]["india_news_sentiment"] = {
+                "articles": len(articles),
+                "daily_rows": len(daily_sentiment),
+                "articles_path": str(articles_path),
+                "daily_path": str(daily_path),
+                "start": str(daily_sentiment["date"].iloc[0]),
+                "end": str(daily_sentiment["date"].iloc[-1]),
+            }
 
     fin_news = parse_indian_financial_news_csv(root / "IndianFinancialNews.csv")
     if not fin_news.empty:
@@ -1673,4 +2007,5 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
         }
 
     results["rows"] = sum(int(v.get("rows") or v.get("months") or 0) for v in results["datasets"].values())
+    _save_historic_manifest(repo_root, manifest)
     return results
