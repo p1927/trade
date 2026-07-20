@@ -55,27 +55,56 @@ def run_darts_macro(ctx: TrackContext) -> ForecastTrack:
     )
 
 
+def _prepare_darts_frame(
+    panel: pd.DataFrame,
+    horizon_days: int,
+    cov_cols: list[str],
+) -> pd.DataFrame:
+    working = panel.copy()
+    working["date"] = pd.to_datetime(working["date"], errors="coerce")
+    working = working.dropna(subset=["date"]).set_index("date").sort_index()
+    working = working[~working.index.duplicated(keep="last")]
+    if working.empty or "close" not in working.columns:
+        raise ValueError("insufficient_panel_rows:0")
+
+    for col in cov_cols:
+        if col in working.columns:
+            working[col] = pd.to_numeric(working[col], errors="coerce")
+
+    close = pd.to_numeric(working["close"], errors="coerce")
+    bidx = pd.bdate_range(working.index.min(), working.index.max())
+    aligned = working.reindex(bidx)
+    aligned["close"] = close.reindex(bidx).ffill().bfill()
+    for col in cov_cols:
+        if col in aligned.columns:
+            aligned[col] = aligned[col].ffill().bfill().fillna(0.0)
+
+    aligned["y"] = _forward_return_pct(aligned["close"].astype(float), horizon_days)
+    first = aligned["y"].first_valid_index()
+    last = aligned["y"].last_valid_index()
+    if first is None or last is None:
+        raise ValueError("insufficient_panel_rows:0")
+
+    df = aligned.loc[first:last].dropna(subset=["y"])
+    if len(df) < _MIN_TRAIN_ROWS:
+        raise ValueError(f"insufficient_training_pairs:{len(df)}")
+    return df
+
+
 def _predict_darts(ctx: TrackContext, *, TimeSeries, RegressionModel) -> tuple[float, dict]:
     panel = load_aligned_factor_history(days=400)
-    if panel is None or panel.empty or "close" not in panel.columns:
+    if panel is None or panel.empty or "close" not in panel.columns or "date" not in panel.columns:
         raise ValueError("insufficient_panel_rows:0")
 
     horizon_days = int(ctx.horizon.days)
-    closes = panel["close"].astype(float)
-    target = _forward_return_pct(closes, horizon_days)
     cov_cols = [c for c in _COVARIATE_COLS if c in panel.columns]
     if not cov_cols:
         cov_cols = [c for c in ("fii_net_5d", "india_vix") if c in panel.columns]
 
-    df = pd.DataFrame({"y": target})
-    for col in cov_cols:
-        df[col] = pd.to_numeric(panel[col], errors="coerce").fillna(0.0)
-    df = df.dropna(subset=["y"])
-    if len(df) < _MIN_TRAIN_ROWS:
-        raise ValueError(f"insufficient_training_pairs:{len(df)}")
+    df = _prepare_darts_frame(panel, horizon_days, cov_cols)
 
-    series_y = TimeSeries.from_series(df["y"], fill_missing_dates=True, freq=None)
-    past_cov = TimeSeries.from_dataframe(df[cov_cols], fill_missing_dates=True, freq=None)
+    series_y = TimeSeries.from_series(df["y"], fill_missing_dates=True, freq="B")
+    past_cov = TimeSeries.from_dataframe(df[cov_cols], fill_missing_dates=True, freq="B")
 
     try:
         import lightgbm as lgb
@@ -87,14 +116,14 @@ def _predict_darts(ctx: TrackContext, *, TimeSeries, RegressionModel) -> tuple[f
             random_state=42,
             verbose=-1,
         )
-        model = RegressionModel(lgb_model=lgb_model, lags=5, lags_past_covariates=3)
+        model = RegressionModel(model=lgb_model, lags=5, lags_past_covariates=3)
     except ImportError:
         from sklearn.linear_model import Ridge
 
-        model = RegressionModel(Ridge(alpha=1.0), lags=5, lags_past_covariates=3)
+        model = RegressionModel(model=Ridge(alpha=1.0), lags=5, lags_past_covariates=3)
 
     model.fit(series_y, past_covariates=past_cov)
-    pred_series = model.predict(n=horizon_days, series=series_y, past_covariates=past_cov)
+    pred_series = model.predict(n=1, series=series_y, past_covariates=past_cov)
     pred = float(pred_series.values()[-1][0])
 
     return round(pred, 4), {

@@ -44,6 +44,33 @@ logger = logging.getLogger(__name__)
 
 _MACRO_DRIFT_ENV = "INDEX_MONITOR_MACRO_DRIFT_PCT"
 _DEFAULT_MACRO_DRIFT_PCT = 0.5
+_LIGHT_REFRESH_HEAVY_ENV = "INDEX_LIGHT_REFRESH_HEAVY"
+_LIGHT_REFRESH_BUDGET_ENV = "INDEX_LIGHT_REFRESH_BUDGET_SEC"
+_DEFAULT_LIGHT_REFRESH_BUDGET_SEC = 420.0
+
+
+def _light_refresh_heavy_enabled(*, poll_mode: bool) -> bool:
+    if poll_mode:
+        return os.environ.get(_LIGHT_REFRESH_HEAVY_ENV, "0").strip().lower() in {"1", "true", "yes", "on"}
+    return True
+
+
+def _light_refresh_budget_sec() -> float:
+    try:
+        return max(60.0, float(os.getenv(_LIGHT_REFRESH_BUDGET_ENV, str(_DEFAULT_LIGHT_REFRESH_BUDGET_SEC))))
+    except ValueError:
+        return _DEFAULT_LIGHT_REFRESH_BUDGET_SEC
+
+
+class _LightRefreshBudgetExceeded(TimeoutError):
+    pass
+
+
+def _check_light_refresh_budget(deadline: float, stage: str) -> None:
+    import time as _time
+
+    if _time.monotonic() > deadline:
+        raise _LightRefreshBudgetExceeded(f"light_refresh budget exceeded at {stage}")
 
 
 def _stage_now() -> datetime:
@@ -184,15 +211,33 @@ def _concurrent_full_run_saved(
     return any(row.get("stage") == "done" for row in pipeline_log if isinstance(row, dict))
 
 
+def _reload_index_doc(
+    ticker: str,
+    fallback: IndexResearchDoc | None,
+) -> IndexResearchDoc | None:
+    """Reload hub artifact, falling back when disk read is transiently unavailable."""
+    try:
+        fresh = load_index_research_json(ticker)
+    except Exception as exc:
+        logger.debug("light_refresh hub reload skipped: %s", exc)
+        return fallback
+    return fresh if fresh is not None else fallback
+
+
 def run_index_light_refresh(
     ticker: str = "NIFTY",
     *,
     horizon_days: int | None = None,
     force: bool = False,
+    poll_mode: bool = False,
 ) -> tuple[IndexResearchDoc, str]:
     """Recompute prediction using cached constituents and fresh macro factors."""
+    import time as _time
+
     sym = ticker.strip().upper()
     horizon = resolve_horizon(horizon_days)
+    deadline = _time.monotonic() + _light_refresh_budget_sec()
+    heavy = _light_refresh_heavy_enabled(poll_mode=poll_mode)
     cached_doc = load_index_research_json(sym)
     disk_as_of_at_start = _coerce_utc(getattr(cached_doc, "as_of", None) if cached_doc else None)
 
@@ -211,7 +256,12 @@ def run_index_light_refresh(
                 previous_factors[str(row["factor"])] = row.get("value")
 
     sentiments = [s.sentiment_score for s in signals if s.sentiment_score is not None]
-    macro_stage = fetch_global_macro_snapshot(constituent_sentiments=sentiments or None)
+    _check_light_refresh_budget(deadline, "before_macro")
+    macro_stage = fetch_global_macro_snapshot(
+        constituent_sentiments=sentiments or None,
+        trading_day=_stage_now().date().isoformat(),
+        force=False,
+    )
     macro_factors = dict(macro_stage.data.get("factors") or {})
     global_factors = list(macro_stage.data.get("factor_rows") or [])
 
@@ -224,7 +274,7 @@ def run_index_light_refresh(
     news_hit = bool(headlines) or _heavyweight_news(signals)
 
     if not force and cached_doc is not None and not macro_changed and not news_hit:
-        fresh = load_index_research_json(sym)
+        fresh = _reload_index_doc(sym, cached_doc)
         return fresh or cached_doc, "unchanged"
 
     reason = "material_news" if news_hit else "macro_drift" if macro_changed else "forced"
@@ -233,9 +283,10 @@ def run_index_light_refresh(
         from trade_integrations.dataflows.index_research.constituent_momentum import attach_constituent_momentum
         from trade_integrations.hub_capture.ohlcv_cache import prefetch_symbols
 
+        _check_light_refresh_budget(deadline, "before_momentum")
         prefetch_list = [sym] + [s.symbol for s in signals]
         ohlcv_stats = prefetch_symbols(prefetch_list, days=14, force=False)
-        signals = attach_constituent_momentum(signals, force_refresh=True)
+        signals = attach_constituent_momentum(signals, force_refresh=not poll_mode)
         momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
         logger.info(
             "light_refresh ohlcv_cache loaded=%s cache_hits=%s vendor_fetches=%s momentum=%s",
@@ -247,49 +298,53 @@ def run_index_light_refresh(
     except Exception as exc:
         logger.debug("light_refresh momentum refresh skipped: %s", exc)
 
-    try:
-        from datetime import date as _date
-
-        from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
-            merge_flow_derivatives_frame,
-            upsert_flow_cash_cache,
-        )
-
+    if heavy:
         try:
-            from trade_integrations.dataflows.index_research.history_ingest import run_history_incremental_sync
+            from datetime import date as _date
 
-            run_history_incremental_sync(days=30, explicit=False)
-        except Exception as ingest_exc:
-            logger.debug("history incremental sync skipped: %s", ingest_exc)
+            from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+                merge_flow_derivatives_frame,
+                upsert_flow_cash_cache,
+            )
+
+            _check_light_refresh_budget(deadline, "before_flow_sync")
             try:
-                from trade_integrations.nse_browser.repository import ingest_repository_to_hub
+                from trade_integrations.dataflows.index_research.history_ingest import run_history_incremental_sync
 
-                ingest_repository_to_hub(skip_repo_sync=True, allow_live_fetch=False, explicit=False)
-            except Exception as hub_exc:
-                logger.debug("nse repo ingest skipped: %s", hub_exc)
+                run_history_incremental_sync(days=30, explicit=False)
+            except Exception as ingest_exc:
+                logger.debug("history incremental sync skipped: %s", ingest_exc)
+                try:
+                    from trade_integrations.nse_browser.repository import ingest_repository_to_hub
 
-        today = _date.today().isoformat()
-        if os.environ.get("NSE_BROWSER_ON_REFRESH", "").strip().lower() in {"1", "true", "yes"}:
-            try:
-                from trade_integrations.dataflows.index_research.nse_browser_refresh import (
-                    refresh_nse_browser_for_prediction,
-                )
+                    ingest_repository_to_hub(skip_repo_sync=True, allow_live_fetch=False, explicit=False)
+                except Exception as hub_exc:
+                    logger.debug("nse repo ingest skipped: %s", hub_exc)
 
-                refresh_nse_browser_for_prediction(days=30, refresh=False)
-            except Exception as browser_exc:
-                logger.debug("nse_browser light_refresh skipped: %s", browser_exc)
-        flow = merge_flow_derivatives_frame(today, today, allow_live_fetch=False)
-        if not flow.empty:
-            upsert_flow_cash_cache(flow.to_dict("records"))
-        flow_rows = [
-            {"factor": str(row["factor"]), "value": float(row["value"]), "source": row.get("source")}
-            for row in global_factors
-            if row.get("factor") is not None and row.get("value") is not None
-        ]
-        if flow_rows:
-            upsert_daily_factors(today, flow_rows)
-    except Exception as exc:
-        logger.debug("light_refresh factor upsert skipped: %s", exc)
+            today = _date.today().isoformat()
+            if os.environ.get("NSE_BROWSER_ON_REFRESH", "").strip().lower() in {"1", "true", "yes"}:
+                try:
+                    from trade_integrations.dataflows.index_research.nse_browser_refresh import (
+                        refresh_nse_browser_for_prediction,
+                    )
+
+                    refresh_nse_browser_for_prediction(days=30, refresh=False)
+                except Exception as browser_exc:
+                    logger.debug("nse_browser light_refresh skipped: %s", browser_exc)
+            flow = merge_flow_derivatives_frame(today, today, allow_live_fetch=False)
+            if not flow.empty:
+                upsert_flow_cash_cache(flow.to_dict("records"))
+            flow_rows = [
+                {"factor": str(row["factor"]), "value": float(row["value"]), "source": row.get("source")}
+                for row in global_factors
+                if row.get("factor") is not None and row.get("value") is not None
+            ]
+            if flow_rows:
+                upsert_daily_factors(today, flow_rows)
+        except Exception as exc:
+            logger.debug("light_refresh factor upsert skipped: %s", exc)
+    else:
+        logger.debug("light_refresh heavy flow/history sync skipped (poll_mode)")
 
     try:
         from datetime import date as _date
@@ -446,30 +501,6 @@ def run_index_light_refresh(
             scenario_anchor_return_pct=scenario_anchor,
         )
 
-    if spot > 0 and prediction:
-        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
-            attach_forecast_lab,
-            snapshot_legacy_prediction,
-            snapshot_pre_reconcile_prediction,
-        )
-
-        pre_reconcile = snapshot_pre_reconcile_prediction(prediction)
-        legacy = snapshot_legacy_prediction(prediction)
-        prediction = attach_forecast_lab(
-            prediction,
-            ticker=sym,
-            spot=spot,
-            horizon_days=horizon.days,
-            macro_factors=macro_factors,
-            signals=signals,
-            scenarios=scenarios,
-            scenario_anchor=scenario_anchor,
-            as_of_day=_stage_now().date().isoformat(),
-            macro_trust_multiplier=macro_trust_multiplier,
-            pre_reconcile_snapshot=pre_reconcile,
-            legacy_prediction=legacy,
-        )
-
     factor_bundle: dict[str, Any] = {}
     if spot > 0 and prediction:
         factor_bundle = build_factor_explanation_bundle(
@@ -541,7 +572,7 @@ def run_index_light_refresh(
         logger.debug("light_refresh news_impact skipped: %s", exc)
 
     refresh_at = _stage_now()
-    existing_on_disk = load_index_research_json(sym)
+    existing_on_disk = _reload_index_doc(sym, cached_doc)
     if _concurrent_full_run_saved(
         disk_as_of_at_start=disk_as_of_at_start,
         existing=existing_on_disk,

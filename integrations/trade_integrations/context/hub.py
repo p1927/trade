@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
+import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from trade_integrations.dataflows.company_research.india_symbols import india_index_tickers
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc
@@ -776,6 +781,35 @@ def _is_light_refresh_only_log(entries: list) -> bool:
     return "light_refresh" in stages and "start" not in stages
 
 
+def _fsync_dir(directory: Path) -> None:
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write text atomically so concurrent readers never see a truncated file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, content.encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    _fsync_dir(path.parent)
+
+
 def save_index_research(doc) -> Path:
     """Write latest index research markdown + JSON under the shared hub."""
     from trade_integrations.dataflows.index_research.format import format_index_report
@@ -810,20 +844,21 @@ def save_index_research(doc) -> Path:
 
     out_dir = _index_research_dir(doc.ticker)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "latest.md").write_text(format_index_report(doc), encoding="utf-8")
+    _atomic_write_text(out_dir / "latest.md", format_index_report(doc))
     payload = asdict(doc)
     payload["as_of"] = doc.as_of.isoformat()
     payload["stages"] = [
         {**asdict(stage), "fetched_at": stage.fetched_at.isoformat()} for stage in doc.stages
     ]
+    json_text = json.dumps(payload, indent=2, default=str)
     json_path = out_dir / "latest.json"
-    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    _atomic_write_text(json_path, json_text)
 
     history_dir = out_dir / "history"
     history_dir.mkdir(parents=True, exist_ok=True)
     stamp = doc.as_of.strftime("%Y-%m-%dT%H%M%S") if hasattr(doc.as_of, "strftime") else "snapshot"
     snap_path = history_dir / f"{stamp}.json"
-    snap_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    _atomic_write_text(snap_path, json_text)
     snapshots = sorted(history_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in snapshots[30:]:
         old.unlink(missing_ok=True)
@@ -836,7 +871,29 @@ def load_index_research_json(ticker: str):
     path = _index_research_dir(ticker) / "latest.json"
     if not path.is_file():
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    payload: dict[str, Any] | None = None
+    for attempt in range(3):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            if not raw.strip():
+                raise json.JSONDecodeError("empty file", raw, 0)
+            payload = json.loads(raw)
+            break
+        except json.JSONDecodeError as exc:
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+            logger.warning(
+                "index research JSON unreadable for %s after retries: %s",
+                ticker,
+                exc,
+            )
+            return None
+
+    if payload is None:
+        return None
+
     doc = _index_doc_from_json(payload)
     embedded = getattr(doc, "news_impact", None) or {}
     if not (embedded.get("items") or []):

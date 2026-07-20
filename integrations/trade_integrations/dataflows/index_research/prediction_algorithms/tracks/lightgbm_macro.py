@@ -110,4 +110,9 @@ def _train_lgb(rows_x, rows_y, feature_names):
 
 
 def _predict_lgb(model, live_vec):
-    return model.predict(live_vec)
+    import numpy as np
+
+    data = live_vec if isinstance(live_vec, np.ndarray) else np.asarray(live_vec, dtype=np.float64)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    return model.predict(data)
