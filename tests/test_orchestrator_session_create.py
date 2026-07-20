@@ -11,7 +11,7 @@ if str(AGENT_SRC) not in sys.path:
 
 
 def test_orchestrator_session_reuses_active_session(monkeypatch, tmp_path):
-    from vibetrading.agent.src.api import autonomous_routes as routes
+    from src.api import autonomous_routes as routes
 
     hub = tmp_path / "hub"
     (hub / "_data" / "autonomous_agents").mkdir(parents=True)
@@ -57,7 +57,7 @@ def test_orchestrator_session_reuses_active_session(monkeypatch, tmp_path):
 
 
 def test_orchestrator_session_creates_when_no_active(monkeypatch, tmp_path):
-    from vibetrading.agent.src.api import autonomous_routes as routes
+    from src.api import autonomous_routes as routes
 
     hub = tmp_path / "hub"
     (hub / "_data" / "autonomous_agents").mkdir(parents=True)

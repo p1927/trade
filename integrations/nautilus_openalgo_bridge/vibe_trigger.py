@@ -148,6 +148,14 @@ async def dispatch_thesis_alert(
     if agent.get("streaming"):
         return {"status": "skipped", "reason": "turn_in_flight"}
 
+    try:
+        from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+        if not is_plan_approved(agent):
+            return {"status": "skipped", "reason": "plan_not_approved"}
+    except ImportError:
+        pass
+
     prompt = build_alert_turn_prompt(
         agent=agent,
         alert=alert,
@@ -239,9 +247,22 @@ async def dispatch_us_exit_alert(
     agent = get_agent(agent_id)
     if not agent:
         return {"status": "error", "error": f"agent not found: {agent_id}"}
+    if str(agent.get("status")) != "running":
+        return {"status": "skipped", "reason": "agent_not_running"}
     session_id = str(agent.get("vibe_session_id") or "").strip()
     if not session_id:
         return {"status": "error", "error": "agent has no vibe_session_id"}
+    if agent.get("streaming"):
+        return {"status": "skipped", "reason": "turn_in_flight"}
+
+    try:
+        from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+        if not is_plan_approved(agent):
+            return {"status": "skipped", "reason": "plan_not_approved"}
+    except ImportError:
+        pass
+
     symbols = list(agent.get("symbols") or ["SPY"])
     symbol = symbols[0]
     block = (
@@ -252,8 +273,6 @@ async def dispatch_us_exit_alert(
     )
     prompt = block + build_full_reasoning_prompt(agent=agent, turn_kind="strategy_revision")
     caller = make_vibe_message_client(config)
-    if agent.get("streaming"):
-        return {"status": "skipped", "reason": "turn_in_flight"}
     agent["streaming"] = True
     save_agent(agent)
     try:

@@ -27,6 +27,7 @@ _DEFAULT_RETENTION = {
     "vix": 365,
     "ticks_hot": 7,
     "ticks_cold": 90,
+    "history_cold": None,
 }
 
 # Tier A — proprietary / hard to replay

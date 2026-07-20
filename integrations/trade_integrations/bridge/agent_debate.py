@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _INDEX_YF = {
     "NIFTY": "^NSEI",
     "NIFTY50": "^NSEI",
-    "BANKNIFTY": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
     "FINNIFTY": "^NSEI",
     "MIDCPNIFTY": "^NSEI",
     "SENSEX": "^BSESN",

@@ -159,7 +159,14 @@ def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: i
 3. Refine thesis; confidence 0–100
 4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)`
 5. `record_autonomous_decision` — **stop**"""
-    return _FRAGMENTS.get(fragment_id) or _FRAGMENTS["in_options_paper"]
+    template = _FRAGMENTS.get(fragment_id) or _FRAGMENTS["in_options_paper"]
+    return template.format(
+        agent_id=agent_id,
+        focus=focus,
+        threshold=threshold,
+        order_tool=_US_ORDER_TOOL,
+        order_tool_live=_US_ORDER_TOOL_LIVE,
+    )
 
 
 def _revision_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: int) -> str:

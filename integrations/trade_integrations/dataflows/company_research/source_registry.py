@@ -49,6 +49,29 @@ INDIA_COMPANY_DATA_SOURCES: tuple[dict[str, Any], ...] = (
         "notes": "Enrichment/fallback when INDstocks lacks a field (fundamentals, earnings, trailing P/E).",
     },
     {
+        "key": "nifty100_financial_intel",
+        "label": "Nifty 100 Financial Intelligence (GitHub)",
+        "stages": ["fundamentals"],
+        "priority": 1,
+        "env": ["NIFTY100_FININTEL_REPO", "NIFTY100_FININTEL_BRANCH", "NIFTY100_FININTEL_CACHE"],
+        "package": "requests, openpyxl, pandas",
+        "provides": [
+            "annual_financials",
+            "roe_pct",
+            "roce_pct",
+            "opm_pct",
+            "npm_pct",
+            "debt_to_equity",
+            "free_cash_flow",
+            "growth_analysis",
+        ],
+        "reliability": "high",
+        "used_in_pipeline": True,
+        "cost": "free",
+        "notes": "Bulk FY2010–2024 statements for 92 Nifty 100 names from GitHub Excel ingest. "
+        "Run scripts/ingest_nifty100_financial_intel.py to refresh hub cache.",
+    },
+    {
         "key": "dalal_bse",
         "label": "dalal (BSE meta + fundamentals)",
         "stages": ["identity", "fundamentals"],
@@ -134,7 +157,7 @@ STAGE_CORE_SOURCES: dict[str, tuple[str, ...]] = {
     "identity": ("openalgo", "yfinance", "dalal_bse"),
     "peers": ("screener", "yfinance"),
     "calendar": ("bse_india", "yfinance"),
-    "fundamentals": ("yfinance", "dalal_bse"),
+    "fundamentals": ("nifty100_financial_intel", "yfinance", "dalal_bse"),
     "filings": ("bse_india",),
 }
 
@@ -151,7 +174,7 @@ STAGE_SOURCE_ORDER: dict[str, list[str]] = {
     "identity": ["openalgo", "yfinance", "dalal_bse", "tapetide"],
     "peers": ["screener_in", "yfinance", "tapetide"],
     "calendar": ["bse_india", "yfinance", "tapetide"],
-    "fundamentals": ["yfinance", "dalal_bse", "tapetide"],
+    "fundamentals": ["nifty100_financial_intel", "yfinance", "dalal_bse", "tapetide"],
     "filings": ["bse_india"],
 }
 

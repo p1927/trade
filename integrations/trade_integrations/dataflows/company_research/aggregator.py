@@ -186,6 +186,7 @@ def run_company_research_batch(
     tickers: list[str],
     *,
     lookahead_days: int | None = None,
+    include_macro: bool = True,
 ) -> list[CompanyResearchDoc]:
     """Run the pipeline for multiple tickers (dual-market aware)."""
     docs: list[CompanyResearchDoc] = []
@@ -193,5 +194,11 @@ def run_company_research_batch(
         ticker = ticker.strip()
         if not ticker:
             continue
-        docs.append(run_company_research(ticker, lookahead_days=lookahead_days, include_macro=False))
+        docs.append(
+            run_company_research(
+                ticker,
+                lookahead_days=lookahead_days,
+                include_macro=include_macro,
+            )
+        )
     return docs

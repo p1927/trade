@@ -9,7 +9,7 @@ import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
 import trade_integrations  # noqa: F401 — apply runtime patches
 from trade_integrations.dataflows.openalgo import resolve_openalgo_symbol
-from tradingagents.dataflows.symbol_utils import NoMarketDataError
+from trade_integrations.dataflows.errors import NoMarketDataError
 
 
 def _reset_config():

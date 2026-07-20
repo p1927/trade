@@ -47,6 +47,7 @@ class WatchActor(Actor):
         self._watch_symbols = tuple(config.watch_symbols or ())
         self._spec = WatchSpec()
         self._baselines: dict[str, float] = {}
+        self._latest_ltp: dict[str, float] = {}
         self._oi_baselines: dict[str, float] = {}
         self._volume_baselines: dict[str, float] = {}
         self._last_alert_at: dict[str, float] = {}
@@ -94,7 +95,12 @@ class WatchActor(Actor):
         if len(parts) != 2:
             return
         close_h, close_m = int(parts[0]), int(parts[1])
-        flatten_at = now.replace(hour=close_h, minute=max(0, close_m - 10), second=0, microsecond=0)
+        close_dt = datetime.combine(
+            now.date(),
+            datetime.min.time().replace(hour=close_h, minute=close_m),
+            tzinfo=ist,
+        )
+        flatten_at = close_dt - timedelta(minutes=10)
         if flatten_at <= now:
             return
         self.clock.set_time_alert("flatten_at_close", flatten_at, self._on_flatten_alert)
@@ -142,10 +148,20 @@ class WatchActor(Actor):
         handoff = load_handoff(self._agent_id)
         if handoff and handoff.watch_spec.rules:
             self._spec = handoff.watch_spec
-            return
-        raw = load_agent_watch_spec(self._agent_id)
-        if raw:
-            self._spec = WatchSpec.from_dict(raw)
+        else:
+            raw = load_agent_watch_spec(self._agent_id)
+            if raw:
+                self._spec = WatchSpec.from_dict(raw)
+        self._refresh_spot_baselines()
+
+    def _refresh_spot_baselines(self) -> None:
+        for rule in self._spec.rules:
+            if rule.metric != "spot_move_pct":
+                continue
+            for key in (rule.symbol, rule.symbol.upper()):
+                latest = self._latest_ltp.get(key)
+                if latest is not None:
+                    self._baselines[key] = latest
 
     def _evaluate_thesis_alerts(self, quotes: dict[str, QuoteSnapshot]) -> WatchAlert | None:
         if not self._agent_id:
@@ -218,6 +234,7 @@ class WatchActor(Actor):
             return
         symbol = str(tick.instrument_id.symbol)
         ltp = tick.bid_price.as_double()
+        self._latest_ltp[symbol] = ltp
         self._baselines.setdefault(symbol, ltp)
         snap = QuoteSnapshot(symbol=symbol, exchange=self._market, ltp=ltp)
         quotes = {symbol: snap}

@@ -129,10 +129,28 @@ def _listener_pids(port: int) -> list[int]:
     return pids
 
 
+def _claimed_pids(root: Path | None) -> set[int]:
+    if root is None:
+        return set()
+    claims_dir = root / "log" / "claims"
+    pids: set[int] = set()
+    if not claims_dir.is_dir():
+        return pids
+    for claim in claims_dir.glob("*.claim"):
+        try:
+            for line in claim.read_text(encoding="utf-8").splitlines():
+                if line.startswith("pid="):
+                    pids.add(int(line.split("=", 1)[1].strip()))
+        except (OSError, ValueError):
+            continue
+    return pids
+
+
 def check_port_listeners(*, root: Path | None = None, allow_pids: set[int] | None = None) -> list[str]:
     """Return errors when registry host ports are held by unexpected listeners."""
     reg = load_ports_registry(root=str(root) if root else None)
-    allow = allow_pids or set()
+    root_path = root.resolve() if root else None
+    allow = set(allow_pids or set()) | _claimed_pids(root)
     errors: list[str] = []
     import subprocess
 
@@ -169,6 +187,8 @@ def check_port_listeners(*, root: Path | None = None, allow_pids: set[int] | Non
                 args = (full.stdout or "").strip()
             except OSError:
                 args = comm_base
+            if root_path and str(root_path) in args:
+                continue
             if "docker" in args.lower() and "compose" in args.lower():
                 continue
             errors.append(

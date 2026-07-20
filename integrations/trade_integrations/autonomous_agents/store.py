@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -216,6 +217,34 @@ def _proposal_commit_lock_path(proposal_id: str) -> Path:
     return _proposal_path(proposal_id).with_suffix(".commit.lock")
 
 
+_COMMIT_LOCK_TTL_SEC = 300.0
+
+
+def _lock_holder_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _commit_lock_is_stale(lock_path: Path) -> bool:
+    """True when lock file is orphaned (dead PID) or exceeded TTL."""
+    if not lock_path.is_file():
+        return False
+    try:
+        age_sec = time.time() - lock_path.stat().st_mtime
+        if age_sec > _COMMIT_LOCK_TTL_SEC:
+            return True
+        raw = lock_path.read_text(encoding="utf-8").strip()
+        holder_pid = int(raw)
+    except (OSError, ValueError):
+        return True
+    return not _lock_holder_alive(holder_pid)
+
+
 @contextmanager
 def acquire_proposal_commit_lock(proposal_id: str) -> Iterator[None]:
     """Exclusive lock for proposal commit — prevents double-commit races."""
@@ -224,15 +253,25 @@ def acquire_proposal_commit_lock(proposal_id: str) -> Iterator[None]:
         raise ValueError("proposal_id is required for commit lock")
     lock_path = _proposal_commit_lock_path(pid)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd: int | None = None
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
-    except FileExistsError as exc:
-        raise ValueError("commit already in progress") from exc
-    finally:
-        if fd is not None:
-            os.close(fd)
+
+    def _try_acquire() -> int | None:
+        fd: int | None = None
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            return fd
+        except FileExistsError:
+            return None
+
+    fd = _try_acquire()
+    if fd is None:
+        if _commit_lock_is_stale(lock_path):
+            lock_path.unlink(missing_ok=True)
+            fd = _try_acquire()
+        if fd is None:
+            raise ValueError("commit already in progress")
+    if fd is not None:
+        os.close(fd)
     try:
         yield
     finally:

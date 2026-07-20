@@ -52,3 +52,23 @@ def test_submit_and_process_intent(hub_tmp: Path):
     assert processed.is_file()
     archived = json.loads(processed.read_text(encoding="utf-8"))
     assert archived["_execution_result"]["status"] == "skipped"
+
+
+def test_process_pending_skips_halted_intent(hub_tmp: Path):
+    intent = ExecutionIntent(
+        action=IntentAction.EXIT,
+        agent_id="aa_halted",
+        rationale="flatten",
+        intent_id="intent_halted_exit",
+    )
+    submit_intent(intent)
+    assert len(list_pending_intents()) == 1
+
+    with patch("nautilus_openalgo_bridge.intent_queue.is_trading_halted", return_value=True):
+        results = process_pending_intents(client=MagicMock(), max_count=5)
+
+    assert len(results) == 1
+    assert results[0]["status"] == "halted_skipped"
+    assert len(list_pending_intents()) == 0
+    skipped = hub_tmp / "_data" / "nautilus_intents" / "halted_skipped" / "intent_halted_exit.json"
+    assert skipped.is_file()

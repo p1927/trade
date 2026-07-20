@@ -58,6 +58,7 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
         quote = None
 
     spot = float((quote or {}).get("ltp") or identity.get("last_price") or 0)
+    openalgo_exchange = str(identity.get("openalgo_exchange") or "NSE").strip() or "NSE"
     browse = build_stock_browse_summary(
         ticker=sym,
         identity=identity,
@@ -260,7 +261,7 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
                     "mcp_tool": "place_order",
                     "payload": {
                         "symbol": sym,
-                        "exchange": "NSE",
+                        "exchange": openalgo_exchange,
                         "action": top.get("action", "BUY"),
                         "quantity": top.get("quantity", 1),
                         "product": "CNC",
@@ -269,5 +270,7 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
                 },
             ]
         doc.meta["strategy_builder_url"] = f"{_strategy_builder_base()}?plan={sym}&asset=stock"
+    elif spot <= 0:
+        doc.meta["skip_reason"] = "spot_unavailable"
 
     return doc

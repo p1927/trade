@@ -18,6 +18,20 @@ __all__ = ["execute_intent", "process_intent_file", "leg_to_openalgo_order", "le
 logger = logging.getLogger(__name__)
 
 
+def _exit_realized_pnl_from_reconcile(
+    pre_exit_unrealized: float | None,
+    postflight: dict[str, Any],
+) -> float | None:
+    """Derive realized exit P&L from post-exit reconcile snapshot."""
+    open_positions = int(postflight.get("open_positions") or 0)
+    post_unrealized = postflight.get("unrealized_pnl_inr")
+    if open_positions == 0 and pre_exit_unrealized is not None:
+        return pre_exit_unrealized
+    if pre_exit_unrealized is not None and post_unrealized is not None:
+        return pre_exit_unrealized - post_unrealized
+    return None
+
+
 def execute_intent(
     intent: ExecutionIntent,
     *,
@@ -100,6 +114,9 @@ def execute_intent(
                 clear_agent_position_state(intent.agent_id)
             except Exception:
                 logger.debug("handoff clear on EXIT skipped", exc_info=True)
+        postflight = reconcile_after_intent(intent, client=oa, execution_result=payload)
+        payload["postflight"] = postflight
+        realized_pnl = _exit_realized_pnl_from_reconcile(pre_exit_pnl, postflight)
         try:
             from trade_integrations.auto_paper.outcome_ledger import append_outcome, reconcile_exit_outcome
 
@@ -110,18 +127,16 @@ def execute_intent(
                 intent_source="nautilus_intent",
                 agent_id=intent.agent_id or None,
             )
-            if pre_exit_pnl is not None:
+            if realized_pnl is not None:
                 reconcile_exit_outcome(
                     symbol=str(intent.underlying or "NIFTY"),
                     strategy=intent.strategy,
                     agent_id=intent.agent_id or None,
-                    net_pnl_inr=pre_exit_pnl,
+                    net_pnl_inr=realized_pnl,
                     intent_source="nautilus_reconcile",
                 )
         except Exception:
             logger.debug("outcome ledger append skipped", exc_info=True)
-        postflight = reconcile_after_intent(intent, client=oa, execution_result=payload)
-        payload["postflight"] = postflight
         if persist:
             archive_intent(intent, payload)
         return payload

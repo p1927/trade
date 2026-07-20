@@ -76,3 +76,11 @@ def test_run_agent_debate_hub_wrapper_accepts_asset_type_keyword():
     assert payload["ticker"] == "NIFTY"
     assert payload["asset_type"] == "options"
     save_debate.assert_called_once()
+
+
+@pytest.mark.unit
+def test_to_tradingagents_ticker_banknifty():
+    from trade_integrations.bridge.agent_debate import to_tradingagents_ticker
+
+    assert to_tradingagents_ticker("BANKNIFTY") == "^NSEBANK"
+    assert to_tradingagents_ticker("NIFTY") == "^NSEI"

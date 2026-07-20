@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -24,6 +25,8 @@ from .sources.chain_openalgo import fetch_chain_stage
 from .sources.events_index import fetch_events_index
 from .sources.events_stock import fetch_events_stock
 from .sources.earnings_us import fetch_earnings_us_stage
+
+logger = logging.getLogger(__name__)
 
 
 def _strategy_builder_base() -> str:
@@ -165,8 +168,21 @@ def run_options_research(
             if fallback_spot is not None and float(fallback_spot) > 0:
                 doc.spot = float(fallback_spot)
                 doc.meta.setdefault("spot_provenance", "quote_fallback")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "spot fallback failed for %s: %s",
+                instrument.display_symbol,
+                exc,
+            )
+            doc.stages.append(
+                StageResult(
+                    stage="spot_fallback",
+                    status="error",
+                    vendor="live_quotes",
+                    fetched_at=now,
+                    errors=[str(exc)],
+                )
+            )
     doc.browse_summary = build_browse_summary(doc.chain_snapshot)
 
     prediction_signals: dict = {}
@@ -357,7 +373,11 @@ def run_options_research(
                     },
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "options prediction ledger append failed for %s: %s",
+                doc.underlying,
+                exc,
+            )
 
     return doc

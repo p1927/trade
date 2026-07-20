@@ -597,6 +597,11 @@ def _commit_autonomous_agent_locked(
     }
     save_agent(agent)
 
+    now_commit = datetime.now(timezone.utc).isoformat()
+    proposal["committed_agent_id"] = agent_id
+    proposal["committed_at"] = now_commit
+    save_proposal(proposal)
+
     from trade_integrations.autonomous_agents.store import clear_orchestrator_meta
 
     clear_orchestrator_meta(orch_sid or None)
@@ -619,10 +624,6 @@ def _commit_autonomous_agent_locked(
         agent["infra_pending"] = blocking
         agent["infra_last_attempt_at"] = now
         save_agent(agent)
-
-    proposal["committed_agent_id"] = agent_id
-    proposal["committed_at"] = now
-    save_proposal(proposal)
 
     result: dict[str, Any] = {
         "status": "ok",

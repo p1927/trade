@@ -58,10 +58,7 @@ class TestFilingsIn:
 
         with patch(
             "trade_integrations.dataflows.company_research.sources.filings_in._fetch_bse_filings",
-            return_value=rows[:1],
-        ), patch(
-            "trade_integrations.dataflows.company_research.sources.filings_in._fetch_dalal_bse_filings",
-            return_value=rows[1:],
+            return_value=rows,
         ):
             result = fetch_filings_in(normalized, lookback_days=30)
 
@@ -73,21 +70,29 @@ class TestFilingsIn:
 @pytest.mark.unit
 class TestMacroIn:
     def test_yfinance_vix_and_nifty(self):
+        from trade_integrations.dataflows.company_research.sources.resilience import SourceAttempt
+
+        def mock_run_sources(fetchers):
+            return [
+                SourceAttempt(
+                    name="yfinance_vix",
+                    status="ok",
+                    data={"india_vix": 14.2, "source": "yfinance"},
+                ),
+                SourceAttempt(
+                    name="yfinance_nifty",
+                    status="ok",
+                    data={
+                        "nifty_level": 24500.0,
+                        "nifty_change_pct": 0.35,
+                        "source": "yfinance",
+                    },
+                ),
+            ]
+
         with patch(
-            "trade_integrations.dataflows.company_research.sources.macro_in._fetch_yfinance_vix",
-            return_value={"india_vix": 14.2, "source": "yfinance"},
-        ), patch(
-            "trade_integrations.dataflows.company_research.sources.macro_in._fetch_nifty_context",
-            return_value={"nifty_level": 24500.0, "nifty_change_pct": 0.35, "source": "yfinance"},
-        ), patch(
             "trade_integrations.dataflows.company_research.sources.macro_in.run_sources",
-            side_effect=lambda fetchers: [
-                __import__(
-                    "trade_integrations.dataflows.company_research.sources.resilience",
-                    fromlist=["SourceAttempt"],
-                ).SourceAttempt(name=n, status="ok", data=f())
-                for n, f in fetchers
-            ],
+            side_effect=mock_run_sources,
         ):
             result = fetch_macro_in()
 

@@ -26,16 +26,21 @@ def _agent_uses_bridge(agent_id: str | None) -> bool:
 
 def legs_from_widget(widget: dict[str, Any], *, product: str) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
+    basket_steps = 0
     for step in widget.get("implementation_steps") or []:
         if step.get("action") != "execute_basket":
             continue
+        basket_steps += 1
         for order in (step.get("payload") or {}).get("orders") or []:
             if not isinstance(order, dict) or not order.get("symbol"):
                 continue
             row = dict(order)
             row["product"] = product
             orders.append(row)
-        break
+    if basket_steps > 1:
+        raise ValueError(
+            f"Widget has {basket_steps} execute_basket steps; expected exactly one"
+        )
     return orders
 
 
@@ -120,6 +125,12 @@ def execute_widget_via_bridge(
     except MandateViolation as exc:
         raise ValueError(str(exc)) from exc
 
+    agent = get_agent(agent_id)
+    if not agent:
+        raise ValueError(f"agent not found: {agent_id}")
+    profile = resolve_profile(agent=agent)
+    execution_mode = profile.mode
+
     product = mandate.resolve_product()
     raw_orders = legs_from_widget(widget, product=product)
     if not raw_orders:
@@ -151,7 +162,7 @@ def execute_widget_via_bridge(
     from trade_integrations.auto_paper.session_store import save_session
     from trade_integrations.auto_paper.outcome_ledger import append_outcome
 
-    record_execution_from_widget(widget, result.get("results") or [result], execution_mode="paper")
+    record_execution_from_widget(widget, result.get("results") or [result], execution_mode=execution_mode)
     session = load_session(autonomous_agent_id=agent_id)
     session["trades_today"] = int(session.get("trades_today") or 0) + 1
     on_basket_executed(
@@ -180,7 +191,7 @@ def execute_widget_via_bridge(
         "orders_placed": result.get("orders_placed") or len(legs),
         "results": result.get("results") or result,
         "postflight": result.get("postflight"),
-        "execution_mode": "paper",
+        "execution_mode": execution_mode,
     }
 
 

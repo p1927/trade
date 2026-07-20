@@ -1,4 +1,4 @@
-"""Nautilus watch feed routes multiquote polls through hub channel."""
+"""Nautilus watch feed polls OpenAlgo multiquotes via fetch_multi_quotes_raw."""
 
 from __future__ import annotations
 
@@ -21,10 +21,7 @@ def hub_tmp(tmp_path, monkeypatch):
     return hub
 
 
-def test_poll_uses_hub_channel_not_client_get_multi_quotes(hub_tmp, monkeypatch):
-    from trade_integrations.openalgo.freshness import FreshnessPolicy
-    from trade_integrations.openalgo.market_data import fetch_multi_quotes_raw
-
+def test_poll_uses_fetch_multi_quotes_raw(hub_tmp, monkeypatch):
     from nautilus_openalgo_bridge.config import BridgeConfig
     from nautilus_openalgo_bridge.data_feed import OpenAlgoQuoteFeed
 
@@ -36,26 +33,30 @@ def test_poll_uses_hub_channel_not_client_get_multi_quotes(hub_tmp, monkeypatch)
             return {}
 
         def get_quote(self, symbol, *, exchange="NSE"):
-            raise AssertionError("fallback should not run when channel returns quotes")
+            raise AssertionError("fallback should not run when multiquotes returns data")
 
-    channel_calls = {"n": 0, "policy": None, "fetch_fn": None, "requests": None}
+    raw_calls = {"n": 0, "requests": None}
 
-    def fake_get_multi_quotes(requests, fetch_fn, *, policy):
-        channel_calls["n"] += 1
-        channel_calls["policy"] = policy
-        channel_calls["fetch_fn"] = fetch_fn
-        channel_calls["requests"] = requests
+    def fake_fetch_multi_quotes_raw(requests):
+        raw_calls["n"] += 1
+        raw_calls["requests"] = requests
         return {
-            "NIFTY@NSE_INDEX": {
-                "symbol": "NIFTY",
-                "exchange": "NSE_INDEX",
-                "ltp": 24500.0,
-            }
+            "quotes": [
+                {
+                    "symbol": "NIFTY",
+                    "exchange": "NSE_INDEX",
+                    "ltp": 24500.0,
+                }
+            ]
         }
 
     monkeypatch.setattr(
-        "nautilus_openalgo_bridge.data_feed.get_multi_quotes",
-        fake_get_multi_quotes,
+        "nautilus_openalgo_bridge.data_feed.fetch_multi_quotes_raw",
+        fake_fetch_multi_quotes_raw,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.openalgo.ws_client.ensure_ws_feed",
+        lambda _requests: None,
     )
 
     feed = OpenAlgoQuoteFeed(
@@ -64,10 +65,8 @@ def test_poll_uses_hub_channel_not_client_get_multi_quotes(hub_tmp, monkeypatch)
     )
     quotes = feed.poll(["NIFTY"])
 
-    assert channel_calls["n"] == 1
-    assert channel_calls["policy"] is FreshnessPolicy.WATCH
-    assert channel_calls["fetch_fn"] is fetch_multi_quotes_raw
-    assert channel_calls["requests"] == [{"symbol": "NIFTY", "exchange": "NSE_INDEX"}]
+    assert raw_calls["n"] == 1
+    assert raw_calls["requests"] == [{"symbol": "NIFTY", "exchange": "NSE_INDEX"}]
     assert client_calls["multi"] == 0
     assert "NIFTY" in quotes
     assert quotes["NIFTY"].ltp == 24500.0

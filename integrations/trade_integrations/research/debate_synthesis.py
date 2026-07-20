@@ -250,6 +250,7 @@ def merge_index_prediction(
     }
     if d.get("rationale"):
         merged["debate_rationale"] = d["rationale"][:300]
+    merged["debate_merged"] = True
     return merged
 
 

@@ -164,18 +164,26 @@ def ensure_handoff_for_agent(agent_id: str) -> PositionHandoff | None:
 
 def sync_watch_spec_to_handoff(agent_id: str, watch_spec: dict[str, Any]) -> PositionHandoff | None:
     """Persist watch rules on the bridge handoff file (create shell if needed)."""
-    from trade_integrations.autonomous_agents.store import get_agent
-
     spec = WatchSpec.from_dict(watch_spec)
     existing = load_handoff(agent_id)
     if existing:
         existing.watch_spec = spec
         return save_handoff(existing)
 
-    agent = get_agent(agent_id)
-    if not agent:
+    try:
+        from trade_integrations.autonomous_agents.store import get_agent
+
+        agent = get_agent(agent_id)
+        if agent:
+            return save_handoff(build_handoff_shell_from_agent(agent, watch_spec=spec))
+    except ImportError:
+        pass
+
+    shell = build_handoff_shell_from_hub_agent(agent_id)
+    if shell is None:
         return None
-    return save_handoff(build_handoff_shell_from_agent(agent, watch_spec=spec))
+    shell.watch_spec = spec
+    return save_handoff(shell)
 
 
 def update_agent_thesis_from_handoff(handoff: PositionHandoff) -> None:
@@ -225,7 +233,7 @@ def clear_agent_position_state(agent_id: str) -> None:
 
 
 def enqueue_intent(intent: ExecutionIntent) -> Path:
-    """Backward-compatible alias — archive executed intent."""
-    from nautilus_openalgo_bridge.intent_queue import archive_intent
+    """Backward-compatible alias for submit_intent — queue intent for async execution."""
+    from nautilus_openalgo_bridge.intent_queue import submit_intent
 
-    return archive_intent(intent, {"status": "queued"})
+    return submit_intent(intent)

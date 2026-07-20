@@ -160,9 +160,16 @@ def _merge_fundamentals(attempts: list[SourceAttempt]) -> dict[str, Any]:
     return merged
 
 
+def _fetch_nifty100_github(normalized: NormalizedTicker) -> dict[str, Any] | None:
+    from .fundamentals_nifty100 import fetch_fundamentals_nifty100
+
+    return fetch_fundamentals_nifty100(normalized.base_symbol)
+
+
 def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
     """Collect latest fundamental metrics for an India equity."""
     fetchers: list[tuple[str, Any]] = [
+        ("nifty100_financial_intel", lambda: _fetch_nifty100_github(normalized)),
         ("yfinance", lambda: _fetch_yfinance(normalized)),
     ]
     if resolve_bse_scrip_code(normalized.base_symbol):

@@ -28,7 +28,7 @@ def dispatch_exit_intent(
 
         return dispatch_us_exit_alert_sync(agent_id, alert)
 
-    from nautilus_openalgo_bridge.execute import execute_intent
+    from nautilus_openalgo_bridge.intent_queue import submit_intent
 
     handoff = load_handoff(agent_id)
     intent = ExecutionIntent(
@@ -39,4 +39,9 @@ def dispatch_exit_intent(
         legs=list(handoff.legs) if handoff and handoff.legs else [],
         strategy="nautilus_stop",
     )
-    return execute_intent(intent)
+    path = submit_intent(intent)
+    return {
+        "status": "queued",
+        "intent_id": intent.intent_id,
+        "path": str(path),
+    }

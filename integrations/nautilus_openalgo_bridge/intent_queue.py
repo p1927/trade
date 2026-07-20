@@ -21,6 +21,12 @@ def processed_intents_root() -> Path:
     return root
 
 
+def halted_skipped_root() -> Path:
+    root = intents_root() / "halted_skipped"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def submit_intent(intent: ExecutionIntent) -> Path:
     """Queue an intent for async execution by the watch node."""
     intents_root()
@@ -49,6 +55,16 @@ def archive_intent(intent: ExecutionIntent, result: dict[str, Any]) -> Path:
     return path
 
 
+def archive_halted_intent(intent: ExecutionIntent, *, reason: str = "trading_halted") -> Path:
+    halted_skipped_root()
+    intent_id = intent.intent_id or "intent_unknown"
+    payload = intent.to_dict()
+    payload["_execution_result"] = {"status": "halted_skipped", "reason": reason}
+    path = halted_skipped_root() / f"{intent_id}.json"
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
 def process_pending_intents(
     *,
     client: BridgeOpenAlgoClient | None = None,
@@ -71,6 +87,9 @@ def process_pending_intents(
         agent_id = (intent.agent_id or "").strip()
         if agent_id and is_trading_halted(agent_id):
             logger.warning("skip intent %s — trading halted for %s", path.name, agent_id)
+            archive_halted_intent(intent)
+            path.unlink(missing_ok=True)
+            results.append({"intent_id": intent.intent_id, "status": "halted_skipped"})
             continue
 
         dedupe_key = intent.intent_id or json.dumps(intent.to_dict(), sort_keys=True)

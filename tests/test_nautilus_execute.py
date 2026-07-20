@@ -128,7 +128,8 @@ def test_execute_exit_records_outcome_ledger():
         strategy="short_straddle",
     )
     with patch("nautilus_openalgo_bridge.execute.run_preflight", return_value={"blocked": False}), patch(
-        "nautilus_openalgo_bridge.execute.reconcile_after_intent", return_value={"open_positions": 0}
+        "nautilus_openalgo_bridge.execute.reconcile_after_intent",
+        return_value={"open_positions": 0, "unrealized_pnl_inr": 0.0},
     ), patch("nautilus_openalgo_bridge.handoff.clear_agent_position_state"), patch(
         "trade_integrations.auto_paper.outcome_ledger.append_outcome"
     ) as append_mock, patch(
@@ -140,6 +141,30 @@ def test_execute_exit_records_outcome_ledger():
     reconcile_mock.assert_called_once()
     kwargs = reconcile_mock.call_args.kwargs
     assert kwargs.get("net_pnl_inr") == -120.5
+
+
+def test_execute_exit_realized_pnl_from_partial_reconcile():
+    client = MagicMock()
+    client.ensure_analyzer_mode.return_value = True
+    client.close_all_positions.return_value = {"status": "ok"}
+    client.get_position_book.return_value = [{"pnl": -200.0, "quantity": 25, "symbol": "NIFTY24JUL24500CE"}]
+    intent = ExecutionIntent(
+        action=IntentAction.EXIT,
+        agent_id="aa_x",
+        rationale="partial flatten",
+        underlying="NIFTY",
+        strategy="short_straddle",
+    )
+    with patch("nautilus_openalgo_bridge.execute.run_preflight", return_value={"blocked": False}), patch(
+        "nautilus_openalgo_bridge.execute.reconcile_after_intent",
+        return_value={"open_positions": 1, "unrealized_pnl_inr": -50.0},
+    ), patch("nautilus_openalgo_bridge.handoff.clear_agent_position_state"), patch(
+        "trade_integrations.auto_paper.outcome_ledger.append_outcome"
+    ), patch("trade_integrations.auto_paper.outcome_ledger.reconcile_exit_outcome") as reconcile_mock:
+        result = execute_intent(intent, client=client, persist=False, skip_preflight=True)
+    assert result["status"] == "executed"
+    reconcile_mock.assert_called_once()
+    assert reconcile_mock.call_args.kwargs.get("net_pnl_inr") == -150.0
 
 
 def test_process_intent_file_invalid_json(tmp_path: Path):

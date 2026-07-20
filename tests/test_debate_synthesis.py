@@ -99,8 +99,7 @@ class TestDebateSynthesis:
         assert merged["confidence"] == 0.65
         assert merged["quant"]["expected_return_pct"] == 1.2
         assert merged["debate"]["expected_return_pct"] == -1.5
-
-    def test_merge_index_prediction_bearish_debate_bullish_quant(self):
+        assert merged["debate_merged"] is True
         debate = {
             "view": "bearish",
             "direction_confidence": 0.7,
