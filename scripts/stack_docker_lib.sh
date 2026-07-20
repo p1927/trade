@@ -176,10 +176,32 @@ stack_http_ok() {
 }
 
 stack_probe_searxng() {
-  local base
+  local base probe_url
   base="$(stack_searxng_url)"
   base="${base%/}"
-  stack_http_ok "$base/" || stack_http_ok "$base/search?q=test&format=json"
+  if stack_http_ok "$base/"; then
+    :
+  elif stack_http_ok "$base/search?q=test&format=json"; then
+    :
+  else
+    return 1
+  fi
+
+  probe_url="${base}/search?q=trade+hub+probe&format=json&categories=general"
+  if ! curl -sf -m 8 "$probe_url" 2>/dev/null | python3 -c '
+import json, sys
+allow = ("duckduckgo", "bing", "brave", "mojeek", "qwant")
+data = json.load(sys.stdin)
+for entry in data.get("unresponsive_engines") or []:
+    name = str(entry[0] if entry else "").lower()
+    if not any(token in name for token in allow):
+        print(name, file=sys.stderr)
+        sys.exit(1)
+' 2>/dev/null; then
+    echo "[stack] SearXNG probe: disallowed engines failing (check stack/searxng/settings.yml keep_only)" >&2
+    return 1
+  fi
+  return 0
 }
 
 stack_ensure_searxng() {

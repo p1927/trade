@@ -20,7 +20,7 @@ Commands:
   down [--all|--hub]  Stop stack ( --all: + hub Docker + tunnels; --hub: hub Docker only )
   restart [--force]  Heal (default) or full stop+start (--force)
   ensure [--hub-only]  Start only services that are down
-  status [--json]   Vibe + hub Docker status (heals hub tier first)
+  status [--json]   Vibe + hub Docker status (read-only — does not start services)
   preflight       Dependency checks only (no start/stop)
 
 Public interface:

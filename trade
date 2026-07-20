@@ -15,10 +15,10 @@ Usage:
 Stack (one lifecycle — use these):
   up                    Start background stack (preflight + heal)
   heal                  Heal missing services only (no preflight noise)
-  down [--all|--hub]          Stop OpenAlgo + Vibe ( --all: + hub Docker + tunnels; --hub: hub Docker only )
+  down [--all|--hub]          Stop OpenAlgo + Vibe + watchers; remove stale pidfiles/claims ( --all: + docker compose down + tunnels )
   heal [--hub-only]           Heal missing services (hub tier only with --hub-only)
   restart [--force]     Heal missing services ( --force: full stop + start )
-  status                Vibe + hub Docker health
+  status                Vibe + hub Docker health (read-only — does not start services)
   doctor                Preflight checks before start (no start)
   dev                   Dev mode: auto-reload API/UI + OpenAlgo debug (exclusive Vibe tier).
                         Nautilus watch keeps running; use trade reload nautilus after handoff changes.

@@ -110,14 +110,14 @@ Use **`./trade`** for the background stack (OpenAlgo + Vibe API + Vite UI + hub 
 ./trade doctor              # preflight — run before first start or after .env changes
 ./trade doctor --hub        # hub Docker probes only (SearXNG, Redis, Timescale)
 ./trade up                  # start/heal background stack (recommended)
-./trade status              # heal hub tier + health summary
+./trade status              # read-only health summary (does not start services)
 ./trade status --json       # machine-readable dependency matrix
 ./trade heal                # start missing services
 ./trade heal --hub-only     # hub Docker tier only (SearXNG, Redis, Timescale)
 ./trade restart             # heal — start only what's down
 ./trade restart --force     # full stop + preflight + start
-./trade down                # stop stack (releases claims)
-./trade down --all          # stop stack + hub Docker + tunnels
+./trade down                # stop stack + watchers; clear pidfiles and claims
+./trade down --all          # full teardown — docker compose down + tunnels + cleanup
 ./trade down --hub          # stop hub Docker only (app tier keeps running)
 ./trade dev                 # dev mode: auto-reload API/UI (blocks if hub deps down)
 ./trade reload app          # restart app tier after code edits (if not using trade dev)

@@ -1268,12 +1268,13 @@ stack_stop_vibe_stack() {
   stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$ui_port"
   stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$api_port"
   stack_stop_claimed "vibe-trading (legacy)" "vibe-trading" "$log_dir/vibe-trading.pid"
-  stack_stop_nautilus_watch
+  stack_stop_nautilus_watch "$stop_all"
   stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
   stack_kill_openalgo_ws_proxy
   stack_stop_heal_daemon
   stack_stop_dev_nautilus_heal
   stack_stop_data_worker
+  stack_kill_orphan_trade_processes
   stack_reconcile_orphan_watchdogs
   stack_clear_stack_mode
   stack_clear_instance_manifest
@@ -1281,20 +1282,91 @@ stack_stop_vibe_stack() {
   # shellcheck disable=SC1091
   source "$(stack_root)/scripts/stack_docker_lib.sh"
   if (( stop_all )); then
-    stack_docker_stop_all
+    stack_docker_down_all
     local exposure_stop
     exposure_stop="$(stack_root)/exposure/start.sh"
     if [[ -x "$exposure_stop" ]]; then
       echo "[stack] stopping exposure tunnels ..."
       "$exposure_stop" stop 2>/dev/null || true
     fi
+    stack_clear_stale_exposure_state --force
   elif (( stop_hub )); then
     stack_docker_stop_all
   elif [[ "$stop_docker" == "1" || "$stop_docker" == "true" || "$stop_docker" == "yes" || "$stop_docker" == "on" ]]; then
     stack_hub_docker_stop_graceful
   fi
 
+  stack_cleanup_after_stop "$stop_all"
   sleep 1
+}
+
+stack_kill_orphan_trade_pgrep() {
+  local pattern="$1" label="$2" pid
+  for pid in $(pgrep -f "$pattern" 2>/dev/null || true); do
+    [[ -n "$pid" ]] || continue
+    stack_process_in_trade_repo "$pid" || continue
+    echo "[stack] stopping orphan $label (pid $pid) ..."
+    kill "$pid" 2>/dev/null || true
+    local waited=0
+    while (( waited < 15 )); do
+      stack_pid_alive "$pid" || break
+      sleep 0.5
+      waited=$((waited + 1))
+    done
+    if stack_pid_alive "$pid"; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
+stack_kill_orphan_trade_processes() {
+  local openalgo_port api_port ui_port
+  openalgo_port="$(stack_openalgo_port)"
+  api_port="$(stack_vibe_api_port)"
+  ui_port="$(stack_vibe_ui_port)"
+
+  stack_kill_unclaimed_port "$openalgo_port"
+  stack_kill_unclaimed_port "$api_port"
+  stack_kill_unclaimed_port "$ui_port"
+  stack_kill_unclaimed_port 8765
+
+  stack_kill_orphan_trade_pgrep "nautilus_openalgo_bridge.runtime.run_watch_node" "Nautilus watch"
+  stack_kill_orphan_trade_pgrep "openalgo/.venv/bin/python app.py" "OpenAlgo"
+  stack_kill_orphan_trade_pgrep "vite --port ${ui_port}" "Vibe UI"
+  stack_kill_orphan_trade_pgrep "uvicorn.*:${api_port}" "Vibe API"
+  stack_kill_orphan_trade_pgrep "stack-nautilus-heal" "dev Nautilus heal loop"
+  stack_kill_orphan_trade_pgrep "stack-heal.pid" "stack heal daemon"
+}
+
+stack_cleanup_after_stop() {
+  local stop_all="${1:-0}" log_dir removed=0 f orphan_count
+  log_dir="$(stack_log_dir)"
+
+  for f in openalgo.pid vibe-api.pid vibe-ui.pid vibe-trading.pid \
+           nautilus-watch.pid nautilus-watch.agent_id \
+           stack-heal.pid stack-nautilus-heal.pid stack-data-worker.pid \
+           openalgo-manual.pid; do
+    if [[ -f "$log_dir/$f" ]]; then
+      rm -f "$log_dir/$f"
+      removed=$((removed + 1))
+    fi
+  done
+
+  rm -f "$log_dir"/claims/*.claim 2>/dev/null || true
+  stack_reconcile_nautilus_watch_pid
+  stack_clear_stale_exposure_state
+
+  orphan_count=0
+  local pid
+  for pid in $(pgrep -f "run_watch_node" 2>/dev/null || true) \
+             $(pgrep -f "openalgo/.venv/bin/python app.py" 2>/dev/null || true) \
+             $(pgrep -f "vite --port $(stack_vibe_ui_port)" 2>/dev/null || true); do
+    [[ -n "$pid" ]] || continue
+    if stack_process_in_trade_repo "$pid"; then
+      orphan_count=$((orphan_count + 1))
+    fi
+  done
+  echo "[stack] down cleanup — removed ${removed} pidfile(s), claims cleared, trade orphans: ${orphan_count}"
 }
 
 _stack_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
@@ -1423,9 +1495,7 @@ stack_status_vibe_stack() {
   fi
   stack_load_env
   log_dir="$(stack_log_dir)"
-  stack_reconcile_all
-  stack_ensure_dependencies hub || ok=0
-  stack_sync_nautilus_claim
+  stack_reconcile_for_status
   openalgo_port="$(stack_openalgo_port)"
   api_port="$(stack_vibe_api_port)"
   ui_port="$(stack_vibe_ui_port)"
@@ -1457,7 +1527,6 @@ stack_status_vibe_stack() {
     if [[ -n "$listener" ]] && kill -0 "$listener" 2>/dev/null; then
       alive="alive"
       pid="$listener"
-      stack_sync_pidfile_from_port "$pidfile" "$port"
     elif stack_pid_alive "$pid" && stack_process_in_trade_repo "$pid"; then
       alive="alive"
     fi
@@ -1513,22 +1582,12 @@ PY
   elif [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
     echo "  · Nautilus watch  disabled (NAUTILUS_WATCH_ENABLE=0)"
   else
-    if ! stack_nautilus_pid_valid "$nautilus_pid"; then
-      stack_ensure_nautilus_watch || true
-      stack_sync_nautilus_claim
-      nautilus_pid="$(stack_read_pid "$log_dir/nautilus-watch.pid")"
-    fi
-    if stack_nautilus_pid_valid "$nautilus_pid"; then
-      nautilus_claim="$(stack_claim_pid nautilus-watch)"
-      if [[ -n "$registry_summary" ]]; then
-        echo "  ✓ Nautilus watch  pid=${nautilus_pid} claim=${nautilus_claim:-?} (started, agents: ${registry_summary})"
-      else
-        echo "  ✓ Nautilus watch  pid=${nautilus_pid} claim=${nautilus_claim:-?} (started)"
-      fi
+    if [[ -n "$registry_summary" ]]; then
+      echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (not running, agents: ${registry_summary})"
     else
-      echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (expected — enabled by default)"
-      ok=0
+      echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (not running)"
     fi
+    ok=0
   fi
 
   echo "══════════════════════════════════════════════════════════"
@@ -1681,14 +1740,17 @@ PY
 }
 
 stack_stop_nautilus_watch() {
+  local clear_agents="${1:-0}"
   stack_stop_claimed "Nautilus watch" "nautilus-watch" "$(stack_log_dir)/nautilus-watch.pid"
   rm -f "$(stack_log_dir)/nautilus-watch.agent_id"
-  local py root
+  local py root flag
   root="$(stack_root)"
   py="$(stack_pick_python)"
+  flag="False"
+  (( clear_agents )) && flag="True"
   PYTHONPATH="$root/integrations" "$py" -c "
-from trade_integrations.autonomous_agents.nautilus_watch import reconcile_stale_watch_pid
-reconcile_stale_watch_pid()
+from trade_integrations.autonomous_agents.nautilus_watch import stop_nautilus_watch_node
+stop_nautilus_watch_node(clear_agents=$flag)
 " 2>/dev/null || true
 }
 

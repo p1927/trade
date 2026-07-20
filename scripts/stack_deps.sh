@@ -39,6 +39,15 @@ stack_reconcile_all() {
   stack_reconcile_orphan_lock
 }
 
+# Read-only reconcile for status — no scheduler boot recovery or service starts.
+stack_reconcile_for_status() {
+  stack_reconcile_stale_dev_mode
+  stack_reconcile_orphan_watchdogs
+  stack_reconcile_stale_claims
+  stack_reconcile_nautilus_watch_pid
+  stack_reconcile_orphan_lock
+}
+
 stack_reconcile_orphan_watchdogs() {
   local log_dir pid pidfile name
   log_dir="$(stack_log_dir)"
@@ -287,20 +296,32 @@ PY
 stack_command_needs_heal() {
   local cmd="$1"
   case "$cmd" in
-    dev|status|status-vibe|status-hub|reload|research|data|tiered-api|data-router|start|up|heal|restart)
+    dev|reload|research|data|tiered-api|data-router|start|up|heal|restart)
       return 0
       ;;
   esac
   return 1
 }
 
+stack_command_is_status() {
+  local cmd="$1"
+  case "$cmd" in
+    status|status-vibe|status-hub) return 0 ;;
+  esac
+  return 1
+}
+
 stack_maybe_heal_before_command() {
   local cmd="$1"
+  if stack_command_is_status "$cmd"; then
+    stack_reconcile_for_status
+    return 0
+  fi
   stack_reconcile_all
   if ! stack_command_needs_heal "$cmd"; then
     return 0
   fi
-  if stack_dev_mode_active && [[ "$cmd" != "dev" && "$cmd" != "status" && "$cmd" != "status-vibe" ]]; then
+  if stack_dev_mode_active && [[ "$cmd" != "dev" ]]; then
     return 0
   fi
   echo "[stack] ensuring hub dependencies before: $cmd"
@@ -340,6 +361,35 @@ stack_warn_stale_exposure() {
   pid="$(grep -E '"pid"' "$state" 2>/dev/null | grep -Eo '[0-9]+' | head -1 || true)"
   if [[ -n "$pid" ]] && ! stack_pid_alive "$pid"; then
     echo "[stack] WARN: exposure tunnel state stale (pid $pid dead) — run: ./trade tunnel restart" >&2
+  fi
+}
+
+stack_clear_stale_exposure_state() {
+  local force=0 root state pids_file pid
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=1 ;;
+    esac
+    shift
+  done
+  root="$(stack_root)"
+  state="$root/.exposure.state"
+  pids_file="$root/.exposure.pids"
+  if (( force )); then
+    rm -f "$state" "$pids_file"
+    return 0
+  fi
+  if [[ -f "$state" ]]; then
+    pid="$(grep -E '"pid"' "$state" 2>/dev/null | grep -Eo '[0-9]+' | head -1 || true)"
+    if [[ -z "$pid" ]] || ! stack_pid_alive "$pid"; then
+      rm -f "$state"
+    fi
+  fi
+  if [[ -f "$pids_file" ]]; then
+    pid="$(tr -d '[:space:]' <"$pids_file" 2>/dev/null | grep -Eo '[0-9]+' | head -1 || true)"
+    if [[ -z "$pid" ]] || ! stack_pid_alive "$pid"; then
+      rm -f "$pids_file"
+    fi
   fi
 }
 
