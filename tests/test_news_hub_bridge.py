@@ -96,6 +96,7 @@ def test_ingest_reports_pipeline_paused_without_minimax(hub_tmp, monkeypatch):
     monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(staging_store, "is_entity_pipeline_enabled", lambda: True)
     monkeypatch.setattr(staging_store, "minimax_configured", lambda: False)
+    monkeypatch.setattr(staging_store, "rule_fallback_distillation_enabled", lambda: False)
 
     stats = ingest_rows_to_hub(
         [
@@ -158,6 +159,15 @@ def test_query_verified_news_reads_events_ssot(hub_tmp, monkeypatch):
     titles = {str(r.get("title") or "") for r in rows}
     assert "Distilled FII story" in titles
     assert "Pending staging headline" in titles
+
+
+def test_legacy_ingest_flag(monkeypatch):
+    from trade_integrations.hub_storage import news_staging_store as staging_store
+
+    monkeypatch.delenv("HUB_NEWS_LEGACY_INGEST", raising=False)
+    assert staging_store.is_legacy_ingest_enabled() is False
+    monkeypatch.setenv("HUB_NEWS_LEGACY_INGEST", "1")
+    assert staging_store.is_legacy_ingest_enabled() is True
 
 
 @pytest.fixture

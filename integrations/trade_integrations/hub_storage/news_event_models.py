@@ -157,6 +157,12 @@ class DistilledNewsEvent:
     title: str
     content: str
     publish_day: str = ""
+    parent_event_id: str | None = None
+    event_kind: str = "macro"
+    scope: str = "index"
+    provenance: str = "live"
+    market_impact_status: str = "unverified"
+    distillation_mode: str = "minimax"
     timeline: list[TimelineEntry] = field(default_factory=list)
     references: list[NewsReference] = field(default_factory=list)
     consensus: EventConsensus = field(default_factory=EventConsensus)
@@ -179,6 +185,12 @@ class DistilledNewsEvent:
             "title": self.title,
             "content": self.content,
             "publish_day": self.publish_day,
+            "parent_event_id": self.parent_event_id,
+            "event_kind": self.event_kind,
+            "scope": self.scope,
+            "provenance": self.provenance,
+            "market_impact_status": self.market_impact_status,
+            "distillation_mode": self.distillation_mode,
             "timeline": [entry.to_dict() for entry in self.timeline],
             "references": [ref.to_dict() for ref in self.references],
             "consensus": self.consensus.to_dict(),
@@ -205,6 +217,12 @@ class DistilledNewsEvent:
             title=str(data.get("title") or ""),
             content=str(data.get("content") or ""),
             publish_day=str(data.get("publish_day") or ""),
+            parent_event_id=str(data.get("parent_event_id") or "") or None,
+            event_kind=str(data.get("event_kind") or "macro"),
+            scope=str(data.get("scope") or "index"),
+            provenance=str(data.get("provenance") or "live"),
+            market_impact_status=str(data.get("market_impact_status") or "unverified"),
+            distillation_mode=str(data.get("distillation_mode") or "minimax"),
             timeline=timeline,
             references=references,
             consensus=EventConsensus.from_dict(data.get("consensus")),

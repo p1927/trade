@@ -43,6 +43,8 @@ __all__ = [
     "tag_inventory",
     "process_staging_batch",
     "staging_queue_stats",
+    "hub_news_pipeline_status",
+    "run_hub_news_ingest",
     "get_distilled_event",
     "distillation_queue_stats",
 ]
@@ -186,6 +188,41 @@ def staging_queue_stats(*, ticker: str = "NIFTY") -> dict[str, int]:
     from trade_integrations.hub_storage.news_staging_store import staging_queue_stats as _fn
 
     return _fn(ticker=ticker)
+
+
+def hub_news_pipeline_status(*, ticker: str = "NIFTY") -> dict[str, Any]:
+    """Staging + distillation + SSOT migration + LLM-Wiki connectivity."""
+    from trade_integrations.dataflows.news_hub_bridge._pipeline_status import (
+        hub_news_pipeline_status as _fn,
+    )
+
+    return _fn(ticker=ticker)
+
+
+def run_hub_news_ingest(
+    *,
+    ticker: str = "NIFTY",
+    sources: str | list[str] | None = "all",
+    mode: str | None = None,
+    lookback_days: int | None = None,
+    rss_limit_per_feed: int = 10,
+    watcher_since_hours: int = 6,
+    watcher_tickers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Unified scheduled ingest from RSS, SearXNG, Moneycontrol, and watcher."""
+    from trade_integrations.dataflows.index_research.hub_news_ingest import (
+        run_hub_news_ingest as _fn,
+    )
+
+    return _fn(
+        ticker=ticker,
+        sources=sources,
+        mode=mode,
+        lookback_days=lookback_days,
+        rss_limit_per_feed=rss_limit_per_feed,
+        watcher_since_hours=watcher_since_hours,
+        watcher_tickers=watcher_tickers,
+    )
 
 
 def resolve_news_impact(

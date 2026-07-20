@@ -20,6 +20,13 @@ from trade_integrations.dataflows.index_research.news_distillation import (
     strip_minimax_thinking,
 )
 from trade_integrations.dataflows.index_research.news_event_matching import find_matching_event
+from trade_integrations.dataflows.index_research.news_parent_events import (
+    event_parent_id,
+    infer_event_kind,
+    infer_parent_event_id,
+    infer_provenance,
+    infer_scope,
+)
 from trade_integrations.dataflows.index_research.news_tags import build_article_tags
 from trade_integrations.hub_storage.news_staging_store import (
     is_entity_pipeline_enabled,
@@ -125,9 +132,24 @@ def _list_match_candidates(
     *,
     ticker: str,
     publish_day: str | None,
+    parent_event_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load distilled events for staging match."""
     sym = ticker.strip().upper()
+    if parent_event_id:
+        events = list_events(
+            ticker=sym,
+            since=None,
+            publish_day=None,
+            limit=120,
+            include_rejected=False,
+        )
+        return [
+            distilled_event_to_headline_dict(event)
+            for event in events
+            if event_parent_id(event) == parent_event_id
+            or not event_parent_id(event)
+        ]
     return [
         distilled_event_to_headline_dict(event)
         for event in list_events(
@@ -197,12 +219,45 @@ def process_staging_ref(
     ticker: str | None = None,
 ) -> dict[str, Any]:
     """Match ref to hub event, distill, verify, and upsert."""
+    from trade_integrations.dataflows.index_research.news_claim_extraction import enrich_ref_with_claims
     from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headline_rows
 
+    ref = enrich_ref_with_claims(ref)
     sym = (ticker or ref.get("ticker") or "NIFTY").strip().upper()
+
+    from trade_integrations.dataflows.index_research.news_relevance import (
+        assess_ref_relevance,
+        relevance_min_confidence,
+    )
+    from trade_integrations.hub_storage.news_staging_store import mark_ref_discarded
+
+    verdict = assess_ref_relevance(ref, ticker=sym)
+    if not verdict.relevant and verdict.confidence >= relevance_min_confidence():
+        mark_ref_discarded(
+            str(ref.get("ref_id") or ""),
+            reason=verdict.reason or "irrelevant",
+            relevance=verdict.to_dict(),
+            restore_payload=dict(ref),
+            source_kind="auto_gate",
+        )
+        return {
+            "action": "discard_irrelevant",
+            "reason": verdict.reason,
+            "confidence": verdict.confidence,
+        }
+
     publish_day = publish_day_from_value(str(ref.get("published_at") or ""))
 
-    candidates = _list_match_candidates(ticker=sym, publish_day=publish_day or None)
+    ref_tags = ref.get("tags") if isinstance(ref.get("tags"), dict) else {}
+    parent_id = infer_parent_event_id(ref, tags=ref_tags)
+    if parent_id:
+        ref["parent_event_id"] = parent_id
+
+    candidates = _list_match_candidates(
+        ticker=sym,
+        publish_day=publish_day or None,
+        parent_event_id=parent_id,
+    )
     matched = find_matching_event(ref, candidates, ticker=sym)
     event_id = str(matched.get("canonical_story_id") or "") if matched else ""
 
@@ -246,7 +301,31 @@ def process_staging_ref(
             reason="staging_update",
         )
     mark_ref_merged(ref["ref_id"], event_id)
-    return {"action": action, "event_id": event_id, "stats": stats}
+    wiki_result: dict[str, Any] | None = None
+    try:
+        from trade_integrations.dataflows.hub_wiki.compile import compile_event_to_wiki, wiki_compile_enabled
+
+        if wiki_compile_enabled():
+            meta = (row.get("structured_summary") or {}).get("event_meta") or {}
+            lookup_id = str(meta.get("event_id") or event_id)
+            stored = get_event(lookup_id) or get_event(event_id)
+            payload = stored or {
+                "event_id": lookup_id,
+                "ticker": sym,
+                "title": row.get("title"),
+                "content": row.get("summary") or distilled.get("content"),
+                "publish_day": publish_day,
+                "structured_summary": row.get("structured_summary"),
+                "verification_status": "pending",
+            }
+            wiki_result = compile_event_to_wiki(payload, rescan=True)
+    except Exception as exc:
+        logger.debug("llm-wiki compile skipped for %s: %s", event_id, exc)
+
+    out = {"action": action, "event_id": event_id, "stats": stats}
+    if wiki_result:
+        out["wiki_compile"] = wiki_result
+    return out
 
 
 def process_staging_batch(
@@ -278,12 +357,23 @@ def process_staging_batch(
     require_minimax_for_distillation()
 
     pending = list_pending_refs(ticker=ticker, limit=limit)
+    cluster_stats: dict[str, int] = {}
+    try:
+        from trade_integrations.dataflows.index_research.news_embedding_cluster import (
+            dedupe_pending_by_cluster,
+        )
+
+        pending, cluster_stats = dedupe_pending_by_cluster(pending, ticker=ticker)
+    except Exception as exc:
+        logger.debug("tier-2 cluster dedupe skipped: %s", exc)
+
     summary: dict[str, Any] = {
         "processed": 0,
         "created": 0,
         "updated": 0,
         "skipped": 0,
         "errors": 0,
+        "cluster_dedup": cluster_stats,
     }
     for ref in pending:
         try:
@@ -366,12 +456,19 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
     repair = repair_leaked_distilled_summaries(ticker=ticker)
     backfill = backfill_distilled_event_metadata(ticker=ticker)
     compact_events = compact_distilled_events(ticker=ticker, lookback_days=lookback)
+    from trade_integrations.dataflows.index_research.news_cleanup import cleanup_hub_news
+    from trade_integrations.dataflows.index_research.news_rollup import rollup_parent_topic_events
+
+    cleanup = cleanup_hub_news(ticker=ticker)
+    rollup = rollup_parent_topic_events(ticker=ticker, lookback_days=7)
     return {
         "migration": migration,
         "staging": staging,
         "repair": repair,
         "backfill": backfill,
         "compact_events": compact_events,
+        "cleanup": cleanup,
+        "rollup": rollup,
     }
 
 

@@ -44,6 +44,7 @@ def _reference_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "raw_summary": str(row.get("summary") or "")[:600],
         "published_at": str(row.get("published_at") or ""),
         "fetched_at": _now_iso(),
+        "extracted_claims": list(row.get("extracted_claims") or []),
     }
 
 
@@ -220,23 +221,81 @@ def _keyword_fallback(refs: list[dict[str, Any]]) -> dict[str, str]:
     return {"title": title[:300], "content": content[:2000]}
 
 
+def _rule_fallback_distill(
+    *,
+    refs: list[dict[str, Any]],
+    previous: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Deterministic distillation when MiniMax is unavailable."""
+    from trade_integrations.dataflows.index_research.news_claim_extraction import extract_claims
+
+    normalized = [_reference_from_row(r) for r in refs if r.get("title") or r.get("summary")]
+    base = _keyword_fallback(normalized)
+    claim_lines: list[str] = []
+    for ref in normalized[-6:]:
+        for claim in extract_claims(
+            str(ref.get("raw_title") or ref.get("title") or ""),
+            str(ref.get("raw_summary") or ref.get("summary") or ""),
+        ):
+            kind = claim.get("kind")
+            value = claim.get("value")
+            status = claim.get("status") or "claimed"
+            claim_lines.append(f"- [{status}] {kind}: {value}")
+
+    facts = base.get("content") or ""
+    if claim_lines:
+        facts = "Facts (claimed):\n" + "\n".join(claim_lines[:12])
+    impact = "Impact (claimed): Market reaction not yet verified against factor panel."
+    if previous:
+        prev = strip_minimax_thinking(str(previous.get("content_summary") or previous.get("content") or ""))
+        if prev:
+            facts = f"{facts}\n\nPrior narrative:\n{prev[:800]}"
+    content = f"{facts}\n\n{impact}"[:2000]
+    title = base.get("title") or str((previous or {}).get("title") or "Market update")[:300]
+    return {"title": title, "content": content, "distillation_mode": "rule_fallback"}
+
+
 def distill_event(
     *,
     refs: list[dict[str, Any]],
     previous: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build distilled title, content, timeline entry, and references list."""
+    from trade_integrations.hub_storage.news_staging_store import minimax_configured, rule_fallback_distillation_enabled
+
     normalized_refs = [_reference_from_row(r) for r in refs if r.get("title") or r.get("summary")]
+    for ref in normalized_refs:
+        from trade_integrations.dataflows.index_research.news_claim_extraction import extract_claims
+
+        if not ref.get("extracted_claims"):
+            ref["extracted_claims"] = extract_claims(
+                str(ref.get("raw_title") or ref.get("title") or ""),
+                str(ref.get("raw_summary") or ref.get("summary") or ""),
+            )
+
     prev_title = str((previous or {}).get("title") or "")
     prev_content = strip_minimax_thinking(
         str((previous or {}).get("content_summary") or (previous or {}).get("content") or "")
     )
 
-    llm_out = _llm_distill(
-        previous_title=prev_title,
-        previous_content=prev_content,
-        refs=normalized_refs,
-    )
+    distilled_by = "minimax"
+    if minimax_configured():
+        try:
+            llm_out = _llm_distill(
+                previous_title=prev_title,
+                previous_content=prev_content,
+                refs=normalized_refs,
+            )
+        except Exception as exc:
+            logger.warning("MiniMax distillation failed, using rule fallback: %s", exc)
+            llm_out = _rule_fallback_distill(refs=normalized_refs, previous=previous)
+            distilled_by = "rule_fallback"
+    elif rule_fallback_distillation_enabled():
+        llm_out = _rule_fallback_distill(refs=normalized_refs, previous=previous)
+        distilled_by = "rule_fallback"
+    else:
+        raise RuntimeError("MiniMax not configured and rule-fallback distillation is disabled")
+
     title = llm_out.get("title") or ""
     content = llm_out.get("content") or ""
     if is_distillation_leak(title) or is_distillation_leak(content):
@@ -252,9 +311,20 @@ def distill_event(
     pub = str(latest_ref.get("publisher") or "unknown")
     raw_title = str(latest_ref.get("raw_title") or "")
     latest_url = str(latest_ref.get("url") or "")
+    from trade_integrations.dataflows.index_research.news_parent_events import (
+        infer_event_kind,
+        infer_parent_event_id,
+        infer_provenance,
+        infer_scope,
+    )
+
+    parent_id = infer_parent_event_id(latest_ref if latest_ref else {})
+    timeline_kind = "created" if not previous else "update"
+    if parent_id and previous:
+        timeline_kind = "update"
     timeline_entry = {
         "at": _now_iso(),
-        "kind": "created" if not previous else "update",
+        "kind": timeline_kind,
         "publisher": pub,
         "raw_title": raw_title[:180],
         "summary": f"Source {pub}: {raw_title[:180]}",
@@ -279,7 +349,13 @@ def distill_event(
     event_meta = {
         "event_id": event_id,
         "distilled": True,
-        "distilled_by": "minimax",
+        "distilled_by": distilled_by,
+        "distillation_mode": distilled_by,
+        "parent_event_id": parent_id,
+        "event_kind": infer_event_kind(latest_ref if latest_ref else {}),
+        "scope": infer_scope(latest_ref if latest_ref else {}),
+        "provenance": infer_provenance(latest_ref if latest_ref else {}),
+        "market_impact_status": "claimed" if distilled_by == "rule_fallback" else "unverified",
         "references": normalized_refs,
         "timeline": [timeline_entry],
         "ref_count": len(normalized_refs),

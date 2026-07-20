@@ -15,6 +15,10 @@ from trade_integrations.dataflows.index_research.news_dedup import (
     publish_day_from_value,
     semantic_cluster_key,
 )
+from trade_integrations.dataflows.index_research.news_parent_events import (
+    event_parent_id,
+    infer_parent_event_id,
+)
 from trade_integrations.dataflows.index_research.news_tags import tags_from_dict
 
 _BULLISH = frozenset({"rally", "recovery", "record_high"})
@@ -166,13 +170,16 @@ def find_matching_event(
     ref_bucket = event_bucket_key(ref, ticker=ticker)
     ref_title = str(ref.get("title") or "")
     ref_symbols = _specific_symbols(ref_tags, ref_title)
+    ref_parent = infer_parent_event_id(ref, tags=ref_tags)
 
     best: dict[str, Any] | None = None
     best_score = 0.0
 
     for event in events:
         event_day = publish_day_from_value(str(event.get("published_at") or ""))
-        if ref_day and event_day and ref_day != event_day:
+        event_parent = event_parent_id(event)
+        same_parent_thread = bool(ref_parent and event_parent and ref_parent == event_parent)
+        if ref_day and event_day and ref_day != event_day and not same_parent_thread:
             continue
 
         event_tags = tags_from_dict(event.get("tags")).to_dict()
@@ -207,6 +214,8 @@ def find_matching_event(
         }
         event_bucket = event_bucket_key(event_row, ticker=ticker) if ref_bucket else ""
         bucket_match = bool(ref_bucket and event_bucket == ref_bucket)
+        if same_parent_thread and sim >= cut - 0.15:
+            sim = min(1.0, sim + 0.1)
         if bucket_match and sim >= cut - 0.1:
             sim = min(1.0, sim + 0.05)
             if title_sim < 0.20 and ref_symbols and event_symbols and not (ref_symbols & event_symbols):

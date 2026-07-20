@@ -150,6 +150,7 @@ def ingest_rows_to_hub(
         from trade_integrations.hub_storage.news_staging_store import (
             enqueue_raw_ref,
             is_entity_pipeline_enabled,
+            is_legacy_ingest_enabled,
             pipeline_pause_status,
         )
 
@@ -158,57 +159,57 @@ def ingest_rows_to_hub(
         if not merged:
             return {"ingested": 0, "cache_hits": 0, "verified": 0}
 
-        if is_entity_pipeline_enabled():
-            from trade_integrations.dataflows.index_research.news_entity_worker import (
-                process_staging_batch,
-                schedule_staging_processing,
+        if is_legacy_ingest_enabled() or not is_entity_pipeline_enabled():
+            return ingest_headline_rows(
+                merged,
+                ticker=hub_sym,
+                collection_day=collection_day,
             )
-            from trade_integrations.dataflows.index_research.news_tags import build_article_tags
 
-            pause = pipeline_pause_status(ticker=hub_sym)
-            queued = 0
-            for row in merged:
-                tagged = build_article_tags(
-                    str(row.get("title") or ""),
-                    str(row.get("summary") or ""),
-                    ticker=hub_sym,
-                    published_at=str(row.get("published_at") or ""),
-                ).to_dict()
-                row["tags"] = tagged
-                _, appended = enqueue_raw_ref(row, ticker=hub_sym)
-                if appended:
-                    queued += 1
-
-            pause = pipeline_pause_status(ticker=hub_sym)
-            sync_stats: dict[str, Any] = {}
-            distill_mode = "deferred"
-            if not pause.get("pipeline_paused"):
-                sync_limit = _sync_distill_limit()
-                if sync_limit > 0:
-                    sync_stats = process_staging_batch(ticker=hub_sym, limit=sync_limit)
-                    distill_mode = "sync"
-                schedule_staging_processing(ticker=hub_sym, limit=20)
-
-            pending = pause.get("pending") or {}
-            return {
-                "ingested": queued,
-                "queued": queued,
-                "cache_hits": 0,
-                "verified": int(sync_stats.get("processed") or 0),
-                "created": int(sync_stats.get("created") or 0),
-                "updated": int(sync_stats.get("updated") or 0),
-                "distill": distill_mode if not pause.get("pipeline_paused") else "paused",
-                "pipeline_paused": bool(pause.get("pipeline_paused")),
-                "pause_reason": str(pause.get("pause_reason") or ""),
-                "minimax_configured": bool(pause.get("minimax_configured")),
-                "pending_queued": int(pending.get("queued") or 0),
-            }
-
-        return ingest_headline_rows(
-            merged,
-            ticker=hub_sym,
-            collection_day=collection_day,
+        from trade_integrations.dataflows.index_research.news_entity_worker import (
+            process_staging_batch,
+            schedule_staging_processing,
         )
+        from trade_integrations.dataflows.index_research.news_tags import build_article_tags
+
+        pause = pipeline_pause_status(ticker=hub_sym)
+        queued = 0
+        for row in merged:
+            tagged = build_article_tags(
+                str(row.get("title") or ""),
+                str(row.get("summary") or ""),
+                ticker=hub_sym,
+                published_at=str(row.get("published_at") or ""),
+            ).to_dict()
+            row["tags"] = tagged
+            _, appended = enqueue_raw_ref(row, ticker=hub_sym)
+            if appended:
+                queued += 1
+
+        pause = pipeline_pause_status(ticker=hub_sym)
+        sync_stats: dict[str, Any] = {}
+        distill_mode = "deferred"
+        if not pause.get("pipeline_paused"):
+            sync_limit = _sync_distill_limit()
+            if sync_limit > 0:
+                sync_stats = process_staging_batch(ticker=hub_sym, limit=sync_limit)
+                distill_mode = "sync"
+            schedule_staging_processing(ticker=hub_sym, limit=20)
+
+        pending = pause.get("pending") or {}
+        return {
+            "ingested": queued,
+            "queued": queued,
+            "cache_hits": 0,
+            "verified": int(sync_stats.get("processed") or 0),
+            "created": int(sync_stats.get("created") or 0),
+            "updated": int(sync_stats.get("updated") or 0),
+            "distill": distill_mode if not pause.get("pipeline_paused") else "paused",
+            "pipeline_paused": bool(pause.get("pipeline_paused")),
+            "pause_reason": str(pause.get("pause_reason") or ""),
+            "minimax_configured": bool(pause.get("minimax_configured")),
+            "pending_queued": int(pending.get("queued") or 0),
+        }
     except Exception as exc:
         logger.warning("hub ingest failed for %s: %s", ticker, exc, exc_info=True)
         return {
@@ -239,7 +240,8 @@ def ingest_rss_entries(
     collection_day: str | None = None,
 ) -> dict[str, int]:
     rows = [rss_entry_to_hub_row(e, label=label, feed_url=feed_url) for e in entries if e.get("title")]
-    return ingest_rows_to_hub(rows, ticker=ticker, collection_day=collection_day)
+    hub_sym = hub_ticker_for_symbol(ticker)
+    return ingest_rows_to_hub(rows, ticker=hub_sym, collection_day=collection_day)
 
 
 def ingest_searxng_results(

@@ -68,6 +68,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _infer_market_impact_status(
+    *,
+    market_impact_status: str = "",
+    actual_impact: dict[str, Any] | None = None,
+    predicted_impact: dict[str, Any] | None = None,
+    structured_summary: dict[str, Any] | None = None,
+) -> str:
+    explicit = str(market_impact_status or "").strip()
+    if explicit:
+        return explicit
+    event_meta = ((structured_summary or {}).get("event_meta") or {})
+    if isinstance(event_meta, dict):
+        meta_status = str(event_meta.get("market_impact_status") or "").strip()
+        if meta_status:
+            return meta_status
+        if event_meta.get("distilled_by") == "rule_fallback":
+            return "claimed"
+    actual = actual_impact or {}
+    predicted = predicted_impact or {}
+    if isinstance(actual, dict) and actual.get("nifty_points") is not None:
+        return "observed"
+    if isinstance(predicted, dict) and predicted.get("nifty_points") is not None:
+        return "predicted"
+    return "unverified"
+
+
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, default=str) if value is not None else ""
 
@@ -161,6 +187,11 @@ def _row_to_event(row: Any) -> dict[str, Any]:
         updated_at=str(data.get("updated_at") or ""),
         published_at=str(data.get("published_at") or ""),
     )
+    event.market_impact_status = _infer_market_impact_status(
+        actual_impact=event.actual_impact,
+        predicted_impact=event.predicted_impact,
+        structured_summary=event.structured_summary,
+    )
     payload = event.to_dict()
     payload["verification"] = verification
     payload["verification_data_as_of"] = str(data.get("verification_data_as_of") or "")
@@ -196,6 +227,13 @@ def upsert_event(event: DistilledNewsEvent) -> None:
     event_id = str(event.event_id or "").strip()
     if not event_id:
         return
+
+    event.market_impact_status = _infer_market_impact_status(
+        market_impact_status=event.market_impact_status,
+        actual_impact=event.actual_impact,
+        predicted_impact=event.predicted_impact,
+        structured_summary=event.structured_summary,
+    )
 
     frame = _load_events_frame()
     incoming = _event_to_row(event)
@@ -248,6 +286,9 @@ def existing_event_ids(*, ticker: str | None = None) -> set[str]:
     return {str(v).strip() for v in frame["event_id"].astype(str) if str(v).strip()}
 
 
+_INACTIVE_EVENT_STATUSES = frozenset({"discarded", "rolled_up", "archived"})
+
+
 def list_events(
     *,
     ticker: str = "NIFTY",
@@ -265,6 +306,9 @@ def list_events(
     sym = ticker.strip().upper()
     if "ticker" in frame.columns:
         frame = frame[frame["ticker"].astype(str).str.upper() == sym]
+
+    if "status" in frame.columns:
+        frame = frame[~frame["status"].astype(str).isin(_INACTIVE_EVENT_STATUSES)]
 
     statuses: set[str] | None = None
     if status is None and not include_rejected:
@@ -386,6 +430,12 @@ def distilled_event_to_headline_dict(event: dict[str, Any]) -> dict[str, Any]:
     predicted = event.get("predicted_impact") or {}
     actual = event.get("actual_impact") or {}
     has_actual = bool((actual or {}).get("nifty_points") is not None)
+    market_impact_status = _infer_market_impact_status(
+        market_impact_status=str(event.get("market_impact_status") or ""),
+        actual_impact=actual if isinstance(actual, dict) else {},
+        predicted_impact=predicted if isinstance(predicted, dict) else {},
+        structured_summary=structured if isinstance(structured, dict) else {},
+    )
 
     return {
         "canonical_story_id": event_id,
@@ -415,6 +465,9 @@ def distilled_event_to_headline_dict(event: dict[str, Any]) -> dict[str, Any]:
         "url": first_url,
         "source": (sources[0].get("vendor") if sources and isinstance(sources[0], dict) else "") or "",
         "status": "reconciled" if has_actual else (event.get("status") or "live"),
+        "market_impact_status": market_impact_status,
+        "event_kind": event.get("event_kind") or "",
+        "parent_event_id": event.get("parent_event_id"),
         "timeline": event.get("timeline") or [],
         "references": event.get("references") or [],
         "consensus": event.get("consensus") or {},
@@ -506,6 +559,11 @@ def build_event_from_distilled_row(
     if not tags.get("publish_day") and publish_day:
         tags = {**tags, "publish_day": publish_day}
 
+    market_impact_status = _infer_market_impact_status(
+        market_impact_status=str(event_meta.get("market_impact_status") or ""),
+        structured_summary=dict(structured) if isinstance(structured, dict) else {},
+    )
+
     return DistilledNewsEvent(
         event_id=event_id,
         ticker=ticker,
@@ -520,6 +578,9 @@ def build_event_from_distilled_row(
         verification_status=verification_status,
         sources=list(row.get("sources") or []),
         published_at=str(row.get("published_at") or publish_day),
+        market_impact_status=market_impact_status,
+        event_kind=str(event_meta.get("event_kind") or "macro"),
+        parent_event_id=str(event_meta.get("parent_event_id") or "") or None,
     )
 
 

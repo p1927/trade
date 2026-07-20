@@ -58,37 +58,36 @@ def _predict_impact(
     horizon_days: int,
     primary_topic: str | None = None,
 ) -> dict[str, Any]:
-    shock_pct = 8.0
+    overlay_return_pct = 8.0
     if primary_topic:
         try:
             from trade_integrations.dataflows.index_research.news_shock_calibration import (
                 calibrated_shock_pct_for_topic,
             )
 
-            shock_pct = abs(calibrated_shock_pct_for_topic(primary_topic))
-            if shock_pct <= 0:
-                shock_pct = 8.0
+            calibrated = float(calibrated_shock_pct_for_topic(primary_topic))
+            if calibrated != 0.0:
+                overlay_return_pct = calibrated
         except Exception:
-            shock_pct = 8.0
+            overlay_return_pct = 8.0
     if spot <= 0 or not primary_factor:
-        return {"return_pct": 0.0, "nifty_points": 0.0, "model": "ridge_shock_v1"}
+        return {"return_pct": 0.0, "nifty_points": 0.0, "model": "calibrated_return_overlay_v1"}
     try:
         result = simulate_index_prediction(
             macro_factors=macro_factors,
             spot=spot,
             bottom_up_return_pct=0.0,
             horizon_days=horizon_days,
-            primary_factor=primary_factor,
-            primary_shock_pct=shock_pct,
-            cascade=True,
             india_vix=macro_factors.get("india_vix"),
         )
-        baseline = float(result.get("baseline_return_pct") or 0.0)
-        scenario = float(result.get("expected_return_pct") or 0.0)
-        delta = scenario - baseline
+        baseline = float(result.get("expected_return_pct") or 0.0)
+        delta = overlay_return_pct
+        scenario = baseline + delta
         return {
             "return_pct": round(delta, 4),
             "nifty_points": round(spot * delta / 100.0, 2),
+            "baseline_return_pct": round(baseline, 4),
+            "scenario_return_pct": round(scenario, 4),
             "factor_contributions": [
                 {
                     "factor": primary_factor,
@@ -96,10 +95,10 @@ def _predict_impact(
                     "nifty_points": round(spot * delta / 100.0, 2),
                 }
             ],
-            "model": "ridge_shock_v1",
+            "model": "calibrated_return_overlay_v1",
         }
     except Exception:
-        return {"return_pct": 0.0, "nifty_points": 0.0, "model": "ridge_shock_v1"}
+        return {"return_pct": 0.0, "nifty_points": 0.0, "model": "calibrated_return_overlay_v1"}
 
 
 def _build_timeline(spot: float, predicted_return_pct: float, horizon_days: int) -> list[dict[str, Any]]:

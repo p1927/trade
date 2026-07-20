@@ -123,6 +123,79 @@ def load_shock_calibration(ticker: str = "NIFTY") -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def build_shock_calibration_from_history(*, ticker: str = "NIFTY", horizon_days: int = 14) -> dict[str, Any]:
+    """Build topic shock table from curated major events + realized Nifty forward returns."""
+    from trade_integrations.dataflows.index_research.history_panel import build_history_panel
+    from trade_integrations.dataflows.index_research.sources.major_events_calendar import load_major_events_calendar
+
+    panel = build_history_panel(start="2006-01-01")
+    events = load_major_events_calendar()
+    if panel.empty or events.empty or "close" not in panel.columns:
+        return build_shock_calibration(ticker=ticker)
+
+    closes = panel.set_index("date")["close"].astype(float)
+    buckets: dict[str, list[float]] = {}
+
+    for _, event in events.iterrows():
+        day = str(event["date"])[:10]
+        topic = str(event.get("topic") or "index_sentiment")
+        if day not in closes.index:
+            continue
+        idx = closes.index.get_loc(day)
+        if isinstance(idx, slice):
+            idx = idx.start or 0
+        forward_idx = int(idx) + horizon_days
+        if forward_idx >= len(closes):
+            continue
+        spot = float(closes.iloc[int(idx)])
+        fwd = float(closes.iloc[forward_idx])
+        if spot <= 0:
+            continue
+        ret_pct = (fwd - spot) / spot * 100.0
+        buckets.setdefault(topic, []).append(ret_pct)
+
+    verified = build_shock_calibration(ticker=ticker)
+    topics: dict[str, Any] = dict(verified.get("topics") or {})
+
+    for topic, returns in buckets.items():
+        if len(returns) < 2:
+            continue
+        n = len(returns)
+        shrink = min(1.0, n / _SHRINK_CAP_N)
+        median_error = statistics.median(returns)
+        existing = topics.get(topic) or {}
+        sample_count = int(existing.get("sample_count") or 0) + n
+        merged_shrink = min(1.0, sample_count / _SHRINK_CAP_N)
+        topics[topic] = {
+            "sample_count": sample_count,
+            "shrink_weight": round(merged_shrink, 3),
+            "median_actual_return_pct": round(statistics.median(returns), 4),
+            "median_predicted_return_pct": round(float(existing.get("median_predicted_return_pct") or 0.0), 4),
+            "median_calibration_error": round(median_error, 4),
+            "calibrated_shock_pct": round(merged_shrink * median_error, 4),
+            "overlay_eligible": sample_count >= _MIN_SAMPLE,
+            "source": "major_events_history",
+        }
+
+    report = {
+        "status": "ok",
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "ticker": ticker,
+        "reconciled_total": sum(t.get("sample_count", 0) for t in topics.values()),
+        "topics": topics,
+        "default_shock_pct": _DEFAULT_SHOCK_PCT,
+        "min_sample": _MIN_SAMPLE,
+        "history_horizon_days": horizon_days,
+    }
+    return report
+
+
+def update_shock_calibration_from_history(*, ticker: str = "NIFTY", horizon_days: int = 14) -> dict[str, Any]:
+    report = build_shock_calibration_from_history(ticker=ticker, horizon_days=horizon_days)
+    save_shock_calibration(report, ticker=ticker)
+    return report
+
+
 def update_shock_calibration(*, ticker: str = "NIFTY") -> dict[str, Any]:
     report = build_shock_calibration(ticker=ticker)
     save_shock_calibration(report, ticker=ticker)

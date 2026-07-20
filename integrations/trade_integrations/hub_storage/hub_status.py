@@ -67,9 +67,30 @@ def _normalize_news_item_for_hub(row: dict[str, Any]) -> dict[str, Any]:
         ]
 
     ref_count = int(event_meta.get("ref_count") or len(references) or len(sources) or 1)
+    consensus = row.get("consensus") if isinstance(row.get("consensus"), dict) else event_meta.get("consensus")
+    timeline = row.get("timeline") if isinstance(row.get("timeline"), list) else event_meta.get("timeline")
+    event_id = str(row.get("event_id") or event_meta.get("event_id") or row.get("canonical_story_id") or row.get("id") or "")
+    market_impact_status = str(
+        row.get("market_impact_status")
+        or event_meta.get("market_impact_status")
+        or ""
+    ).strip()
+    if not market_impact_status:
+        actual = row.get("actual_impact") or row.get("actual") or {}
+        predicted = row.get("predicted_impact") or row.get("predicted") or {}
+        if isinstance(actual, dict) and actual.get("nifty_points") is not None:
+            market_impact_status = "observed"
+        elif isinstance(predicted, dict) and predicted.get("nifty_points") is not None:
+            market_impact_status = "predicted"
+        elif event_meta.get("distilled_by") == "rule_fallback":
+            market_impact_status = "claimed"
+        else:
+            market_impact_status = "unverified"
+
     return {
         "id": str(row.get("canonical_story_id") or row.get("id") or row.get("ref_id") or ""),
         "ref_id": str(row.get("ref_id") or row.get("id") or ""),
+        "event_id": event_id,
         "title": str(row.get("title") or "")[:220],
         "summary": str(row.get("content_summary") or row.get("summary") or "")[:600],
         "url": url,
@@ -81,9 +102,16 @@ def _normalize_news_item_for_hub(row: dict[str, Any]) -> dict[str, Any]:
         "verification_status": str(
             row.get("verification_status") or ("pending" if provenance == "staging" else "")
         ),
+        "market_impact_status": market_impact_status,
+        "event_kind": str(row.get("event_kind") or event_meta.get("event_kind") or ""),
+        "parent_event_id": str(row.get("parent_event_id") or event_meta.get("parent_event_id") or "") or None,
         "sources": sources[:12],
         "references": references[:20],
         "ref_count": ref_count,
+        "timeline": [t for t in (timeline or []) if isinstance(t, dict)][:30],
+        "consensus": consensus if isinstance(consensus, dict) else {},
+        "predicted_impact": row.get("predicted_impact") or row.get("predicted") or {},
+        "actual_impact": row.get("actual_impact") or row.get("actual") or {},
         "tags": row.get("tags") if isinstance(row.get("tags"), dict) else {},
     }
 
@@ -136,13 +164,38 @@ def _recent_news_inventory(*, ticker: str, limit: int = 40) -> dict[str, Any]:
     items = staging_queue[:staging_cap] + distilled_items[: max(0, limit - staging_cap)]
 
     staging_in_union = sum(1 for item in items if item.get("provenance") == "staging")
+
+    from trade_integrations.dataflows.index_research.news_discard import list_discarded
+
+    discarded_raw = list_discarded(ticker=sym, limit=50)
+    discarded_items = [
+        {
+            "discard_id": row.get("discard_id"),
+            "id": row.get("discard_id"),
+            "ref_id": row.get("ref_id"),
+            "event_id": row.get("event_id"),
+            "title": row.get("title"),
+            "url": row.get("url"),
+            "reason": row.get("reason"),
+            "source_kind": row.get("source_kind"),
+            "discarded_at": row.get("discarded_at"),
+            "expires_at": row.get("expires_at"),
+            "provenance": "discarded",
+            "ticker": row.get("ticker"),
+            "relevance": row.get("relevance") or {},
+        }
+        for row in discarded_raw
+    ]
+
     return {
         "pending_count": int(pending_stats.get("queued") or 0),
         "union_count": len(items),
         "staging_in_union": staging_in_union,
         "distilled_in_union": max(0, len(items) - staging_in_union),
+        "discarded_count": len(discarded_items),
         "items": items,
         "staging_queue": staging_queue,
+        "discarded_items": discarded_items,
     }
 
 
@@ -241,6 +294,7 @@ def _hub_paths() -> dict[str, str]:
         "news_verified_records_archived": _hub_relative(
             hub / "_data" / "news_verified" / "records.parquet"
         ),
+        "llm_wiki_project": _hub_relative(hub / "llm-wiki"),
         "index_research_latest": _hub_relative(hub / "NIFTY" / "index_research" / "latest.json"),
         "capture_registry": _hub_relative(hub / "_data" / "capture_registry.json"),
         "worker_last": _hub_relative(hub / "_data" / "news_staging" / "worker_last.json"),
@@ -275,6 +329,14 @@ def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
             sample_tickers.append(symbol)
 
     pause = pipeline_pause_status(ticker=sym)
+    pipeline_status: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import hub_news_pipeline_status
+
+        pipeline_status = hub_news_pipeline_status(ticker=sym)
+    except Exception as exc:
+        pipeline_status = {"error": str(exc)}
+
     migration_state: dict[str, Any] = {}
     try:
         from trade_integrations.hub_storage.news_migrations import (
@@ -305,6 +367,7 @@ def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
         },
         "news_inventory": _recent_news_inventory(ticker=sym, limit=50),
         "news_events_migration": migration_state,
+        "news_pipeline": pipeline_status,
         "verified_news": _verified_breakdown(sample_tickers),
         "index_research": _index_research_summary(sym),
         "constituent_cache": _constituent_cache_stats(),

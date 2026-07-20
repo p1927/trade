@@ -2,24 +2,34 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 
 import pandas as pd
 
+logger = logging.getLogger(__name__)
+
 
 def read_dataframe(path: Path) -> pd.DataFrame:
+    parquet_exc: Exception | None = None
     if path.is_file():
         try:
             return pd.read_parquet(path)
-        except Exception:
-            pass
+        except Exception as exc:
+            parquet_exc = exc
+            logger.warning("Failed to read parquet %s: %s", path, exc)
     csv_path = path.with_suffix(".csv")
     if csv_path.is_file():
         try:
             return pd.read_csv(csv_path)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to read CSV fallback %s: %s", csv_path, exc)
+            if parquet_exc is not None:
+                raise parquet_exc from exc
             return pd.DataFrame()
+    if parquet_exc is not None:
+        raise parquet_exc
     return pd.DataFrame()
 
 

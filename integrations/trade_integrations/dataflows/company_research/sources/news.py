@@ -122,6 +122,13 @@ def fetch_news(
 
         status = stage_status_from_attempts(attempts, has_output=bool(blocks))
         combined_md = blocks[0]["markdown"] if blocks else ""
+        hub_meta: dict[str, Any] = {}
+        try:
+            from trade_integrations.dataflows.index_research.hub_news_ingest import hub_ingest_snapshot
+
+            hub_meta = hub_ingest_snapshot(ticker=normalized.base_symbol)
+        except Exception:
+            hub_meta = {}
         return StageResult(
             stage="news",
             status=status if blocks else "skipped",
@@ -132,6 +139,7 @@ def fetch_news(
                 "markdown": combined_md,
                 "headline_count": sum(len(b.get("headlines") or []) for b in blocks),
                 "batch_mode": "nifty50",
+                "hub_ingest": hub_meta,
                 "source_attempts": [a.to_dict() for a in attempts],
             },
         )
@@ -196,14 +204,21 @@ def fetch_news(
     )
 
     # Aggregator path already ingests via news_hub_bridge; record stage metadata.
+    hub_meta: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.index_research.hub_news_ingest import hub_ingest_snapshot
+
+        hub_meta = hub_ingest_snapshot(ticker=normalized.base_symbol)
+    except Exception:
+        hub_meta = {}
     try:
         from trade_integrations.dataflows.news_hub_bridge import query_verified_news
 
         hub_sym = normalized.base_symbol
         recent = query_verified_news(ticker=hub_sym, limit=5)
-        hub_count = len(recent)
+        hub_meta["verified_recent"] = len(recent)
     except Exception:
-        hub_count = 0
+        hub_meta.setdefault("verified_recent", 0)
 
     return StageResult(
         stage="news",
@@ -214,7 +229,8 @@ def fetch_news(
             "blocks": blocks,
             "markdown": combined_md,
             "headline_count": sum(len(b.get("headlines") or []) for b in blocks),
-            "hub_verified_recent": hub_count,
+            "hub_ingest": hub_meta,
+            "hub_verified_recent": int(hub_meta.get("verified_recent") or 0),
             "source_attempts": [a.to_dict() for a in attempts],
         },
     )
