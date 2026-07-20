@@ -8,6 +8,26 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_constituents_state():
+    from trade_integrations.dataflows import source_availability as sa
+    from trade_integrations.dataflows.index_research import constituents as c
+
+    c.clear_constituents_cache()
+    sa.clear_availability_cache()
+    yield
+    c.clear_constituents_cache()
+    sa.clear_availability_cache()
+
+
+def _write_local_nifty50_json(path, symbols: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"status": "ok", "symbols": symbols, "count": len(symbols)}),
+        encoding="utf-8",
+    )
+
+
 def _mock_nselib_frame() -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -33,6 +53,10 @@ def _mock_nselib_frame() -> pd.DataFrame:
 @pytest.mark.unit
 def test_load_from_cached_weights(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "trade_integrations.nse_browser.repository.repo_root",
+        lambda: tmp_path,
+    )
 
     weights_dir = tmp_path / "_data" / "index_factors" / "weights"
     weights_dir.mkdir(parents=True)
@@ -52,19 +76,9 @@ def test_load_from_cached_weights(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    def fake_nifty50_equity_list():
-        return _mock_nselib_frame()
-
-    class FakeCapitalMarket:
-        nifty50_equity_list = staticmethod(fake_nifty50_equity_list)
-
-    class FakeNselib:
-        capital_market = FakeCapitalMarket()
-
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "nselib",
-        FakeNselib(),
+    _write_local_nifty50_json(
+        tmp_path / "historic_data" / "ind_nifty50_constituents_current.json",
+        ["RELIANCE", "TCS", "HDFCBANK"],
     )
 
     from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
@@ -73,8 +87,8 @@ def test_load_from_cached_weights(tmp_path, monkeypatch):
     by_symbol = {row.symbol: row for row in rows}
 
     assert len(rows) == 3
-    assert by_symbol["RELIANCE"].name == "Reliance Industries Ltd."
-    assert by_symbol["RELIANCE"].sector == "Oil Gas & Consumable Fuels"
+    assert by_symbol["RELIANCE"].name == "RELIANCE"
+    assert by_symbol["RELIANCE"].sector == ""
     assert by_symbol["RELIANCE"].weight == pytest.approx(0.5)
     assert by_symbol["TCS"].weight == pytest.approx(0.3)
     assert by_symbol["HDFCBANK"].weight == pytest.approx(0.2)
@@ -84,6 +98,14 @@ def test_load_from_cached_weights(tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_yfinance_fallback_normalizes(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.constituents._fetch_local_nifty50_rows",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.constituents._fetch_niftyindices_rows",
+        lambda: [],
+    )
 
     def fake_nifty50_equity_list():
         return _mock_nselib_frame()
@@ -150,23 +172,48 @@ def test_load_from_local_json_when_nselib_unavailable(tmp_path, monkeypatch):
 
     from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 
-    local_json = tmp_path / "historic_data" / "ind_nifty50_constituents_current.json"
-    local_json.parent.mkdir(parents=True)
-    local_json.write_text(
-        json.dumps(
-            {
-                "status": "ok",
-                "symbols": ["RELIANCE", "TCS", "HDFCBANK"],
-                "count": 3,
-            }
-        ),
-        encoding="utf-8",
+    _write_local_nifty50_json(
+        tmp_path / "historic_data" / "ind_nifty50_constituents_current.json",
+        ["RELIANCE", "TCS", "HDFCBANK"],
     )
 
     rows = load_nifty50_constituents()
     assert len(rows) == 3
     assert {row.symbol for row in rows} == {"RELIANCE", "TCS", "HDFCBANK"}
     assert sum(row.weight for row in rows) == pytest.approx(1.0)
+
+
+@pytest.mark.unit
+def test_constituents_cached_across_calls(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+
+    call_count = {"n": 0}
+    mock_rows = [
+        {"symbol": "RELIANCE", "name": "Reliance", "sector": "", "source": "test"},
+        {"symbol": "TCS", "name": "TCS", "sector": "", "source": "test"},
+    ]
+
+    def counting_fetch(*, allow_nselib: bool = False):
+        call_count["n"] += 1
+        return mock_rows, "test"
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.constituents._fetch_nifty50_rows",
+        counting_fetch,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.constituents.fetch_nifty50_weights",
+        lambda: None,
+    )
+
+    from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
+
+    rows1 = load_nifty50_constituents()
+    rows2 = load_nifty50_constituents()
+
+    assert call_count["n"] == 1
+    assert len(rows1) == 2
+    assert len(rows2) == 2
 
 
 @pytest.mark.unit

@@ -162,21 +162,27 @@ def _dedupe_symbols(*groups: list[str]) -> list[str]:
     return out
 
 
+_SYMBOL_UNIVERSE_CACHE: dict[str, list[str]] = {}
+
+
 def resolve_symbol_universe(bundle: str = "nifty50") -> list[str]:
     """Return deduplicated symbols for a named bundle."""
     bundle = bundle.strip().lower()
+    cached = _SYMBOL_UNIVERSE_CACHE.get(bundle)
+    if cached is not None:
+        return cached
+
     indices = list(_INDEX_SYMBOLS)
+    result: list[str]
 
     if bundle in ("indices", "index", "indices_extended"):
-        return indices
-
-    if bundle in ("nifty50", "n50", "default"):
+        result = indices
+    elif bundle in ("nifty50", "n50", "default"):
         from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 
         equities = [row.symbol.strip().upper() for row in load_nifty50_constituents()]
-        return _dedupe_symbols(["NIFTY", "INDIAVIX", "BANKNIFTY"], equities)
-
-    if bundle in ("niftynext50", "next50"):
+        result = _dedupe_symbols(["NIFTY", "INDIAVIX", "BANKNIFTY"], equities)
+    elif bundle in ("niftynext50", "next50"):
         from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 
         n50 = {row.symbol.strip().upper() for row in load_nifty50_constituents()}
@@ -184,32 +190,35 @@ def resolve_symbol_universe(bundle: str = "nifty50") -> list[str]:
         if hub100:
             diff = [s for s in hub100 if s not in n50]
             if diff:
-                return diff
-        next50 = _nselib_equity_symbols("niftynext50_equity_list")
-        return next50
-
-    if bundle in ("nifty100", "n100"):
+                result = diff
+            else:
+                result = _nselib_equity_symbols("niftynext50_equity_list")
+        else:
+            result = _nselib_equity_symbols("niftynext50_equity_list")
+    elif bundle in ("nifty100", "n100"):
         hub100 = _hub_nifty100_symbols()
         if hub100:
-            return _dedupe_symbols(["NIFTY", "INDIAVIX", "BANKNIFTY"], hub100)
-        from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
+            result = _dedupe_symbols(["NIFTY", "INDIAVIX", "BANKNIFTY"], hub100)
+        else:
+            from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 
-        n50 = [row.symbol.strip().upper() for row in load_nifty50_constituents()]
-        next50 = _nselib_equity_symbols("niftynext50_equity_list")
-        return _dedupe_symbols(["NIFTY", "INDIAVIX", "BANKNIFTY"], n50, next50)
-
-    if bundle in ("niftymidcap150", "midcap150"):
-        return _nselib_equity_symbols("niftymidcap150_equity_list")
-
-    if bundle in ("all", "full"):
+            n50 = [row.symbol.strip().upper() for row in load_nifty50_constituents()]
+            next50 = _nselib_equity_symbols("niftynext50_equity_list")
+            result = _dedupe_symbols(["NIFTY", "INDIAVIX", "BANKNIFTY"], n50, next50)
+    elif bundle in ("niftymidcap150", "midcap150"):
+        result = _nselib_equity_symbols("niftymidcap150_equity_list")
+    elif bundle in ("all", "full"):
         from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 
         n50 = [row.symbol.strip().upper() for row in load_nifty50_constituents()]
         next50 = _nselib_equity_symbols("niftynext50_equity_list")
         mid150 = _nselib_equity_symbols("niftymidcap150_equity_list")
-        return _dedupe_symbols(indices, n50, next50, mid150)
+        result = _dedupe_symbols(indices, n50, next50, mid150)
+    else:
+        raise ValueError(f"unknown symbol bundle: {bundle}")
 
-    raise ValueError(f"unknown symbol bundle: {bundle}")
+    _SYMBOL_UNIVERSE_CACHE[bundle] = result
+    return result
 
 
 def _read_parquet(path: Path) -> pd.DataFrame:

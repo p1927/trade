@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,12 @@ from trade_integrations.dataflows.index_research.sources.weights_nse import (
 logger = logging.getLogger(__name__)
 
 _EQUAL_WEIGHT = 1.0 / 50.0
+_NSELIB_VENDOR = "nselib"
+_NSELIB_CAPABILITY = "nifty50_equity_list"
+_logged_tiers: set[str] = set()
+_ROWS_CACHE: dict[str, Any] | None = None
+_RESULT_CACHE: list[ConstituentRow] | None = None
+_RESULT_CACHE_AT: float = 0.0
 
 # Last-resort fallback when nselib and data/nse/historic_data are unavailable.
 _NIFTY50_HARDCODED: tuple[str, ...] = (
@@ -102,8 +110,30 @@ def _rows_from_symbols(symbols: list[str], *, source: str = "local") -> list[dic
     ]
 
 
+def _constituents_cache_ttl_sec() -> float:
+    raw = os.getenv("CONSTITUENTS_CACHE_TTL_SEC", "86400").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 86400.0
+
+
+def _log_source_tier(source_tier: str, count: int) -> None:
+    if source_tier in _logged_tiers:
+        return
+    _logged_tiers.add(source_tier)
+    labels = {
+        "local_historic_data": "local historic_data",
+        "niftyindices": "niftyindices CSV",
+        "nselib": "nselib",
+        "hardcoded": "hardcoded fallback",
+    }
+    label = labels.get(source_tier, source_tier)
+    logger.info("Nifty 50 constituents: using %s (%d symbols)", label, count)
+
+
 def _fetch_local_nifty50_rows() -> list[dict[str, str]]:
-    """Fallback when nselib is unavailable — repo JSON/CSV then hub curated cache."""
+    """Primary source — repo JSON/CSV then hub curated cache."""
     from trade_integrations.dataflows.external_financial_datasets.curated_ingest import hub_dir
     from trade_integrations.nse_browser.parsers.historic_data import (
         _LOCAL_NIFTY50_LIST_NAMES,
@@ -146,26 +176,52 @@ def nifty50_fallback_symbols() -> tuple[str, ...]:
     return _NIFTY50_HARDCODED
 
 
+def _fetch_niftyindices_rows() -> list[dict[str, str]]:
+    from trade_integrations.openalgo.bulk_history_persist import _fetch_niftyindices_symbols
+
+    symbols = _fetch_niftyindices_symbols(_NSELIB_CAPABILITY)
+    if symbols:
+        return _rows_from_symbols(symbols, source="niftyindices")
+    return []
+
+
 def _fetch_nselib_rows() -> list[dict[str, str]]:
+    from trade_integrations.dataflows import source_availability
+
+    if not source_availability.should_attempt(_NSELIB_VENDOR, _NSELIB_CAPABILITY):
+        return []
+
     try:
         from nselib import capital_market
-    except ImportError:
+    except ImportError as exc:
+        source_availability.record_failure(_NSELIB_VENDOR, _NSELIB_CAPABILITY, exc)
         logger.info("nselib not installed; cannot load Nifty 50 list")
         return []
 
     try:
         frame = capital_market.nifty50_equity_list()
     except Exception as exc:
+        source_availability.record_failure(_NSELIB_VENDOR, _NSELIB_CAPABILITY, exc)
         logger.info("nselib nifty50_equity_list failed: %s", exc)
         return []
 
     if frame is None or getattr(frame, "empty", True):
+        source_availability.record_failure(
+            _NSELIB_VENDOR,
+            _NSELIB_CAPABILITY,
+            "empty nifty50_equity_list frame",
+        )
         return []
 
     symbol_col = "Symbol" if "Symbol" in frame.columns else None
     name_col = "Company Name" if "Company Name" in frame.columns else None
     sector_col = "Industry" if "Industry" in frame.columns else None
     if not symbol_col:
+        source_availability.record_failure(
+            _NSELIB_VENDOR,
+            _NSELIB_CAPABILITY,
+            "missing Symbol column in nifty50_equity_list",
+        )
         return []
 
     rows: list[dict[str, str]] = []
@@ -178,8 +234,18 @@ def _fetch_nselib_rows() -> list[dict[str, str]]:
                 "symbol": symbol,
                 "name": str(row[name_col]).strip() if name_col else symbol,
                 "sector": str(row[sector_col]).strip() if sector_col else "",
+                "source": "nselib",
             }
         )
+    if not rows:
+        source_availability.record_failure(
+            _NSELIB_VENDOR,
+            _NSELIB_CAPABILITY,
+            "no symbols parsed from nifty50_equity_list",
+        )
+        return []
+
+    source_availability.record_success(_NSELIB_VENDOR, _NSELIB_CAPABILITY)
     return rows
 
 
@@ -187,22 +253,25 @@ def _fetch_hardcoded_nifty50_rows() -> list[dict[str, str]]:
     return _rows_from_symbols(list(_NIFTY50_HARDCODED), source="hardcoded")
 
 
-def _fetch_nifty50_rows() -> tuple[list[dict[str, str]], str]:
-    rows = _fetch_nselib_rows()
-    if rows:
-        return rows, "nselib"
+def _fetch_nifty50_rows(*, allow_nselib: bool = False) -> tuple[list[dict[str, str]], str]:
     rows = _fetch_local_nifty50_rows()
     if rows:
-        logger.warning(
-            "Nifty 50 constituents: nselib unavailable; using local historic_data (%d symbols)",
-            len(rows),
-        )
+        _log_source_tier("local_historic_data", len(rows))
         return rows, "local_historic_data"
+
+    rows = _fetch_niftyindices_rows()
+    if rows:
+        _log_source_tier("niftyindices", len(rows))
+        return rows, "niftyindices"
+
+    if allow_nselib:
+        rows = _fetch_nselib_rows()
+        if rows:
+            _log_source_tier("nselib", len(rows))
+            return rows, "nselib"
+
     rows = _fetch_hardcoded_nifty50_rows()
-    logger.warning(
-        "Nifty 50 constituents: nselib and local data unavailable; using hardcoded fallback (%d symbols)",
-        len(rows),
-    )
+    _log_source_tier("hardcoded", len(rows))
     return rows, "hardcoded"
 
 
@@ -271,13 +340,57 @@ def _merge_constituents(
     return merged
 
 
+def clear_constituents_cache() -> None:
+    """Reset in-process constituent caches (tests and force_refresh)."""
+    global _ROWS_CACHE, _RESULT_CACHE, _RESULT_CACHE_AT
+    _ROWS_CACHE = None
+    _RESULT_CACHE = None
+    _RESULT_CACHE_AT = 0.0
+    _logged_tiers.clear()
+
+
 def load_nifty50_constituents(*, force_refresh: bool = False) -> list[ConstituentRow]:
     """Load Nifty 50 constituents with normalized index weights."""
-    rows, _source_tier = _fetch_nifty50_rows()
+    global _ROWS_CACHE, _RESULT_CACHE, _RESULT_CACHE_AT
+
+    if force_refresh:
+        clear_constituents_cache()
+
+    now = time.monotonic()
+    ttl = _constituents_cache_ttl_sec()
+    if (
+        not force_refresh
+        and _RESULT_CACHE is not None
+        and now - _RESULT_CACHE_AT < ttl
+    ):
+        return list(_RESULT_CACHE)
+
+    rows: list[dict[str, str]] | None = None
+    if (
+        not force_refresh
+        and _ROWS_CACHE is not None
+        and now - float(_ROWS_CACHE.get("cached_at") or 0.0) < ttl
+    ):
+        cached_rows = _ROWS_CACHE.get("rows")
+        if isinstance(cached_rows, list) and cached_rows:
+            rows = cached_rows
+
+    if rows is None:
+        rows, source_tier = _fetch_nifty50_rows(allow_nselib=force_refresh)
+        if rows:
+            _ROWS_CACHE = {
+                "rows": rows,
+                "source_tier": source_tier,
+                "cached_at": now,
+            }
+
     if not rows:
         return []
 
     symbols = [row["symbol"] for row in rows]
     cache_path = get_weights_cache_path()
     weights, _source = _resolve_weights(symbols, force_refresh=force_refresh, cache_path=cache_path)
-    return _merge_constituents(rows, weights)
+    merged = _merge_constituents(rows, weights)
+    _RESULT_CACHE = merged
+    _RESULT_CACHE_AT = now
+    return list(merged)
