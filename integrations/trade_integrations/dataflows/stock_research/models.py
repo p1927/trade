@@ -17,6 +17,7 @@ class StockResearchDoc:
     as_of: datetime
     lookahead_days: int
     market: str = "IN"
+    execution_market: str = "IN"
     spot: float | None = None
     meta: dict[str, Any] = field(default_factory=dict)
     browse_summary: dict[str, Any] = field(default_factory=dict)

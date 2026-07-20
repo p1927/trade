@@ -48,6 +48,12 @@ def _sample_stock_doc() -> StockResearchDoc:
         },
         charges={"net_debit_credit": 2850, "round_trip_charges": 120},
         payoff={"max_profit": 500, "max_loss": 200, "samples": [{"spot": 2850, "pnl": 0}]},
+        payoff_over_time={
+            "samples": [
+                {"day": 0, "pnl": 0.0, "net_pnl": -120.0},
+                {"day": 14, "pnl": 500.0, "net_pnl": 380.0},
+            ]
+        },
     )
 
 
@@ -60,3 +66,5 @@ class TestStockWidgetPayload:
         assert widget["widget_id"].startswith("ts_RELIANCE_")
         assert "buy_dip" in widget["strategy_variants"]
         assert widget["strategy_variants"]["buy_dip"]["implementation_steps"][-1]["action"] == "execute_basket"
+        samples = widget.get("payoff_over_time", {}).get("samples") or []
+        assert len(samples) >= 2

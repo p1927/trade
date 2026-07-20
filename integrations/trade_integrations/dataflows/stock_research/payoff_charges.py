@@ -72,3 +72,45 @@ def build_stock_payoff(
         "net_max_profit": net_max_profit,
         "net_max_loss": net_max_loss,
     }
+
+
+def compute_stock_payoff_over_time(
+    entry: float,
+    quantity: int,
+    *,
+    horizon_days: int = 14,
+    target: float | None = None,
+    entry_charges: float = 0.0,
+    exit_charges: float = 0.0,
+) -> dict[str, Any]:
+    """Hold-horizon P&L samples (linear path to target; theta=0)."""
+    days = max(1, int(horizon_days))
+    samples: list[dict[str, Any]] = []
+    for day in range(days + 1):
+        if target is not None:
+            price = entry + (target - entry) * (day / days)
+        else:
+            price = entry
+        pnl = round((price - entry) * quantity, 2)
+        exit_cost = exit_charges if day == days else 0.0
+        net_pnl = round(pnl - entry_charges - exit_cost, 2)
+        samples.append(
+            {
+                "day": day,
+                "days_to_expiry": days - day,
+                "price": round(price, 2),
+                "pnl": pnl,
+                "net_pnl": net_pnl,
+            }
+        )
+    gross_max = max((s["pnl"] for s in samples), default=0.0)
+    gross_min = min((s["pnl"] for s in samples), default=0.0)
+    net_max = max((s["net_pnl"] for s in samples), default=0.0)
+    net_min = min((s["net_pnl"] for s in samples), default=0.0)
+    return {
+        "samples": samples,
+        "gross_max_profit": gross_max,
+        "gross_max_loss": gross_min,
+        "net_max_profit": net_max,
+        "net_max_loss": net_min,
+    }

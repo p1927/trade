@@ -13,7 +13,7 @@ from trade_integrations.dataflows.market_quotes import fetch_live_quote
 from .browse_summary import build_stock_browse_summary
 from .format import format_stock_report
 from .models import StockResearchDoc
-from .payoff_charges import build_stock_payoff, calculate_equity_charges
+from .payoff_charges import build_stock_payoff, calculate_equity_charges, compute_stock_payoff_over_time
 from .predictor import predict_stock
 from .strategy_ranker import build_stock_scenarios, rank_stock_strategies
 
@@ -39,6 +39,10 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
     """Build a stock trade plan from company research + live quote."""
     now = _stage_now()
     sym = ticker.strip().upper().replace(".NS", "").replace(".BO", "")
+
+    from trade_integrations.autonomous_agents.market import symbol_execution_market
+
+    execution_market = symbol_execution_market(sym)
 
     company = load_company_research_json(sym)
     if company is None:
@@ -104,7 +108,8 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
         ticker=sym,
         as_of=now,
         lookahead_days=lookahead_days,
-        market=payload.get("market") or "IN",
+        market=payload.get("market") or execution_market,
+        execution_market=execution_market,
         spot=spot or None,
         browse_summary=browse,
         events=list(events),
@@ -182,6 +187,15 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
             row["max_loss"] = row_payoff.get("max_loss")
             row["net_max_profit"] = row_payoff.get("net_max_profit")
             row["net_max_loss"] = row_payoff.get("net_max_loss")
+            target_for_horizon = target_px if target_px is not None else merged_prediction.get("target")
+            row["payoff_over_time"] = compute_stock_payoff_over_time(
+                spot,
+                int(row.get("quantity", 1)),
+                horizon_days=lookahead_days,
+                target=float(target_for_horizon) if target_for_horizon else None,
+                entry_charges=entry_charges,
+                exit_charges=exit_charges,
+            )
 
         top = ranked[0]
         is_hold = str(top.get("action", "BUY")).upper() == "HOLD"
@@ -234,6 +248,18 @@ def run_stock_research(ticker: str, *, lookahead_days: int = 14) -> StockResearc
             doc.payoff = top.get("payoff") or {}
             target_px = top.get("target") or merged_prediction.get("target")
             stop_px = top.get("stop") or merged_prediction.get("stop")
+            doc.payoff_over_time = top.get("payoff_over_time") or {}
+            if not doc.payoff_over_time.get("samples") and spot > 0:
+                entry_charges = float((doc.charges.get("total") or {}).get("total_charges") or 0)
+                exit_charges = float(doc.charges.get("exit_charges") or 0)
+                doc.payoff_over_time = compute_stock_payoff_over_time(
+                    spot,
+                    int(top.get("quantity", 1)),
+                    horizon_days=lookahead_days,
+                    target=float(target_px) if target_px else None,
+                    entry_charges=entry_charges,
+                    exit_charges=exit_charges,
+                )
             doc.recommended["max_profit"] = doc.payoff.get("max_profit")
             doc.recommended["max_loss"] = doc.payoff.get("max_loss")
             doc.recommended["net_max_profit"] = doc.payoff.get("net_max_profit")
