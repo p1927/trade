@@ -193,7 +193,12 @@ def search_json(
         if categories:
             params["categories"] = categories
         try:
-            resp = get(url, params=params, timeout=timeout)
+            resp = get(
+                url,
+                params=params,
+                timeout=timeout,
+                headers={"X-Real-IP": "127.0.0.1"},
+            )
             resp.raise_for_status()
         except RequestException as exc:
             source_availability.record_failure("searxng", "search", exc)

@@ -42,17 +42,23 @@ def _parse_pub_date(result: dict) -> datetime | None:
 
 
 def _search(query: str, limit: int) -> list[dict]:
-    try:
-        payload = search_json(query, categories="news", timeout=REQUEST_TIMEOUT)
-    except RequestException as exc:
-        logger.warning("SearXNG search failed for %r: %s", query, exc)
-        return []
-    except ValueError as exc:
-        logger.warning("SearXNG returned invalid JSON for %r: %s", query, exc)
-        return []
+    category_attempts = ["general", "news", "finance"]
+    for cat in category_attempts:
+        try:
+            payload = search_json(query, categories=cat, timeout=REQUEST_TIMEOUT)
+        except RequestException as exc:
+            logger.debug("SearXNG search failed (%s) for %r: %s", cat, query, exc)
+            continue
+        except ValueError as exc:
+            logger.warning("SearXNG returned invalid JSON (%s) for %r: %s", cat, query, exc)
+            continue
 
-    results = payload.get("results") or []
-    return results[:limit]
+        results = payload.get("results") or []
+        if results:
+            return results[:limit]
+
+    logger.warning("SearXNG search returned no results for %r", query)
+    return []
 
 
 def _format_results(

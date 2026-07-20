@@ -12,7 +12,7 @@ services:
     environment:
       - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "--header=X-Real-IP: 127.0.0.1", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -1,0 +1,18 @@
+# Private localhost hub instance — silence botdetection without enabling rate limiter.
+# See https://docs.searxng.org/admin/searx.limiter.html
+
+[botdetection]
+trusted_proxies = [
+  "127.0.0.0/8",
+  "::1/128",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "fd00::/8",
+]
+
+[botdetection.ip_lists]
+pass_ip = [
+  "0.0.0.0/0",
+  "::/0",
+]

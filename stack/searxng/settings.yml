@@ -1,4 +1,11 @@
-use_default_settings: true
+use_default_settings:
+  engines:
+    keep_only:
+      - duckduckgo
+      - bing
+      - brave
+      - mojeek
+      - qwant
 
 server:
   port: 8080
@@ -29,27 +36,32 @@ engines:
       - general
       - web
       - finance
+      - news
 
   - name: bing
     engine: bing
     categories:
       - general
       - finance
+      - news
 
   - name: brave
     engine: brave
     categories:
       - general
       - finance
+      - news
 
   - name: mojeek
     engine: mojeek
     categories:
       - general
       - finance
+      - news
 
   - name: qwant
     engine: qwant
     categories:
       - general
       - finance
+      - news
