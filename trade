@@ -19,7 +19,8 @@ Stack (one lifecycle — use these):
   restart [--force]     Heal missing services ( --force: full stop + start )
   status                Vibe + hub Docker health
   doctor                Preflight checks before start (no start)
-  dev                   Dev mode: auto-reload API/UI + OpenAlgo debug (exclusive Vibe tier)
+  dev                   Dev mode: auto-reload API/UI + OpenAlgo debug (exclusive Vibe tier).
+                        Nautilus watch keeps running; use trade reload nautilus after handoff changes.
   reload [target]       Reload after code/env change (app|env|nautilus|hub|all)
   start [mode]          Legacy foreground modes (prefer trade up / trade dev)
                         Modes: vibe | openalgo | cli | full | daemon | nautilus-watch
@@ -47,6 +48,10 @@ Research:
   research <ticker>     Run company research pipeline (e.g. RELIANCE, AAPL)
   research <ticker> --days 30
 
+Data (historic / prediction cold tier):
+  data ingest [--offline] [--incremental] [--audit]   Load historic_data + cold tier
+  data audit [--write]                              Prediction factor coverage audit
+
 Maintenance:
   sync [target]         Sync submodules (all|tradingagents|openalgo|status)
   sync-ports            Apply stack/ports.yaml to .env, compose, OpenAlgo/Vibe
@@ -59,7 +64,7 @@ Examples:
   trade restart                     # heal — start only what's down
   trade restart --force             # full stop + preflight + start
   trade down                        # stop background stack
-  trade dev                         # dev mode with auto-reload (blocks trade up)
+  trade dev                         # dev mode with auto-reload (blocks trade up; Nautilus watch stays up)
   trade reload app                  # reload daemon after code edit
   trade start openalgo              # OpenAlgo only (webhook setup)
   trade start nautilus-watch --agent-id aa_abc123
@@ -278,6 +283,37 @@ case "$cmd" in
     py="$ROOT/.venv/bin/python"
     [[ -x "$py" ]] || py="python3"
     exec "$py" "$ROOT/scripts/run_company_research.py" "$ticker" "$@"
+    ;;
+
+  data)
+    sub="${1:-}"
+    shift || true
+    py="$ROOT/.venv/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    case "$sub" in
+      ingest)
+        exec "$py" "$ROOT/scripts/ingest_historical_data.py" "$@"
+        ;;
+      audit)
+        args=()
+        if [[ "${1:-}" == "--write" ]]; then
+          args+=(--write)
+          shift || true
+        fi
+        exec "$py" "$ROOT/scripts/audit_prediction_data.py" "${args[@]}" "$@"
+        ;;
+      -h|--help|help|"")
+        cat <<'EOF'
+Usage:
+  trade data ingest [--offline] [--incremental] [--incremental-days N] [--audit]
+  trade data audit [--write]
+EOF
+        ;;
+      *)
+        echo "Unknown data subcommand: $sub (try: ingest, audit)" >&2
+        exit 1
+        ;;
+    esac
     ;;
 
   sync)

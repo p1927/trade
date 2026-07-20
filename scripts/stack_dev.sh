@@ -35,7 +35,7 @@ echo "  Vibe API     uvicorn --reload (integrations/, vibetrading/agent/)"
 echo "  Vite UI      Vite HMR"
 echo "  OpenAlgo     FLASK_DEBUG=1 (openalgo/)"
 echo "  Env change   trade reload env"
-echo "  Nautilus     trade reload nautilus (manual restart required)"
+echo "  Nautilus     runs independently of trade dev; trade reload nautilus after handoff/watch_spec changes; trade status shows watch PID"
 echo ""
 
 if ! stack_validate_ports_registry; then
@@ -48,6 +48,8 @@ stack_ensure_vibe_config || true
 
 # Stop daemon app tier before strict port check (otherwise ports look "foreign").
 stack_with_lock stack_dev_prepare_inner
+
+stack_reconcile_nautilus_watch_pid
 
 stack_check_port_listeners || exit 1
 

@@ -497,6 +497,24 @@ stack_sync_service_claim() {
   fi
 }
 
+stack_reconcile_nautilus_watch_pid() {
+  local py root
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  PYTHONPATH="$root/integrations" "$py" -c "
+from trade_integrations.autonomous_agents.nautilus_watch import (
+    get_watch_process_status,
+    reconcile_stale_watch_pid,
+)
+reconcile_stale_watch_pid()
+st = get_watch_process_status(reconcile=False)
+if st.get('alive'):
+    print(f\"[stack] Nautilus watch pid={st.get('pid')} (alive — left running)\")
+elif st.get('enabled'):
+    print('[stack] Nautilus watch not running (registry reconciled if stale)')
+" 2>/dev/null || true
+}
+
 stack_sync_nautilus_claim() {
   local log_dir pidfile reg_file py reg_pid
   log_dir="$(stack_log_dir)"

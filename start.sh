@@ -24,9 +24,9 @@ AGENTS_DIR="$ROOT/tradingagents"
 OPENALGO_DIR="$ROOT/openalgo"
 VIBE_DIR="$ROOT/vibetrading"
 COMPOSE_FILE="$ROOT/docker-compose.stack.yml"
-PID_FILE="$ROOT/.stack.pids"
 LOG_DIR="$ROOT/openalgo/log"
 OPENALGO_LOG="$LOG_DIR/stack-openalgo.log"
+OPENALGO_BG_PID=""
 
 START_OPENALGO=1
 START_AGENTS=1
@@ -106,14 +106,9 @@ fail() { echo "  ✗ $*" >&2; }
 _lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 cleanup() {
-  if [[ -f "$PID_FILE" ]]; then
-    while read -r pid name; do
-      if kill -0 "$pid" 2>/dev/null; then
-        log "Stopping $name (pid $pid)..."
-        kill "$pid" 2>/dev/null || true
-      fi
-    done < "$PID_FILE"
-    rm -f "$PID_FILE"
+  if [[ -n "${OPENALGO_BG_PID:-}" ]] && kill -0 "$OPENALGO_BG_PID" 2>/dev/null; then
+    log "Stopping OpenAlgo (pid $OPENALGO_BG_PID)..."
+    kill "$OPENALGO_BG_PID" 2>/dev/null || true
   fi
 }
 
@@ -453,7 +448,6 @@ start_openalgo() {
   fi
 
   mkdir -p "$LOG_DIR"
-  touch "$PID_FILE"
 
   local runner
   runner="$(pick_openalgo_runner)"
@@ -463,7 +457,7 @@ start_openalgo() {
     # shellcheck disable=SC2086
     exec $runner
   ) >>"$OPENALGO_LOG" 2>&1 &
-  echo "$! openalgo" >> "$PID_FILE"
+  OPENALGO_BG_PID=$!
 
   if wait_for_openalgo; then
     READY_OPENALGO=1
