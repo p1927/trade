@@ -593,15 +593,38 @@ def save_agent_debate(ticker: str, payload: dict) -> Path:
     (out_dir / "latest.md").write_text(format_agent_debate_report(payload), encoding="utf-8")
     json_path = out_dir / "latest.json"
     json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+    as_of = str(payload.get("as_of") or payload.get("date") or "")[:10]
+    if not as_of:
+        from datetime import datetime, timezone
+
+        as_of = datetime.now(timezone.utc).date().isoformat()
+    history_dir = out_dir / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    history_path = history_dir / f"{as_of}.json"
+    history_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     return json_path
 
 
-def load_agent_debate_json(ticker: str) -> dict | None:
-    """Load cached agent debate JSON when present."""
-    path = _agent_debate_dir(ticker) / "latest.json"
+def load_agent_debate_json(ticker: str, *, as_of_day: str | None = None) -> dict | None:
+    """Load cached agent debate JSON when present (optionally for a historical date)."""
+    out_dir = _agent_debate_dir(ticker)
+    if as_of_day:
+        path = out_dir / "history" / f"{as_of_day[:10]}.json"
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    path = out_dir / "latest.json"
     if not path.is_file():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def count_agent_debate_history(ticker: str) -> int:
+    """Count dated debate archive snapshots for backtest eligibility."""
+    history_dir = _agent_debate_dir(ticker) / "history"
+    if not history_dir.is_dir():
+        return 0
+    return sum(1 for p in history_dir.glob("*.json") if p.is_file())
 
 
 def load_agent_debate_markdown(ticker: str) -> str | None:

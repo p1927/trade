@@ -61,6 +61,25 @@ TRACK_BACKTEST_ELIGIBLE: dict[str, bool] = {
     "headline_legacy": True,
 }
 
+_DEBATE_ARCHIVE_MIN_DATES = 60
+
+
+def debate_backtest_eligible(ticker: str = "NIFTY") -> bool:
+    """True when dated debate history has enough coverage for walk-forward."""
+    try:
+        from trade_integrations.context.hub import count_agent_debate_history
+
+        return count_agent_debate_history(ticker.strip().upper()) >= _DEBATE_ARCHIVE_MIN_DATES
+    except Exception:
+        return False
+
+
+def walk_forward_track_ids(*, ticker: str = "NIFTY") -> tuple[str, ...]:
+    """Backtest track list; includes debate_numeric when archive threshold met."""
+    if debate_backtest_eligible(ticker):
+        return CANONICAL_TRACK_IDS
+    return BACKTEST_TRACK_IDS
+
 TRACK_IMPLEMENTATION_NOTES: dict[str, str] = {
     "quant_ridge": "predict_nifty() — bottom-up + macro Ridge + overlay shrink",
     "quant_ridge_no_overlay": "predict_nifty(apply_event_overlay=False) — hybrid without news shock in macro",
