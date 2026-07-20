@@ -41,7 +41,7 @@ def _reference_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "publisher": publisher,
         "vendor": str(first.get("vendor") or row.get("source") or publisher),
         "raw_title": str(row.get("title") or "")[:300],
-        "raw_summary": str(row.get("summary") or "")[:600],
+        "raw_summary": str(row.get("summary") or "")[:2000],
         "published_at": str(row.get("published_at") or ""),
         "fetched_at": _now_iso(),
         "extracted_claims": list(row.get("extracted_claims") or []),
@@ -132,32 +132,35 @@ def _distill_max_tokens() -> int:
         return 800
 
 
-def _extract_message_text(message: Any) -> str:
-    """Read MiniMax answer text from content or reasoning channels."""
+def _distill_reasoning_split_enabled() -> bool:
+    """MiniMax-M3 thinking is on by default; split keeps it out of distill output."""
+    return os.getenv("MINIMAX_DISTILL_REASONING_SPLIT", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _extract_distill_answer(message: Any) -> str:
+    """Read distill answer from ``content`` only — never ``reasoning_content``.
+
+    With ``reasoning_split=True``, MiniMax puts chain-of-thought in
+    ``reasoning_content`` and the trader-facing title/summary in ``content``.
+    """
     content = str(getattr(message, "content", None) or "")
-    if content.strip():
-        return content
-    reasoning = getattr(message, "reasoning_content", None)
-    if reasoning:
-        return str(reasoning)
-    extra = getattr(message, "model_extra", None) or {}
-    if isinstance(extra, dict):
-        rc = extra.get("reasoning_content")
-        if rc:
-            return str(rc)
-    kwargs = getattr(message, "additional_kwargs", None) or {}
-    if isinstance(kwargs, dict):
-        rc = kwargs.get("reasoning_content")
-        if rc:
-            return str(rc)
-    return ""
+    return strip_minimax_thinking(content)
+
+
+def _extract_message_text(message: Any) -> str:
+    """Backward-compatible alias — distill answers come from ``content`` only."""
+    return _extract_distill_answer(message)
 
 
 def _call_distill_model(
     prompt: str,
     *,
     max_tokens: int,
-    reasoning_split: bool,
 ) -> dict[str, str]:
     from trade_integrations.nse_browser.minimax_agent import chat_completions_create, _model
 
@@ -167,11 +170,11 @@ def _call_distill_model(
         "max_tokens": max_tokens,
         "temperature": 0.1,
     }
-    if reasoning_split:
+    if _distill_reasoning_split_enabled():
         kwargs["extra_body"] = {"reasoning_split": True}
     response = chat_completions_create(**kwargs)
     message = response.choices[0].message
-    text = _extract_message_text(message)
+    text = _extract_distill_answer(message)
     parsed = _parse_llm_distill(text)
     if not parsed.get("title") and not parsed.get("content") and text.strip():
         logger.debug(
@@ -181,14 +184,37 @@ def _call_distill_model(
     return parsed
 
 
+def call_minimax_text(prompt: str, *, max_tokens: int | None = None) -> str:
+    """Run one MiniMax completion and return answer text from content channel."""
+    tokens = max_tokens if max_tokens is not None else _distill_max_tokens()
+    from trade_integrations.nse_browser.minimax_agent import chat_completions_create, _model
+
+    kwargs: dict[str, Any] = {
+        "model": _model(),
+        "messages": [{"role": "user", "content": prompt[:12000]}],
+        "max_tokens": tokens,
+        "temperature": 0.1,
+    }
+    if _distill_reasoning_split_enabled():
+        kwargs["extra_body"] = {"reasoning_split": True}
+    response = chat_completions_create(**kwargs)
+    message = response.choices[0].message
+    return _extract_distill_answer(message)
+
+
 def _llm_distill(
     *,
     previous_title: str,
     previous_content: str,
     refs: list[dict[str, Any]],
+    market_context: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Always call MiniMax to distill/update the event narrative."""
     require_minimax_for_distillation()
+
+    from trade_integrations.dataflows.index_research.news_market_context import (
+        format_market_context_for_prompt,
+    )
 
     context_lines = []
     for ref in refs[-8:]:
@@ -198,27 +224,27 @@ def _llm_distill(
         )
     previous_content = strip_minimax_thinking(previous_content)
     story = f"title: {previous_title}\nsummary: {previous_content}"
+    tape = format_market_context_for_prompt(market_context)
     prompt = (
-        "You summarize financial market news for traders. Given prior story text in <story> "
-        "and new source articles in <context>, update the story title and summary. "
-        "Reconcile conflicting numbers as ranges. Do not invent facts not present in sources. "
+        "You summarize financial market news for traders. Given prior story text in <story>, "
+        "new source articles in <context>, and market tape in <market>, update the story title "
+        "and summary. Reconcile conflicting numbers as ranges. Note when headline aligns or "
+        "conflicts with the market tape. Do not invent facts not present in sources. "
         "Do not include reasoning or analysis steps. "
         "Output <title>...</title> and <summary>...</summary> only.\n\n"
+        f"<market>\n{tape}\n</market>\n\n"
         f"<story>\n{story}\n</story>\n\n<context>\n" + "\n".join(context_lines) + "\n</context>"
     )
 
     base_tokens = _distill_max_tokens()
-    attempts: list[tuple[int, bool]] = [
-        (base_tokens, False),
-        (max(base_tokens + 400, 1200), False),
-        (base_tokens, True),
-    ]
+    # MiniMax-M3 thinking enabled with reasoning_split so answer stays in content.
+    attempts = [base_tokens, max(base_tokens + 400, 1200)]
+    reasoning_split = _distill_reasoning_split_enabled()
     try:
-        for max_tokens, reasoning_split in attempts:
+        for max_tokens in attempts:
             parsed = _call_distill_model(
                 prompt,
                 max_tokens=max_tokens,
-                reasoning_split=reasoning_split,
             )
             if parsed.get("title") or parsed.get("content"):
                 return parsed
@@ -287,6 +313,7 @@ def distill_event(
     *,
     refs: list[dict[str, Any]],
     previous: dict[str, Any] | None = None,
+    market_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build distilled title, content, timeline entry, and references list."""
     from trade_integrations.hub_storage.news_staging_store import minimax_configured, rule_fallback_distillation_enabled
@@ -313,6 +340,7 @@ def distill_event(
                 previous_title=prev_title,
                 previous_content=prev_content,
                 refs=normalized_refs,
+                market_context=market_context,
             )
         except Exception as exc:
             logger.warning("MiniMax distillation failed, using rule fallback: %s", exc)

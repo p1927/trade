@@ -34,7 +34,25 @@ def _merge_stats(out: dict[str, Any], source: str, stats: dict[str, Any]) -> Non
             out["totals"][key] = int(out["totals"].get(key) or 0) + int(stats.get(key) or 0)
 
 
-def _ingest_rss(*, ticker: str, limit_per_feed: int) -> dict[str, Any]:
+def _sync_distill_limit_for_mode(mode: str) -> int:
+    """Light ingest queues refs only; entity drain job runs MiniMax distillation."""
+    if mode == "light":
+        try:
+            return max(0, int(os.getenv("HUB_NEWS_LIGHT_SYNC_DISTILL_LIMIT", "0")))
+        except ValueError:
+            return 0
+    try:
+        return max(0, int(os.getenv("HUB_NEWS_SYNC_DISTILL_LIMIT", "10")))
+    except ValueError:
+        return 10
+
+
+def _ingest_rss(
+    *,
+    ticker: str,
+    limit_per_feed: int,
+    sync_distill_limit: int | None = None,
+) -> dict[str, Any]:
     from trade_integrations.dataflows.news_hub_bridge import ingest_rss_entries
     from trade_integrations.dataflows.rss_feeds import (
         _fetch_one_feed,
@@ -63,13 +81,24 @@ def _ingest_rss(*, ticker: str, limit_per_feed: int) -> dict[str, Any]:
         if not entries:
             continue
         totals["entries"] += len(entries)
-        stats = ingest_rss_entries(entries, ticker=ticker, label=label, feed_url=url)
+        stats = ingest_rss_entries(
+            entries,
+            ticker=ticker,
+            label=label,
+            feed_url=url,
+            sync_distill_limit=sync_distill_limit,
+        )
         totals["queued"] += int(stats.get("queued") or stats.get("ingested") or 0)
         totals["ingested"] += int(stats.get("ingested") or 0)
     return totals
 
 
-def _ingest_searxng_ticker(*, ticker: str, lookback_days: int) -> dict[str, Any]:
+def _ingest_searxng_ticker(
+    *,
+    ticker: str,
+    lookback_days: int,
+    sync_distill_limit: int | None = None,
+) -> dict[str, Any]:
     from trade_integrations.dataflows.news_hub_bridge import ingest_searxng_results
     from trade_integrations.dataflows.searxng_news import _format_results, _search
 
@@ -82,6 +111,7 @@ def _ingest_searxng_ticker(*, ticker: str, lookback_days: int) -> dict[str, Any]
         results,
         ticker=ticker,
         collection_day=end.isoformat(),
+        sync_distill_limit=sync_distill_limit,
     )
     _format_results(
         results,
@@ -94,7 +124,11 @@ def _ingest_searxng_ticker(*, ticker: str, lookback_days: int) -> dict[str, Any]
     return stats
 
 
-def _ingest_searxng_global(*, lookback_days: int) -> dict[str, Any]:
+def _ingest_searxng_global(
+    *,
+    lookback_days: int,
+    sync_distill_limit: int | None = None,
+) -> dict[str, Any]:
     from trade_integrations.dataflows.news_hub_bridge import ingest_searxng_results
     from trade_integrations.dataflows.searxng_news import _search
     from tradingagents.dataflows.config import get_config
@@ -105,7 +139,8 @@ def _ingest_searxng_global(*, lookback_days: int) -> dict[str, Any]:
     all_results: list[dict] = []
     seen: set[str] = set()
     for query in config.get("global_news_queries") or []:
-        for result in _search(str(query), limit):
+        enriched = f"{query} India markets moneycontrol economictimes livemint"
+        for result in _search(str(enriched), limit):
             title = (result.get("title") or "").strip()
             if title and title not in seen:
                 seen.add(title)
@@ -119,12 +154,18 @@ def _ingest_searxng_global(*, lookback_days: int) -> dict[str, Any]:
         ticker="NIFTY",
         kind="global",
         collection_day=end.isoformat(),
+        sync_distill_limit=sync_distill_limit,
     )
     stats["results"] = len(all_results)
     return stats
 
 
-def _ingest_moneycontrol_macro(*, ticker: str, limit: int = 25) -> dict[str, Any]:
+def _ingest_moneycontrol_macro(
+    *,
+    ticker: str,
+    limit: int = 25,
+    sync_distill_limit: int | None = None,
+) -> dict[str, Any]:
     from trade_integrations.dataflows.company_research.sources.moneycontrol_rss import (
         MONEYCONTROL_RSS_URLS,
         _fetch_url,
@@ -150,19 +191,24 @@ def _ingest_moneycontrol_macro(*, ticker: str, limit: int = 25) -> dict[str, Any
                 {
                     "title": title[:500],
                     "summary": str(entry.get("summary") or "")[:2000],
-                    "url": "",
+                    "url": str(entry.get("url") or "").strip()[:2000],
                     "source": str(entry.get("source") or "moneycontrol_rss"),
                     "published_at": f"{day}T09:00:00+00:00" if day else "",
                 }
             )
     if not rows:
         return {"rows": 0, "queued": 0, "ingested": 0}
-    stats = ingest_rows_to_hub(rows, ticker=ticker)
+    stats = ingest_rows_to_hub(rows, ticker=ticker, sync_distill_limit=sync_distill_limit)
     stats["rows"] = len(rows)
     return stats
 
 
-def _ingest_watcher(*, tickers: list[str], since_hours: int) -> dict[str, Any]:
+def _ingest_watcher(
+    *,
+    tickers: list[str],
+    since_hours: int,
+    sync_distill_limit: int | None = None,
+) -> dict[str, Any]:
     from trade_integrations.monitor.news_watcher import scan_material_news
 
     since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
@@ -189,7 +235,7 @@ def _ingest_watcher(*, tickers: list[str], since_hours: int) -> dict[str, Any]:
             }
             for item in material
         ]
-        stats = ingest_rows_to_hub(rows, ticker=sym)
+        stats = ingest_rows_to_hub(rows, ticker=sym, sync_distill_limit=sync_distill_limit)
         totals["queued"] += int(stats.get("queued") or stats.get("ingested") or 0)
         totals["ingested"] += int(stats.get("ingested") or 0)
     return totals
@@ -223,10 +269,15 @@ def run_hub_news_ingest(
     :func:`load_news_pipeline_config` when ``sources`` is not explicitly set.
     """
     from trade_integrations.hub_storage.news_pipeline_config import load_news_pipeline_config
+    from trade_integrations.dataflows.index_research.news_market_context import (
+        refresh_index_market_context,
+    )
 
     cfg = load_news_pipeline_config()
     sym = ticker.strip().upper()
     ingest_mode = (mode or "full").strip().lower()
+
+    market_context = refresh_index_market_context(ticker=sym, persist=True)
 
     if sources is None or sources == "default":
         if ingest_mode == "light":
@@ -246,10 +297,18 @@ def run_hub_news_ingest(
             days = 3
 
     selected = _parse_sources(sources)
+    sync_distill_limit = _sync_distill_limit_for_mode(ingest_mode)
     out: dict[str, Any] = {
         "ticker": sym,
         "mode": ingest_mode,
         "lookback_days": days,
+        "sync_distill_limit": sync_distill_limit,
+        "market_context": {
+            "as_of": market_context.get("as_of"),
+            "quotes_ok": market_context.get("quotes_ok"),
+            "factors_ok": market_context.get("factors_ok"),
+            "source": market_context.get("source"),
+        },
         "sources_requested": sorted(selected),
         "sources": {},
         "totals": {"queued": 0, "ingested": 0, "verified": 0, "created": 0, "updated": 0, "error": 0},
@@ -258,7 +317,15 @@ def run_hub_news_ingest(
 
     if "rss" in selected:
         try:
-            _merge_stats(out, "rss", _ingest_rss(ticker=sym, limit_per_feed=rss_limit_per_feed))
+            _merge_stats(
+                out,
+                "rss",
+                _ingest_rss(
+                    ticker=sym,
+                    limit_per_feed=rss_limit_per_feed,
+                    sync_distill_limit=sync_distill_limit,
+                ),
+            )
         except Exception as exc:
             logger.warning("hub ingest rss failed: %s", exc)
             out["sources"]["rss"] = {"error": str(exc)[:200]}
@@ -266,7 +333,15 @@ def run_hub_news_ingest(
 
     if "searxng" in selected:
         try:
-            _merge_stats(out, "searxng", _ingest_searxng_ticker(ticker=sym, lookback_days=days))
+            _merge_stats(
+                out,
+                "searxng",
+                _ingest_searxng_ticker(
+                    ticker=sym,
+                    lookback_days=days,
+                    sync_distill_limit=sync_distill_limit,
+                ),
+            )
         except Exception as exc:
             logger.warning("hub ingest searxng ticker failed: %s", exc)
             out["sources"]["searxng"] = {"error": str(exc)[:200]}
@@ -274,7 +349,14 @@ def run_hub_news_ingest(
 
     if "searxng_global" in selected:
         try:
-            _merge_stats(out, "searxng_global", _ingest_searxng_global(lookback_days=days))
+            _merge_stats(
+                out,
+                "searxng_global",
+                _ingest_searxng_global(
+                    lookback_days=days,
+                    sync_distill_limit=sync_distill_limit,
+                ),
+            )
         except Exception as exc:
             logger.warning("hub ingest searxng global failed: %s", exc)
             out["sources"]["searxng_global"] = {"error": str(exc)[:200]}
@@ -282,7 +364,14 @@ def run_hub_news_ingest(
 
     if "moneycontrol" in selected:
         try:
-            _merge_stats(out, "moneycontrol", _ingest_moneycontrol_macro(ticker=sym))
+            _merge_stats(
+                out,
+                "moneycontrol",
+                _ingest_moneycontrol_macro(
+                    ticker=sym,
+                    sync_distill_limit=sync_distill_limit,
+                ),
+            )
         except Exception as exc:
             logger.warning("hub ingest moneycontrol failed: %s", exc)
             out["sources"]["moneycontrol"] = {"error": str(exc)[:200]}
@@ -294,7 +383,11 @@ def run_hub_news_ingest(
             _merge_stats(
                 out,
                 "watcher",
-                _ingest_watcher(tickers=watch_syms, since_hours=watcher_since_hours),
+                _ingest_watcher(
+                    tickers=watch_syms,
+                    since_hours=watcher_since_hours,
+                    sync_distill_limit=sync_distill_limit,
+                ),
             )
         except Exception as exc:
             logger.warning("hub ingest watcher failed: %s", exc)

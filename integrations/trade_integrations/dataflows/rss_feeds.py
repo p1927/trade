@@ -1,9 +1,12 @@
 """Configurable RSS/Atom feed fetcher for sentiment analysis.
 
-Feeds are defined in ``default_config.sentiment_rss_feeds`` and can be
-extended via ``TRADINGAGENTS_SENTIMENT_RSS_FEEDS`` in ``.env``. Each entry
-is a ``label|url`` pair (comma-separated); bare URLs are accepted and
-labelled from the hostname.
+Built-in feeds (``_BUILTIN_RSS_FEEDS``) are always included. Additional feeds
+from ``TRADINGAGENTS_SENTIMENT_RSS_FEEDS`` in ``.env`` are appended and
+URL-deduped. When that env var is unset, India-focused defaults from
+``_DEFAULT_RSS_FALLBACK`` are appended instead.
+
+Each env entry is a ``label|url`` pair (comma-separated); bare URLs are
+accepted and labelled from the hostname.
 
 URLs may include ``{ticker}`` (upper-cased symbol) and ``{search_term}``
 (crypto base for crypto pairs, otherwise upper-cased symbol) for
@@ -28,20 +31,31 @@ from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.symbol_utils import crypto_base
 
 logger = logging.getLogger(__name__)
 
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+_CONTENT_NS = {"content": "http://purl.org/rss/1.0/modules/content/"}
+_SUMMARY_MAX_LEN = 2000
 
 
 def _strip_html(content: str) -> str:
     if not content:
         return ""
     text = re.sub(r"<[^>]+>", " ", content)
-    return " ".join(html.unescape(text).split())
+    return " ".join(html.unescape(text).split())[:_SUMMARY_MAX_LEN]
+
+
+def _rss_item_body(item: ET.Element) -> str:
+    encoded = item.find("content:encoded", _CONTENT_NS)
+    if encoded is not None and encoded.text:
+        return encoded.text
+    desc_el = item.find("description")
+    if desc_el is not None and desc_el.text:
+        return desc_el.text
+    return ""
 
 
 def _parse_pub_date(raw: str | None) -> str:
@@ -130,11 +144,10 @@ def _parse_feed_entries(raw_xml: bytes, limit: int) -> list[dict]:
     for item in channel.findall("item")[:limit]:
         title_el = item.find("title")
         pub_el = item.find("pubDate")
-        desc_el = item.find("description")
         entries.append({
             "title": (title_el.text if title_el is not None else "") or "",
             "date": _parse_pub_date(pub_el.text if pub_el is not None else None),
-            "summary": _strip_html(desc_el.text if desc_el is not None else ""),
+            "summary": _strip_html(_rss_item_body(item)),
             "url": _rss_item_link(item),
         })
     return entries
@@ -158,13 +171,65 @@ def _parse_feed_spec(raw: str) -> list[dict[str, str]]:
     return feeds
 
 
+# Former register.py defaults — always merged before env extras.
+_BUILTIN_RSS_FEEDS: list[dict[str, str]] = [
+    {
+        "label": "Google News",
+        "url": (
+            "https://news.google.com/rss/search?q={search_term}+stock+when:7d"
+            "&hl=en-US&gl=US&ceid=US:en"
+        ),
+    },
+    {
+        "label": "Yahoo Finance Headlines",
+        "url": (
+            "https://feeds.finance.yahoo.com/rss/2.0/headline"
+            "?s={ticker}&region=US&lang=en-US"
+        ),
+    },
+]
+
+# Used when TRADINGAGENTS_SENTIMENT_RSS_FEEDS is unset (.env.example template).
+_DEFAULT_RSS_FALLBACK = (
+    "Google News India|https://news.google.com/rss/search?q={search_term}+NSE+stock+India"
+    "&hl=en-IN&gl=IN&ceid=IN:en,"
+    "Moneycontrol Latest|https://www.moneycontrol.com/rss/latestnews.xml,"
+    "Yahoo Finance Headlines|https://feeds.finance.yahoo.com/rss/2.0/headline"
+    "?s={ticker}&region=US&lang=en-US"
+)
+
+
+def _normalize_feed_url(url: str) -> str:
+    return (url or "").strip().lower().rstrip("/")
+
+
+def _dedupe_feeds(feeds: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for feed in feeds:
+        url = str(feed.get("url") or "").strip()
+        key = _normalize_feed_url(url)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "label": str(feed.get("label") or _label_from_url(url)),
+                "url": url,
+            }
+        )
+    return out
+
+
 def get_sentiment_rss_feeds() -> list[dict[str, str]]:
-    """Return built-in feeds plus any extras from ``TRADINGAGENTS_SENTIMENT_RSS_FEEDS``."""
-    feeds = list(get_config().get("sentiment_rss_feeds") or [])
-    extra = os.environ.get("TRADINGAGENTS_SENTIMENT_RSS_FEEDS", "").strip()
-    if extra:
-        feeds.extend(_parse_feed_spec(extra))
-    return feeds
+    """Return built-in feeds plus env extras (or fallback when env unset), URL-deduped."""
+    feeds = list(_BUILTIN_RSS_FEEDS)
+    raw = os.environ.get("TRADINGAGENTS_SENTIMENT_RSS_FEEDS", "").strip()
+    if raw:
+        feeds.extend(_parse_feed_spec(raw))
+    else:
+        feeds.extend(_parse_feed_spec(_DEFAULT_RSS_FALLBACK))
+    return _dedupe_feeds(feeds)
 
 
 def _resolve_url(url: str, ticker: str) -> str:

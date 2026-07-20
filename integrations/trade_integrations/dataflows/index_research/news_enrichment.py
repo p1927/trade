@@ -135,7 +135,7 @@ def build_content_summary(title: str, summary: str = "") -> str:
     body = (summary or "").strip()
     title_clean = de_clickbait_title(title)
     if body and body.lower() != title_clean.lower():
-        return body[:600]
+        return body[:1200]
     return title_clean
 
 

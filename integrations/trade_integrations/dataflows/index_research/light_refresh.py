@@ -224,6 +224,35 @@ def _reload_index_doc(
     return fresh if fresh is not None else fallback
 
 
+def _try_spot_touch(
+    sym: str,
+    cached_doc: IndexResearchDoc,
+    *,
+    horizon,
+) -> tuple[IndexResearchDoc | None, str | None]:
+    """Fetch live spot and persist when macro/news are unchanged."""
+    from dataclasses import replace
+
+    from trade_integrations.context.hub import save_index_research
+    from trade_integrations.dataflows.index_research.spot_fetch import fetch_index_spot
+
+    spot_result = fetch_index_spot(sym)
+    if spot_result.spot <= 0:
+        return None, None
+
+    refresh_at = _stage_now()
+    doc = replace(
+        cached_doc,
+        spot=spot_result.spot,
+        spot_source=spot_result.source,
+        spot_error=None,
+        as_of=refresh_at,
+    )
+    save_index_research(doc)
+    logger.info("light_refresh spot_touch for %s spot=%.2f", sym, spot_result.spot)
+    return doc, "spot_touch"
+
+
 def run_index_light_refresh(
     ticker: str = "NIFTY",
     *,
@@ -274,6 +303,9 @@ def run_index_light_refresh(
     news_hit = bool(headlines) or _heavyweight_news(signals)
 
     if not force and cached_doc is not None and not macro_changed and not news_hit:
+        touched, reason = _try_spot_touch(sym, cached_doc, horizon=horizon)
+        if touched is not None and reason:
+            return touched, reason
         fresh = _reload_index_doc(sym, cached_doc)
         return fresh or cached_doc, "unchanged"
 
@@ -299,6 +331,12 @@ def run_index_light_refresh(
         logger.debug("light_refresh momentum refresh skipped: %s", exc)
 
     if heavy:
+        try:
+            from trade_integrations.dataflows.index_research.history_ingest import sync_nifty_ohlcv_tail
+
+            sync_nifty_ohlcv_tail()
+        except Exception as exc:
+            logger.debug("light_refresh nifty ohlcv tail skipped: %s", exc)
         try:
             from datetime import date as _date
 
@@ -394,11 +432,20 @@ def run_index_light_refresh(
         status=macro_stage.status,
     )
 
-    spot = _fetch_spot(sym)
+    from trade_integrations.dataflows.index_research.spot_fetch import fetch_index_spot
+
+    spot_result = fetch_index_spot(sym)
+    spot = spot_result.spot
+    spot_source = spot_result.source
+    spot_error = spot_result.error
+    data_warnings: list[str] = list(getattr(cached_doc, "data_warnings", None) or [])
+    if spot_error:
+        data_warnings.append(f"Live spot unavailable: {spot_error}")
     log.info(
         "spot",
-        f"Spot: {spot:.2f}" if spot > 0 else "Spot unavailable",
+        f"Spot: {spot:.2f} ({spot_source})" if spot > 0 else f"Spot unavailable ({spot_error or 'openalgo'})",
         spot=spot,
+        spot_source=spot_source,
     )
 
     from trade_integrations.dataflows.index_research.data_completeness import (
@@ -614,6 +661,9 @@ def run_index_light_refresh(
         as_of=refresh_at,
         horizon={"name": horizon.name, "days": horizon.days},
         spot=spot or None,
+        spot_source=spot_source if spot > 0 else "unavailable",
+        spot_error=spot_error,
+        data_warnings=data_warnings,
         prediction=prediction,
         regime=regime,
         global_factors=global_factors,

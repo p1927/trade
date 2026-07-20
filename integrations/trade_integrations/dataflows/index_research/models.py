@@ -68,6 +68,9 @@ class IndexResearchDoc:
     as_of: datetime
     horizon: dict[str, Any] = field(default_factory=dict)
     spot: float | None = None
+    spot_source: str | None = None
+    spot_error: str | None = None
+    data_warnings: list[str] = field(default_factory=list)
     prediction: dict[str, Any] = field(default_factory=dict)
     regime: dict[str, Any] = field(default_factory=dict)
     global_factors: list[dict[str, Any]] = field(default_factory=list)

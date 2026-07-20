@@ -82,6 +82,8 @@ def test_run_hub_news_ingest_light_mode_sources(hub_tmp, monkeypatch):
 
     result = run_hub_news_ingest(ticker="NIFTY", mode="light", sources="default")
     assert result["mode"] == "light"
+    assert result["sync_distill_limit"] == 0
+    assert "market_context" in result
     assert "rss" in result["sources_requested"]
     assert "watcher" not in result["sources_requested"]
     assert called.get("rss") == "NIFTY"

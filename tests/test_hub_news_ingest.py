@@ -27,6 +27,7 @@ def test_run_hub_news_ingest_rss_only(hub_tmp, monkeypatch):
     from trade_integrations.hub_storage import news_staging_store as staging_store
 
     monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
+    monkeypatch.setenv("HUB_NEWS_SYNC_DISTILL_LIMIT", "0")
 
     def fake_rss(**kwargs):
         from trade_integrations.dataflows.news_hub_bridge import ingest_rss_entries

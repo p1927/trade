@@ -63,19 +63,15 @@ def _stage_now() -> datetime:
 
 
 def _fetch_spot(ticker: str) -> float:
-    from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+    from trade_integrations.dataflows.index_research.spot_fetch import fetch_index_spot
 
-    try:
-        quote = fetch_openalgo_quote(ticker)
-        if quote and quote.get("ltp"):
-            return float(quote["ltp"])
-    except Exception as exc:
-        logger.debug("OpenAlgo spot fetch failed for %s: %s", ticker, exc)
+    return fetch_index_spot(ticker).spot
 
-    hist = load_nifty_history(days=10)
-    if not hist.empty:
-        return float(hist["close"].iloc[-1])
-    return 0.0
+
+def _fetch_spot_result(ticker: str):
+    from trade_integrations.dataflows.index_research.spot_fetch import fetch_index_spot
+
+    return fetch_index_spot(ticker)
 
 
 def _nifty_trend_20d() -> str:
@@ -153,6 +149,19 @@ def run_index_research(
     )
     _pipeline_checkpoint()
 
+    data_warnings: list[str] = []
+    try:
+        from trade_integrations.dataflows.index_research.history_ingest import sync_nifty_ohlcv_tail
+
+        tail_result = sync_nifty_ohlcv_tail()
+        log.info(
+            "history",
+            f"Nifty OHLCV tail: {tail_result.get('reason', tail_result.get('status', 'ok'))}",
+            **{k: tail_result[k] for k in ("status", "reason", "max_date") if k in tail_result},
+        )
+    except Exception as exc:
+        logger.debug("nifty ohlcv tail refresh skipped: %s", exc)
+
     log.info(
         "data_completeness",
         "Checking flow-factor coverage (FII/DII/PCR gate)…",
@@ -203,12 +212,16 @@ def run_index_research(
                 progress=done,
                 total=total,
             )
+            if done % 5 == 0:
+                _pipeline_checkpoint()
 
+        _pipeline_checkpoint()
         signals = batch_constituent_research(
             lookahead_days=horizon.days,
             refresh=True,
             on_progress=_constituent_progress,
         )
+        _pipeline_checkpoint()
         try:
             from trade_integrations.hub_capture.channel import record_news_headlines
 
@@ -369,9 +382,16 @@ def run_index_research(
     except Exception as exc:
         logger.debug("alpha_zoo bridge skipped: %s", exc)
 
-    log.info("spot", f"Fetching live NIFTY spot via OpenAlgo INDstocks / yfinance…")
-    spot = _fetch_spot(sym)
-    log.info("spot", f"Spot: {spot:.2f}" if spot > 0 else "Spot unavailable", spot=spot)
+    log.info("spot", "Fetching live NIFTY spot via OpenAlgo (INDmoney)…")
+    spot_result = _fetch_spot_result(sym)
+    spot = spot_result.spot
+    spot_source = spot_result.source
+    spot_error = spot_result.error
+    if spot_error:
+        data_warnings.append(f"Live spot unavailable: {spot_error}")
+        log.error("spot", spot_error, spot=0, spot_source=spot_source)
+    else:
+        log.info("spot", f"Spot: {spot:.2f} ({spot_source})", spot=spot, spot_source=spot_source)
 
     trend = _nifty_trend_20d()
     regime = classify_regime(
@@ -695,6 +715,9 @@ def run_index_research(
         as_of=now,
         horizon={"name": horizon.name, "days": horizon.days},
         spot=spot or None,
+        spot_source=spot_source if spot > 0 else "unavailable",
+        spot_error=spot_error,
+        data_warnings=data_warnings,
         prediction=prediction,
         regime=regime,
         global_factors=global_factors,

@@ -39,6 +39,7 @@ def _fetch_url(url: str, *, limit: int = 25) -> list[dict[str, str]]:
                 "title": entry.get("title", ""),
                 "date": entry.get("date", ""),
                 "summary": entry.get("summary", ""),
+                "url": entry.get("url", ""),
                 "source": "moneycontrol_rss",
             }
             for entry in entries
@@ -88,6 +89,7 @@ def fetch_results_news(symbol: str, *, limit: int = 20) -> list[dict[str, Any]]:
                     "purpose": "Results / corporate news",
                     "description": title,
                     "date": entry.get("date") or "",
+                    "url": entry.get("url") or "",
                     "source": entry.get("source", "moneycontrol_rss"),
                 }
             )
@@ -110,6 +112,7 @@ def fetch_results_news(symbol: str, *, limit: int = 20) -> list[dict[str, Any]]:
                 "purpose": "Results / corporate news",
                 "description": title,
                 "date": entry.get("date") or "",
+                "url": entry.get("url") or "",
                 "source": "google_news_india",
             }
         )
@@ -122,6 +125,7 @@ def fetch_results_news(symbol: str, *, limit: int = 20) -> list[dict[str, Any]]:
                 {
                     "title": str(ev.get("description") or ""),
                     "summary": str(ev.get("purpose") or ""),
+                    "url": str(ev.get("url") or ""),
                     "source": str(ev.get("source") or "moneycontrol_rss"),
                     "published_at": (
                         f"{str(ev.get('date') or '')[:10]}T09:00:00+00:00"

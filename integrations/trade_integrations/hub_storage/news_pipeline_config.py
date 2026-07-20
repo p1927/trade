@@ -17,7 +17,7 @@ from trade_integrations.context.hub import get_hub_dir
 _CONFIG_REL = Path("_data") / "news_pipeline" / "config.json"
 
 _FULL_SOURCES_DEFAULT = "all"
-_LIGHT_SOURCES_DEFAULT = "rss,watcher"
+_LIGHT_SOURCES_DEFAULT = "rss"
 
 _JOB_ID_FULL = "nifty-hub-news-ingest-full"
 _JOB_ID_LIGHT = "nifty-hub-news-ingest-light"

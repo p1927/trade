@@ -24,6 +24,21 @@ from trade_integrations.openalgo.freshness import FreshnessPolicy, L1Cache, ttl_
 
 logger = logging.getLogger(__name__)
 
+_INDEX_SPOT_ENTITIES = frozenset({"NIFTY", "BANKNIFTY"})
+_KNOWN_STALE_HUB_SPOTS = frozenset({24000.0})
+
+
+def _index_spot_entity(entity_id: str | None) -> bool:
+    return (entity_id or "").strip().upper() in _INDEX_SPOT_ENTITIES
+
+
+def _hub_spot_is_stale_placeholder(spot: Any) -> bool:
+    try:
+        value = float(spot)
+    except (TypeError, ValueError):
+        return True
+    return value in _KNOWN_STALE_HUB_SPOTS or value <= 0
+
 _l1_cache = L1Cache()
 
 
@@ -346,8 +361,11 @@ def _quote_from_hub_latest(entity_id: str, *, max_age_seconds: float) -> dict[st
                 return None
         if payload.get("spot") is None:
             return None
+        spot = payload.get("spot")
+        if _index_spot_entity(entity_id) and _hub_spot_is_stale_placeholder(spot):
+            return None
         return {
-            "ltp": payload.get("spot"),
+            "ltp": spot,
             "source": "hub_latest",
             "channel": "hub_latest",
         }
@@ -409,7 +427,7 @@ def get_multi_quotes(
 
             if policy == FreshnessPolicy.NORMAL:
                 entity = resolve_registered_entity(symbol)
-                if entity is not None:
+                if entity is not None and not _index_spot_entity(entity):
                     hub_quote = _quote_from_hub_latest(entity, max_age_seconds=float(max_age))
                     if hub_quote is not None:
                         record_channel_stat("hub_hit", "quotes")
@@ -515,7 +533,7 @@ def get_quote(
 
     if policy == FreshnessPolicy.LIVE:
         quote = fetch_fn(symbol)
-        if quote is None:
+        if quote is None or quote.get("ltp") in (None, 0):
             return None
         record_channel_stat("vendor_fetch", "quotes")
         if should_capture(entity, "derivatives_chain"):
@@ -528,11 +546,13 @@ def get_quote(
 
     if policy == FreshnessPolicy.WATCH:
         cached_l1 = _l1_cache.get(l1_key)
-        if cached_l1 is not None:
+        if cached_l1 is not None and not _index_spot_entity(entity):
             record_channel_stat("l1_hit", "quotes")
             return cached_l1
 
-    hub_quote = _quote_from_hub_latest(entity, max_age_seconds=max_age)
+    hub_quote = None
+    if not _index_spot_entity(entity):
+        hub_quote = _quote_from_hub_latest(entity, max_age_seconds=max_age)
     if hub_quote is not None:
         record_channel_stat("hub_hit", "quotes")
         if policy == FreshnessPolicy.WATCH:
@@ -540,7 +560,7 @@ def get_quote(
         return hub_quote
 
     quote = fetch_fn(symbol)
-    if quote is None:
+    if quote is None or quote.get("ltp") in (None, 0):
         return None
     record_channel_stat("vendor_fetch", "quotes")
     if should_capture(entity, "derivatives_chain"):

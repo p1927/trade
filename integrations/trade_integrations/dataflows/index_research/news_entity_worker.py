@@ -217,13 +217,32 @@ def process_staging_ref(
     ref: dict[str, Any],
     *,
     ticker: str | None = None,
+    market_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Match ref to hub event, distill, verify, and upsert."""
+    return process_staging_group(
+        [ref],
+        ticker=ticker,
+        market_context=market_context,
+    )
+
+
+def process_staging_group(
+    refs: list[dict[str, Any]],
+    *,
+    ticker: str | None = None,
+    market_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Match a deduped ref group to hub event, distill once, verify, and upsert."""
+    if not refs:
+        return {"action": "skip_empty", "event_id": ""}
     from trade_integrations.dataflows.index_research.news_claim_extraction import enrich_ref_with_claims
     from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headline_rows
 
-    ref = enrich_ref_with_claims(ref)
-    sym = (ticker or ref.get("ticker") or "NIFTY").strip().upper()
+    enriched: list[dict[str, Any]] = []
+    for ref in refs:
+        enriched.append(enrich_ref_with_claims(dict(ref)))
+    sym = (ticker or enriched[-1].get("ticker") or "NIFTY").strip().upper()
 
     from trade_integrations.dataflows.index_research.news_relevance import (
         assess_ref_relevance,
@@ -231,20 +250,31 @@ def process_staging_ref(
     )
     from trade_integrations.hub_storage.news_staging_store import mark_ref_discarded
 
-    verdict = assess_ref_relevance(ref, ticker=sym)
-    if not verdict.relevant and verdict.confidence >= relevance_min_confidence():
-        mark_ref_discarded(
-            str(ref.get("ref_id") or ""),
-            reason=verdict.reason or "irrelevant",
-            relevance=verdict.to_dict(),
-            restore_payload=dict(ref),
-            source_kind="auto_gate",
-        )
+    kept: list[dict[str, Any]] = []
+    for candidate in enriched:
+        verdict = assess_ref_relevance(candidate, ticker=sym)
+        if not verdict.relevant and verdict.confidence >= relevance_min_confidence():
+            mark_ref_discarded(
+                str(candidate.get("ref_id") or ""),
+                reason=verdict.reason or "irrelevant",
+                relevance=verdict.to_dict(),
+                restore_payload=dict(candidate),
+                source_kind="auto_gate",
+            )
+            continue
+        kept.append(candidate)
+    if not kept:
         return {
             "action": "discard_irrelevant",
-            "reason": verdict.reason,
-            "confidence": verdict.confidence,
+            "reason": "all_refs_irrelevant",
+            "confidence": relevance_min_confidence(),
         }
+    enriched = kept
+
+    from trade_integrations.dataflows.article_body import enrich_ref_summary_from_url
+
+    enriched = [enrich_ref_summary_from_url(r) for r in enriched]
+    ref = enriched[-1]
 
     publish_day = publish_day_from_value(str(ref.get("published_at") or ""))
 
@@ -264,25 +294,37 @@ def process_staging_ref(
     if not matched:
         url_id = canonical_story_id(str(ref.get("title") or ""), str(ref.get("url") or ""))
         if url_id and get_event(url_id):
-            mark_ref_merged(ref["ref_id"], url_id)
+            for r in enriched:
+                if r.get("ref_id"):
+                    mark_ref_merged(str(r["ref_id"]), url_id)
             return {"action": "skip_duplicate_url", "event_id": url_id}
 
     if matched:
-        refs_for_distill = [ref]
         prior_meta = ((matched.get("structured_summary") or {}).get("event_meta") or {})
         prior_refs = list(prior_meta.get("references") or [])
-        merged_sources = _merge_sources(matched.get("sources") or [], ref.get("sources") or [])
+        merged_sources = matched.get("sources") or []
+        for r in enriched:
+            merged_sources = _merge_sources(merged_sources, r.get("sources") or [])
         row = _ref_to_process_row(ref, event_id=event_id)
         row["sources"] = merged_sources
+        refs_for_distill = [_ref_to_process_row(r) for r in enriched]
         if prior_refs:
-            refs_for_distill = prior_refs + [_ref_to_process_row(ref)]
-        distilled = distill_event(refs=refs_for_distill, previous=matched)
+            refs_for_distill = prior_refs + refs_for_distill
+        distilled = distill_event(
+            refs=refs_for_distill,
+            previous=matched,
+            market_context=market_context,
+        )
         row = _apply_distilled_to_row(row, distilled)
         action = "update"
     else:
         event_id = canonical_story_id(str(ref.get("title") or ""), str(ref.get("url") or ""))
         row = _ref_to_process_row(ref, event_id=event_id)
-        distilled = distill_event(refs=[ref], previous=None)
+        distilled = distill_event(
+            refs=enriched,
+            previous=None,
+            market_context=market_context,
+        )
         row = _apply_distilled_to_row(row, distilled)
         action = "create"
 
@@ -300,7 +342,9 @@ def process_staging_ref(
             merged_story_ids=[],
             reason="staging_update",
         )
-    mark_ref_merged(ref["ref_id"], event_id)
+    for r in enriched:
+        if r.get("ref_id"):
+            mark_ref_merged(str(r["ref_id"]), event_id)
     wiki_result: dict[str, Any] | None = None
     try:
         from trade_integrations.dataflows.hub_wiki.compile import compile_event_to_wiki, wiki_compile_enabled
@@ -322,7 +366,12 @@ def process_staging_ref(
     except Exception as exc:
         logger.debug("llm-wiki compile skipped for %s: %s", event_id, exc)
 
-    out = {"action": action, "event_id": event_id, "stats": stats}
+    out = {
+        "action": action,
+        "event_id": event_id,
+        "ref_count": len(enriched),
+        "stats": stats,
+    }
     if wiki_result:
         out["wiki_compile"] = wiki_result
     return out
@@ -373,6 +422,13 @@ def process_staging_batch(
 
     require_minimax_for_distillation()
 
+    from trade_integrations.dataflows.index_research.news_market_context import (
+        get_market_context_for_pipeline,
+    )
+
+    sym = (ticker or "NIFTY").strip().upper()
+    market_context = get_market_context_for_pipeline(ticker=sym, refresh=False)
+
     pending = list_pending_refs(ticker=ticker, limit=limit)
     cluster_stats: dict[str, int] = {}
     try:
@@ -384,6 +440,17 @@ def process_staging_batch(
     except Exception as exc:
         logger.debug("tier-2 cluster dedupe skipped: %s", exc)
 
+    from trade_integrations.dataflows.index_research.news_llm_batch_dedup import (
+        llm_batch_dedup_groups,
+        mechanical_singleton_groups,
+    )
+
+    try:
+        groups = llm_batch_dedup_groups(pending, market_context=market_context)
+    except Exception as exc:
+        logger.warning("LLM batch dedup failed, using singleton groups: %s", exc)
+        groups = mechanical_singleton_groups(pending)
+
     summary: dict[str, Any] = {
         "processed": 0,
         "created": 0,
@@ -391,25 +458,42 @@ def process_staging_batch(
         "skipped": 0,
         "errors": 0,
         "cluster_dedup": cluster_stats,
+        "llm_dedup_groups": len(groups),
+        "mechanical_refs": len(pending),
+        "market_context_as_of": market_context.get("as_of"),
         "wiki_exports": 0,
     }
-    for ref in pending:
+    for group in groups:
+        group_refs = group.get("refs")
+        if not isinstance(group_refs, list) or not group_refs:
+            id_map = {str(r.get("ref_id") or ""): r for r in pending if r.get("ref_id")}
+            group_refs = [id_map[rid] for rid in group.get("ref_ids") or [] if rid in id_map]
+        if not group_refs:
+            continue
         try:
-            result = process_staging_ref(ref, ticker=ticker)
-            summary["processed"] += 1
+            result = process_staging_group(
+                group_refs,
+                ticker=ticker,
+                market_context=market_context,
+            )
+            summary["processed"] += int(result.get("ref_count") or len(group_refs))
             action = result.get("action")
             if action == "create":
                 summary["created"] += 1
             elif action == "update":
                 summary["updated"] += 1
-            elif action == "skip_duplicate_url":
+            elif action in {"skip_duplicate_url", "discard_irrelevant", "skip_empty"}:
                 summary["skipped"] += 1
             wiki_compile = result.get("wiki_compile")
             if isinstance(wiki_compile, dict) and wiki_compile.get("ok"):
                 summary["wiki_exports"] = int(summary.get("wiki_exports") or 0) + 1
         except Exception as exc:
             summary["errors"] += 1
-            logger.warning("staging ref %s failed: %s", ref.get("ref_id"), exc)
+            logger.warning(
+                "staging group %s failed: %s",
+                group.get("group_id"),
+                exc,
+            )
     if run_wiki_rescan and int(summary.get("wiki_exports") or 0) > 0:
         try:
             from trade_integrations.dataflows.hub_wiki.compile import batch_rescan_if_enabled
@@ -470,6 +554,16 @@ def _safe_stage(name: str, fn: Any, /, **kwargs: Any) -> dict[str, Any]:
         return {"status": "error", "stage": name, "error": str(exc)}
 
 
+def _refresh_news_impact_cache(*, ticker: str) -> dict[str, Any]:
+    try:
+        from trade_integrations.dataflows.news_hub_bridge import refresh_news_impact
+
+        return refresh_news_impact(ticker=ticker, refresh_ingest=False)
+    except Exception as exc:
+        logger.warning("news_impact cache refresh failed: %s", exc)
+        return {"status": "error", "error": str(exc)[:200]}
+
+
 def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Daily compaction: drain staging queue and process pending refs."""
     from trade_integrations.hub_storage.news_migrations import ensure_hub_news_migrations
@@ -524,6 +618,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         }
 
     if not run_maintenance:
+        news_impact = _refresh_news_impact_cache(ticker=ticker) if run_drain else {"skipped": True}
         return {
             "mode": mode,
             "migration": migration,
@@ -533,9 +628,10 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "compact_events": {"skipped": True, "reason": "drain_only"},
             "cleanup": {"skipped": True, "reason": "drain_only"},
             "rollup": {"skipped": True, "reason": "drain_only"},
+            "news_impact_refresh": news_impact,
             "had_errors": any(
                 isinstance(part, dict) and part.get("status") == "error"
-                for part in (migration, staging)
+                for part in (migration, staging, news_impact)
             ),
         }
 
@@ -558,6 +654,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         lookback_days=7,
     )
     stages = (migration, staging, repair, backfill, compact_events, cleanup, rollup)
+    news_impact = _refresh_news_impact_cache(ticker=ticker) if run_drain else {"skipped": True}
     return {
         "mode": mode,
         "migration": migration,
@@ -567,7 +664,11 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         "compact_events": compact_events,
         "cleanup": cleanup,
         "rollup": rollup,
-        "had_errors": any(isinstance(part, dict) and part.get("status") == "error" for part in stages),
+        "news_impact_refresh": news_impact,
+        "had_errors": any(
+            isinstance(part, dict) and part.get("status") == "error"
+            for part in (*stages, news_impact)
+        ),
     }
 
 

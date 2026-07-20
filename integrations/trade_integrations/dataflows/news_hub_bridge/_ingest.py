@@ -136,11 +136,25 @@ def _sync_distill_limit() -> int:
         return 10
 
 
+def _light_sync_distill_limit() -> int:
+    try:
+        return max(0, int(os.getenv("HUB_NEWS_LIGHT_SYNC_DISTILL_LIMIT", "0")))
+    except ValueError:
+        return 0
+
+
+def _resolve_sync_distill_limit(sync_distill_limit: int | None) -> int:
+    if sync_distill_limit is not None:
+        return max(0, int(sync_distill_limit))
+    return _sync_distill_limit()
+
+
 def ingest_rows_to_hub(
     rows: list[dict[str, Any]],
     *,
     ticker: str,
     collection_day: str | None = None,
+    sync_distill_limit: int | None = None,
 ) -> dict[str, Any]:
     if not rows:
         return {"ingested": 0, "cache_hits": 0, "verified": 0}
@@ -206,7 +220,7 @@ def ingest_rows_to_hub(
         sync_stats: dict[str, Any] = {}
         distill_mode = "deferred"
         if not pause.get("pipeline_paused"):
-            sync_limit = _sync_distill_limit()
+            sync_limit = _resolve_sync_distill_limit(sync_distill_limit)
             if sync_limit > 0:
                 sync_stats = process_staging_batch(ticker=hub_sym, limit=sync_limit)
                 distill_mode = "sync"
@@ -242,10 +256,16 @@ def ingest_news_articles(
     ticker: str,
     kind: str = "ticker",
     collection_day: str | None = None,
+    sync_distill_limit: int | None = None,
 ) -> dict[str, int]:
     hub_sym = hub_ticker_for_symbol(ticker, kind=kind)
     rows = [article_to_hub_row(a) for a in articles if str(getattr(a, "title", "") or "").strip()]
-    return ingest_rows_to_hub(rows, ticker=hub_sym, collection_day=collection_day)
+    return ingest_rows_to_hub(
+        rows,
+        ticker=hub_sym,
+        collection_day=collection_day,
+        sync_distill_limit=sync_distill_limit,
+    )
 
 
 def ingest_rss_entries(
@@ -255,10 +275,16 @@ def ingest_rss_entries(
     label: str,
     feed_url: str,
     collection_day: str | None = None,
+    sync_distill_limit: int | None = None,
 ) -> dict[str, int]:
     rows = [rss_entry_to_hub_row(e, label=label, feed_url=feed_url) for e in entries if e.get("title")]
     hub_sym = hub_ticker_for_symbol(ticker)
-    return ingest_rows_to_hub(rows, ticker=hub_sym, collection_day=collection_day)
+    return ingest_rows_to_hub(
+        rows,
+        ticker=hub_sym,
+        collection_day=collection_day,
+        sync_distill_limit=sync_distill_limit,
+    )
 
 
 def ingest_searxng_results(
@@ -267,10 +293,16 @@ def ingest_searxng_results(
     ticker: str,
     kind: str = "ticker",
     collection_day: str | None = None,
+    sync_distill_limit: int | None = None,
 ) -> dict[str, int]:
     rows = [searxng_result_to_hub_row(r) for r in results if str(r.get("title") or "").strip()]
     hub_sym = hub_ticker_for_symbol(ticker, kind=kind)
-    return ingest_rows_to_hub(rows, ticker=hub_sym, collection_day=collection_day)
+    return ingest_rows_to_hub(
+        rows,
+        ticker=hub_sym,
+        collection_day=collection_day,
+        sync_distill_limit=sync_distill_limit,
+    )
 
 
 def enrich_articles_with_hub_tags(articles: list[Any], *, ticker: str) -> list[Any]:

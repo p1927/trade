@@ -18,6 +18,7 @@ from trade_integrations.dataflows.hub_wiki import (
 )
 from trade_integrations.dataflows.hub_wiki.config import llm_wiki_news_sources_dir
 from trade_integrations.dataflows.index_research.news_entity_worker import load_worker_last_summary
+from trade_integrations.dataflows.index_research.news_market_context import load_last_market_context
 from trade_integrations.hub_storage.news_migrations import load_migration_state, needs_news_migration
 from trade_integrations.hub_storage.news_staging_store import (
     discarded_count,
@@ -53,6 +54,7 @@ def hub_news_pipeline_status(*, ticker: str = "NIFTY") -> dict[str, Any]:
     project_dir = ensure_llm_wiki_project()
     alignment = project_path_aligned(expected_dir=project_dir)
     worker_last = load_worker_last_summary() or {}
+    market_context = load_last_market_context() or {}
     cluster_dedup = worker_last.get("cluster_dedup") if isinstance(worker_last.get("cluster_dedup"), dict) else {}
 
     llm_wiki_block: dict[str, Any] = {
@@ -102,6 +104,8 @@ def hub_news_pipeline_status(*, ticker: str = "NIFTY") -> dict[str, Any]:
         "relevance_gate_enabled": relevance_gate_enabled(),
         "distilled_event_count": count_events(ticker=sym),
         "worker_last": worker_last,
+        "market_context": market_context,
+        "llm_dedup_groups_last": worker_last.get("llm_dedup_groups"),
         "migration": migration,
         "llm_wiki": llm_wiki_block,
     }
