@@ -48,3 +48,25 @@ def write_dataframe(df: pd.DataFrame, path: Path) -> None:
         if tmp.is_file():
             tmp.unlink(missing_ok=True)
     df.to_csv(csv_path, index=False)
+
+
+def upsert_by_keys(
+    existing: pd.DataFrame,
+    incoming: pd.DataFrame,
+    *,
+    dedupe_keys: list[str],
+    sort_key: str | None = None,
+) -> pd.DataFrame:
+    """Merge frames keeping last row per dedupe key set."""
+    if existing.empty:
+        merged = incoming.copy()
+    elif incoming.empty:
+        merged = existing.copy()
+    else:
+        merged = pd.concat([existing, incoming], ignore_index=True)
+    keys = [k for k in dedupe_keys if k in merged.columns]
+    if not keys:
+        return merged
+    if sort_key and sort_key in merged.columns:
+        merged = merged.sort_values(sort_key)
+    return merged.drop_duplicates(keys, keep="last").reset_index(drop=True)

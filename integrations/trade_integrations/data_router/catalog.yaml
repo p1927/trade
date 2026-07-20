@@ -1,0 +1,89 @@
+# Unified source chains for DataRouter — env overrides: DATA_ROUTER_CHAIN_{DOMAIN}_{MARKET}
+modes:
+  ohlcv: sequential
+  fundamentals: parallel_merge
+  news: parallel_dedupe
+  flows: sequential
+
+sources:
+  openalgo:
+    tier: capture
+    markets: [india_equity]
+    domains: [ohlcv]
+    adapter: openalgo
+  yfinance:
+    tier: free
+    markets: [india_equity, us_equity, global]
+    domains: [ohlcv, fundamentals, news]
+    adapter: yfinance
+  yahoo:
+    tier: free
+    markets: [us_equity, india_equity, hk_equity]
+    domains: [ohlcv]
+    adapter: vibe_loader
+  stooq:
+    tier: free
+    markets: [us_equity]
+    domains: [ohlcv]
+    adapter: vibe_loader
+  tiingo:
+    tier: tiered
+    markets: [us_equity]
+    domains: [ohlcv]
+    adapter: vibe_loader
+  fmp:
+    tier: tiered
+    markets: [us_equity]
+    domains: [ohlcv]
+    adapter: vibe_loader
+  finnhub:
+    tier: tiered
+    markets: [us_equity]
+    domains: [ohlcv]
+    adapter: vibe_loader
+  alphavantage:
+    tier: tiered
+    markets: [us_equity, global]
+    domains: [ohlcv, news]
+    adapter: vibe_loader
+  alpha_vantage:
+    tier: tiered
+    markets: [global]
+    domains: [ohlcv, news]
+    adapter: alpha_vantage
+  eod_historical:
+    tier: tiered
+    markets: [india_equity]
+    domains: [ohlcv]
+    adapter: eod_historical
+  tapetide:
+    tier: tiered
+    markets: [india_equity]
+    domains: [fundamentals]
+    adapter: tapetide
+  searxng:
+    tier: free
+    markets: [global]
+    domains: [news]
+    adapter: searxng
+  dalal_bse:
+    tier: free
+    markets: [india_equity]
+    domains: [fundamentals]
+    adapter: dalal_bse
+  nse_browser:
+    tier: mission
+    markets: [india_index]
+    domains: [flows]
+    adapter: nse_mission
+
+chains:
+  ohlcv:
+    india_equity: [openalgo, yfinance, eod_historical, alpha_vantage]
+    us_equity: [yahoo, stooq, yfinance, tiingo, fmp, finnhub, alphavantage]
+  news:
+    global: [searxng, yfinance, alpha_vantage]
+  fundamentals:
+    india_equity: [dalal_bse, yfinance, tapetide]
+  flows:
+    india_index: [nse_browser]

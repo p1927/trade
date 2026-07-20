@@ -36,6 +36,8 @@ HUB_VIEWS = (
     "history_manifest",
     "tiered_api_manifest",
     "tiered_api_ledger",
+    "datasets_manifest",
+    "backlog_pending",
 )
 
 _BUILTIN_QUERIES: dict[str, str] = {
@@ -358,6 +360,30 @@ def register_hub_views(con: duckdb.DuckDBPyConnection) -> list[str]:
             f"SELECT * FROM read_json_auto('{escaped}', union_by_name=true)"
         )
     registered.append("tiered_api_ledger")
+
+    datasets_manifest = get_hub_dir() / "_data" / "datasets" / "manifest.json"
+    manifest_resolved = _resolve_readable_path(datasets_manifest)
+    if manifest_resolved is None:
+        con.execute("CREATE OR REPLACE VIEW datasets_manifest AS SELECT NULL WHERE false")
+    else:
+        escaped = str(manifest_resolved).replace("'", "''")
+        con.execute(
+            f"CREATE OR REPLACE VIEW datasets_manifest AS "
+            f"SELECT * FROM read_json_auto('{escaped}')"
+        )
+    registered.append("datasets_manifest")
+
+    backlog_pending = get_hub_dir() / "_data" / "backlog" / "pending.jsonl"
+    backlog_resolved = _resolve_readable_path(backlog_pending)
+    if backlog_resolved is None:
+        con.execute("CREATE OR REPLACE VIEW backlog_pending AS SELECT NULL WHERE false")
+    else:
+        escaped = str(backlog_pending).replace("'", "''")
+        con.execute(
+            f"CREATE OR REPLACE VIEW backlog_pending AS "
+            f"SELECT * FROM read_json_auto('{escaped}', format='newline_delimited')"
+        )
+    registered.append("backlog_pending")
 
     return registered
 

@@ -181,6 +181,9 @@ def fetch_fundamentals_in(normalized: NormalizedTicker) -> StageResult:
     if tapetide_configured() and allow_tiered_apis():
         fetchers.append(("tapetide", lambda: _fetch_tapetide(normalized.base_symbol)))
 
+    from trade_integrations.data_router.callers import order_fetchers_by_catalog
+
+    fetchers = order_fetchers_by_catalog("fundamentals", "india_equity", fetchers)
     attempts = run_sources(fetchers, optional=optional_source_names("fundamentals"))
     merged = _merge_fundamentals(attempts)
     has_output = bool(merged.get("ratios") or merged.get("financials") or merged.get("quarterly_results"))

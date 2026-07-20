@@ -17,10 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MCP_URL = "https://mcp.tapetide.com/mcp"
 REQUEST_TIMEOUT = 45
-PROFILE_CACHE_TTL_SEC = 15 * 60
 
-_profile_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-_events_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _rate_limited_until: float = 0.0
 
 
@@ -190,28 +187,8 @@ def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         raise
 
 
-def _cache_get(cache: dict[str, tuple[float, dict[str, Any]]], key: str) -> dict[str, Any] | None:
-    row = cache.get(key)
-    if not row:
-        return None
-    expires_at, payload = row
-    if time.monotonic() > expires_at:
-        cache.pop(key, None)
-        return None
-    return payload
-
-
-def _cache_set(cache: dict[str, tuple[float, dict[str, Any]]], key: str, payload: dict[str, Any]) -> None:
-    cache[key] = (time.monotonic() + PROFILE_CACHE_TTL_SEC, payload)
-
-
 def get_company_profile(symbol: str, *, include_peers: bool = True) -> dict[str, Any]:
     symbol_upper = symbol.upper()
-    cache_key = f"{symbol_upper}:profile"
-    cached = _cache_get(_profile_cache, cache_key)
-    if cached is not None:
-        return cached
-
     data = call_tool(
         "get_company_profile",
         {"symbol": symbol_upper, "include": ["peers"]},
@@ -220,18 +197,11 @@ def get_company_profile(symbol: str, *, include_peers: bool = True) -> dict[str,
     if result.get("raw_text") and is_rate_limit_message(str(result["raw_text"])):
         _mark_rate_limited(str(result["raw_text"]))
         raise TapetideRateLimitError(str(result["raw_text"]))
-
-    _cache_set(_profile_cache, cache_key, result)
     return result
 
 
 def get_stock_events(symbol: str, *, limit: int = 20) -> dict[str, Any]:
     symbol_upper = symbol.upper()
-    cache_key = f"{symbol_upper}:limit={limit}"
-    cached = _cache_get(_events_cache, cache_key)
-    if cached is not None:
-        return cached
-
     data = call_tool(
         "get_stock_events",
         {"symbol": symbol_upper, "limit": limit},
@@ -240,6 +210,4 @@ def get_stock_events(symbol: str, *, limit: int = 20) -> dict[str, Any]:
     if result.get("raw_text") and is_rate_limit_message(str(result["raw_text"])):
         _mark_rate_limited(str(result["raw_text"]))
         raise TapetideRateLimitError(str(result["raw_text"]))
-
-    _cache_set(_events_cache, cache_key, result)
     return result

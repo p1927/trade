@@ -24,10 +24,6 @@ class TieredResult:
     budget: dict[str, Any]
 
 
-def _force_bypasses_budget() -> bool:
-    return os.getenv("TRADE_TIERED_API_FORCE", "").strip().lower() in ("1", "true", "yes")
-
-
 def _check_fetch_policy(source: str) -> None:
     try:
         from trade_integrations.dataflows.company_research.fetch_policy import tiered_source_allowed
@@ -38,6 +34,18 @@ def _check_fetch_policy(source: str) -> None:
             )
     except ImportError:
         pass
+
+
+def _force_bypasses_budget() -> bool:
+    return os.getenv("TRADE_TIERED_API_FORCE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _should_persist_raw_cache(source: str, data: Any) -> bool:
+    from trade_integrations.tiered_api.cache_policy import should_cache_response
+
+    if os.getenv("TIERED_API_RAW_CACHE", "0").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    return should_cache_response(data)
 
 
 def tiered_fetch(
@@ -90,6 +98,15 @@ def tiered_fetch(
             budget.check_budget_headroom(source)
 
         data = fetch_fn()
+        if not _should_persist_raw_cache(source, data):
+            status = budget.record_call(source, req_hash, cache_hit=False)
+            return TieredResult(
+                data=data,
+                cache_hit=False,
+                source=source.strip().lower(),
+                req_hash=req_hash,
+                budget=status,
+            )
         hub_store.save_cached(
             source,
             req_hash,

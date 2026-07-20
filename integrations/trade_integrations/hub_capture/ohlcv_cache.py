@@ -20,6 +20,12 @@ OHLCV_SERIES = "ohlcv_daily"
 _META_NAME = "_meta.json"
 
 
+def _datasets_redirect_enabled() -> bool:
+    import os
+
+    return os.getenv("DATA_ROUTER_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -83,6 +89,32 @@ def read_cached_bars(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Load cached OHLCV bars for ``[start_date, end_date]`` inclusive."""
     entity = _entity_id(symbol)
+    if _datasets_redirect_enabled():
+        try:
+            from trade_integrations.data_router.normalized_store import read_ohlcv
+            from trade_integrations.data_router.types import FetchSpec
+
+            spec = FetchSpec(
+                domain="ohlcv",
+                market="india_equity",
+                symbol=symbol,
+                start=start_date,
+                end=end_date,
+            )
+            frame, path = read_ohlcv(spec)
+            if not frame.empty:
+                cached_dates = frame["date"].astype(str).tolist() if "date" in frame.columns else []
+                return frame, {
+                    "entity_id": entity,
+                    "cache_hit": True,
+                    "cached_dates": cached_dates,
+                    "cache_as_of": None,
+                    "source": "datasets",
+                    "normalized_path": path,
+                }
+        except Exception as exc:
+            logger.debug("datasets redirect read miss: %s", exc)
+
     path = _bars_path(entity)
     meta = _read_meta(entity)
     if not path.is_file():
@@ -154,6 +186,22 @@ def write_cached_bars(
         "last_source": source,
     }
     _write_meta(entity, meta)
+    if _datasets_redirect_enabled():
+        try:
+            from trade_integrations.data_router.normalized_store import write_ohlcv
+            from trade_integrations.data_router.types import FetchSpec
+
+            write_ohlcv(
+                FetchSpec(
+                    domain="ohlcv",
+                    market="india_equity",
+                    symbol=symbol,
+                ),
+                merged,
+                source=source,
+            )
+        except Exception as exc:
+            logger.debug("datasets redirect write failed: %s", exc)
     return {"status": "ok", "entity_id": entity, "appended": int(len(normalized)), **meta}
 
 

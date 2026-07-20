@@ -540,6 +540,41 @@ def history_incremental_sync_enabled() -> bool:
     }
 
 
+def sync_index_ohlcv_via_data_router(*, start: str, end: str) -> dict[str, Any]:
+    """Optional recent index OHLCV overlay via DataRouter when enabled."""
+    from trade_integrations.data_router import data_router_enabled, fetch
+    from trade_integrations.data_router.types import FetchSpec
+
+    if not data_router_enabled():
+        return {"status": "skipped", "reason": "DATA_ROUTER_ENABLED off"}
+
+    results: dict[str, Any] = {}
+    for symbol, dataset in (("^NSEI", "nifty_ohlcv_daily"), ("^BSESN", "sensex_ohlcv_daily")):
+        spec = FetchSpec(
+            domain="ohlcv",
+            market="india_equity",
+            symbol=symbol,
+            start=start[:10],
+            end=end[:10],
+        )
+        result = fetch(spec)
+        if result.status != "ok" or result.data is None or getattr(result.data, "empty", True):
+            results[dataset] = {
+                "status": "skipped",
+                "reason": result.status,
+                "attempts": [a.source_id for a in (result.attempts or [])],
+            }
+            continue
+        overlay = result.data.copy()
+        overlay["source"] = str(result.source_id or "data_router")
+        keep_cols = [c for c in ("date", "open", "high", "low", "close", "volume", "source") if c in overlay.columns]
+        overlay = overlay[keep_cols]
+        existing = load_history_dataset(dataset)
+        merged = merge_with_priority([existing, overlay], on=["date"])
+        results[dataset] = save_history_dataset(dataset, merged)
+    return {"status": "ok", "datasets": results}
+
+
 def run_history_incremental_sync(*, days: int = 30, explicit: bool = False) -> dict[str, Any]:
     """Lightweight append: recent flows/derivatives/sector + hub mirror (no yfinance 2006 refetch)."""
     from datetime import date, timedelta
@@ -556,6 +591,13 @@ def run_history_incremental_sync(*, days: int = 30, explicit: bool = False) -> d
         "historic_derivatives": sync_historic_derivatives_to_cold_tier(start=start, end=end),
         "repo_flows": sync_repo_flows_to_cold_tier(start=start, end=end),
     }
+    try:
+        from trade_integrations.data_router import data_router_enabled
+
+        if data_router_enabled():
+            results["data_router_index_ohlcv"] = sync_index_ohlcv_via_data_router(start=start, end=end)
+    except Exception as exc:
+        results["data_router_index_ohlcv"] = {"status": "error", "error": str(exc)}
     try:
         from trade_integrations.nse_browser.repository import ingest_repository_to_hub
 

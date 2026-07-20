@@ -34,7 +34,8 @@ def test_request_hash_strips_apikey():
 
 
 @pytest.mark.unit
-def test_tiered_fetch_cache_hit_skips_budget(hub_tmp):
+def test_tiered_fetch_cache_hit_skips_budget(hub_tmp, monkeypatch):
+    monkeypatch.setenv("TIERED_API_RAW_CACHE", "1")
     req = TieredRequest(url="https://example.com/data", params={"symbol": "TEST"})
     calls = {"n": 0}
 

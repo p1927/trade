@@ -60,7 +60,33 @@ def _patch_default_config() -> None:
     if alpaca_on:
         stock_vendors.append("alpaca")
     stock_vendors.append("yfinance")
-    stock_chain = os.getenv("TRADINGAGENTS_CORE_STOCK_DATA_VENDOR") or ",".join(stock_vendors)
+    stock_chain = os.getenv("TRADINGAGENTS_CORE_STOCK_DATA_VENDOR")
+    if not stock_chain:
+        try:
+            from trade_integrations.data_router.catalog import get_chain
+
+            india = [s for s in get_chain("ohlcv", "india_equity") if s != "eod_historical"]
+            us = get_chain("ohlcv", "us_equity")
+            vendor_map = {
+                "openalgo": "openalgo",
+                "yfinance": "yfinance",
+                "yahoo": "yfinance",
+                "stooq": "yfinance",
+                "alpha_vantage": "alpha_vantage",
+                "alphavantage": "alpha_vantage",
+                "eod_historical": "yfinance",
+            }
+            if openalgo_on:
+                stock_vendors = ["openalgo"] + [
+                    vendor_map.get(s, s)
+                    for s in india
+                    if vendor_map.get(s, s) not in ("openalgo",)
+                ]
+            else:
+                stock_vendors = [vendor_map.get(s, s) for s in us[:4]]
+            stock_chain = ",".join(dict.fromkeys(stock_vendors))
+        except Exception:
+            stock_chain = ",".join(stock_vendors) if stock_vendors else "yfinance"
     indicator_chain = os.getenv("TRADINGAGENTS_TECHNICAL_INDICATORS_DATA_VENDOR") or stock_chain
     cfg["data_vendors"] = {
         "core_stock_apis": stock_chain,
@@ -116,6 +142,29 @@ def _patch_vendor_routing() -> None:
     interface.VENDOR_METHODS["get_news"]["aggregated"] = get_news_aggregated
     interface.VENDOR_METHODS["get_global_news"]["searxng"] = get_global_news_searxng
     interface.VENDOR_METHODS["get_global_news"]["aggregated"] = get_global_news_aggregated
+
+    _patch_data_router_routing(interface)
+
+
+def _patch_data_router_routing(interface) -> None:
+    """Route get_stock_data through DataRouter when enabled."""
+    original_route = interface.route_to_vendor
+
+    def route_to_vendor_patched(method: str, *args, **kwargs):
+        if method == "get_stock_data" and len(args) >= 3:
+            try:
+                from trade_integrations.data_router.callers import fetch_stock_data_via_router
+
+                routed = fetch_stock_data_via_router(args[0], args[1], args[2])
+                if routed is not None:
+                    return routed
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).debug("data_router stock fetch miss: %s", exc)
+        return original_route(method, *args, **kwargs)
+
+    interface.route_to_vendor = route_to_vendor_patched
 
 
 def _patch_sentiment_analyst() -> None:
