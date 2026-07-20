@@ -55,6 +55,35 @@ def test_tiered_fetch_cache_hit_skips_budget(hub_tmp, monkeypatch):
 
 
 @pytest.mark.unit
+def test_budget_exhausted_serves_stale_cache(hub_tmp, monkeypatch):
+    monkeypatch.setenv("TIERED_API_RAW_CACHE", "1")
+    monkeypatch.setenv("TIERED_API_ALPHA_VANTAGE_HUB_TTL_HOURS", "1")
+    req = TieredRequest(url="https://example.com/stale", params={"symbol": "STALE"})
+    req_hash = request_hash("alpha_vantage", req)
+    hub_store.save_cached("alpha_vantage", req_hash, {"value": "cached"}, request_meta={})
+
+    path = hub_store._cache_path("alpha_vantage", req_hash)
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    envelope["fetched_at"] = "2020-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+    for _ in range(2):
+        tiered_fetch(
+            "alpha_vantage",
+            TieredRequest(url="https://example.com/other", params={"i": _}),
+            lambda: {"fresh": True},
+            skip_policy_check=True,
+        )
+
+    def should_not_run():
+        raise AssertionError("fetch_fn should not run when stale cache is served")
+
+    result = tiered_fetch("alpha_vantage", req, should_not_run, skip_policy_check=True)
+    assert result.cache_hit is True
+    assert result.data == {"value": "cached"}
+
+
+@pytest.mark.unit
 def test_budget_exhausted(hub_tmp):
     req = TieredRequest(url="https://example.com/x", params={"i": 1})
     counter = {"n": 0}

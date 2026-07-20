@@ -88,3 +88,31 @@ def test_finalize_message_triggers_debate_worker():
     assert statuses == ["started", "ready"]
     ready = [e for e in bus.events if e[1] == "research.debate" and e[2]["status"] == "ready"][0]
     assert ready[2]["debate"] == debate_payload
+
+
+@pytest.mark.unit
+def test_maybe_start_debate_emits_error_when_no_market_data():
+    bus = _FakeEventBus()
+
+    with (
+        patch("src.trade.hub_bridge.load_debate_artifact", return_value=None),
+        patch("trade_integrations.context.hub.is_agent_debate_cache_fresh", return_value=False),
+        patch("src.trade.hub_bridge.is_debate_running", return_value=False),
+        patch(
+            "src.trade.hub_bridge.run_agent_debate_sync",
+            side_effect=ValueError("Agent debate unavailable for CURRENT: no OHLCV history"),
+        ),
+        patch("src.trade.hub_bridge.threading.Thread") as mock_thread,
+    ):
+        def _run_worker() -> None:
+            target = mock_thread.call_args.kwargs.get("target") or mock_thread.call_args[1]["target"]
+            target()
+
+        mock_thread.return_value.start.side_effect = _run_worker
+        _maybe_start_debate("sess-debate", "CURRENT", "stock", bus)
+
+    error_events = [
+        e for e in bus.events if e[1] == "research.debate" and e[2].get("status") == "error"
+    ]
+    assert len(error_events) == 1
+    assert "no OHLCV history" in error_events[0][2]["message"]

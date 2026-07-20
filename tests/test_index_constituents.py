@@ -131,6 +131,45 @@ def test_yfinance_fallback_normalizes(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_load_from_local_json_when_nselib_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
+
+    class FakeCapitalMarket:
+        @staticmethod
+        def nifty50_equity_list():
+            raise FileNotFoundError("No data equity list available")
+
+    class FakeNselib:
+        capital_market = FakeCapitalMarket()
+
+    monkeypatch.setitem(__import__("sys").modules, "nselib", FakeNselib())
+    monkeypatch.setattr(
+        "trade_integrations.nse_browser.repository.repo_root",
+        lambda: tmp_path,
+    )
+
+    from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
+
+    local_json = tmp_path / "historic_data" / "ind_nifty50_constituents_current.json"
+    local_json.parent.mkdir(parents=True)
+    local_json.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "symbols": ["RELIANCE", "TCS", "HDFCBANK"],
+                "count": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = load_nifty50_constituents()
+    assert len(rows) == 3
+    assert {row.symbol for row in rows} == {"RELIANCE", "TCS", "HDFCBANK"}
+    assert sum(row.weight for row in rows) == pytest.approx(1.0)
+
+
+@pytest.mark.unit
 def test_constituent_row_has_name_sector_weight():
     from trade_integrations.dataflows.index_research.models import ConstituentRow
 

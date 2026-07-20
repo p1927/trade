@@ -4,14 +4,25 @@ from __future__ import annotations
 
 import pytest
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 from trade_integrations.dataflows.company_research.market import (
     Market,
     detect_market,
+    india_trading_date,
     normalize_ticker,
 )
+
 from trade_integrations.dataflows.company_research.models import CompanyResearchDoc, StageResult
 from trade_integrations.dataflows.company_research.aggregator import run_company_research
-from datetime import datetime, timezone
+
+
+@pytest.mark.unit
+class TestIndiaTradingDate:
+    def test_utc_evening_maps_to_next_ist_day(self):
+        utc = datetime(2026, 7, 20, 20, 0, tzinfo=timezone.utc)
+        assert india_trading_date(now=utc).isoformat() == "2026-07-21"
 
 
 @pytest.mark.unit

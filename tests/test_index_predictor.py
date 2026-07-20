@@ -99,6 +99,7 @@ def test_predict_nifty_hybrid(monkeypatch):
     assert "direction_view" in result
     assert "direction_confidence" in result
     assert "direction_confidence_raw" in result
+    assert result.get("direction_model_score") == result.get("direction_confidence_raw")
     if result.get("direction_confidence_raw") is not None and result.get("direction_confidence") is not None:
         assert result["direction_confidence"] <= max(result["direction_confidence_raw"], 0.56)
     assert "expected_return_pct" in result
