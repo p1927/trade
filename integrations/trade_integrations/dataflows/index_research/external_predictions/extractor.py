@@ -1,0 +1,380 @@
+"""LLM structured extraction for third-party NIFTY forecasts."""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from datetime import date
+from typing import Any
+
+from trade_integrations.dataflows.index_research.external_predictions.models import (
+    ExternalPredictionRecord,
+    ExternalPredictionSource,
+    ExternalPredictionTarget,
+    utc_now_iso,
+)
+from trade_integrations.dataflows.index_research.external_predictions.validators import (
+    validate_record,
+)
+
+logger = logging.getLogger(__name__)
+
+_JSON_OBJECT = re.compile(r"\{[\s\S]*\}")
+_LEVEL_PATTERN = re.compile(
+    r"nifty(?:\s*50)?[^0-9]{0,40}(\d{1,2}[,.]?\d{3,5}(?:\.\d+)?)",
+    re.I,
+)
+_RANGE_PATTERN = re.compile(
+    r"(\d{1,2}[,.]?\d{3,5})\s*(?:-|to|–)\s*(\d{1,2}[,.]?\d{3,5})",
+    re.I,
+)
+
+
+def _ensure_env_loaded() -> None:
+    try:
+        from trade_integrations.env import load_trade_env
+
+        load_trade_env()
+    except Exception:
+        logger.debug("load_trade_env skipped", exc_info=True)
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    text = (text or "").strip()
+    if not text:
+        return {}
+    candidates: list[str] = []
+    match = _JSON_OBJECT.search(text)
+    if match:
+        candidates.append(match.group(0))
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+    for blob in candidates:
+        try:
+            payload = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _maybe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.replace(",", "").strip()
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not (out == out):
+        return None
+    return out
+
+
+def _normalize_level(value: float | None, spot: float | None) -> float | None:
+    if value is None:
+        return None
+    if spot and spot > 1000 and value < 500:
+        return None
+    if value < 5000 or value > 50000:
+        return None
+    if spot and spot > 0:
+        change = abs(value - spot) / spot
+        if change > 0.5:
+            return None
+    return round(value, 2)
+
+
+def _horizon_label(horizon_days: int) -> str:
+    if horizon_days <= 7:
+        return "short-term (~1 week)"
+    if horizon_days <= 14:
+        return "near-term (~2 weeks)"
+    if horizon_days <= 30:
+        return "medium-term (~1 month)"
+    return f"~{horizon_days} trading days"
+
+
+def _build_prompt(
+    *,
+    source: ExternalPredictionSource,
+    horizon_days: int,
+    spot: float | None,
+    title: str,
+    url: str,
+    published_at: str,
+    body: str,
+) -> str:
+    spot_line = f"Current NIFTY spot reference: {spot:.0f}" if spot else "Current NIFTY spot: unknown"
+    return f"""Extract a structured NIFTY 50 index forecast from the article below.
+
+Source: {source.display_name}
+User-selected horizon: {horizon_days} trading days ({_horizon_label(horizon_days)})
+{spot_line}
+Published: {published_at or "unknown"}
+URL: {url}
+Title: {title}
+
+Return ONLY valid JSON with this schema:
+{{
+  "has_prediction": true,
+  "instrument": "NIFTY50",
+  "target_low": number or null,
+  "target_mid": number or null,
+  "target_high": number or null,
+  "target_date": "YYYY-MM-DD or empty",
+  "direction": "bullish" | "bearish" | "neutral",
+  "expected_return_pct": number or null,
+  "summary": "2-3 sentence overview of their NIFTY view and timing",
+  "rationale_bullets": ["driver 1", "driver 2", "driver 3"],
+  "confidence": "high" | "medium" | "low",
+  "published_at": "YYYY-MM-DD or empty"
+}}
+
+Rules:
+- ONLY extract explicit NIFTY 50 / Nifty index LEVEL targets (index points 15000-35000).
+- REJECT single-stock price targets, Sensex-only targets, options strategies, F&O commentary.
+- REJECT if the page is a stock listicle without a clear NIFTY 50 index level forecast.
+- Prefer forecasts whose target_date is ~{horizon_days} trading days from today ({_horizon_label(horizon_days)}).
+- If no explicit NIFTY 50 index target is stated, set has_prediction=false and null targets.
+- summary: plain-language context a trader can verify against the article.
+- rationale_bullets: 3-5 bullets explaining WHY they expect that move (flows, events, earnings, macro, technicals).
+
+Article:
+{body[:8000]}
+"""
+
+
+def _build_rationale_prompt(
+    *,
+    source: ExternalPredictionSource,
+    horizon_days: int,
+    title: str,
+    url: str,
+    body: str,
+    target_mid: float | None,
+) -> str:
+    target_line = f"Known NIFTY target from article: {target_mid:,.0f}" if target_mid else "Target level mentioned in article"
+    return f"""Summarize the reasoning behind this NIFTY 50 forecast from the article below.
+
+Source: {source.display_name}
+Horizon context: {horizon_days} trading days ({_horizon_label(horizon_days)})
+{target_line}
+URL: {url}
+Title: {title}
+
+Return ONLY valid JSON:
+{{
+  "summary": "2-3 sentence overview",
+  "rationale_bullets": ["reason 1", "reason 2", "reason 3"]
+}}
+
+Article:
+{body[:6000]}
+"""
+
+
+def _regex_fallback(body: str, spot: float | None) -> ExternalPredictionTarget:
+    target = ExternalPredictionTarget()
+    range_match = _RANGE_PATTERN.search(body)
+    if range_match:
+        low = _normalize_level(_maybe_float(range_match.group(1)), spot)
+        high = _normalize_level(_maybe_float(range_match.group(2)), spot)
+        if low and high:
+            target.low = min(low, high)
+            target.high = max(low, high)
+            target.mid = round((target.low + target.high) / 2, 2)
+            return target
+    levels: list[float] = []
+    for match in _LEVEL_PATTERN.finditer(body):
+        level = _normalize_level(_maybe_float(match.group(1)), spot)
+        if level:
+            levels.append(level)
+    if not levels:
+        return target
+    if len(levels) >= 2:
+        target.low = min(levels)
+        target.high = max(levels)
+        target.mid = round(sum(levels) / len(levels), 2)
+    else:
+        target.mid = levels[0]
+    return target
+
+
+def _call_minimax(prompt: str, *, max_tokens: int = 1200) -> dict[str, Any]:
+    from trade_integrations.dataflows.index_research.news_distillation import (
+        call_minimax_json_text,
+    )
+
+    raw = call_minimax_json_text(prompt, max_tokens=max_tokens)
+    return _parse_json_object(raw)
+
+
+def extract_prediction_from_text(
+    *,
+    source: ExternalPredictionSource,
+    horizon_days: int,
+    spot: float | None,
+    title: str,
+    url: str,
+    snippet: str,
+    body: str,
+    published_at: str = "",
+    symbol: str = "NIFTY",
+    pipeline: PipelineLogger | None = None,
+) -> ExternalPredictionRecord:
+    """Extract structured prediction via LLM with regex fallback."""
+    _ensure_env_loaded()
+    text = body or snippet
+    record = ExternalPredictionRecord(
+        source_id=source.id,
+        symbol=symbol.upper(),
+        horizon_days=horizon_days,
+        as_of=date.today().isoformat(),
+        spot_at_fetch=spot,
+        provenance={"url": url, "title": title, "snippet": snippet[:500]},
+        fetch_status="not_found",
+    )
+
+    if not text.strip():
+        record.error_message = "No article text available"
+        return record
+
+    payload: dict[str, Any] = {}
+    model_name = "regex"
+    try:
+        prompt = _build_prompt(
+            source=source,
+            horizon_days=horizon_days,
+            spot=spot,
+            title=title,
+            url=url,
+            published_at=published_at,
+            body=text,
+        )
+        payload = _call_minimax(prompt, max_tokens=1400)
+        model_name = "minimax"
+        if pipeline:
+            pipeline.info("extract", "MiniMax extraction completed", source_id=source.id)
+    except Exception as exc:
+        if pipeline:
+            pipeline.warn("extract", f"MiniMax unavailable — using regex fallback: {exc}", source_id=source.id)
+        logger.debug("LLM extraction failed for %s: %s", source.id, exc)
+
+    has_prediction = bool(payload.get("has_prediction", True))
+    target = ExternalPredictionTarget(
+        low=_normalize_level(_maybe_float(payload.get("target_low")), spot),
+        mid=_normalize_level(_maybe_float(payload.get("target_mid")), spot),
+        high=_normalize_level(_maybe_float(payload.get("target_high")), spot),
+    )
+    used_regex_target = False
+    if not any(v is not None for v in (target.low, target.mid, target.high)):
+        target = _regex_fallback(text, spot)
+        used_regex_target = any(v is not None for v in (target.low, target.mid, target.high))
+        if used_regex_target:
+            model_name = "regex"
+            if pipeline:
+                pipeline.info("extract", "Regex fallback found numeric target", source_id=source.id)
+
+    if not has_prediction and not any(
+        v is not None for v in (target.low, target.mid, target.high)
+    ):
+        record.error_message = "No NIFTY target found in source"
+        return record
+
+    if not any(v is not None for v in (target.low, target.mid, target.high)):
+        record.error_message = "No numeric NIFTY target extracted"
+        return record
+
+    direction = str(payload.get("direction") or "neutral")
+    if direction not in {"bullish", "bearish", "neutral"}:
+        if spot and target.mid:
+            direction = "bullish" if target.mid >= spot else "bearish"
+        else:
+            direction = "neutral"
+
+    summary = str(payload.get("summary") or "").strip()
+    bullets = payload.get("rationale_bullets") or []
+    if not isinstance(bullets, list):
+        bullets = []
+    bullets = [str(b).strip() for b in bullets if str(b).strip()]
+
+    if (not summary or len(bullets) < 2) and model_name == "regex" and used_regex_target:
+        try:
+            rationale_payload = _call_minimax(
+                _build_rationale_prompt(
+                    source=source,
+                    horizon_days=horizon_days,
+                    title=title,
+                    url=url,
+                    body=text,
+                    target_mid=target.mid,
+                ),
+                max_tokens=900,
+            )
+            if not summary:
+                summary = str(rationale_payload.get("summary") or "").strip()
+            extra = rationale_payload.get("rationale_bullets") or []
+            if isinstance(extra, list):
+                for item in extra:
+                    line = str(item).strip()
+                    if line and line not in bullets:
+                        bullets.append(line)
+            if bullets:
+                model_name = "minimax+rationale"
+                if pipeline:
+                    pipeline.info("extract", "MiniMax rationale pass completed", source_id=source.id)
+        except Exception as exc:
+            if pipeline:
+                pipeline.warn("extract", f"Rationale LLM pass skipped: {exc}", source_id=source.id)
+
+    if not bullets:
+        if summary:
+            bullets = [summary]
+        elif snippet:
+            bullets = [snippet[:240]]
+
+    confidence = str(payload.get("confidence") or "medium")
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "high" if "minimax" in model_name and body else "low"
+
+    expected_return = _maybe_float(payload.get("expected_return_pct"))
+    if expected_return is None and spot and target.mid:
+        expected_return = round((target.mid - spot) / spot * 100, 2)
+
+    pub = str(payload.get("published_at") or published_at or "")[:10]
+
+    record.target = target
+    record.target_date = str(payload.get("target_date") or "")[:10]
+    record.direction = direction  # type: ignore[assignment]
+    record.expected_return_pct = expected_return
+    record.rationale_bullets = bullets[:6]
+    record.confidence = confidence  # type: ignore[assignment]
+    record.published_at = pub
+    record.extraction = {
+        "model": model_name,
+        "extracted_at": utc_now_iso(),
+        "instrument": str(payload.get("instrument") or "NIFTY50"),
+    }
+    record.provenance = {
+        "url": url,
+        "title": title,
+        "snippet": snippet[:500],
+        "summary": summary,
+        "horizon_days": horizon_days,
+        "instrument": str(payload.get("instrument") or "NIFTY50"),
+    }
+    record.fetch_status = "ok"
+    record = validate_record(record, body=text, used_regex_only=used_regex_target and model_name == "regex")
+    if record.fetch_status != "ok" and pipeline:
+        pipeline.warn(
+            "extract",
+            f"Validation failed: {record.error_message or 'not_found'}",
+            source_id=source.id,
+        )
+    return record
