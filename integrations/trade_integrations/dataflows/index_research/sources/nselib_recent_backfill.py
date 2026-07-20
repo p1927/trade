@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.dataflows import source_availability
 from trade_integrations.dataflows.index_research.participant_oi_backfill import fetch_participant_oi_day
 from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
     upsert_flow_cash_cache,
@@ -19,14 +20,24 @@ logger = logging.getLogger(__name__)
 
 def fetch_fii_derivatives_day(day: str) -> dict[str, Any] | None:
     """One day of FII Nifty futures OI from nselib fii_derivatives_statistics xls."""
+    capability = "fii_derivatives_statistics"
+    if not source_availability.should_attempt("nselib", capability):
+        return None
+
     try:
         from nselib import derivatives
 
         frame = derivatives.fii_derivatives_statistics(trade_date=iso_to_nselib(day))
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
+        logger.debug("nselib fii_derivatives_statistics failed %s: %s", day, exc)
+        return None
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.debug("nselib fii_derivatives_statistics failed %s: %s", day, exc)
         return None
     if frame is None or frame.empty:
+        source_availability.record_failure("nselib", capability, "empty fii_derivatives_statistics frame")
         return None
 
     col = "fii_derivatives" if "fii_derivatives" in frame.columns else frame.columns[0]
@@ -59,6 +70,7 @@ def fetch_fii_derivatives_day(day: str) -> dict[str, Any] | None:
         payload["fii_nifty_fut_buy_cr"] = buy_val
     if sell_val is not None:
         payload["fii_nifty_fut_sell_cr"] = sell_val
+    source_availability.record_success("nselib", capability)
     return payload
 
 
@@ -68,6 +80,9 @@ def backfill_nselib_flow_gaps(
     sleep_seconds: float = 0.5,
 ) -> dict[str, int | str]:
     """Backfill participant OI + FII deriv stats for explicit trading days."""
+    if not source_availability.should_attempt("nselib", "flow_backfill"):
+        return {"status": "skipped", "reason": "nselib_circuit_open"}
+
     rows: list[dict[str, Any]] = []
     participant_hits = 0
     deriv_hits = 0

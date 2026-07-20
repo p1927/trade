@@ -69,10 +69,15 @@ def fetch_nifty50_weights() -> dict[str, float] | None:
 
 def fetch_yfinance_mcap_weights(symbols: list[str]) -> dict[str, float]:
     """Derive normalized weights from yfinance market-cap for `.NS` tickers."""
+    from trade_integrations.dataflows import source_availability
+
     try:
         import yfinance as yf
     except ImportError:
         logger.info("yfinance not installed; cannot compute mcap weights")
+        return {}
+
+    if not source_availability.should_attempt("yfinance", "history"):
         return {}
 
     raw: dict[str, float] = {}

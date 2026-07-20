@@ -28,6 +28,18 @@ def test_assign_cluster_ids_groups_similar():
     assert refs[2]["cluster_id"] != refs[0]["cluster_id"]
 
 
+def test_assign_cluster_ids_transitive_via_best_of_cluster():
+    from trade_integrations.dataflows.index_research.news_embedding_cluster import assign_cluster_ids
+
+    refs = [
+        {"ref_id": "a", "title": "RBI holds repo rate unchanged", "summary": "No change in policy"},
+        {"ref_id": "b", "title": "RBI keeps repo rate steady", "summary": "Policy unchanged today"},
+        {"ref_id": "c", "title": "Reserve Bank of India leaves rates unchanged", "summary": "Repo steady"},
+    ]
+    assign_cluster_ids(refs, threshold=0.65)
+    assert refs[0]["cluster_id"] == refs[1]["cluster_id"] == refs[2]["cluster_id"]
+
+
 def test_dedupe_pending_by_cluster_keeps_leader(hub_tmp, monkeypatch):
     from trade_integrations.hub_storage import news_staging_store as staging_store
     from trade_integrations.dataflows.index_research.news_embedding_cluster import dedupe_pending_by_cluster

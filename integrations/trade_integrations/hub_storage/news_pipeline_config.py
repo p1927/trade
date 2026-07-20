@@ -56,9 +56,9 @@ class NewsPipelineConfig:
     full_lookback_days: int = 3
     light_lookback_days: int = 1
     entity_batch_size: int = 200
-    cluster_threshold: float = 0.85
+    cluster_threshold: float = 0.80
     relevance_gate_enabled: bool = True
-    relevance_min_confidence: float = 0.55
+    relevance_min_confidence: float = 0.60
     relevance_rule_first: bool = True
     discard_retention_days: int = 30
 
@@ -79,11 +79,11 @@ class NewsPipelineConfig:
         try:
             base.cluster_threshold = float(base.cluster_threshold)
         except (TypeError, ValueError):
-            base.cluster_threshold = 0.85
+            base.cluster_threshold = 0.80
         try:
             base.relevance_min_confidence = float(base.relevance_min_confidence)
         except (TypeError, ValueError):
-            base.relevance_min_confidence = 0.55
+            base.relevance_min_confidence = 0.60
         try:
             base.discard_retention_days = int(base.discard_retention_days)
         except (TypeError, ValueError):
@@ -106,9 +106,9 @@ def env_defaults() -> NewsPipelineConfig:
         full_lookback_days=_env_int("HUB_NEWS_FULL_LOOKBACK_DAYS", _env_int("HUB_NEWS_INGEST_LOOKBACK_DAYS", 3)),
         light_lookback_days=_env_int("HUB_NEWS_LIGHT_LOOKBACK_DAYS", 1),
         entity_batch_size=_env_int("HUB_NEWS_ENTITY_BATCH_SIZE", 200),
-        cluster_threshold=float(os.getenv("HUB_NEWS_EMBED_CLUSTER_THRESHOLD", "0.85")),
+        cluster_threshold=float(os.getenv("HUB_NEWS_EMBED_CLUSTER_THRESHOLD", "0.80")),
         relevance_gate_enabled=_env_bool("HUB_NEWS_RELEVANCE_GATE", True),
-        relevance_min_confidence=float(os.getenv("HUB_NEWS_RELEVANCE_MIN_CONFIDENCE", "0.55")),
+        relevance_min_confidence=float(os.getenv("HUB_NEWS_RELEVANCE_MIN_CONFIDENCE", "0.60")),
         relevance_rule_first=_env_bool("HUB_NEWS_RELEVANCE_RULE_FIRST", True),
         discard_retention_days=_env_int("HUB_NEWS_DISCARD_RETENTION_DAYS", 30),
     )

@@ -107,6 +107,11 @@ def _parse_mcp_body(text: str) -> dict[str, Any]:
 
 def _execute_mcp_call(tool_name: str, arguments: dict[str, Any]) -> Any:
     """Direct HTTP MCP call (invoked only on tiered_fetch hub miss)."""
+    from trade_integrations.dataflows import source_availability
+
+    if not source_availability.should_attempt("tapetide", "api"):
+        raise TapetideRateLimitError("Tapetide circuit open; retry later.")
+
     body = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -124,8 +129,11 @@ def _execute_mcp_call(tool_name: str, arguments: dict[str, Any]) -> Any:
         timeout=REQUEST_TIMEOUT,
     )
     if response.status_code == 401:
-        raise TapetideNotConfiguredError("Tapetide token rejected (401). Generate a new token.")
+        err = TapetideNotConfiguredError("Tapetide token rejected (401). Generate a new token.")
+        source_availability.record_failure("tapetide", "api", err)
+        raise err
     if response.status_code == 429:
+        source_availability.record_failure("tapetide", "api", response.text or "429 Too Many Requests")
         _check_response_rate_limit(response, response.text)
     response.raise_for_status()
     payload = _parse_mcp_body(response.text)
@@ -157,8 +165,13 @@ def _execute_mcp_call(tool_name: str, arguments: dict[str, Any]) -> Any:
 
 def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
     """Invoke one Tapetide MCP tool via tiered queue + hub cache."""
+    from trade_integrations.dataflows import source_availability
+
     if is_rate_limited():
         raise TapetideRateLimitError("Tapetide calls paused after rate limit (retry in ~1 hour).")
+
+    if not source_availability.should_attempt("tapetide", "api"):
+        raise TapetideRateLimitError("Tapetide circuit open; retry later.")
 
     body = {
         "jsonrpc": "2.0",
@@ -179,10 +192,18 @@ def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
             req,
             lambda: _execute_mcp_call(tool_name, arguments),
         )
+        source_availability.record_success("tapetide", "api")
         return result.data
     except TieredApiBudgetExhausted as exc:
         _mark_rate_limited(str(exc))
+        source_availability.record_failure("tapetide", "api", exc)
         raise TapetideRateLimitError(str(exc)) from exc
+    except TapetideNotConfiguredError as exc:
+        source_availability.record_failure("tapetide", "api", exc)
+        raise
+    except TapetideRateLimitError as exc:
+        source_availability.record_failure("tapetide", "api", exc)
+        raise
     except TieredApiDisabledError:
         raise
 

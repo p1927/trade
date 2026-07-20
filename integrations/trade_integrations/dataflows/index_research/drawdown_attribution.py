@@ -48,22 +48,36 @@ def _load_history_headlines(symbol: str, day: str) -> list[dict[str, str]]:
     ]
 
 
-def _fetch_constituent_returns(day: str, *, lookback_days: int = 10) -> dict[str, float]:
+def _fetch_constituent_returns(
+    day: str,
+    *,
+    lookback_days: int = 10,
+    constituents: list | None = None,
+) -> dict[str, float]:
     """1d return % per constituent ending on ``day``."""
+    from trade_integrations.dataflows import source_availability
+    from trade_integrations.dataflows.company_research.sources.resilience import classify_error
+
     try:
         import yfinance as yf
     except ImportError:
         return {}
 
+    if not source_availability.should_attempt("yfinance", "history"):
+        return {}
+
     end = datetime.strptime(day[:10], "%Y-%m-%d").date() + timedelta(days=2)
     start = end - timedelta(days=lookback_days + 5)
     returns: dict[str, float] = {}
-    for row in load_nifty50_constituents():
+    rows = constituents if constituents is not None else load_nifty50_constituents()
+    for row in rows:
         sym = row.symbol.strip().upper()
         yf_sym = sym if sym.endswith(".NS") else f"{sym}.NS"
         try:
             hist = yf.Ticker(yf_sym).history(start=start.isoformat(), end=end.isoformat(), auto_adjust=True)
-        except Exception:
+        except Exception as exc:
+            if classify_error(exc) == "vendor_rate_limited":
+                source_availability.record_failure("yfinance", "history", exc)
             continue
         if hist is None or hist.empty or len(hist) < 2:
             continue
@@ -88,11 +102,12 @@ def enrich_drawdown_with_constituents(drawdown: dict[str, Any]) -> dict[str, Any
     if not day:
         return drawdown
 
-    rets = _fetch_constituent_returns(day)
+    constituents = load_nifty50_constituents()
+    rets = _fetch_constituent_returns(day, constituents=constituents)
     if not rets:
         return drawdown
 
-    weight_map = {row.symbol.strip().upper(): float(row.weight) for row in load_nifty50_constituents()}
+    weight_map = {row.symbol.strip().upper(): float(row.weight) for row in constituents}
     ranked: list[dict[str, Any]] = []
     for sym, ret_1d in rets.items():
         weight = weight_map.get(sym, 0.0)

@@ -16,6 +16,12 @@ def _stage_now() -> datetime:
 
 
 def _fetch_vix() -> dict[str, Any] | None:
+    from trade_integrations.dataflows import source_availability
+
+    capability = "india_vix_data"
+    if not source_availability.should_attempt("nselib", capability):
+        return None
+
     try:
         from nselib import capital_market
 
@@ -26,11 +32,17 @@ def _fetch_vix() -> dict[str, Any] | None:
             to_date=end.strftime("%d-%m-%Y"),
         )
         if frame is None or getattr(frame, "empty", True):
+            source_availability.record_failure("nselib", capability, "empty india_vix_data frame")
             return None
         latest = frame.iloc[-1].to_dict()
         vix = latest.get("close") or latest.get("CLOSE")
+        source_availability.record_success("nselib", capability)
         return {"india_vix": vix, "source": "nselib", "as_of": str(latest.get("date") or "")}
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
+        logger.debug("nselib VIX unavailable: %s", exc)
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.debug("nselib VIX unavailable: %s", exc)
     try:
         import yfinance as yf
@@ -45,6 +57,12 @@ def _fetch_vix() -> dict[str, Any] | None:
 
 
 def _fetch_fii_dii() -> dict[str, Any] | None:
+    from trade_integrations.dataflows import source_availability
+
+    capability = "fii_dii_trading_activity"
+    if not source_availability.should_attempt("nselib", capability):
+        return None
+
     try:
         from nselib import capital_market
 
@@ -55,26 +73,49 @@ def _fetch_fii_dii() -> dict[str, Any] | None:
             to_date=end.strftime("%d-%m-%Y"),
         )
         if frame is None or getattr(frame, "empty", True):
+            source_availability.record_failure("nselib", capability, "empty fii_dii_trading_activity frame")
             return None
         latest = frame.iloc[-1].to_dict()
+        source_availability.record_success("nselib", capability)
         return {"latest": latest, "source": "nselib"}
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
+        logger.debug("FII/DII fetch failed: %s", exc)
+        return None
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.debug("FII/DII fetch failed: %s", exc)
         return None
 
 
 def _fetch_upcoming_expiries() -> list[str]:
+    from trade_integrations.dataflows import source_availability
+
+    capability = "expiry_dates_option_index"
+    if not source_availability.should_attempt("nselib", capability):
+        return []
+
     try:
         from nselib import derivatives
 
         dates = derivatives.expiry_dates_option_index()
         if dates is None:
+            source_availability.record_failure("nselib", capability, "empty expiry_dates_option_index")
             return []
         if isinstance(dates, list):
-            return [str(d) for d in dates[:6]]
+            result = [str(d) for d in dates[:6]]
+            source_availability.record_success("nselib", capability)
+            return result
         if hasattr(dates, "tolist"):
-            return [str(d) for d in dates.tolist()[:6]]
+            result = [str(d) for d in dates.tolist()[:6]]
+            source_availability.record_success("nselib", capability)
+            return result
+        source_availability.record_failure("nselib", capability, "unexpected expiry_dates_option_index type")
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
+        logger.debug("option index expiries unavailable: %s", exc)
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.debug("option index expiries unavailable: %s", exc)
     return []
 

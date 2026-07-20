@@ -23,7 +23,8 @@ def company_history_path(symbol: str, day: str) -> Path:
 def load_constituent_signals_for_day(day: str, macro_factors: dict | None = None) -> list[ConstituentSignal]:
     """Load archived constituent sentiment/momentum for a historical trading day."""
     signals: list[ConstituentSignal] = []
-    for row in load_nifty50_constituents():
+    constituents = load_nifty50_constituents()
+    for row in constituents:
         path = company_history_path(row.symbol, day)
         if not path.is_file():
             continue

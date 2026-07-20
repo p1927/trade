@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 _JUNK_PATTERNS = re.compile(
     r"\b("
     r"cricket|ipl|bollywood|celebrity|recipe|horoscope|"
-    r"football|soccer|tennis grand slam|beauty pageant"
+    r"football|soccer|tennis grand slam|beauty pageant|"
+    r"kardashian|reality tv|fashion week|wedding|gossip|"
+    r"lottery|casino|gaming review|movie review|box office"
     r")\b",
     re.IGNORECASE,
 )
@@ -75,13 +77,13 @@ def relevance_min_confidence() -> float:
         from trade_integrations.hub_storage.news_pipeline_config import load_news_pipeline_config
 
         cfg = load_news_pipeline_config()
-        return float(getattr(cfg, "relevance_min_confidence", 0.55))
+        return float(getattr(cfg, "relevance_min_confidence", 0.60))
     except Exception:
         pass
     try:
-        return float(os.getenv("HUB_NEWS_RELEVANCE_MIN_CONFIDENCE", "0.55"))
+        return float(os.getenv("HUB_NEWS_RELEVANCE_MIN_CONFIDENCE", "0.60"))
     except ValueError:
-        return 0.55
+        return 0.60
 
 
 def discard_retention_days() -> int:
@@ -150,7 +152,7 @@ def rule_prefilter(ref: dict[str, Any]) -> RelevanceVerdict | None:
     if _INDIA_MARKET.search(text) or _MARKET_SIGNALS.search(text):
         return RelevanceVerdict(
             relevant=True,
-            confidence=0.7,
+            confidence=0.72,
             reason="market keyword signal",
             source="rule",
         )

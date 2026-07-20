@@ -17,6 +17,26 @@ logger = logging.getLogger(__name__)
 _MIN_INDEX_CHAIN_STRIKES = 3
 
 
+def _openalgo_capability(endpoint: str) -> str:
+    ep = endpoint.strip().lower().lstrip("/")
+    if ep in ("quotes", "multiquotes"):
+        return "quotes"
+    if ep == "optionchain":
+        return "optionchain"
+    if ep == "history":
+        return "history"
+    return "api"
+
+
+def _record_openalgo_failure(endpoint: str, exc: Exception | str) -> None:
+    from trade_integrations.dataflows import source_availability
+    from trade_integrations.dataflows.company_research.sources.resilience import classify_error
+
+    code = classify_error(exc)
+    if code in ("openalgo_not_configured", "openalgo_unreachable"):
+        source_availability.record_failure("openalgo", _openalgo_capability(endpoint), exc)
+
+
 def _ensure_date_column(data: pd.DataFrame) -> pd.DataFrame:
     if "Date" in data.columns:
         return data
@@ -117,12 +137,14 @@ def openalgo_post(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         host, api_key = openalgo_settings()
     except RuntimeError as exc:
+        _record_openalgo_failure(endpoint, exc)
         raise VendorNotConfiguredError(
             "OPENALGO_API_KEY is not set. Start OpenAlgo, log in, generate an API "
             "key in the dashboard, and add it to your .env file."
         ) from exc
 
     if not api_key:
+        _record_openalgo_failure(endpoint, "OPENALGO_API_KEY is not set")
         raise VendorNotConfiguredError(
             "OPENALGO_API_KEY is not set. Start OpenAlgo, log in, generate an API "
             "key in the dashboard, and add it to your .env file."
@@ -134,6 +156,7 @@ def openalgo_post(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         parsed = get_rest_client(host=host, api_key=api_key).post(endpoint, body)
     except RuntimeError as exc:
         message = str(exc)
+        _record_openalgo_failure(endpoint, exc)
         if "429" in message or "rate limit" in message.lower():
             raise VendorRateLimitError(f"OpenAlgo rate limited: {endpoint}") from exc
         raise NoMarketDataError(symbol, payload.get("symbol"), f"OpenAlgo {endpoint} error: {message}") from exc
@@ -212,6 +235,11 @@ def _quote_data(oa_symbol: str, exchange: str) -> dict | None:
 
 def fetch_quote_raw(symbol: str, *, exchange: str | None = None) -> dict | None:
     """Direct OpenAlgo quote fetch (no hub channel)."""
+    from trade_integrations.dataflows import source_availability
+
+    if not source_availability.should_attempt("openalgo", "quotes"):
+        return None
+
     oa_symbol, resolved_exchange = resolve_openalgo_symbol(symbol)
     data = _quote_data(oa_symbol, exchange or resolved_exchange)
     if not data:
@@ -336,6 +364,11 @@ def fetch_option_chain_raw(
     strike_count: int | None = None,
 ) -> dict[str, Any]:
     """Direct OpenAlgo option chain fetch (no hub channel)."""
+    from trade_integrations.dataflows import source_availability
+
+    if not source_availability.should_attempt("openalgo", "optionchain"):
+        return {}
+
     effective_expiry = expiry_date or resolve_default_option_expiry(underlying, exchange)
     normalized_expiry = normalize_openalgo_expiry(effective_expiry) if effective_expiry else None
 
@@ -463,9 +496,16 @@ def _fetch_nselib_chain(
     *,
     is_index: bool,
 ) -> dict[str, Any] | None:
+    from trade_integrations.dataflows import source_availability
+
+    capability = "option_chain"
+    if not source_availability.should_attempt("nselib", capability):
+        return None
+
     try:
         from nselib import derivatives
-    except ImportError:
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
         return None
 
     symbol = underlying.upper()
@@ -486,10 +526,12 @@ def _fetch_nselib_chain(
                 instrument="equities",
             )
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.warning("nselib option chain failed for %s: %s", symbol, exc)
         return None
 
     if frame is None or getattr(frame, "empty", True):
+        source_availability.record_failure("nselib", capability, "empty option chain frame")
         return None
 
     rows = frame.to_dict("records")
@@ -497,10 +539,12 @@ def _fetch_nselib_chain(
     expiry = str(rows[0].get("Expiry_Date") or expiry_date or "")
     chain = _nselib_rows_to_chain(rows)
     if not chain:
+        source_availability.record_failure("nselib", capability, "empty normalized option chain")
         return None
 
     strikes = [float(r["strike"]) for r in chain]
     atm = min(strikes, key=lambda s: abs(s - (spot or strikes[len(strikes) // 2])))
+    source_availability.record_success("nselib", capability)
     return {
         "underlying": symbol,
         "underlying_ltp": spot,

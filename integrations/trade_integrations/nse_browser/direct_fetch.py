@@ -49,19 +49,29 @@ def bootstrap_nse_session_cookies() -> list[dict[str, Any]]:
 
 
 def fetch_nselib_fpi_latest() -> pd.DataFrame:
+    from trade_integrations.dataflows import source_availability
+
+    capability = "nsdl_fpi_latest"
+    if not source_availability.should_attempt("nselib", capability):
+        return pd.DataFrame()
+
     try:
         from nselib import cash_market
-    except ImportError:
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
         return pd.DataFrame()
     try:
         raw = cash_market.nsdl_fpi_latest_investment_activity()
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.debug("nselib nsdl_fpi_latest failed: %s", exc)
         return pd.DataFrame()
     if raw is None or raw.empty:
+        source_availability.record_failure("nselib", capability, "empty nsdl_fpi_latest frame")
         return pd.DataFrame()
     from trade_integrations.nse_browser.parsers.fpi import parse_fpi_investment_table
 
+    source_availability.record_success("nselib", capability)
     return parse_fpi_investment_table(raw, source="nselib")
 
 

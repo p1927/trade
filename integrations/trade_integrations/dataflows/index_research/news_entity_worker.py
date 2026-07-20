@@ -318,7 +318,7 @@ def process_staging_ref(
                 "structured_summary": row.get("structured_summary"),
                 "verification_status": "pending",
             }
-            wiki_result = compile_event_to_wiki(payload, rescan=True)
+            wiki_result = compile_event_to_wiki(payload, rescan=False)
     except Exception as exc:
         logger.debug("llm-wiki compile skipped for %s: %s", event_id, exc)
 
@@ -374,6 +374,7 @@ def process_staging_batch(
         "skipped": 0,
         "errors": 0,
         "cluster_dedup": cluster_stats,
+        "wiki_exports": 0,
     }
     for ref in pending:
         try:
@@ -386,9 +387,19 @@ def process_staging_batch(
                 summary["updated"] += 1
             elif action == "skip_duplicate_url":
                 summary["skipped"] += 1
+            wiki_compile = result.get("wiki_compile")
+            if isinstance(wiki_compile, dict) and wiki_compile.get("ok"):
+                summary["wiki_exports"] = int(summary.get("wiki_exports") or 0) + 1
         except Exception as exc:
             summary["errors"] += 1
             logger.warning("staging ref %s failed: %s", ref.get("ref_id"), exc)
+    if int(summary.get("wiki_exports") or 0) > 0:
+        try:
+            from trade_integrations.dataflows.hub_wiki.compile import batch_rescan_if_enabled
+
+            summary["wiki_rescan"] = batch_rescan_if_enabled()
+        except Exception as exc:
+            logger.debug("llm-wiki batch rescan skipped: %s", exc)
     if summary.get("processed"):
         try:
             _write_worker_last({"ticker": ticker, **summary})

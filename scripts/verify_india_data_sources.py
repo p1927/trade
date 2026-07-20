@@ -267,6 +267,38 @@ def check_raw_source_proof(symbol: str) -> Check:
     )
 
 
+def check_source_availability() -> Check:
+    """Report in-process circuit breaker state for fragile India data vendors."""
+    from trade_integrations.dataflows import source_availability as sa
+
+    vendors = ("nselib", "openalgo", "yfinance", "tapetide")
+    all_statuses = sa.list_all_statuses()
+    circuits: dict[str, dict[str, str]] = {}
+    blocked: list[str] = []
+    for vendor in vendors:
+        prefix = f"{vendor}:"
+        entries = {
+            key.removeprefix(prefix): status.value
+            for key, status in all_statuses.items()
+            if key.startswith(prefix)
+        }
+        circuits[vendor] = entries or {"_default": sa.SourceStatus.AVAILABLE.value}
+        if any(status != sa.SourceStatus.AVAILABLE.value for status in entries.values()):
+            blocked.append(vendor)
+
+    if blocked:
+        detail = f"open circuits: {', '.join(blocked)}"
+        status = "warn"
+    else:
+        detail = "all circuits available"
+    return Check(
+        "source_availability",
+        status,
+        detail,
+        {"circuits": circuits},
+    )
+
+
 def check_stage(symbol: str, stage_fn, *, min_peers: int = 0, min_events: int = 0) -> Check:
     try:
         n = normalize_ticker(symbol, market_hint=Market.IN)
@@ -348,6 +380,8 @@ def main() -> int:
                 check_stage(sym, "fundamentals"),
             ]
         )
+
+    checks.append(check_source_availability())
 
     summary = {"pass": 0, "fail": 0, "warn": 0, "skip": 0}
     rows = []

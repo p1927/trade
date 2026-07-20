@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 
 @pytest.fixture
@@ -75,7 +76,23 @@ def test_hub_news_pipeline_status(hub_tmp, monkeypatch):
     from trade_integrations.dataflows.news_hub_bridge import hub_news_pipeline_status
 
     monkeypatch.setattr(
-        "trade_integrations.dataflows.hub_wiki.client.health_check",
+        "trade_integrations.dataflows.news_hub_bridge._pipeline_status.project_path_aligned",
+        lambda **_: {"aligned": True, "expected_path": str(hub_tmp / "llm-wiki"), "registered_path": str(hub_tmp / "llm-wiki")},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge._pipeline_status.embedding_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge._pipeline_status.count_project_files",
+        lambda **_: 3,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge._pipeline_status.search_wiki",
+        lambda *a, **k: {"ok": True, "mode": "keyword", "results": [{}], "tokenHits": 1},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge._pipeline_status.health_check",
         lambda: {"ok": True, "status": "running", "version": "0.6.4"},
     )
 
@@ -84,6 +101,8 @@ def test_hub_news_pipeline_status(hub_tmp, monkeypatch):
     assert "staging" in status
     assert status["llm_wiki"]["project_dir"].endswith("llm-wiki")
     assert status["llm_wiki"]["health"]["ok"] is True
+    assert status["llm_wiki"]["path_alignment"]["aligned"] is True
+    assert status["llm_wiki"]["search_probe"]["hits"] == 1
 
 
 def test_ensure_llm_wiki_project_creates_tree(hub_tmp):
@@ -91,7 +110,31 @@ def test_ensure_llm_wiki_project_creates_tree(hub_tmp):
 
     root = ensure_llm_wiki_project()
     assert root == get_llm_wiki_project_dir()
+    assert (root / "purpose.md").is_file()
     assert (root / "wiki" / "index.md").is_file()
     assert (root / "schema.md").is_file()
-    assert (root / "sources" / "inbox").is_dir()
-    assert (root / "wiki" / "events").is_dir()
+    assert (root / "raw" / "sources" / "inbox").is_dir()
+    assert (root / "raw" / "sources" / "news").is_dir()
+
+
+def test_compile_event_exports_to_raw_sources(hub_tmp, monkeypatch):
+    from trade_integrations.context import hub as hub_mod
+    from trade_integrations.dataflows.hub_wiki.compile import compile_event_to_wiki
+
+    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
+
+    result = compile_event_to_wiki(
+        {
+            "event_id": "evt:test12345678",
+            "title": "RBI holds rates steady",
+            "ticker": "NIFTY",
+            "content": "Policy unchanged.",
+            "structured_summary": {"event_meta": {"event_id": "evt:test12345678", "references": []}},
+        },
+        rescan=False,
+    )
+    assert result["ok"] is True
+    md_path = Path(result["source_md_path"])
+    assert md_path.is_file()
+    assert "raw/sources/news" in str(md_path)
+    assert not (hub_tmp / "llm-wiki" / "wiki" / "events" / f"{result['slug']}.md").exists()

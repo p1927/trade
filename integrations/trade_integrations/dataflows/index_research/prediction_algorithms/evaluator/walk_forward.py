@@ -180,8 +180,9 @@ def run_track_walk_forward(
             scenario_anchor = scenario_weighted_return_pct(scenarios, spot=close)
         except Exception:
             scenarios = []
+            signals_for_scenarios = []
 
-        signals = load_constituent_signals_for_day(day_str, factors_today)
+        signals = signals_for_scenarios
         if signals and signals[0].symbol != "_INDEX_SENTIMENT":
             hybrid_eval_dates += 1
 

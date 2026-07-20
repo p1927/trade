@@ -21,9 +21,9 @@ def cluster_threshold() -> float:
     except Exception:
         pass
     try:
-        return float(os.getenv("HUB_NEWS_EMBED_CLUSTER_THRESHOLD", "0.85"))
+        return float(os.getenv("HUB_NEWS_EMBED_CLUSTER_THRESHOLD", "0.80"))
     except ValueError:
-        return 0.85
+        return 0.80
 
 
 def _ref_text(ref: dict[str, Any]) -> str:
@@ -61,22 +61,36 @@ def _embed_texts(texts: list[str]) -> list[list[float] | None]:
         return [None] * len(texts)
 
 
+def _cluster_best_similarity(
+    text: str,
+    vec: list[float] | None,
+    cluster: list[dict[str, Any]],
+    cluster_vectors: list[list[float] | None],
+) -> float:
+    best = 0.0
+    for member, member_vec in zip(cluster, cluster_vectors):
+        sim = _similarity(text, _ref_text(member), vec_a=vec, vec_b=member_vec)
+        if sim > best:
+            best = sim
+    return best
+
+
 def assign_cluster_ids(refs: list[dict[str, Any]], *, threshold: float | None = None) -> list[dict[str, Any]]:
-    """Greedy cluster assignment; sets ``cluster_id`` on each ref dict."""
+    """Greedy cluster assignment using best-of-cluster similarity."""
     cut = cluster_threshold() if threshold is None else threshold
     texts = [_ref_text(ref) for ref in refs]
     vectors = _embed_texts(texts)
     backend = "llm_wiki_embed" if any(v is not None for v in vectors) else "stdlib"
 
     clusters: list[list[dict[str, Any]]] = []
-    cluster_vectors: list[list[float] | None] = []
+    cluster_member_vectors: list[list[list[float] | None]] = []
     for ref, text, vec in zip(refs, texts, vectors):
         placed = False
         for idx, cluster in enumerate(clusters):
-            leader_vec = cluster_vectors[idx]
-            sim = _similarity(text, _ref_text(cluster[0]), vec_a=vec, vec_b=leader_vec)
+            sim = _cluster_best_similarity(text, vec, cluster, cluster_member_vectors[idx])
             if sim >= cut:
                 cluster.append(ref)
+                cluster_member_vectors[idx].append(vec)
                 ref["cluster_id"] = str(cluster[0].get("ref_id") or cluster[0].get("cluster_id") or "")
                 ref["cluster_backend"] = backend
                 placed = True
@@ -86,7 +100,7 @@ def assign_cluster_ids(refs: list[dict[str, Any]], *, threshold: float | None = 
             ref["cluster_id"] = rid
             ref["cluster_backend"] = backend
             clusters.append([ref])
-            cluster_vectors.append(vec)
+            cluster_member_vectors.append([vec])
     return refs
 
 

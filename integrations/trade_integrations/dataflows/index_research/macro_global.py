@@ -165,26 +165,40 @@ def _dii_net_column(frame) -> str | None:
 
 
 def _fetch_flow_net_5d(*, factor: str, net_col_finder) -> dict[str, Any] | None:
+    from trade_integrations.dataflows import source_availability
+
+    capability = "fii_dii_trading_activity"
+    if not source_availability.should_attempt("nselib", capability):
+        return None
+
     try:
         from nselib import capital_market
-    except ImportError:
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
         return None
 
     fetcher = getattr(capital_market, "fii_dii_trading_activity", None)
     if fetcher is None:
+        source_availability.record_failure("nselib", capability, "missing fii_dii_trading_activity")
         return None
 
     end = datetime.now().date()
     start = end - timedelta(days=10)
-    frame = fetcher(
-        from_date=start.strftime("%d-%m-%Y"),
-        to_date=end.strftime("%d-%m-%Y"),
-    )
+    try:
+        frame = fetcher(
+            from_date=start.strftime("%d-%m-%Y"),
+            to_date=end.strftime("%d-%m-%Y"),
+        )
+    except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
+        return None
     if frame is None or getattr(frame, "empty", True):
+        source_availability.record_failure("nselib", capability, "empty fii_dii_trading_activity frame")
         return None
 
     net_col = net_col_finder(frame)
     if net_col is None:
+        source_availability.record_failure("nselib", capability, "missing net column in fii_dii_trading_activity")
         return None
 
     tail = frame.tail(5)
@@ -195,8 +209,10 @@ def _fetch_flow_net_5d(*, factor: str, net_col_finder) -> dict[str, Any] | None:
         except (TypeError, ValueError):
             continue
     if not values:
+        source_availability.record_failure("nselib", capability, "no numeric net values in fii_dii_trading_activity")
         return None
 
+    source_availability.record_success("nselib", capability)
     return {
         "factor": factor,
         "value": sum(values),

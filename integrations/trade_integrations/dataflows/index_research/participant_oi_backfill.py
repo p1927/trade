@@ -83,22 +83,35 @@ def fetch_participant_oi_day(day: str) -> dict[str, Any] | None:
         except (OSError, json.JSONDecodeError):
             pass
 
+    from trade_integrations.dataflows import source_availability
+
+    capability = "participant_oi"
+    if not source_availability.should_attempt("nselib", capability):
+        return None
+
     try:
         from nselib import derivatives
 
         frame = derivatives.participant_wise_open_interest(trade_date=_parse_trade_date(day))
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
+        logger.debug("participant OI failed %s: %s", day, exc)
+        return None
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.debug("participant OI failed %s: %s", day, exc)
         return None
 
     metrics = _extract_fii_row(frame)
     if not metrics:
+        source_availability.record_failure("nselib", capability, "empty participant OI metrics")
         return None
     payload = {"date": day[:10], **metrics, "source": "nselib_participant_oi"}
     try:
         cache.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     except OSError:
         pass
+    source_availability.record_success("nselib", capability)
     return payload
 
 

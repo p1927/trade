@@ -44,6 +44,7 @@ def rollup_parent_topic_events(
 
     digests_created = 0
     rows_rolled = 0
+    wiki_exports = 0
     for parent_id, group in by_parent.items():
         if len(group) < min_events:
             continue
@@ -86,10 +87,18 @@ def rollup_parent_topic_events(
 
             stored = get_event(digest_id)
             if stored:
-                compile_event_to_wiki(stored, rescan=False)
+                result = compile_event_to_wiki(stored, rescan=False)
+                if result.get("ok"):
+                    wiki_exports += 1
 
         digests_created += 1
         rows_rolled += len(group)
+
+    wiki_rescan: dict[str, Any] | None = None
+    if wiki_exports > 0:
+        from trade_integrations.dataflows.hub_wiki.compile import batch_rescan_if_enabled
+
+        wiki_rescan = batch_rescan_if_enabled()
 
     return {
         "ticker": sym,
@@ -99,4 +108,6 @@ def rollup_parent_topic_events(
         "digests_created": digests_created,
         "rows_rolled": rows_rolled,
         "parent_groups": len(by_parent),
+        "wiki_exports": wiki_exports,
+        "wiki_rescan": wiki_rescan,
     }

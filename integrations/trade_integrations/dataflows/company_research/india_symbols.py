@@ -34,10 +34,16 @@ def india_index_tickers() -> frozenset[str]:
 
 
 def _load_nselib_fallback() -> frozenset[str]:
+    from trade_integrations.dataflows import source_availability
+
     global _NSELIB_CACHE
     if _NSELIB_CACHE is not None:
         return _NSELIB_CACHE
     symbols: set[str] = set(_IN_INDEX_TICKERS)
+    capability = "equity_list"
+    if not source_availability.should_attempt("nselib", capability):
+        _NSELIB_CACHE = frozenset(symbols)
+        return _NSELIB_CACHE
     try:
         from nselib import capital_market
 
@@ -45,7 +51,14 @@ def _load_nselib_fallback() -> frozenset[str]:
         column = "SYMBOL" if "SYMBOL" in frame.columns else None
         if column:
             symbols.update(frame[column].astype(str).str.strip().str.upper().tolist())
+            source_availability.record_success("nselib", capability)
+        else:
+            source_availability.record_failure("nselib", capability, "missing SYMBOL column in equity_list")
+    except ImportError as exc:
+        source_availability.record_failure("nselib", capability, exc)
+        logger.info("nselib equity_list unavailable for market routing fallback: %s", exc)
     except Exception as exc:
+        source_availability.record_failure("nselib", capability, exc)
         logger.info("nselib equity_list unavailable for market routing fallback: %s", exc)
     _NSELIB_CACHE = frozenset(symbols)
     return _NSELIB_CACHE

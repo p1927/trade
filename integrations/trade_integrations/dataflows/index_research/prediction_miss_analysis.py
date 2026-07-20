@@ -180,9 +180,14 @@ def _constituent_movers_horizon(
     *,
     limit: int = 6,
 ) -> list[dict[str, Any]]:
+    from trade_integrations.dataflows import source_availability
+
     try:
         import yfinance as yf
     except ImportError:
+        return []
+
+    if not source_availability.should_attempt("yfinance", "history"):
         return []
 
     weight_map = {row.symbol.strip().upper(): float(row.weight) for row in load_nifty50_constituents()}

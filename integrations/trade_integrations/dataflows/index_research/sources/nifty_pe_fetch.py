@@ -35,7 +35,15 @@ def _fetch_yfinance_index_pe() -> dict[str, Any] | None:
 
 def _fetch_weighted_constituent_pe() -> dict[str, Any] | None:
     """Weighted average of constituent trailing P/E (Nifty 50 weights)."""
-    import yfinance as yf
+    from trade_integrations.dataflows import source_availability
+
+    try:
+        import yfinance as yf
+    except ImportError:
+        return None
+
+    if not source_availability.should_attempt("yfinance", "history"):
+        return None
 
     from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
     from trade_integrations.dataflows.index_research.sources.weights_nse import fetch_nifty50_weights

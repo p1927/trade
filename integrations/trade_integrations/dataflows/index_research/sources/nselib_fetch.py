@@ -9,8 +9,11 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.dataflows import source_availability
+
 logger = logging.getLogger(__name__)
 
+_NSELIB_VENDOR = "nselib"
 _NSELIB_DATE = "%d-%m-%Y"
 _ISO_DATE = "%Y-%m-%d"
 
@@ -97,9 +100,14 @@ def fetch_index_data_range(
     sleep_seconds: float = 0.3,
 ) -> pd.DataFrame:
     """Fetch index OHLCV via nselib using explicit from/to chunks (period= avoided)."""
+    capability = "index_data"
+    if not source_availability.should_attempt(_NSELIB_VENDOR, capability):
+        return pd.DataFrame()
+
     try:
         from nselib import capital_market
-    except ImportError:
+    except ImportError as exc:
+        source_availability.record_failure(_NSELIB_VENDOR, capability, exc)
         return pd.DataFrame()
 
     start_d = datetime.strptime(start[:10], _ISO_DATE).date()
@@ -133,9 +141,12 @@ def fetch_index_data_range(
             time.sleep(sleep_seconds)
 
     if not frames:
+        source_availability.record_failure(_NSELIB_VENDOR, capability, "empty index_data result")
         return pd.DataFrame()
     combined = pd.concat(frames, ignore_index=True)
-    return combined.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+    result = combined.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+    source_availability.record_success(_NSELIB_VENDOR, capability)
+    return result
 
 
 def fetch_index_data_period(index: str, period: str, *, index_slug: str = "nifty50", **kwargs: Any) -> pd.DataFrame:
@@ -146,9 +157,14 @@ def fetch_index_data_period(index: str, period: str, *, index_slug: str = "nifty
 
 def fetch_india_vix_range(start: str, end: str, *, sleep_seconds: float = 0.25) -> pd.DataFrame:
     """Fetch India VIX history with explicit dates (no period=)."""
+    capability = "india_vix_data"
+    if not source_availability.should_attempt(_NSELIB_VENDOR, capability):
+        return pd.DataFrame()
+
     try:
         from nselib import capital_market
-    except ImportError:
+    except ImportError as exc:
+        source_availability.record_failure(_NSELIB_VENDOR, capability, exc)
         return pd.DataFrame()
 
     try:
@@ -157,10 +173,12 @@ def fetch_india_vix_range(start: str, end: str, *, sleep_seconds: float = 0.25) 
             to_date=iso_to_nselib(end),
         )
     except Exception as exc:
+        source_availability.record_failure(_NSELIB_VENDOR, capability, exc)
         logger.debug("nselib india_vix_data failed %s-%s: %s", start, end, exc)
         return pd.DataFrame()
 
     if raw is None or raw.empty:
+        source_availability.record_failure(_NSELIB_VENDOR, capability, "empty india_vix_data frame")
         return pd.DataFrame()
 
     cols = {str(c).strip().lower(): c for c in raw.columns}
@@ -178,7 +196,9 @@ def fetch_india_vix_range(start: str, end: str, *, sleep_seconds: float = 0.25) 
     out = out.dropna(subset=["india_vix"])
     if sleep_seconds > 0:
         time.sleep(sleep_seconds)
-    return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+    result = out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+    source_availability.record_success(_NSELIB_VENDOR, capability)
+    return result
 
 
 def backfill_nifty50_ohlcv_gaps(

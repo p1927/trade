@@ -210,7 +210,15 @@ def build_constituent_momentum_series(
     end: str,
 ) -> pd.Series:
     """Weighted 7d Nifty 50 momentum (%) per trading day via yfinance."""
-    import yfinance as yf
+    from trade_integrations.dataflows import source_availability
+
+    try:
+        import yfinance as yf
+    except ImportError:
+        return pd.Series(dtype=float)
+
+    if not source_availability.should_attempt("yfinance", "history"):
+        return pd.Series(dtype=float)
 
     constituents = load_nifty50_constituents()
     if not constituents:

@@ -710,26 +710,36 @@ def _fao_backfill_progress_path() -> Path:
     return get_hub_dir() / "_data" / "history" / ".fao_backfill_progress.json"
 
 
-def _load_fao_backfill_progress() -> set[str]:
+def _load_fao_backfill_progress() -> tuple[set[str], set[str]]:
     path = _fao_backfill_progress_path()
     if not path.is_file():
-        return set()
+        return set(), set()
     try:
         import json
 
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return set(str(d) for d in (payload.get("completed_dates") or []))
+        completed = set(str(d) for d in (payload.get("completed_dates") or []))
+        skipped = set(str(d) for d in (payload.get("skipped_dates") or []))
+        return completed, skipped
     except Exception:
-        return set()
+        return set(), set()
 
 
-def _save_fao_backfill_progress(completed: set[str]) -> None:
+def _save_fao_backfill_progress(completed: set[str], skipped: set[str]) -> None:
     import json
 
     path = _fao_backfill_progress_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"completed_dates": sorted(completed), "count": len(completed)}, indent=2),
+        json.dumps(
+            {
+                "completed_dates": sorted(completed),
+                "skipped_dates": sorted(skipped),
+                "count": len(completed),
+                "skipped_count": len(skipped),
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -834,8 +844,11 @@ def backfill_nse_fao_to_cold_tier(
             existing.loc[existing["nifty_pcr"].notna(), "date"].astype(str).str[:10].tolist()
         )
 
-    completed = _load_fao_backfill_progress() if resume else set()
-    missing = [d for d in trading_dates if d not in have_pcr and d not in completed]
+    completed, skipped = _load_fao_backfill_progress() if resume else (set(), set())
+    missing = [d for d in trading_dates if d not in have_pcr and d not in completed and d not in skipped]
+    cache_dir = get_hub_dir() / "_data" / "participant_oi"
+    cached_dates = {p.stem[:10] for p in cache_dir.glob("*.json")} if cache_dir.is_dir() else set()
+    missing.sort(key=lambda d: (d not in cached_dates, d))
     if max_fetch is not None and len(missing) > max_fetch:
         missing = missing[:max_fetch]
 
@@ -856,6 +869,13 @@ def backfill_nse_fao_to_cold_tier(
         if not frame.empty:
             fao_ok += 1
         if frame.empty:
+            from trade_integrations.dataflows import source_availability
+
+            if not source_availability.should_attempt("nselib", "participant_oi"):
+                skipped.add(day[:10])
+                if sleep_s > 0 and idx < len(missing) - 1:
+                    time.sleep(sleep_s)
+                continue
             try:
                 from trade_integrations.dataflows.index_research.participant_oi_backfill import (
                     fetch_participant_oi_day,
@@ -870,10 +890,12 @@ def backfill_nse_fao_to_cold_tier(
         if not frame.empty:
             fetched_rows.append(frame.iloc[0].to_dict())
             completed.add(day[:10])
+        else:
+            skipped.add(day[:10])
         if sleep_s > 0 and idx < len(missing) - 1:
             time.sleep(sleep_s)
         if (idx + 1) % 50 == 0:
-            _save_fao_backfill_progress(completed)
+            _save_fao_backfill_progress(completed, skipped)
             if fetched_rows:
                 from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
 
@@ -907,7 +929,7 @@ def backfill_nse_fao_to_cold_tier(
                 len(completed),
             )
 
-    _save_fao_backfill_progress(completed)
+    _save_fao_backfill_progress(completed, skipped)
 
     if not fetched_rows and total_fetched == 0:
         return {

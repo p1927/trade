@@ -10,6 +10,7 @@ from typing import Any
 from trade_integrations.context.hub import get_hub_dir, is_cache_fresh, load_index_research_json
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 from trade_integrations.dataflows.index_research.data_completeness import measure_flow_coverage
+from trade_integrations.dataflows.source_availability import list_all_statuses
 from trade_integrations.dataflows.index_research.news_entity_worker import load_worker_last_summary
 from trade_integrations.hub_storage.news_staging_store import (
     is_entity_pipeline_enabled,
@@ -233,8 +234,9 @@ def _verified_breakdown(tickers: list[str]) -> dict[str, Any]:
     return out
 
 
-def _constituent_cache_stats() -> dict[str, Any]:
-    constituents = load_nifty50_constituents()
+def _constituent_cache_stats(constituents: list[Any] | None = None) -> dict[str, Any]:
+    if constituents is None:
+        constituents = load_nifty50_constituents()
     fresh = stale = missing = 0
     for row in constituents:
         symbol = (
@@ -370,10 +372,11 @@ def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
         "news_pipeline": pipeline_status,
         "verified_news": _verified_breakdown(sample_tickers),
         "index_research": _index_research_summary(sym),
-        "constituent_cache": _constituent_cache_stats(),
+        "constituent_cache": _constituent_cache_stats(constituents),
         "capture": {
             "stats": capture_stats,
             "coverage": capture_coverage,
         },
         "factor_coverage": measure_flow_coverage(allow_live_fetch=False),
+        "source_availability": list_all_statuses(),
     }
