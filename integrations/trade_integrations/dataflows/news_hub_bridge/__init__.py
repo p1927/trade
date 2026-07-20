@@ -35,6 +35,7 @@ __all__ = [
     "list_headlines_for_date",
     "list_recent_headlines",
     "query_verified_news",
+    "query_with_staging",
     "resolve_news_impact",
     "load_news_impact",
     "refresh_news_impact",
@@ -135,12 +136,11 @@ def query_verified_news(
     limit: int = 50,
     include_rejected: bool = False,
 ) -> list[dict[str, Any]]:
-    """Filter hub SSOT records by date and tags."""
+    """Filter hub SSOT records by date and tags — verified/distilled only (no staging)."""
     from trade_integrations.hub_storage.news_events_store import (
         distilled_event_to_headline_dict,
         query_events,
     )
-    from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
 
     events = query_events(
         ticker=ticker,
@@ -157,7 +157,39 @@ def query_verified_news(
     if status is not None:
         statuses = {status} if isinstance(status, str) else set(status)
         events = [e for e in events if str(e.get("verification_status") or "") in statuses]
-    records = [distilled_event_to_headline_dict(event) for event in events]
+    return [distilled_event_to_headline_dict(event) for event in events]
+
+
+def query_with_staging(
+    *,
+    ticker: str = "NIFTY",
+    status: str | list[str] | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    publish_day: str | None = None,
+    topics: list[str] | None = None,
+    factors: list[str] | None = None,
+    themes: list[str] | None = None,
+    tags: list[str] | None = None,
+    limit: int = 50,
+    include_rejected: bool = False,
+) -> list[dict[str, Any]]:
+    """Verified headlines plus pending staging queue (UI preview / pipeline ops)."""
+    from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+
+    records = query_verified_news(
+        ticker=ticker,
+        status=status,
+        since=since,
+        until=until,
+        publish_day=publish_day,
+        topics=topics,
+        factors=factors,
+        themes=themes,
+        tags=tags,
+        limit=limit,
+        include_rejected=include_rejected,
+    )
     return union_headlines_with_staging(records, ticker=ticker, limit=limit)
 
 
