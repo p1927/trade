@@ -894,7 +894,7 @@ def backfill_nse_fao_to_cold_tier(
                     batch_overlay = pd.DataFrame(fetched_rows)
                     existing = load_history_dataset("flow_derivatives_daily")
                     merged_batch = overlay_derivative_columns(existing, batch_overlay)
-                    save_history_dataset("flow_derivatives_daily", merged_batch, merge=False)
+                    save_history_dataset("flow_derivatives_daily", merged_batch, merge=True)
                     batch_start = min(r["date"][:10] for r in fetched_rows if r.get("date"))
                     batch_end = max(r["date"][:10] for r in fetched_rows if r.get("date"))
                     try:
@@ -939,7 +939,7 @@ def backfill_nse_fao_to_cold_tier(
         overlay = pd.DataFrame(fetched_rows)
         existing = load_history_dataset("flow_derivatives_daily")
         merged = overlay_derivative_columns(existing, overlay)
-        result = save_history_dataset("flow_derivatives_daily", merged, merge=False)
+        result = save_history_dataset("flow_derivatives_daily", merged, merge=True)
         try:
             from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
                 sync_flow_factors_from_merge,

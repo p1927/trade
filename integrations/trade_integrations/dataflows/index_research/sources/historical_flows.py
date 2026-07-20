@@ -120,7 +120,7 @@ def sync_merged_flow_derivatives_to_cold_tier(
 
     existing = load_history_dataset("flow_derivatives_daily")
     overlay = overlay_derivative_columns(existing, deriv)
-    result = save_history_dataset("flow_derivatives_daily", overlay, merge=False)
+    result = save_history_dataset("flow_derivatives_daily", overlay, merge=True)
     return {
         "status": "ok",
         "rows": len(overlay),

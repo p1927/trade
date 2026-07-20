@@ -450,7 +450,12 @@ def sync_valuation_to_cold_tier() -> dict[str, Any]:
         frame = pd.read_parquet(repo_path)
         if frame.empty or "date" not in frame.columns:
             return {"status": "skipped", "reason": "empty_frame", "dataset": "nifty50_valuation_daily"}
-        return save_history_dataset("nifty50_valuation_daily", frame)
+        existing = load_history_dataset("nifty50_valuation_daily")
+        if not existing.empty:
+            from trade_integrations.dataflows.index_research.history_ingest import merge_with_priority
+
+            frame = merge_with_priority([existing, frame], on=["date"])
+        return save_history_dataset("nifty50_valuation_daily", frame, merge=True)
     except Exception as exc:
         return {"status": "error", "error": str(exc), "dataset": "nifty50_valuation_daily"}
 
