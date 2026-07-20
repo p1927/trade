@@ -309,6 +309,70 @@ def purge_anomalous_factor_snapshots() -> list[str]:
     return removed
 
 
+def sync_flow_factors_from_merge(
+    *,
+    days: int | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    allow_live_fetch: bool = False,
+) -> dict[str, int | str]:
+    """Upsert nifty_pcr and fii_fut_long_short_ratio from merged flow frame."""
+    if start is None or end is None:
+        window = days if days is not None else 365
+        nifty = load_nifty_history(days=window)
+        if nifty.empty:
+            return {"status": "error", "reason": "no_nifty_history", "days_upserted": 0}
+        trading_dates = nifty["date"].astype(str).tolist()
+        start = trading_dates[0]
+        end = trading_dates[-1]
+    else:
+        nifty = load_nifty_history(days=0)
+        if nifty.empty:
+            return {"status": "error", "reason": "no_nifty_history", "days_upserted": 0}
+        trading_dates = (
+            nifty["date"]
+            .astype(str)
+            .str[:10]
+            .loc[lambda s: (s >= start[:10]) & (s <= end[:10])]
+            .tolist()
+        )
+
+    flow_frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
+    if flow_frame.empty:
+        return {"status": "skipped", "reason": "empty_merge", "days_upserted": 0}
+
+    days_upserted = 0
+    for day in trading_dates:
+        flow_day = flow_frame[flow_frame["date"].astype(str).str[:10] == day[:10]]
+        if flow_day.empty:
+            continue
+        flow_row = flow_day.iloc[0]
+        rows: list[dict] = []
+        pcr = flow_row.get("nifty_pcr")
+        if pcr is not None and not pd.isna(pcr) and float(pcr) > 0:
+            rows.append(
+                {
+                    "factor": "nifty_pcr",
+                    "value": float(pcr),
+                    "source": "sync_flow_merge",
+                }
+            )
+        fut_ratio = flow_row.get("fii_fut_long_short_ratio")
+        if fut_ratio is not None and not pd.isna(fut_ratio) and float(fut_ratio) > 0:
+            rows.append(
+                {
+                    "factor": "fii_fut_long_short_ratio",
+                    "value": float(fut_ratio),
+                    "source": "sync_flow_merge",
+                }
+            )
+        if rows:
+            upsert_daily_factors(day[:10], rows)
+            days_upserted += 1
+
+    return {"status": "ok", "days_upserted": days_upserted, "start": start[:10], "end": end[:10]}
+
+
 def enrich_factor_history(*, days: int = 365, allow_live_fetch: bool = True) -> dict[str, int | str]:
     """Merge missing factors (repo_rate, FII, PE, momentum, sentiment proxies) into daily store."""
     repo_sync = _prepare_nse_repository_layers(allow_live_fetch=allow_live_fetch, enrich_days=days)

@@ -11,6 +11,10 @@ import os
 import numpy as np
 import pandas as pd
 
+from trade_integrations.dataflows.index_research.sources.india_rates import (
+    cold_tier_rbi_rate_series,
+    fetch_india_10y_fred_series,
+)
 from trade_integrations.dataflows.index_research.sources.rbi_repo_schedule import load_repo_schedule
 
 logger = logging.getLogger(__name__)
@@ -45,29 +49,6 @@ def _cold_tier_cpi_series(trading_dates: list[str]) -> pd.Series:
         direction="backward",
     )
     return pd.Series(merged[col].values, index=trading_dates)
-
-
-def _cold_tier_rbi_rate_series(trading_dates: list[str], column: str) -> pd.Series:
-    """Merge-asof weekly RBI WSS rate column onto trading dates."""
-    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
-
-    frame = load_history_dataset("india_rbi_wss_weekly")
-    if frame.empty or column not in frame.columns:
-        return pd.Series(dtype=float)
-    daily = frame[["date", column]].copy()
-    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
-    daily[column] = pd.to_numeric(daily[column], errors="coerce")
-    daily = daily.dropna(subset=[column]).sort_values("date").drop_duplicates("date", keep="last")
-    if daily.empty:
-        return pd.Series(dtype=float)
-    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
-    merged = pd.merge_asof(
-        trading.sort_values("date"),
-        daily.sort_values("date"),
-        on="date",
-        direction="backward",
-    )
-    return pd.Series(merged[column].values, index=trading_dates)
 
 
 def _cold_tier_news_sentiment_series(trading_dates: list[str]) -> pd.Series:
@@ -168,40 +149,33 @@ def _merge_flow_columns(
     from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
         merge_flow_derivatives_frame,
     )
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
 
     out = frame.copy()
     dates = out["date"].astype(str).tolist()
     start, end = dates[0], dates[-1]
 
-    flow: pd.DataFrame
-    if "fii_net" in out.columns and out["fii_net"].notna().any():
-        flow = out[["date"] + [c for c in out.columns if c in (
-            "fii_net", "dii_net", "nifty_pcr", "fii_fut_long_short_ratio", "fii_sentiment_score"
-        )]].copy()
+    merged = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
+    if merged.empty:
+        flow = out.copy()
     else:
-        flow = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
-    if not flow.empty:
-        flow = flow.copy()
-        flow["date"] = flow["date"].astype(str).str[:10]
-        flow = flow.sort_values("date").drop_duplicates("date", keep="last")
-        merge_cols = [
-            c
-            for c in (
-                "fii_net",
-                "dii_net",
-                "nifty_pcr",
-                "fii_fut_long_short_ratio",
-                "fii_sentiment_score",
-            )
-            if c in flow.columns
-        ]
-        if merge_cols:
-            subset = flow[["date"] + merge_cols]
-            overlap = set(out.columns) & set(merge_cols) - {"date"}
+        merged = merged.copy()
+        merged["date"] = merged["date"].astype(str).str[:10]
+        merged = merged.sort_values("date").drop_duplicates("date", keep="last")
+        cash_cols = [c for c in ("fii_net", "dii_net", "fii_buy", "fii_sell", "dii_buy", "dii_sell", "source") if c in merged.columns]
+        deriv_cols = [c for c in merged.columns if c not in cash_cols and c != "date"]
+        if cash_cols:
+            cash_part = merged[["date"] + cash_cols]
+            overlap = set(out.columns) & set(cash_cols) - {"date"}
             if overlap:
                 out = out.drop(columns=list(overlap), errors="ignore")
-            out = out.merge(subset, on="date", how="left")
+            out = out.merge(cash_part, on="date", how="left")
+        if deriv_cols:
+            deriv_part = merged[["date"] + deriv_cols]
+            out = overlay_derivative_columns(out, deriv_part)
+        flow = merged
 
+    if not flow.empty:
         fii_5d = _rolling_sum_on_trading_dates(flow, "fii_net", dates, window=5)
         dii_5d = _rolling_sum_on_trading_dates(flow, "dii_net", dates, window=5)
     else:
@@ -276,6 +250,82 @@ def _vector_repo_rates(dates: pd.Series) -> pd.Series:
     return pd.Series(rates, index=dates.index)
 
 
+def _append_india_10y_with_sources(out: pd.DataFrame, *, ten_y_override: str) -> pd.DataFrame:
+    """RBI WSS through last observed week; FRED merge_asof after; repo+spread last resort."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    dates = out["date"].astype(str).tolist()
+    if ten_y_override:
+        out["india_10y"] = float(ten_y_override)
+        out["india_10y_source"] = "india_rates_env"
+        return out
+
+    last_rbi_date: str | None = None
+    rbi_by_date: dict[str, float] = {}
+    rbi_frame = load_history_dataset("india_rbi_wss_weekly")
+    if not rbi_frame.empty and "india_10y" in rbi_frame.columns:
+        rbi_slice = rbi_frame[["date", "india_10y"]].copy()
+        rbi_slice["date"] = rbi_slice["date"].astype(str).str[:10]
+        rbi_slice["india_10y"] = pd.to_numeric(rbi_slice["india_10y"], errors="coerce")
+        rbi_slice = rbi_slice.dropna(subset=["india_10y"]).sort_values("date").drop_duplicates("date", keep="last")
+        if not rbi_slice.empty:
+            last_rbi_date = str(rbi_slice["date"].iloc[-1])[:10]
+            trading = pd.DataFrame({"date": pd.to_datetime(dates)})
+            merged_rbi = pd.merge_asof(
+                trading.sort_values("date"),
+                rbi_slice.assign(date=pd.to_datetime(rbi_slice["date"])).sort_values("date"),
+                on="date",
+                direction="backward",
+            )
+            for day, val in zip(dates, merged_rbi["india_10y"].tolist(), strict=False):
+                if val is not None and not pd.isna(val) and (last_rbi_date is None or day <= last_rbi_date):
+                    rbi_by_date[day] = float(val)
+
+    fred_by_date: dict[str, float] = {}
+    fred_series = fetch_india_10y_fred_series(dates[0], dates[-1])
+    if not fred_series.empty:
+        fred_df = fred_series.reset_index()
+        fred_df.columns = ["date", "india_10y"]
+        fred_df["date"] = pd.to_datetime(fred_df["date"].astype(str).str[:10])
+        trading = pd.DataFrame({"date": pd.to_datetime(dates)})
+        merged_fred = pd.merge_asof(
+            trading.sort_values("date"),
+            fred_df.sort_values("date"),
+            on="date",
+            direction="backward",
+        )
+        for day, val in zip(dates, merged_fred["india_10y"].tolist(), strict=False):
+            if val is not None and not pd.isna(val):
+                fred_by_date[day] = float(val)
+
+    values: list[float] = []
+    sources: list[str] = []
+    for day in dates:
+        if day in rbi_by_date:
+            values.append(rbi_by_date[day])
+            sources.append("rbi_wss")
+            continue
+        if day in fred_by_date:
+            values.append(fred_by_date[day])
+            sources.append("fred")
+            continue
+        repo = out.loc[out["date"].astype(str) == day, "repo_rate"]
+        values.append(float(repo.iloc[0]) + 0.65 if not repo.empty else np.nan)
+        sources.append("proxy")
+
+    mapped = pd.Series(values, index=dates)
+    if "india_10y" in out.columns:
+        out["india_10y"] = out["date"].map(mapped).combine_first(pd.to_numeric(out["india_10y"], errors="coerce"))
+    else:
+        out["india_10y"] = out["date"].map(mapped)
+    source_mapped = pd.Series(sources, index=dates)
+    if "india_10y_source" in out.columns:
+        out["india_10y_source"] = out["date"].map(source_mapped).combine_first(out["india_10y_source"])
+    else:
+        out["india_10y_source"] = out["date"].map(source_mapped)
+    return out
+
+
 def _append_repo_and_india_rates(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
@@ -292,40 +342,21 @@ def _append_repo_and_india_rates(frame: pd.DataFrame) -> pd.DataFrame:
             out["india_91d_tbill"] = float(tbill_override)
         else:
             dates = out["date"].astype(str).tolist()
-            rbi_tbill = _cold_tier_rbi_rate_series(dates, "india_91d_tbill")
+            rbi_tbill = cold_tier_rbi_rate_series(dates, "india_91d_tbill")
             if not rbi_tbill.empty and rbi_tbill.notna().any():
                 out["india_91d_tbill"] = out["date"].map(rbi_tbill).combine_first(out["repo_rate"])
             else:
                 out["india_91d_tbill"] = out["repo_rate"]
 
     if "india_10y" not in out.columns or pd.to_numeric(out["india_10y"], errors="coerce").isna().all():
-        if ten_y_override:
-            out["india_10y"] = float(ten_y_override)
-        else:
-            dates = out["date"].astype(str).tolist()
-            rbi_10y = _cold_tier_rbi_rate_series(dates, "india_10y")
-            if not rbi_10y.empty and rbi_10y.notna().any():
-                out["india_10y"] = out["date"].map(rbi_10y)
-            else:
-                out["india_10y"] = out["repo_rate"] + 0.65
+        out = _append_india_10y_with_sources(out, ten_y_override=ten_y_override)
     elif not ten_y_override:
-        dates = out["date"].astype(str).tolist()
-        rbi_10y = _cold_tier_rbi_rate_series(dates, "india_10y")
-        if not rbi_10y.empty and rbi_10y.notna().any():
-            out["india_10y"] = out["date"].map(rbi_10y).combine_first(out["india_10y"])
+        out = _append_india_10y_with_sources(out, ten_y_override="")
 
-    if credit_override and (
-        "india_credit_spread" not in out.columns
-        or pd.to_numeric(out.get("india_credit_spread"), errors="coerce").isna().all()
-    ):
+    if credit_override:
         out["india_credit_spread"] = float(credit_override)
-    elif "india_credit_spread" not in out.columns or pd.to_numeric(out.get("india_credit_spread"), errors="coerce").isna().all():
-        from trade_integrations.dataflows.index_research.spread_features import compute_credit_spread_proxy
-
-        term = pd.to_numeric(out.get("india_10y"), errors="coerce") - pd.to_numeric(
-            out.get("india_91d_tbill"), errors="coerce"
-        )
-        out["india_credit_spread"] = compute_credit_spread_proxy(term)
+    else:
+        out["india_credit_spread"] = np.nan
 
     return out
 

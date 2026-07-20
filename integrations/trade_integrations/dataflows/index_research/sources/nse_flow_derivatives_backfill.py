@@ -771,7 +771,18 @@ def load_fo_bhavcopy_derivatives_frame(*, start: str, end: str) -> pd.DataFrame:
         path = root / "nifty50_fo_data_filtered.csv"
         if not path.is_file():
             return pd.DataFrame()
-        frame = parse_nifty50_fo_bhavcopy_csv(path)
+
+        cache_path = get_hub_dir() / "_data" / "history" / "fo_bhavcopy_deriv_daily.parquet"
+        frame: pd.DataFrame
+        if cache_path.is_file() and cache_path.stat().st_mtime >= path.stat().st_mtime:
+            frame = pd.read_parquet(cache_path)
+        else:
+            frame = parse_nifty50_fo_bhavcopy_csv(path)
+            if not frame.empty:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_cols = ["date"] + [c for c in frame.columns if c != "date"]
+                frame[cache_cols].to_parquet(cache_path, index=False)
+
         if frame.empty:
             return pd.DataFrame()
         out = frame.copy()
@@ -838,8 +849,13 @@ def backfill_nse_fao_to_cold_tier(
         }
 
     fetched_rows: list[dict] = []
+    total_fetched = 0
+    nselib_ok = 0
+    fao_ok = 0
     for idx, day in enumerate(missing):
         frame = fetch_nse_fao_participant_oi_for_date(day)
+        if not frame.empty:
+            fao_ok += 1
         if frame.empty:
             try:
                 from trade_integrations.dataflows.index_research.participant_oi_backfill import (
@@ -849,6 +865,7 @@ def backfill_nse_fao_to_cold_tier(
                 payload = fetch_participant_oi_day(day)
                 if payload:
                     frame = pd.DataFrame([payload])
+                    nselib_ok += 1
             except Exception as exc:
                 logger.debug("nselib FAO fallback failed %s: %s", day, exc)
         if not frame.empty:
@@ -858,26 +875,82 @@ def backfill_nse_fao_to_cold_tier(
             time.sleep(sleep_s)
         if (idx + 1) % 50 == 0:
             _save_fao_backfill_progress(completed)
+            if fetched_rows:
+                from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+                batch_overlay = pd.DataFrame(fetched_rows)
+                existing = load_history_dataset("flow_derivatives_daily")
+                merged_batch = overlay_derivative_columns(existing, batch_overlay)
+                save_history_dataset("flow_derivatives_daily", merged_batch)
+                batch_start = min(r["date"][:10] for r in fetched_rows if r.get("date"))
+                batch_end = max(r["date"][:10] for r in fetched_rows if r.get("date"))
+                try:
+                    from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+                        sync_flow_factors_from_merge,
+                    )
+                    from trade_integrations.dataflows.index_research.sources.historical_flows import (
+                        sync_merged_flow_derivatives_to_cold_tier,
+                    )
+
+                    sync_merged_flow_derivatives_to_cold_tier(batch_start, batch_end, allow_live_fetch=True)
+                    sync_flow_factors_from_merge(start=batch_start, end=batch_end, allow_live_fetch=True)
+                except Exception as exc:
+                    logger.debug("batch cold/factor sync failed: %s", exc)
+                total_fetched += len(fetched_rows)
+                fetched_rows = []
+            logger.info(
+                "FAO batch %d/%d fetched=%d nselib_ok=%d fao_ok=%d completed=%d",
+                idx + 1,
+                len(missing),
+                len(completed),
+                nselib_ok,
+                fao_ok,
+                len(completed),
+            )
 
     _save_fao_backfill_progress(completed)
 
-    if not fetched_rows:
+    if not fetched_rows and total_fetched == 0:
         return {
             "status": "ok",
             "fetched": 0,
             "missing_requested": len(missing),
             "existing_pcr_days": len(have_pcr),
+            "nselib_ok": nselib_ok,
+            "fao_ok": fao_ok,
         }
 
-    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+    if fetched_rows:
+        from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
 
-    overlay = pd.DataFrame(fetched_rows)
-    merged = overlay_derivative_columns(existing, overlay)
-    result = save_history_dataset("flow_derivatives_daily", merged)
+        overlay = pd.DataFrame(fetched_rows)
+        existing = load_history_dataset("flow_derivatives_daily")
+        merged = overlay_derivative_columns(existing, overlay)
+        result = save_history_dataset("flow_derivatives_daily", merged)
+        try:
+            from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+                sync_flow_factors_from_merge,
+            )
+            from trade_integrations.dataflows.index_research.sources.historical_flows import (
+                sync_merged_flow_derivatives_to_cold_tier,
+            )
+
+            batch_dates = [str(r.get("date", ""))[:10] for r in fetched_rows if r.get("date")]
+            if batch_dates:
+                sync_merged_flow_derivatives_to_cold_tier(min(batch_dates), max(batch_dates), allow_live_fetch=True)
+                sync_flow_factors_from_merge(start=min(batch_dates), end=max(batch_dates), allow_live_fetch=True)
+        except Exception as exc:
+            logger.debug("final cold/factor sync failed: %s", exc)
+        total_fetched += len(fetched_rows)
+    else:
+        result = {"status": "ok"}
+
     return {
         "status": "ok",
-        "fetched": len(fetched_rows),
+        "fetched": total_fetched,
         "missing_requested": len(missing),
+        "nselib_ok": nselib_ok,
+        "fao_ok": fao_ok,
         **result,
     }
 

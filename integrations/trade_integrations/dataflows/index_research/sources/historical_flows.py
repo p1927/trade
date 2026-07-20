@@ -88,6 +88,46 @@ def fetch_india_vix_history(*, start: str, end: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def sync_merged_flow_derivatives_to_cold_tier(
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool = False,
+) -> dict[str, Any]:
+    """Persist derivative columns from merged flow frame into flow_derivatives_daily."""
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+    merged = merge_flow_derivatives_frame(start[:10], end[:10], allow_live_fetch=allow_live_fetch)
+    if merged.empty:
+        return {"status": "skipped", "reason": "empty_merge", "start": start[:10], "end": end[:10]}
+
+    deriv_cols = (
+        "nifty_pcr",
+        "fii_sentiment_score",
+        "fii_idx_fut_long",
+        "fii_idx_fut_short",
+        "fii_idx_put_oi",
+        "fii_idx_call_oi",
+        "fii_fut_long_short_ratio",
+    )
+    present = ["date"] + [c for c in deriv_cols if c in merged.columns]
+    deriv = merged[present].copy()
+    value_cols = [c for c in deriv.columns if c != "date"]
+    if not value_cols or not deriv[value_cols].notna().any().any():
+        return {"status": "skipped", "reason": "no_deriv_values", "start": start[:10], "end": end[:10]}
+
+    existing = load_history_dataset("flow_derivatives_daily")
+    overlay = overlay_derivative_columns(existing, deriv)
+    result = save_history_dataset("flow_derivatives_daily", overlay)
+    return {
+        "status": "ok",
+        "rows": len(overlay),
+        "start": start[:10],
+        "end": end[:10],
+        **result,
+    }
+
+
 def backfill_flow_history(
     *,
     start: str = "2006-01-01",
@@ -187,6 +227,26 @@ def backfill_flow_history(
     if not vix.empty:
         vix_result = save_history_dataset("india_vix_daily", vix)
 
+    cold_sync = sync_merged_flow_derivatives_to_cold_tier(
+        start[:10],
+        end_day,
+        allow_live_fetch=allow_live_fetch,
+    )
+    factor_sync: dict[str, Any] = {"status": "skipped"}
+    try:
+        from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+            sync_flow_factors_from_merge,
+        )
+
+        factor_sync = sync_flow_factors_from_merge(
+            start=start[:10],
+            end=end_day,
+            allow_live_fetch=allow_live_fetch,
+        )
+    except Exception as exc:
+        logger.warning("factor sync from merge failed: %s", exc)
+        factor_sync = {"status": "error", "error": str(exc)}
+
     return {
         "status": "ok",
         "cash_rows": len(cash),
@@ -195,4 +255,6 @@ def backfill_flow_history(
         "cash": cash_result,
         "derivatives": deriv_result,
         "vix": vix_result,
+        "cold_deriv_sync": cold_sync,
+        "factor_sync": factor_sync,
     }

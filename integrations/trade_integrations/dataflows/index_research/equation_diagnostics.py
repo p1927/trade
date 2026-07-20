@@ -83,6 +83,26 @@ FACTOR_BLOCKS: dict[str, list[str]] = {
         "geopolitical_headline_flag",
         "oil_headline_flag",
     ],
+    "phase_i_valuation": [
+        "nifty_earnings_yield",
+        "nifty_dividend_yield",
+        "nifty_pb",
+        "nifty_book_to_market",
+        "nifty_pb_zscore_5y",
+        "equity_risk_premium",
+    ],
+    "phase_i_liquidity": [
+        "india_10y",
+        "india_91d_tbill",
+        "india_term_spread",
+        "india_credit_spread",
+    ],
+    "phase_i_flow_momentum": [
+        "india_vix_velocity_3d",
+        "usd_inr_momentum_5d",
+        "us_10y_velocity_3d",
+        "fii_net_5d_momentum",
+    ],
 }
 
 from trade_integrations.dataflows.index_research.news_event_features import NEWS_EVENT_FACTOR_KEYS

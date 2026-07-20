@@ -137,6 +137,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "valuation",
         "source": "NSE index factsheet / nifty50_valuation_daily cold tier",
         "role": "Phase I — income floor; spikes signal buy regime",
+        "data_quality": "proxy",
     },
     {
         "key": "nifty_pb",
@@ -144,6 +145,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "valuation",
         "source": "NSE PE/PB CSV / nifty50_valuation_daily cold tier",
         "role": "Phase I — raw valuation level for Ridge",
+        "data_quality": "proxy",
     },
     {
         "key": "nifty_book_to_market",
@@ -151,6 +153,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "valuation",
         "source": "Derived: 1 / nifty_pb",
         "role": "Phase I — value factor literature parity",
+        "data_quality": "proxy",
     },
     {
         "key": "nifty_pb_zscore_5y",
@@ -158,6 +161,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "valuation",
         "source": "Derived from nifty_pb rolling 5y window",
         "role": "Phase I — extreme P/B vs history → reversal signal",
+        "data_quality": "proxy",
     },
     {
         "key": "equity_risk_premium",
@@ -165,6 +169,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "valuation",
         "source": "Derived: E/P − India 10Y (or repo proxy)",
         "role": "Phase I — equity vs debt attractiveness",
+        "data_quality": "proxy",
     },
     {
         "key": "india_term_spread",
@@ -179,6 +184,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "liquidity_spread",
         "source": "RBI WSS cold tier / FRED / repo+spread proxy",
         "role": "Phase I — cost of capital for ERP and term spread",
+        "data_quality": "proxy",
     },
     {
         "key": "india_91d_tbill",
@@ -186,6 +192,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "liquidity_spread",
         "source": "RBI WSS cold tier / repo proxy",
         "role": "Phase I — short-rate anchor for term spread",
+        "data_quality": "proxy",
     },
     {
         "key": "india_credit_spread",
@@ -193,6 +200,7 @@ NIFTY_FACTOR_CATALOG: tuple[dict[str, Any], ...] = (
         "category": "liquidity_spread",
         "source": "Env override or term-spread proxy (CRISIL CSV pending)",
         "role": "Phase I — credit stress leading indicator for equities",
+        "data_quality": "proxy",
     },
     {
         "key": "india_vix_velocity_3d",

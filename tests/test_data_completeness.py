@@ -119,7 +119,7 @@ def test_measure_flow_coverage_pcr_uses_separate_threshold():
         report = measure_flow_coverage(days=30)
 
     pcr = report["factors"]["nifty_pcr"]
-    assert pcr["gate_threshold_pct"] == 70.0
+    assert pcr["gate_threshold_pct"] == 90.0
     assert pcr["passes_gate"] is True
 
 

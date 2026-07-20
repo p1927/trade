@@ -18,6 +18,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Audit prediction data coverage")
     parser.add_argument("--panel-name", default="NIFTY_2006_present")
     parser.add_argument("--days", type=int, default=365)
+    parser.add_argument("--long-days", type=int, default=3650, help="Long-window flow gate days")
     parser.add_argument("--write", action="store_true", help="Write JSON audit artifact")
     args = parser.parse_args()
 
@@ -25,7 +26,11 @@ def main() -> int:
     from trade_integrations.dataflows.index_research.data_completeness import measure_flow_coverage
     from trade_integrations.dataflows.index_research.history_panel import build_history_panel
     from trade_integrations.dataflows.index_research.phase_i_coverage import audit_phase_i_coverage
-    from trade_integrations.dataflows.index_research.prediction_audit_extensions import audit_news_pipeline
+    from trade_integrations.dataflows.index_research.prediction_audit_extensions import (
+        audit_flow_parity,
+        audit_ltim_status,
+        audit_news_pipeline,
+    )
     from trade_integrations.dataflows.index_research.prediction_data_requirements import (
         audit_prediction_panel_coverage,
     )
@@ -40,6 +45,9 @@ def main() -> int:
         "panel_coverage": audit_prediction_panel_coverage(panel),
         "phase_i_coverage": audit_phase_i_coverage(panel),
         "flow_coverage": measure_flow_coverage(days=args.days, allow_live_fetch=False),
+        "flow_coverage_long": measure_flow_coverage(days=args.long_days, allow_live_fetch=False),
+        "flow_parity": audit_flow_parity(panel, days=args.days, allow_live_fetch=False),
+        "ltim_status": audit_ltim_status(),
         "news_pipeline": audit_news_pipeline(ticker="NIFTY"),
     }
 
