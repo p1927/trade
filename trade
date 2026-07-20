@@ -55,6 +55,10 @@ Data (historic / prediction cold tier):
 Tiered APIs (queue + hub cache):
   tiered-api status [--json]   Per-source daily budget, queue depth, config
 
+Data router (unified fetch + backlog worker):
+  data-router status [--json]  Backlog depth, worker heartbeat, tiered budgets
+  data-worker [--once]         Drain tiered/NSE mission backlog (background daemon via TRADE_DATA_WORKER=1)
+
 Maintenance:
   sync [target]         Sync submodules (all|tradingagents|openalgo|status)
   sync-ports            Apply stack/ports.yaml to .env, compose, OpenAlgo/Vibe
@@ -336,6 +340,31 @@ EOF
         exit 1
         ;;
     esac
+    ;;
+
+  data-router)
+    sub="${1:-status}"
+    shift || true
+    py="$ROOT/.venv/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    case "$sub" in
+      status)
+        exec "$py" "$ROOT/scripts/data_router_status.py" "$@"
+        ;;
+      -h|--help|help|"")
+        echo "Usage: trade data-router status [--json]"
+        ;;
+      *)
+        echo "Unknown data-router subcommand: $sub (try: status)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  data-worker)
+    py="$ROOT/.venv/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    exec "$py" "$ROOT/scripts/data_router_worker.py" "$@"
     ;;
 
   sync)

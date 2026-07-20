@@ -28,11 +28,11 @@
 | **C** — Walk-forward scoreboard | **Shipped** | `evaluator/walk_forward.py`, `scoreboard.py`, `track_scoreboard_latest.json`, `scripts/run_track_backtest.py` |
 | **D** — Combiners + promotion | **Shipped** | 9 combiners in `combiners/`; `promotion.py` (+ `eval_count ≥ 60`, `backtest_eligible`) |
 | **E** — API + UI scoreboard | **Shipped** | `/forecast-lab`, `/track-scoreboard`; Prediction tab **Track Scoreboard** (`?mode=scoreboard`) |
-| **F** — Live auto-promotion | **Partial** | `INDEX_PREDICTION_COMBINER=auto` + `combine` mode wired; 2-run stability + bootstrap CI **not** shipped |
+| **F** — Live auto-promotion | **Shipped (wiring)** | `combine` mode + light refresh lab attach + promotion history bootstrap; strict gates remain |
 | **H1** — Cause layer | **Shipped** | `cause_stress_index.py`, `channel_attribution.py` on hub when lab enabled |
-| **I** — Standard regression predictors | **Partial** | Derive modules + coverage gate shipped; real D/P, P/B history, CRISIL credit **pending** |
-| **G** | **Not started** | Split overlay track, debate archive, LightGBM |
-| **H2 / H3** | **Deferred** | SVAR / DoWhy |
+| **I** — Standard regression predictors | **Partial (data)** | Coverage gate + cold-tier RBI + proxy labels in audit; real D/P, P/B history, CRISIL credit **pending** |
+| **G** | **Shipped** | Split overlay track, debate archive ops, LightGBM/XGBoost experimental tracks |
+| **H2 / H3** | **Stubbed** | `svar_stub.py`, `dowhy_stub.py` + scoreboard `research_notes` |
 
 ### Shipped beyond original Phase E scope
 
@@ -258,7 +258,7 @@ flowchart TB
 | I.1 | `fundamental_features.py` — derive E/P, B/M, P/B z-score, ERP | Unit tests on synthetic series | **Shipped** — `tests/test_fundamental_features.py` |
 | I.2 | `spread_features.py` — term spread, velocities, FII momentum | Backfill ≥ 180d aligned history | **Shipped** — `tests/test_spread_features.py`; credit col stub |
 | I.2b | `sources/india_rates.py` — india_10y / 91d proxies | Document proxy vs real G-Sec | **Shipped** (proxy) |
-| I.3 | `phase_i_coverage.py` + extend `MACRO_FACTOR_KEYS` | Ablation: each group +3 pp or report-only | **Partial** — coverage gate shipped; ablation loop manual |
+| I.3 | `phase_i_coverage.py` + extend `MACRO_FACTOR_KEYS` | Ablation: each group +3 pp or report-only | **Partial** — coverage gate + audit ablation summary shipped; full WF ablation via `run_equation_diagnostics.py` |
 | I.4 | `factor_catalog.py` + UI factor tooltips | User-visible in `/index-prediction/factors` | **Partial** |
 | I.5 | `channel_attribution.py` — valuation + liquidity buckets | Hub JSON includes channels when lab on | **Shipped** |
 | I.6 | Walk-forward parity — `macro_only` MAE unchanged when cols missing | `test_parity_macro_only_matches_backtest` | **Pending** |
@@ -399,12 +399,12 @@ flowchart LR
 | **C** | `walk_forward.py`, scoreboard JSON, parity gates | No | **Shipped** (6-track WF subset) |
 | **D** | Combiners + `promotion.py` | No | **Shipped** |
 | **E** | API `/track-scoreboard` + UI tab + per-track replay charts | No | **Shipped** |
-| **F** | `INDEX_PREDICTION_COMBINER=auto` live promotion | Yes (gated) | **Partial** |
+| **F** | `INDEX_PREDICTION_COMBINER=auto` live promotion | Yes (gated) | **Shipped (wiring)** |
 | **H1** | Cause index, channel attribution, invalidation UX | No (additive) | **Shipped** (index on hub; stale invalidation UX pending M5) |
-| **H2** | LP / mini-SVAR IRFs (`statsmodels`, optional `localprojections`) | No | Deferred |
-| **H3** | DoWhy DAG research | Defer | Deferred |
-| **G** | Split tracks, debate archive, LightGBM (deferred) | Gated | Not started |
-| **I** | Standard regression predictors — see [Phase I table](#phase-i-implementation-factor-ingest--not-a-new-track) | No (Ridge inputs) | **Partial** |
+| **H2** | LP / mini-SVAR IRFs (`statsmodels`, optional `localprojections`) | No | **Stubbed** (`svar_stub.py`) |
+| **H3** | DoWhy DAG research | Defer | **Stubbed** (`dowhy_stub.py`) |
+| **G** | Split tracks, debate archive, LightGBM | Gated | **Shipped** |
+| **I** | Standard regression predictors — see [Phase I table](#phase-i-implementation-factor-ingest--not-a-new-track) | No (Ridge inputs) | **Partial (data)** |
 
 ---
 

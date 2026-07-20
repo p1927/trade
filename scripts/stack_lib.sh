@@ -361,7 +361,8 @@ stack_listener_matches_claim() {
   local listener ppid
   [[ -n "$claimed_pid" ]] || return 1
   listener="$(stack_port_listener_pid "$port")"
-  [[ -z "$listener" ]] && stack_pid_alive "$claimed_pid"
+  # No listener on the port — claim is stale even if the old pid was recycled.
+  [[ -z "$listener" ]] && return 1
   [[ "$listener" == "$claimed_pid" ]] && return 0
   ppid="$(ps -p "$listener" -o ppid= 2>/dev/null | tr -d ' ' || true)"
   [[ -n "$ppid" && "$ppid" == "$claimed_pid" ]] && return 0
@@ -1039,6 +1040,49 @@ stack_start_heal_daemon() {
   stack_write_pidfile "$pidfile" "$pid"
 }
 
+stack_data_worker_enabled() {
+  local v="${TRADE_DATA_WORKER:-0}"
+  v="$(_stack_lc "$v")"
+  [[ "$v" != "0" && "$v" != "false" && "$v" != "no" && "$v" != "off" ]]
+}
+
+stack_stop_data_worker() {
+  local log_dir pidfile pid
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/stack-data-worker.pid"
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
+    echo "[stack] stopping data router worker (pid $pid) ..."
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pidfile"
+}
+
+stack_start_data_worker() {
+  if ! stack_data_worker_enabled; then
+    return 0
+  fi
+  if stack_dev_mode_flagged; then
+    return 0
+  fi
+  local root log_dir pidfile logfile py pid
+  root="$(stack_root)"
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/stack-data-worker.pid"
+  logfile="$log_dir/stack-data-worker.log"
+  py="$(stack_pick_python)"
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
+    return 0
+  fi
+  echo "[stack] starting data router worker ..."
+  : >>"$logfile"
+  nohup "$py" "$root/scripts/data_router_worker.py" >>"$logfile" 2>&1 < /dev/null &
+  pid=$!
+  disown "$pid" 2>/dev/null || true
+  stack_write_pidfile "$pidfile" "$pid"
+}
+
 stack_stop_vibe_stack() {
   local log_dir api_port ui_port openalgo_port stop_docker stop_all=0
   while [[ $# -gt 0 ]]; do
@@ -1062,6 +1106,7 @@ stack_stop_vibe_stack() {
   stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
   stack_kill_openalgo_ws_proxy
   stack_stop_heal_daemon
+  stack_stop_data_worker
   stack_clear_stack_mode
   stack_clear_instance_manifest
 
@@ -1216,7 +1261,7 @@ stack_status_vibe_stack() {
       alive="alive"
       pid="$listener"
       stack_sync_pidfile_from_port "$pidfile" "$port"
-    elif stack_pid_alive "$pid"; then
+    elif stack_pid_alive "$pid" && stack_process_in_trade_repo "$pid"; then
       alive="alive"
     fi
 

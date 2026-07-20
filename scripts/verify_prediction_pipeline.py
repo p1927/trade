@@ -60,6 +60,12 @@ def main() -> int:
                     "tests/test_prediction_pipeline_lab.py",
                     "tests/test_prediction_algorithms_combiners.py",
                     "tests/test_calibrate_bottom_up.py",
+                    "tests/test_phase_i_coverage.py",
+                    "tests/test_data_router_ohlcv.py",
+                    "tests/test_data_router_worker.py",
+                    "tests/test_prediction_algorithms_tracks.py",
+                    "-k",
+                    "debate or seed_debate",
                     "-q",
                     "--timeout=120",
                 ],
@@ -67,8 +73,30 @@ def main() -> int:
             )
         )
 
+    promotion_status: dict[str, object] = {"loaded": False}
+    try:
+        if str(ROOT / "integrations") not in sys.path:
+            sys.path.insert(0, str(ROOT / "integrations"))
+        from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.scoreboard import (
+            load_scoreboard,
+        )
+        from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import (
+            evaluate_promotion,
+        )
+
+        board = load_scoreboard("NIFTY")
+        promotion_status = evaluate_promotion(board or {}, ticker="NIFTY")
+        promotion_status["loaded"] = True
+    except Exception as exc:
+        promotion_status = {"loaded": False, "error": str(exc)}
+
     failed = [s for s in steps if s["returncode"] != 0]
-    report = {"steps": steps, "failed": len(failed), "ok": len(failed) == 0}
+    report = {
+        "steps": steps,
+        "failed": len(failed),
+        "ok": len(failed) == 0,
+        "promotion_status": promotion_status,
+    }
     print(json.dumps(report, indent=2))
     return 1 if failed else 0
 

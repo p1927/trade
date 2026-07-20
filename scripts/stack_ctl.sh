@@ -52,6 +52,7 @@ stack_ctl_up_inner() {
   fi
   stack_write_instance_manifest
   stack_start_heal_daemon
+  stack_start_data_worker
   stack_print_ready
   stack_status_vibe_stack
 }
@@ -99,6 +100,7 @@ stack_ctl_restart_inner() {
   fi
   stack_write_instance_manifest
   stack_start_heal_daemon
+  stack_start_data_worker
   stack_print_ready
   stack_status_vibe_stack
 }
