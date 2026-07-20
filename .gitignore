@@ -243,18 +243,11 @@ data/nse/raw/
 !data/nse/manifest.json
 !data/nse/**/*.parquet
 
-# Stack runtime artifacts (daemon pidfiles, Nautilus registry)
-log/nautilus-watch.agent_id
-log/nautilus-watch.agents.json
-log/nautilus-watch.pid
+# Stack runtime artifacts (daemon pidfiles, Nautilus registry, local logs)
+log/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
 
 # Local stack launcher
-.stack.pids
-.exposure.state
-.exposure.pids
-cookies.txt
-
-# Editor / local IDE
-.cursor/
-data/.DS_Store
-data/**/.DS_Store
