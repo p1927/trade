@@ -61,12 +61,20 @@ def _has_earnings_within_horizon(
     return False
 
 
-def _expected_return_pct(signal: ConstituentSignal, *, horizon_days: int) -> float:
+def _expected_return_pct(
+    signal: ConstituentSignal,
+    *,
+    horizon_days: int,
+    sentiment_beta: float = _SENTIMENT_BETA,
+    momentum_scale: float = _MOMENTUM_SCALE,
+    sentiment_blend: float = _SENTIMENT_BLEND,
+    momentum_blend: float = _MOMENTUM_BLEND,
+) -> float:
     sentiment = signal.sentiment_score or 0.0
-    sentiment_move = sentiment * _SENTIMENT_BETA
+    sentiment_move = sentiment * sentiment_beta
     if signal.momentum_7d_pct is not None:
-        momentum_move = float(signal.momentum_7d_pct) * _MOMENTUM_SCALE
-        raw = _SENTIMENT_BLEND * sentiment_move + _MOMENTUM_BLEND * momentum_move
+        momentum_move = float(signal.momentum_7d_pct) * momentum_scale
+        raw = sentiment_blend * sentiment_move + momentum_blend * momentum_move
     else:
         raw = sentiment_move
     capped = max(-_EXPECTED_RETURN_CAP_PCT, min(_EXPECTED_RETURN_CAP_PCT, raw))
@@ -79,9 +87,20 @@ def attribute_constituent(
     signal: ConstituentSignal,
     *,
     horizon_days: int = 14,
+    sentiment_beta: float = _SENTIMENT_BETA,
+    momentum_scale: float = _MOMENTUM_SCALE,
+    sentiment_blend: float = _SENTIMENT_BLEND,
+    momentum_blend: float = _MOMENTUM_BLEND,
 ) -> ConstituentSignal:
     """Attribute a single constituent's expected move to index contribution."""
-    expected = _expected_return_pct(signal, horizon_days=horizon_days)
+    expected = _expected_return_pct(
+        signal,
+        horizon_days=horizon_days,
+        sentiment_beta=sentiment_beta,
+        momentum_scale=momentum_scale,
+        sentiment_blend=sentiment_blend,
+        momentum_blend=momentum_blend,
+    )
     contribution = signal.weight * expected
     return replace(signal, contribution_to_index_pct=contribution)
 
@@ -90,9 +109,38 @@ def attribute_constituents(
     signals: list[ConstituentSignal],
     *,
     horizon_days: int = 14,
+    use_calibration: bool = True,
 ) -> list[ConstituentSignal]:
     """Attribute all constituents and sort by absolute contribution descending."""
-    attributed = [attribute_constituent(signal, horizon_days=horizon_days) for signal in signals]
+    sentiment_beta = _SENTIMENT_BETA
+    momentum_scale = _MOMENTUM_SCALE
+    sentiment_blend = _SENTIMENT_BLEND
+    momentum_blend = _MOMENTUM_BLEND
+    if use_calibration and signals:
+        try:
+            from trade_integrations.dataflows.index_research.calibrate_bottom_up import (
+                calibrate_bottom_up_coeffs,
+            )
+
+            coeffs = calibrate_bottom_up_coeffs()
+            sentiment_beta = coeffs.sentiment_beta
+            momentum_scale = coeffs.momentum_scale
+            sentiment_blend = coeffs.sentiment_blend
+            momentum_blend = coeffs.momentum_blend
+        except Exception:
+            pass
+
+    attributed = [
+        attribute_constituent(
+            signal,
+            horizon_days=horizon_days,
+            sentiment_beta=sentiment_beta,
+            momentum_scale=momentum_scale,
+            sentiment_blend=sentiment_blend,
+            momentum_blend=momentum_blend,
+        )
+        for signal in signals
+    ]
     return sorted(
         attributed,
         key=lambda signal: abs(signal.contribution_to_index_pct or 0.0),

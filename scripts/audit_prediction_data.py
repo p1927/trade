@@ -25,6 +25,7 @@ def main() -> int:
     from trade_integrations.dataflows.index_research.data_completeness import measure_flow_coverage
     from trade_integrations.dataflows.index_research.history_panel import build_history_panel
     from trade_integrations.dataflows.index_research.phase_i_coverage import audit_phase_i_coverage
+    from trade_integrations.dataflows.index_research.prediction_audit_extensions import audit_news_pipeline
     from trade_integrations.dataflows.index_research.prediction_data_requirements import (
         audit_prediction_panel_coverage,
     )
@@ -39,6 +40,7 @@ def main() -> int:
         "panel_coverage": audit_prediction_panel_coverage(panel),
         "phase_i_coverage": audit_phase_i_coverage(panel),
         "flow_coverage": measure_flow_coverage(days=args.days, allow_live_fetch=False),
+        "news_pipeline": audit_news_pipeline(ticker="NIFTY"),
     }
 
     if args.write:

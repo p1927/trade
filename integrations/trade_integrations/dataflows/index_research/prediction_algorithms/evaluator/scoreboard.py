@@ -48,6 +48,18 @@ def scoreboard_needs_refresh(
     return False
 
 
+def scoreboard_needs_promotion_history(
+    report: dict[str, Any] | None,
+    *,
+    min_runs: int = 2,
+) -> bool:
+    """True when promotion_run_history is too short for consecutive-run gate."""
+    if not report:
+        return True
+    history = report.get("promotion_run_history") or []
+    return len(history) < min_runs
+
+
 def normalize_scoreboard_report(report: dict[str, Any]) -> dict[str, Any]:
     """Ensure all canonical tracks/combiners appear in summary tables."""
     out = dict(report)

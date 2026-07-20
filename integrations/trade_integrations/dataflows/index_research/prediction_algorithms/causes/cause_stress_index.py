@@ -74,9 +74,14 @@ def compute_cause_stress_index(macro_factors: dict[str, Any]) -> dict[str, Any]:
     else:
         label = "calm"
 
+    material_raw = _finite(macro_factors.get("news_material_7d"))
+    surprise_raw = _finite(macro_factors.get("news_surprise_7d"))
+    unmodeled_event_suspected = stress >= 60 and material_raw < 1.0 and surprise_raw < 1.0
+
     return {
         "cause_stress_index": round(stress, 2),
         "cause_stress_label": label,
         "active_causes": _active_causes(macro_factors),
         "recommended_refresh": stress >= 60,
+        "unmodeled_event_suspected": unmodeled_event_suspected,
     }

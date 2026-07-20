@@ -446,6 +446,30 @@ def run_index_light_refresh(
             scenario_anchor_return_pct=scenario_anchor,
         )
 
+    if spot > 0 and prediction:
+        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
+            attach_forecast_lab,
+            snapshot_legacy_prediction,
+            snapshot_pre_reconcile_prediction,
+        )
+
+        pre_reconcile = snapshot_pre_reconcile_prediction(prediction)
+        legacy = snapshot_legacy_prediction(prediction)
+        prediction = attach_forecast_lab(
+            prediction,
+            ticker=sym,
+            spot=spot,
+            horizon_days=horizon.days,
+            macro_factors=macro_factors,
+            signals=signals,
+            scenarios=scenarios,
+            scenario_anchor=scenario_anchor,
+            as_of_day=_stage_now().date().isoformat(),
+            macro_trust_multiplier=macro_trust_multiplier,
+            pre_reconcile_snapshot=pre_reconcile,
+            legacy_prediction=legacy,
+        )
+
     factor_bundle: dict[str, Any] = {}
     if spot > 0 and prediction:
         factor_bundle = build_factor_explanation_bundle(

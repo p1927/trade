@@ -141,15 +141,24 @@ def enrich_macro_with_news_features(
     as_of_day: str | None = None,
     ticker: str = "NIFTY",
 ) -> dict[str, Any]:
-    """Attach T0-safe news_* keys for overlay / Ridge inference."""
+    """Attach T0-safe news_* keys for overlay / Ridge inference.
+
+    Walk-forward panel rows may already include historical ``news_*`` columns;
+    those values win over hub-only recomputation (which returns zeros for dates
+    without verified hub records).
+    """
     from trade_integrations.dataflows.index_research.news_event_features import (
+        NEWS_EVENT_FACTOR_KEYS,
         compute_news_features_for_day,
     )
 
     day = (as_of_day or datetime.now(timezone.utc).date().isoformat())[:10]
-    feats = compute_news_features_for_day(day, ticker=ticker)
+    hub_feats = compute_news_features_for_day(day, ticker=ticker)
     merged = dict(macro_factors)
-    merged.update(feats)
+    for key in NEWS_EVENT_FACTOR_KEYS:
+        if key in merged:
+            continue
+        merged[key] = hub_feats.get(key, 0.0)
     return merged
 
 

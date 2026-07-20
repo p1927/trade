@@ -49,6 +49,16 @@ def main() -> int:
         help="Lookback days for --incremental (default 30)",
     )
     parser.add_argument("--audit", action="store_true", help="Run prediction data audit after ingest")
+    parser.add_argument(
+        "--news",
+        action="store_true",
+        help="Backfill news_events_daily into panel (scripts/backfill_prediction_history.py --news)",
+    )
+    parser.add_argument(
+        "--shock-calibration",
+        action="store_true",
+        help="Rebuild news_shock_calibration.json from reconciled hub stories",
+    )
     parser.add_argument("--start", default="2006-01-01")
     parser.add_argument("--end", default=None)
     parser.add_argument("--offline", action="store_true", help="Skip live HTTP fetches")
@@ -56,7 +66,16 @@ def main() -> int:
     args = parser.parse_args()
 
     run_all = args.all or not any(
-        (args.repo_only, args.cold_tier, args.hub_sync, args.panel, args.incremental, args.audit)
+        (
+            args.repo_only,
+            args.cold_tier,
+            args.hub_sync,
+            args.panel,
+            args.incremental,
+            args.audit,
+            args.news,
+            args.shock_calibration,
+        )
     )
 
     from trade_integrations.env import load_trade_env
@@ -113,6 +132,29 @@ def main() -> int:
 
     if args.audit or (run_all and not args.dry_run):
         results["audit"] = _run_audit(write=True)
+
+    if args.news or run_all:
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "backfill_prediction_history.py"), "--news"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        results["news_backfill"] = {
+            "returncode": proc.returncode,
+            "stderr": (proc.stderr or "")[-500:],
+        }
+
+    if args.shock_calibration or run_all:
+        try:
+            from trade_integrations.dataflows.index_research.news_shock_calibration import (
+                update_shock_calibration,
+            )
+
+            results["shock_calibration"] = update_shock_calibration(ticker="NIFTY")
+        except Exception as exc:
+            results["shock_calibration"] = {"error": str(exc)}
 
     print(json.dumps(results, indent=2, default=str))
     return 0
