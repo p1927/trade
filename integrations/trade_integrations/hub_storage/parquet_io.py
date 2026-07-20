@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -21,6 +23,43 @@ def concat_dataframes(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.Data
     existing = existing.reindex(columns=columns)
     incoming = incoming.reindex(columns=columns)
     return pd.DataFrame(existing.to_dict("records") + incoming.to_dict("records"))
+
+
+def append_dataframe(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
+    """Readable alias for row-oriented frame append."""
+    return concat_dataframes(existing, incoming)
+
+
+def concat_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
+    """Stack row-oriented frames without pandas empty/all-NA concat warnings."""
+    merged = pd.DataFrame()
+    for frame in frames:
+        if frame is None or frame.empty:
+            continue
+        merged = concat_dataframes(merged, frame)
+    return merged
+
+
+def append_daily_rows(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    dedupe_keys: list[str] | None = None,
+    sort_key: str | None = None,
+) -> int:
+    """Read daily parquet, append rows, dedupe, write. Returns incoming row count."""
+    if not rows:
+        return 0
+    incoming = pd.DataFrame(rows)
+    existing = read_dataframe(path)
+    merged = upsert_by_keys(
+        existing,
+        incoming,
+        dedupe_keys=list(dedupe_keys or []),
+        sort_key=sort_key,
+    )
+    write_dataframe(merged, path)
+    return len(incoming)
 
 
 def read_dataframe(path: Path) -> pd.DataFrame:
