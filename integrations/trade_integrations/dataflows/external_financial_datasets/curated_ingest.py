@@ -17,7 +17,9 @@ from trade_integrations.dataflows.index_research.history_store import (
 from trade_integrations.dataflows.throttled_http import fetch_delay_sec, fetch_to_path
 
 import pandas as pd
-import requests
+
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+from trade_integrations.http import HTTPError
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +267,7 @@ def ingest_nifty50_valuation_github(*, force_fetch: bool = False) -> dict[str, A
         basic = basic[["date", "nifty_close"]].dropna()
         basic["source"] = "github_nifty50_scrapping"
         if frames:
-            merged = pd.concat(frames, ignore_index=True)
+            merged = concat_frames(frames)
             merged = merged.merge(basic, on="date", how="outer", suffixes=("", "_basic"))
             if "nifty_close_basic" in merged.columns:
                 merged["nifty_close"] = merged["nifty_close"].combine_first(merged["nifty_close_basic"])
@@ -275,7 +277,7 @@ def ingest_nifty50_valuation_github(*, force_fetch: bool = False) -> dict[str, A
             panel = basic
     except Exception as exc:
         logger.warning("basic Nifty OHLC merge failed: %s", exc)
-        panel = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        panel = concat_frames(frames) if frames else pd.DataFrame()
 
     if panel.empty:
         return {"status": "error", "reason": "empty_valuation_panel"}

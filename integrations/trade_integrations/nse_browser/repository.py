@@ -12,6 +12,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.nse_browser.hub_writer import _read_parquet_or_csv, _write_parquet, upsert_daily_parquet
 from trade_integrations.nse_browser.registry import DATASETS, get_dataset, hub_root
@@ -310,7 +312,7 @@ def seed_aeron7_nifty_futures_derivatives() -> int:
 
     import pandas as pd
 
-    overlay = pd.concat(frames, ignore_index=True)
+    overlay = concat_frames(frames)
     overlay = overlay.sort_values("date").drop_duplicates("date", keep="last")
     existing = load_repo_dataset("fii_dii")
     merged = overlay_derivative_columns(existing, overlay)
@@ -390,7 +392,7 @@ def seed_nse_mf_sebi_monthly() -> int:
         name="monthly_seed.csv",
     )
     existing = load_repo_dataset("mf_sebi")
-    merged = pd.concat([existing, monthly], ignore_index=True) if not existing.empty else monthly
+    merged = concat_dataframes(existing, monthly) if not existing.empty else monthly
     if "date" in merged.columns:
         dedupe = ["date", "granularity"] if "granularity" in merged.columns else ["date"]
         merged = merged.sort_values(dedupe).drop_duplicates(dedupe, keep="last")
@@ -408,7 +410,7 @@ def seed_nse_fii_sebi_monthly() -> int:
         name="monthly_seed.csv",
     )
     existing = load_repo_dataset("fii_sebi")
-    merged = pd.concat([existing, monthly], ignore_index=True) if not existing.empty else monthly
+    merged = concat_dataframes(existing, monthly) if not existing.empty else monthly
     if "date" in merged.columns:
         dedupe = ["date", "granularity"] if "granularity" in merged.columns else ["date"]
         merged = merged.sort_values(dedupe).drop_duplicates(dedupe, keep="last")

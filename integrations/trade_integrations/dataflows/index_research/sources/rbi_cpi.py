@@ -51,9 +51,9 @@ def _parse_cpi_yoy(text: str) -> float | None:
 
 
 def _scrape_rbi_press_releases() -> dict[str, Any] | None:
-    import requests
+    from trade_integrations.http import get
 
-    response = requests.get(_RBI_PRESS_URL, timeout=15)
+    response = get(_RBI_PRESS_URL, timeout=15)
     response.raise_for_status()
     text = response.text
     if not text.strip():

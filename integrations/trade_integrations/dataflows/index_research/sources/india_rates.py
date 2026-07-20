@@ -121,9 +121,9 @@ def _fetch_fred_latest(series_id: str) -> float | None:
     if not api_key:
         return None
     try:
-        import requests
+        from trade_integrations.http import get
 
-        resp = requests.get(
+        resp = get(
             "https://api.stlouisfed.org/fred/series/observations",
             params={
                 "series_id": series_id,

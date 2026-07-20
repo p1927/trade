@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.dataflows import source_availability
 
 logger = logging.getLogger(__name__)
@@ -143,7 +145,7 @@ def fetch_index_data_range(
     if not frames:
         source_availability.record_failure(_NSELIB_VENDOR, capability, "empty index_data result")
         return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
+    combined = concat_frames(frames)
     result = combined.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
     source_availability.record_success(_NSELIB_VENDOR, capability)
     return result

@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 logger = logging.getLogger(__name__)
 
 _NIFTYINVEST_MONTH_API = "https://niftyinvest.com/fii-dii-data/api/v1/month"
@@ -77,9 +79,9 @@ def parse_niftyinvest_month_payload(payload: dict[str, Any]) -> pd.DataFrame:
 
 def _fetch_niftyinvest_month(year_month: str, *, sleep_s: float = 0.25) -> pd.DataFrame:
     try:
-        import requests
+        from trade_integrations.http import get
 
-        response = requests.get(
+        response = get(
             _NIFTYINVEST_MONTH_API,
             params={"yearMonth": year_month},
             timeout=30,
@@ -101,9 +103,9 @@ def _fetch_niftyinvest_month(year_month: str, *, sleep_s: float = 0.25) -> pd.Da
 def list_niftyinvest_calendar_months() -> list[str]:
     """Discover available yearMonth keys from Nifty Invest API."""
     try:
-        import requests
+        from trade_integrations.http import get
 
-        response = requests.get(
+        response = get(
             _NIFTYINVEST_MONTH_API,
             timeout=30,
             headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
@@ -182,7 +184,7 @@ def fetch_niftyinvest_flow_frame(
             frames.append(frame)
     if not frames:
         return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
+    combined = concat_frames(frames)
     combined["date"] = combined["date"].astype(str).str[:10]
     combined = combined.sort_values("date").drop_duplicates("date", keep="last")
     if start:

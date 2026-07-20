@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 
 def _parse_date(raw: Any) -> str | None:
     if raw is None or (isinstance(raw, float) and pd.isna(raw)):
@@ -154,7 +156,7 @@ def parse_fpi_html_tables(html: str) -> pd.DataFrame:
     valid = [f for f in frames if not f.empty]
     if not valid:
         return pd.DataFrame()
-    return pd.concat(valid, ignore_index=True).drop_duplicates(
+    return concat_frames(valid).drop_duplicates(
         subset=["date", "asset_class", "route"],
         keep="last",
     )

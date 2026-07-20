@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.throttled_http import fetch_to_path
 
@@ -106,7 +108,7 @@ def ingest_huggingface_nse(*, force_fetch: bool = False) -> dict[str, Any]:
             fetch_to_path(url, dest, force=force_fetch)
         frames.append(pd.read_parquet(dest))
 
-    combined = pd.concat(frames, ignore_index=True)
+    combined = concat_frames(frames)
     daily = _aggregate_intraday_to_daily(combined)
 
     out_dir = hub_data_dir() / "huggingface_nse"

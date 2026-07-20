@@ -10,6 +10,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes
+
 from trade_integrations.context.hub import get_hub_dir
 
 _LEDGER_SUBDIR = "_data/options_predictions"
@@ -102,7 +104,7 @@ def append_options_prediction(record: OptionsPredictionRecord) -> None:
     """Append a recommended-strategy forecast row to the options ledger."""
     row = _record_to_row(record)
     existing = load_ledger()
-    updated = pd.concat([existing, pd.DataFrame([row])], ignore_index=True)
+    updated = concat_dataframes(existing, pd.DataFrame([row]))
     save_ledger(updated)
 
 

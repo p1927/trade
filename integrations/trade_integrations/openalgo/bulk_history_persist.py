@@ -11,6 +11,8 @@ from typing import Any, Iterator
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 logger = logging.getLogger(__name__)
 
 _CHUNK_DAYS = 365
@@ -284,7 +286,7 @@ def load_existing_bars(symbol: str, *, repo_root=None) -> pd.DataFrame:
         return cache_frame
     if cache_frame.empty:
         return repo_frame
-    merged = pd.concat([repo_frame, cache_frame], ignore_index=True)
+    merged = concat_dataframes(repo_frame, cache_frame)
     return merged.drop_duplicates("date", keep="last").sort_values("date").reset_index(drop=True)
 
 
@@ -330,7 +332,7 @@ def _write_repo_parquet(symbol: str, frame: pd.DataFrame, *, repo_root=None) -> 
     if existing.empty:
         merged = normalized
     else:
-        merged = pd.concat([existing, normalized], ignore_index=True)
+        merged = concat_dataframes(existing, normalized)
         merged = merged.drop_duplicates("date", keep="last").sort_values("date")
 
     try:
@@ -534,7 +536,7 @@ def fetch_symbol_history(
         stats["status"] = "empty"
         return stats
 
-    merged_fetch = pd.concat(collected, ignore_index=True).drop_duplicates("date", keep="last").sort_values("date")
+    merged_fetch = concat_frames(collected).drop_duplicates("date", keep="last").sort_values("date")
     stats["repo"] = _write_repo_parquet(symbol, merged_fetch, repo_root=repo_root)
     stats["hub"] = _write_hub_cache(symbol, merged_fetch)
     final = load_existing_bars(symbol, repo_root=repo_root)
@@ -614,7 +616,7 @@ def build_constituent_panel(*, repo_root=None, index_slug: str = "nifty50") -> p
             frames.append(frame)
     if not frames:
         return pd.DataFrame(columns=["date", "symbol", "open", "high", "low", "close", "volume", "source"])
-    panel = pd.concat(frames, ignore_index=True)
+    panel = concat_frames(frames)
     return panel.drop_duplicates(["date", "symbol"], keep="last").sort_values(["symbol", "date"]).reset_index(drop=True)
 
 
@@ -631,7 +633,7 @@ def sync_openalgo_panel_to_cold_tier(*, repo_root=None, index_slug: str = "nifty
     if existing.empty:
         merged = panel
     else:
-        merged = pd.concat([existing, panel], ignore_index=True)
+        merged = concat_dataframes(existing, panel)
         merged["date"] = merged["date"].astype(str).str[:10]
         merged = merged.drop_duplicates(["date", "symbol"], keep="last").sort_values(["symbol", "date"])
 

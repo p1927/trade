@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.nse_browser.direct_fetch import fetch_nselib_fpi_latest
 from trade_integrations.nse_browser.http_bridge import HttpBridge
 from trade_integrations.nse_browser.hub_writer import (
@@ -77,7 +79,7 @@ async def _fetch_via_browser_session(
                     frames.append(frame)
 
     if frames:
-        combined = pd.concat(frames, ignore_index=True)
+        combined = concat_frames(frames)
         return combined, artifacts, html, visible
     return pd.DataFrame(), artifacts, html, visible
 

@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes
+
 
 def _norm_cols(frame: pd.DataFrame) -> pd.DataFrame:
     mapping = {}
@@ -62,9 +64,9 @@ def merge_archive_frames(existing: pd.DataFrame, incoming: pd.DataFrame, *, key_
         return incoming
     cols = [c for c in key_cols if c in incoming.columns]
     if not cols:
-        return pd.concat([existing, incoming], ignore_index=True).drop_duplicates(keep="last")
+        return concat_dataframes(existing, incoming).drop_duplicates(keep="last")
     keep = existing[~existing[cols].astype(str).apply(tuple, axis=1).isin(
         incoming[cols].astype(str).apply(tuple, axis=1)
     )]
-    merged = pd.concat([keep, incoming], ignore_index=True)
+    merged = concat_dataframes(keep, incoming)
     return merged.drop_duplicates(subset=cols, keep="last")

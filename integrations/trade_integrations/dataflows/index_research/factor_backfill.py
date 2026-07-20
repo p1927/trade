@@ -57,9 +57,9 @@ def _fetch_fred_dgs10_series(start: str, end: str) -> pd.Series:
     if not api_key:
         return pd.Series(dtype=float)
     try:
-        import requests
+        from trade_integrations.http import get
 
-        response = requests.get(
+        response = get(
             "https://api.stlouisfed.org/fred/series/observations",
             params={
                 "series_id": "DGS10",

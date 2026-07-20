@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 
 def _parse_nse_date(raw: Any) -> str | None:
     if raw is None or (isinstance(raw, float) and pd.isna(raw)):
@@ -164,7 +166,7 @@ def overlay_derivative_columns(base: pd.DataFrame, overlay: pd.DataFrame) -> pd.
     missing_dates = indexed.index.difference(out["date"])
     if len(missing_dates):
         append = layer[layer["date"].isin(missing_dates)].copy()
-        out = pd.concat([out, append], ignore_index=True)
+        out = concat_dataframes(out, append)
 
     return out.sort_values("date").reset_index(drop=True)
 
@@ -174,7 +176,7 @@ def merge_fii_dii_variants(*frames: pd.DataFrame) -> pd.DataFrame:
     valid = [f for f in frames if f is not None and not f.empty]
     if not valid:
         return pd.DataFrame()
-    combined = pd.concat(valid, ignore_index=True)
+    combined = concat_frames(valid)
     if "granularity" not in combined.columns:
         combined["granularity"] = "daily"
     else:

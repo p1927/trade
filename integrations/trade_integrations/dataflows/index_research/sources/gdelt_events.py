@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 logger = logging.getLogger(__name__)
 
 _GDELT_DAILY_URL = "http://data.gdeltproject.org/events/{yyyymmdd}.export.CSV.zip"
@@ -45,14 +47,14 @@ def _topic_from_themes(theme_str: str) -> str | None:
 def _fetch_gdelt_daily_file(day: str) -> pd.DataFrame:
     """Download one GDELT daily export and return India/macro-relevant rows."""
     try:
-        import requests
+        from trade_integrations.http import get
     except ImportError:
         return pd.DataFrame()
 
     yyyymmdd = day.replace("-", "")
     url = _GDELT_DAILY_URL.format(yyyymmdd=yyyymmdd)
     try:
-        response = requests.get(url, timeout=60)
+        response = get(url, timeout=60)
         if response.status_code == 404:
             return pd.DataFrame()
         response.raise_for_status()
@@ -128,7 +130,7 @@ def fetch_gdelt_topic_counts(
 
     if not frames:
         return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
+    combined = concat_frames(frames)
     agg = (
         combined.groupby(["date", "topic"], as_index=False)["count"]
         .sum()

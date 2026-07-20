@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.nse_browser.parsers.structural_adjustments import (
     apply_symbol_succession_to_weights_wide,
     enrich_adjusted_constituent_prices,
@@ -271,7 +273,7 @@ def _merge_nifty50_valuation_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     valid = [frame for frame in frames if frame is not None and not frame.empty]
     if not valid:
         return pd.DataFrame()
-    merged = pd.concat(valid, ignore_index=True)
+    merged = concat_frames(valid)
     merged["date"] = merged["date"].astype(str).str[:10]
     return merged.sort_values(["date", "source_file"]).drop_duplicates("date", keep="last").reset_index(drop=True)
 
@@ -682,7 +684,7 @@ def _merge_index_ohlcv(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.Dat
         return incoming.copy()
     if incoming.empty:
         return existing.copy()
-    merged = pd.concat([existing, incoming], ignore_index=True)
+    merged = concat_dataframes(existing, incoming)
     merged["date"] = merged["date"].astype(str).str[:10]
     return merged.sort_values(["date", "source"]).drop_duplicates("date", keep="last").reset_index(drop=True)
 
@@ -902,11 +904,11 @@ def _merge_nifty50_weights_panels(
     valid_long = [frame for frame in long_frames if frame is not None and not frame.empty]
     if not valid_wide:
         return pd.DataFrame(), pd.DataFrame()
-    wide = pd.concat(valid_wide, ignore_index=True)
+    wide = concat_frames(valid_wide)
     wide["date"] = wide["date"].astype(str).str[:10]
     wide = wide.sort_values(["date", "source"]).drop_duplicates("date", keep="last").reset_index(drop=True)
     if valid_long:
-        long_panel = pd.concat(valid_long, ignore_index=True)
+        long_panel = concat_frames(valid_long)
         long_panel["date"] = long_panel["date"].astype(str).str[:10]
         long_panel = (
             long_panel.sort_values(["date", "symbol", "source"])
@@ -922,7 +924,7 @@ def _merge_nifty50_sector_maps(frames: list[pd.DataFrame]) -> pd.DataFrame:
     valid = [frame for frame in frames if frame is not None and not frame.empty]
     if not valid:
         return pd.DataFrame()
-    combined = pd.concat(valid, ignore_index=True)
+    combined = concat_frames(valid)
     return combined.sort_values(["symbol", "source"]).drop_duplicates("symbol", keep="last").reset_index(drop=True)
 
 
@@ -1297,7 +1299,7 @@ def load_india_news_sentiment_daily(repo_root: Path) -> pd.DataFrame:
             else:
                 legacy = frame.copy()
                 legacy["date"] = legacy["date"].astype(str).str[:10]
-                combined = pd.concat([legacy, ext], ignore_index=True)
+                combined = concat_dataframes(legacy, ext)
                 combined = combined.sort_values("date").drop_duplicates("date", keep="last")
                 frame = combined.reset_index(drop=True)
 
@@ -1386,7 +1388,7 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
             unmapped.append(str(rel))
 
     if annual_frames:
-        merged = pd.concat(annual_frames, ignore_index=True)
+        merged = concat_frames(annual_frames)
         if "year" in merged.columns:
             merged = merged.sort_values("year").drop_duplicates("year", keep="last")
         elif "date" in merged.columns:
@@ -1615,7 +1617,7 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
             if not frame.empty:
                 ohlcv_frames.append(frame)
         if ohlcv_frames:
-            incoming = pd.concat(ohlcv_frames, ignore_index=True)
+            incoming = concat_frames(ohlcv_frames)
             existing = _read_dataset(_dataset_path(repo_root, "nifty50_ohlcv_daily"))
             merged = _merge_index_ohlcv(existing, incoming)
             out_path = _dataset_path(repo_root, "nifty50_ohlcv_daily")
@@ -1635,7 +1637,7 @@ def ingest_historic_data_folder(repo_root: Path) -> dict[str, Any]:
         if not frame.empty:
             rbi_frames.append(frame)
     if rbi_frames:
-        rbi_merged = pd.concat(rbi_frames, ignore_index=True).sort_values("date").drop_duplicates("date", keep="last")
+        rbi_merged = concat_frames(rbi_frames).sort_values("date").drop_duplicates("date", keep="last")
         rbi_path = _dataset_path(repo_root, "india_rbi_wss_weekly")
         _write_dataset(rbi_merged, rbi_path)
         results["datasets"]["india_rbi_wss_weekly"] = {

@@ -41,9 +41,9 @@ def _google_news_rss_url(query: str, *, after: str, before: str) -> str:
 
 def _fetch_rss_headlines(url: str, *, limit: int = 8) -> list[dict[str, str]]:
     try:
-        import requests
+        from trade_integrations.http import get
 
-        response = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        response = get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         root = ET.fromstring(response.content)
     except Exception as exc:

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.history_ingest import _frames_for_concat
 
@@ -588,7 +590,7 @@ def fetch_web_flow_cash_frame(
         pass
     if not frames:
         return pd.DataFrame()
-    combined = pd.concat(_frames_for_concat(frames), ignore_index=True)
+    combined = concat_frames(_frames_for_concat(frames))
     combined = combined.sort_values("date").drop_duplicates("date", keep="last")
     return combined.reset_index(drop=True)
 
@@ -634,7 +636,7 @@ def merge_flow_derivatives_frame(
     if not cash_frames:
         combined = pd.DataFrame(columns=["date"])
     else:
-        combined = pd.concat(cash_frames, ignore_index=True)
+        combined = concat_frames(cash_frames)
         combined["date"] = combined["date"].astype(str).str[:10]
         combined = combined.sort_values("date").drop_duplicates("date", keep="last")
 
@@ -1002,7 +1004,7 @@ def load_nifty_oi_daily_frame(*, start: str, end: str) -> pd.DataFrame:
                 if csv_path.is_file():
                     parsed = parse_nifty_fo_oi_daily_csv(csv_path)
                     if not parsed.empty:
-                        frame = parsed if frame.empty else pd.concat([frame, parsed], ignore_index=True)
+                        frame = parsed if frame.empty else concat_dataframes(frame, parsed)
                         break
     except Exception:
         return pd.DataFrame()

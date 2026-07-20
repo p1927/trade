@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.dataflows.index_research.history_store import (
     load_history_dataset,
     save_history_dataset,
@@ -64,7 +66,7 @@ def merge_with_priority(
     valid = _frames_for_concat(frames)
     if not valid:
         return pd.DataFrame()
-    combined = pd.concat(valid, ignore_index=True)
+    combined = concat_frames(valid)
     for key in on:
         if key in combined.columns and key == "date":
             combined[key] = combined[key].astype(str).str[:10]

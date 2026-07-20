@@ -41,12 +41,12 @@ def _weights_from_heatmap(rows: list[dict[str, Any]]) -> dict[str, float] | None
 
 def _fetch_heatmap_weights() -> dict[str, float] | None:
     try:
-        import requests
+        from trade_integrations.http import get
     except ImportError:
         return None
 
     try:
-        response = requests.get(
+        response = get(
             _NIFTY50_HEATMAP_URL,
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=20,

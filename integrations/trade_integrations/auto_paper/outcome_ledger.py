@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes
+
 from trade_integrations.context.hub import get_hub_dir
 
 _LEDGER_REL = Path("_data") / "auto_paper" / "outcomes.parquet"
@@ -84,7 +86,7 @@ def append_outcome(
     if extra:
         row.update(extra)
     ledger = load_ledger()
-    ledger = pd.concat([ledger, pd.DataFrame([row])], ignore_index=True)
+    ledger = concat_dataframes(ledger, pd.DataFrame([row]))
     save_ledger(ledger)
     return row
 

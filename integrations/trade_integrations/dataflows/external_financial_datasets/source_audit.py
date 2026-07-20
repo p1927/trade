@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import requests
+from trade_integrations.http import get
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.github_datasets.config import DATASETS, raw_url
@@ -87,7 +87,7 @@ def _is_relevant(path: str) -> bool:
 
 def _github_tree(repo: str, branch: str) -> list[dict[str, Any]]:
     url = f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
-    resp = requests.get(url, headers={"User-Agent": _UA}, timeout=90)
+    resp = get(url, headers={"User-Agent": _UA}, timeout=90)
     if resp.status_code != 200:
         logger.warning("GitHub tree failed %s: %s", repo, resp.status_code)
         return []

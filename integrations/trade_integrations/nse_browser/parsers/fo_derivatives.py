@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 _DERIV_COLUMNS: tuple[str, ...] = (
     "nifty_pcr",
     "fii_fut_long_short_ratio",
@@ -103,7 +105,7 @@ def parse_nifty50_fo_bhavcopy_csv(
     if not parts:
         return pd.DataFrame()
 
-    merged = pd.concat(parts, ignore_index=True)
+    merged = concat_frames(parts)
     numeric_cols = [c for c in merged.columns if c != "date"]
     grouped = merged.groupby("date", as_index=False)[numeric_cols].sum(min_count=1)
 

@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.dataflows.company_research.models import StageResult
 from trade_integrations.dataflows.company_research.sources.macro_in import (
     _fetch_nselib_vix,
@@ -80,11 +82,11 @@ def _fetch_us_10y() -> dict[str, Any] | None:
         return None
 
     try:
-        import requests
+        from trade_integrations.http import get
 
         end = today
         start = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=30)).strftime("%Y-%m-%d")
-        response = requests.get(
+        response = get(
             "https://api.stlouisfed.org/fred/series/observations",
             params={
                 "series_id": "DGS10",
@@ -236,7 +238,7 @@ def _fetch_flow_net_5d_from_mrchartist(*, net_key: str, factor: str) -> dict[str
     frames = [f for f in (mr, latest) if f is not None and not f.empty]
     if not frames:
         return None
-    frame = pd.concat(frames, ignore_index=True).sort_values("date").drop_duplicates("date", keep="last")
+    frame = concat_frames(frames).sort_values("date").drop_duplicates("date", keep="last")
     col = "fii_net" if net_key == "fii" else "dii_net"
     if col not in frame.columns:
         return None

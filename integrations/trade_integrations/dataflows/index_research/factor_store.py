@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.context.hub import get_hub_dir
 
 _FACTOR_SUBDIR = "_data/index_factors/daily"
@@ -87,7 +89,7 @@ def upsert_daily_factors(day: str, rows: list[dict]) -> None:
     new_factors = {str(row["factor"]) for row in rows if row.get("factor")}
     if not existing.empty and "factor" in existing.columns:
         kept = existing[~existing["factor"].astype(str).isin(new_factors)]
-        merged = pd.concat([kept, pd.DataFrame([{**row, "date": day} for row in rows])], ignore_index=True)
+        merged = concat_dataframes(kept, pd.DataFrame([{**row, "date": day} for row in rows]))
     else:
         merged = pd.DataFrame([{**row, "date": day} for row in rows])
     out_dir = get_factor_data_dir()
@@ -113,4 +115,4 @@ def load_factor_history(start: str, end: str) -> pd.DataFrame:
 
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+    return concat_frames(frames)

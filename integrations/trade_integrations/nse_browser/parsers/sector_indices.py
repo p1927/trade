@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 _NIFTY50_DIR = "nifty50"
 _INDEX_SLUGS: dict[str, str] = {
     "NIFTY 50": "nifty50",
@@ -120,7 +122,7 @@ def load_nifty50_sector_csvs(repo_root: Path) -> pd.DataFrame:
 
     if not frames:
         return pd.DataFrame()
-    merged = pd.concat(frames, ignore_index=True)
+    merged = concat_frames(frames)
     return merged.sort_values(["date", "index_slug"]).drop_duplicates(["date", "index_slug"], keep="last")
 
 

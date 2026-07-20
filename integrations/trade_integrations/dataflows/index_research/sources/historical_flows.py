@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_frames
+
 from trade_integrations.dataflows.index_research.history_store import load_history_dataset, save_history_dataset
 from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
     fetch_mrchartist_flow_frame,
@@ -55,7 +57,7 @@ def _merge_flow_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     valid = [frame for frame in frames if frame is not None and not frame.empty]
     if not valid:
         return pd.DataFrame()
-    combined = pd.concat(valid, ignore_index=True)
+    combined = concat_frames(valid)
     combined["date"] = combined["date"].astype(str).str[:10]
     return combined.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
 

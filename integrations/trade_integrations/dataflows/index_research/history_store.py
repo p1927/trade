@@ -10,6 +10,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes
+
 from trade_integrations.context.hub import get_hub_dir
 
 _HISTORY_SUBDIR = "_data/history"
@@ -142,7 +144,7 @@ def save_history_dataset(name: str, frame: pd.DataFrame, *, merge: bool | None =
     if merge:
         existing = load_history_dataset(name)
         if not existing.empty:
-            out = pd.concat([existing, out], ignore_index=True)
+            out = concat_dataframes(existing, out)
     out = out.sort_values(keys).drop_duplicates(keys, keep="last").reset_index(drop=True)
     path = history_path(name)
     _write_parquet(out, path)

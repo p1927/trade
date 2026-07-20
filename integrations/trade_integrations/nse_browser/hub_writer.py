@@ -10,6 +10,8 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.hub_storage.parquet_io import concat_dataframes
+
 from trade_integrations.nse_browser.registry import get_mission, hub_root
 
 logger = logging.getLogger(__name__)
@@ -105,7 +107,7 @@ def upsert_daily_parquet(
             lambda row: tuple(str(row[c]) for c in dedupe) in incoming_keys, axis=1
         )
         keep = existing[keep_mask]
-        merged = pd.concat([keep, incoming], ignore_index=True)
+        merged = concat_dataframes(keep, incoming)
     merged = merged.sort_values(dedupe).drop_duplicates(dedupe, keep="last")
     _write_parquet(merged, path)
     return len(incoming)
