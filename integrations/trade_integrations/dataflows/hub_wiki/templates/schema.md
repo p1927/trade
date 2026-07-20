@@ -4,19 +4,20 @@
 
 | Type | Directory | Purpose |
 |------|-----------|---------|
-| event | wiki/events/ | Distilled market events (parent + daily timeline) |
+| event | wiki/ (ingested) | Distilled market events after LLM Wiki ingest |
 | entity | wiki/entities/ | Macro/micro actors (RBI, Iran, Reliance, oil) |
 | theme | wiki/themes/ | Cross-cutting themes (rate cycle, geopolitical risk) |
-| source | sources/news/ | Immutable raw ref exports from hub events |
+| source | raw/sources/news/ | Immutable exports from hub events (Trade writes here) |
 
-## Frontmatter (event pages)
+## Frontmatter (source exports in raw/sources/news/)
 
 ```yaml
 ---
 type: event
+title: Human-readable title
+sources: [news/slug.md]
 event_id: evt:abc123
 parent_event_id: evt:parent or null
-title: Human-readable title
 ticker: NIFTY
 provenance: live | backfill | curated
 market_impact_status: observed | claimed | predicted | unverified
@@ -30,6 +31,7 @@ linked_factors: [oil_brent, fii_net_5d]
 ## Rules
 
 - Wiki pages are **derived** from `events.parquet` — regenerate, never authoritative over SSOT.
+- Trade exports to `raw/sources/news/`; LLM Wiki ingest builds searchable `wiki/` pages.
 - Impact numbers come from `event_outcomes` ledger, not free-form LLM prose.
 - Outliers stay in a **Conflicts** section; do not delete dissenting sources.
 - Use `[[entity-slug]]` wikilinks between events, entities, and themes.

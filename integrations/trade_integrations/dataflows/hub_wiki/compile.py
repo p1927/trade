@@ -1,4 +1,4 @@
-"""Compile distilled hub events into LLM-Wiki markdown (derived layer)."""
+"""Compile distilled hub events into LLM-Wiki source exports (raw/sources/news/)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from trade_integrations.dataflows.hub_wiki.bootstrap import ensure_llm_wiki_proj
 from trade_integrations.dataflows.hub_wiki.client import trigger_sources_rescan
 from trade_integrations.dataflows.hub_wiki.config import (
     llm_wiki_events_dir,
-    llm_wiki_sources_dir,
+    llm_wiki_news_sources_dir,
 )
 
 
@@ -23,6 +23,17 @@ def wiki_compile_enabled() -> bool:
 def _slug(text: str, *, max_len: int = 64) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (text or "").strip().lower()).strip("-")
     return (slug or "event")[:max_len]
+
+
+def event_slug(event: dict[str, Any]) -> str:
+    event_id = str(event.get("event_id") or "").strip()
+    title = str(event.get("title") or "event")
+    slug = _slug(title)
+    if event_id.startswith("url:"):
+        return _slug(f"{slug}-{event_id[-12:]}")
+    if event_id:
+        return _slug(f"{slug}-{event_id[:8]}")
+    return slug
 
 
 def _now_iso() -> str:
@@ -39,8 +50,8 @@ def _yaml_value(value: Any) -> str:
     return str(value).replace("\n", " ")
 
 
-def render_event_page(event: dict[str, Any]) -> str:
-    """Markdown for wiki/events/{slug}.md from a distilled event dict."""
+def render_event_source(event: dict[str, Any], *, source_rel_path: str) -> str:
+    """Markdown for raw/sources/news/{slug}.md — LLM Wiki ingest input."""
     structured = event.get("structured_summary") if isinstance(event.get("structured_summary"), dict) else {}
     meta = structured.get("event_meta") if isinstance(structured.get("event_meta"), dict) else {}
     consensus = meta.get("consensus") if isinstance(meta.get("consensus"), dict) else {}
@@ -56,9 +67,10 @@ def render_event_page(event: dict[str, Any]) -> str:
     fm_lines = [
         "---",
         "type: event",
+        f"title: {_yaml_value(title)}",
+        f"sources: [{_yaml_value(source_rel_path)}]",
         f"event_id: {_yaml_value(event_id)}",
         f"parent_event_id: {_yaml_value(parent)}",
-        f"title: {_yaml_value(title)}",
         f"ticker: {_yaml_value(ticker)}",
         f"provenance: {_yaml_value(meta.get('provenance') or 'live')}",
         f"market_impact_status: {_yaml_value(meta.get('market_impact_status') or 'unverified')}",
@@ -116,8 +128,14 @@ def render_event_page(event: dict[str, Any]) -> str:
     return "\n".join(fm_lines)
 
 
+def render_event_page(event: dict[str, Any]) -> str:
+    """Backward-compatible alias for ``render_event_source``."""
+    slug = event_slug(event)
+    return render_event_source(event, source_rel_path=f"news/{slug}.md")
+
+
 def render_source_export(event: dict[str, Any]) -> str:
-    """JSON export under sources/news/ for immutable ref audit."""
+    """JSON audit sidecar under raw/sources/news/."""
     structured = event.get("structured_summary") if isinstance(event.get("structured_summary"), dict) else {}
     meta = structured.get("event_meta") if isinstance(structured.get("event_meta"), dict) else {}
     payload = {
@@ -138,31 +156,28 @@ def compile_event_to_wiki(
     *,
     rescan: bool = False,
 ) -> dict[str, Any]:
-    """Write one distilled event to LLM-Wiki project tree."""
+    """Export one distilled event to raw/sources/news/ for LLM Wiki ingest."""
     ensure_llm_wiki_project()
     event_id = str(event.get("event_id") or "").strip()
-    title = str(event.get("title") or "event")
     if not event_id:
         return {"ok": False, "error": "missing event_id"}
 
-    slug = _slug(title)
-    if event_id.startswith("url:"):
-        slug = _slug(f"{slug}-{event_id[-12:]}")
-    else:
-        slug = _slug(f"{slug}-{event_id[:8]}")
+    slug = event_slug(event)
+    news_dir = llm_wiki_news_sources_dir()
+    news_dir.mkdir(parents=True, exist_ok=True)
 
-    event_path = llm_wiki_events_dir() / f"{slug}.md"
-    source_path = llm_wiki_sources_dir() / "news" / f"{slug}.json"
-    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_rel = f"news/{slug}.md"
+    md_path = news_dir / f"{slug}.md"
+    json_path = news_dir / f"{slug}.json"
 
-    event_path.write_text(render_event_page(event), encoding="utf-8")
-    source_path.write_text(render_source_export(event), encoding="utf-8")
+    md_path.write_text(render_event_source(event, source_rel_path=source_rel), encoding="utf-8")
+    json_path.write_text(render_source_export(event), encoding="utf-8")
 
     out: dict[str, Any] = {
         "ok": True,
         "event_id": event_id,
-        "wiki_path": str(event_path),
-        "source_path": str(source_path),
+        "source_md_path": str(md_path),
+        "source_json_path": str(json_path),
         "slug": slug,
     }
     if rescan:
@@ -180,28 +195,35 @@ def compile_event_by_id(event_id: str, *, rescan: bool = False) -> dict[str, Any
 
 
 def compile_and_rescan_event(event_id: str) -> dict[str, Any]:
-    """Compile event page + trigger LLM-Wiki source rescan."""
+    """Export event source + trigger LLM-Wiki rescan."""
     return compile_event_by_id(event_id, rescan=True)
 
 
-def remove_event_wiki_files(event: dict[str, Any]) -> dict[str, Any]:
-    """Remove compiled wiki markdown/json for a discarded or archived event."""
+def batch_rescan_if_enabled(*, enabled: bool = True) -> dict[str, Any]:
+    """Single rescan after a worker/rollup batch (avoids per-event queue spam)."""
+    if not enabled or not wiki_compile_enabled():
+        return {"ok": True, "skipped": True}
+    return trigger_sources_rescan()
+
+
+def remove_event_wiki_files(event: dict[str, Any], *, rescan: bool = False) -> dict[str, Any]:
+    """Remove exported source files for a discarded or archived event."""
     event_id = str(event.get("event_id") or "").strip()
-    title = str(event.get("title") or "event")
     if not event_id:
         return {"ok": False, "error": "missing event_id"}
 
-    slug = _slug(title)
-    if event_id.startswith("url:"):
-        slug = _slug(f"{slug}-{event_id[-12:]}")
-    else:
-        slug = _slug(f"{slug}-{event_id[:8]}")
-
+    slug = event_slug(event)
     removed: list[str] = []
-    event_path = llm_wiki_events_dir() / f"{slug}.md"
-    source_path = llm_wiki_sources_dir() / "news" / f"{slug}.json"
-    for path in (event_path, source_path):
+    for path in (
+        llm_wiki_news_sources_dir() / f"{slug}.md",
+        llm_wiki_news_sources_dir() / f"{slug}.json",
+        llm_wiki_events_dir() / f"{slug}.md",
+    ):
         if path.is_file():
             path.unlink()
             removed.append(str(path))
-    return {"ok": True, "event_id": event_id, "removed": removed}
+
+    out: dict[str, Any] = {"ok": True, "event_id": event_id, "removed": removed}
+    if rescan and removed:
+        out["rescan"] = trigger_sources_rescan()
+    return out
