@@ -8,7 +8,7 @@ import os
 import time
 from typing import Any
 
-import requests
+from trade_integrations.http import RequestException, Response, post
 
 from trade_integrations.tiered_api import TieredRequest, tiered_fetch
 from trade_integrations.tiered_api.errors import TieredApiBudgetExhausted, TieredApiDisabledError
@@ -83,7 +83,7 @@ def _mark_rate_limited(text: str = "") -> None:
     logger.warning("Tapetide rate limit detected; pausing MCP calls for 1 hour. %s", text[:120])
 
 
-def _check_response_rate_limit(response: requests.Response, combined_text: str = "") -> None:
+def _check_response_rate_limit(response: Response, combined_text: str = "") -> None:
     if response.status_code == 429 or is_rate_limit_message(combined_text):
         _mark_rate_limited(combined_text)
         raise TapetideRateLimitError(combined_text or "Tapetide rate limit exceeded")
@@ -118,7 +118,7 @@ def _execute_mcp_call(tool_name: str, arguments: dict[str, Any]) -> Any:
         "method": "tools/call",
         "params": {"name": tool_name, "arguments": arguments},
     }
-    response = requests.post(
+    response = post(
         _mcp_url(),
         headers={
             "Authorization": f"Bearer {_token()}",

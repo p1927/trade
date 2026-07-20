@@ -332,17 +332,18 @@ def fetch_position_book() -> dict[str, Any] | None:
     """Fetch OpenAlgo position book; None when unavailable."""
     import os
 
-    import requests
+    from trade_integrations.http import PoolKind, post
 
     host = os.getenv("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
     api_key = os.getenv("OPENALGO_API_KEY", "").strip()
     if not api_key:
         return None
     try:
-        response = requests.post(
+        response = post(
             f"{host}/api/v1/positionbook",
             json={"apikey": api_key},
             timeout=15,
+            pool=PoolKind.OPENALGO,
         )
         if response.ok:
             body = response.json()

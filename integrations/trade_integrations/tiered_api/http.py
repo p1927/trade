@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-import requests
+from trade_integrations.http import get, post
 
 from trade_integrations.tiered_api.client import tiered_fetch
 from trade_integrations.tiered_api.registry import resolve_credential
@@ -40,7 +40,7 @@ def tiered_http_get(
             param_name = credential_param or _default_cred_param(source)
             call_params.setdefault(param_name, cred)
         hdrs = {"User-Agent": DEFAULT_UA, **(headers or {})}
-        resp = requests.get(url, params=call_params, headers=hdrs, timeout=timeout)
+        resp = get(url, params=call_params, headers=hdrs, timeout=timeout)
         resp.raise_for_status()
         text = resp.text
         try:
@@ -74,7 +74,7 @@ def tiered_http_post_json(
         }
         if auth_bearer:
             hdrs["Authorization"] = f"Bearer {resolve_credential(source)}"
-        resp = requests.post(url, json=json_body, headers=hdrs, timeout=timeout)
+        resp = post(url, json=json_body, headers=hdrs, timeout=timeout)
         resp.raise_for_status()
         return resp.text
 

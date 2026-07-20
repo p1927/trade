@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import requests
+from trade_integrations.http import PoolKind, post
 
 from trade_integrations.dataflows.symbol_registry.openalgo_indices import ALL_INDEX_SYMBOLS
 
@@ -159,7 +159,7 @@ def probe_india_symbol_live(symbol: str) -> dict[str, Any] | None:
     if not raw:
         return None
     try:
-        response = requests.post(
+        response = post(
             f"{host}/api/v1/search",
             json={"apikey": api_key, "query": raw},
             timeout=10,
@@ -262,7 +262,7 @@ def search_india_symbols(query: str, *, limit: int = 5) -> list[dict[str, Any]]:
     if settings:
         host, api_key = settings
         try:
-            response = requests.post(
+            response = post(
                 f"{host}/api/v1/search",
                 json={"apikey": api_key, "query": raw},
                 timeout=10,

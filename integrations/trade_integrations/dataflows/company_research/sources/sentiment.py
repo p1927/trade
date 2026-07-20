@@ -97,11 +97,11 @@ def _fetch_sentiment_pulse_http(headlines: list[str]) -> dict[str, Any] | None:
     if not url:
         return None
     try:
-        import requests
+        from trade_integrations.http import post
 
         scores = []
         for headline in headlines[:15]:
-            response = requests.post(
+            response = post(
                 f"{url}/classify",
                 json={"text": headline},
                 timeout=15,

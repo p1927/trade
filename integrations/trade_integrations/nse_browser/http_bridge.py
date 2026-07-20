@@ -7,6 +7,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from trade_integrations.http import scoped_session
 from trade_integrations.nse_browser.registry import cookies_path
 from trade_integrations.nse_browser.session import RateLimiter, cookies_to_requests_jar, load_cookies
 
@@ -96,17 +97,14 @@ class HttpBridge:
             return 0, b""
 
     def _request_requests_bytes(self, url: str, headers: dict[str, str]) -> tuple[int, bytes]:
-        import requests
-
-        session = requests.Session()
-        session.headers.update(headers)
-        session.cookies = cookies_to_requests_jar(self.cookies)
         try:
-            if not self.cookies and "nseindia.com" in url:
-                session.get("https://www.nseindia.com", timeout=15)
-            resp = session.get(url, timeout=45)
-            content = resp.content
-            return resp.status_code, content if isinstance(content, bytes) else b""
+            with scoped_session(headers=headers) as session:
+                session.cookies = cookies_to_requests_jar(self.cookies)
+                if not self.cookies and "nseindia.com" in url:
+                    session.get("https://www.nseindia.com", timeout=15)
+                resp = session.get(url, timeout=45)
+                content = resp.content
+                return resp.status_code, content if isinstance(content, bytes) else b""
         except Exception as exc:
             logger.debug("requests GET bytes failed %s: %s", url, exc)
             return 0, b""
@@ -140,16 +138,13 @@ class HttpBridge:
             return 0, ""
 
     def _request_requests(self, url: str, headers: dict[str, str]) -> tuple[int, str]:
-        import requests
-
-        session = requests.Session()
-        session.headers.update(headers)
-        session.cookies = cookies_to_requests_jar(self.cookies)
         try:
-            if not self.cookies and "nseindia.com" in url:
-                session.get("https://www.nseindia.com", timeout=15)
-            resp = session.get(url, timeout=45)
-            return resp.status_code, resp.text
+            with scoped_session(headers=headers) as session:
+                session.cookies = cookies_to_requests_jar(self.cookies)
+                if not self.cookies and "nseindia.com" in url:
+                    session.get("https://www.nseindia.com", timeout=15)
+                resp = session.get(url, timeout=45)
+                return resp.status_code, resp.text
         except Exception as exc:
             logger.debug("requests GET failed %s: %s", url, exc)
             return 0, ""

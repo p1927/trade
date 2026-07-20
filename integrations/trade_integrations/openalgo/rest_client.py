@@ -34,15 +34,15 @@ class OpenAlgoRestClient:
             raise RuntimeError("OPENALGO_API_KEY not configured")
 
     def post(self, path: str, payload: dict[str, Any], *, timeout: int = 30) -> dict[str, Any]:
-        import requests
+        from trade_integrations.http import PoolKind, RequestException, post
 
         url = f"{self.host}/api/v1/{path.lstrip('/')}"
         last_exc: Exception | None = None
         for attempt in range(2):
             try:
-                response = requests.post(url, json=payload, timeout=timeout)
+                response = post(url, json=payload, timeout=timeout, pool=PoolKind.OPENALGO)
                 body = response.json() if response.content else {}
-            except requests.RequestException as exc:
+            except RequestException as exc:
                 last_exc = exc
                 if attempt == 0:
                     time.sleep(1.0)

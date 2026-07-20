@@ -7,7 +7,7 @@ import os
 import time
 from pathlib import Path
 
-import requests
+from trade_integrations.http import HTTPError, RequestException, get
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +49,12 @@ def fetch_bytes(
     for attempt in range(retries):
         _pace(delay)
         try:
-            resp = requests.get(url, headers={"User-Agent": _UA}, timeout=timeout)
+            resp = get(url, headers={"User-Agent": _UA}, timeout=timeout)
             if resp.status_code in _RETRYABLE_STATUS:
-                raise requests.HTTPError(f"{resp.status_code} for {url}", response=resp)
+                raise HTTPError(f"{resp.status_code} for {url}", response=resp)
             resp.raise_for_status()
             return resp.content
-        except requests.HTTPError as exc:
+        except HTTPError as exc:
             last_exc = exc
             status = exc.response.status_code if exc.response is not None else None
             if status is not None and 400 <= status < 500 and status != 429:
@@ -73,7 +73,7 @@ def fetch_bytes(
                 backoff,
             )
             time.sleep(backoff)
-        except (requests.Timeout, requests.ConnectionError) as exc:
+        except RequestException as exc:
             last_exc = exc
             if attempt + 1 >= retries:
                 break

@@ -7,7 +7,7 @@ Do::
 
 Don't::
 
-    requests.get(SEARXNG_BASE_URL + "/search", ...)
+    import requests; requests.get(...)
 """
 
 from __future__ import annotations
@@ -21,9 +21,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
-import requests
-
 from trade_integrations.context.hub import get_hub_dir
+from trade_integrations.http import RequestException, get
 
 logger = logging.getLogger(__name__)
 
@@ -194,9 +193,9 @@ def search_json(
         if categories:
             params["categories"] = categories
         try:
-            resp = requests.get(url, params=params, timeout=timeout)
+            resp = get(url, params=params, timeout=timeout)
             resp.raise_for_status()
-        except requests.RequestException as exc:
+        except RequestException as exc:
             source_availability.record_failure("searxng", "search", exc)
             raise
         source_availability.record_success("searxng", "search")

@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-import requests
+from trade_integrations.http import RequestException
 
 from trade_integrations.dataflows.searxng_client import search_json
 
@@ -89,7 +89,7 @@ def search_finance(
     for cat in category_attempts:
         try:
             payload = search_json(query, categories=cat, timeout=REQUEST_TIMEOUT)
-        except requests.RequestException as exc:
+        except RequestException as exc:
             logger.debug("SearXNG search failed (%s) for %r: %s", cat or "all", query, exc)
             continue
         except ValueError as exc:

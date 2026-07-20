@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 
-import requests
+from trade_integrations.http import get
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ def _fetch_alpaca_assets() -> frozenset[str] | None:
     url = f"{cfg['trade_base']}/v2/assets"
     params = {"status": "active", "asset_class": "us_equity"}
     try:
-        response = requests.get(url, headers=_alpaca_headers(), params=params, timeout=30)
+        response = get(url, headers=_alpaca_headers(), params=params, timeout=30)
         if not response.ok:
             logger.info("Alpaca assets fetch failed: HTTP %s", response.status_code)
             return None

@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
-import requests
+from trade_integrations.http import RequestException
 from dateutil.relativedelta import relativedelta
 
 from trade_integrations.dataflows.searxng_client import search_json
@@ -44,7 +44,7 @@ def _parse_pub_date(result: dict) -> datetime | None:
 def _search(query: str, limit: int) -> list[dict]:
     try:
         payload = search_json(query, categories="news", timeout=REQUEST_TIMEOUT)
-    except requests.RequestException as exc:
+    except RequestException as exc:
         logger.warning("SearXNG search failed for %r: %s", query, exc)
         return []
     except ValueError as exc:

@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Annotated, Any
 
 import pandas as pd
-import requests
+from trade_integrations.http import get
 from dateutil.relativedelta import relativedelta
 
 from trade_integrations.dataflows.company_research.market import Market, detect_market
@@ -216,7 +216,7 @@ def list_alpaca_positions() -> list[dict[str, Any]]:
     cfg = _settings()
     url = f"{cfg['trade_base']}/v2/positions"
     try:
-        response = requests.get(url, headers=_headers(), timeout=30)
+        response = get(url, headers=_headers(), timeout=30)
     except requests.RequestException as exc:
         raise NoMarketDataError("positions", "positions", f"Alpaca request failed: {exc}") from exc
     if response.status_code >= 400:

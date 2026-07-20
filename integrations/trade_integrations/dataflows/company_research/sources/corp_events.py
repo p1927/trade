@@ -52,13 +52,13 @@ def fetch_corp_events(normalized: NormalizedTicker, *, market: Market) -> StageR
         )
 
     try:
-        import requests
+        from trade_integrations.http import get
 
-        health = requests.get(f"{base}/health", timeout=10)
+        health = get(f"{base}/health", timeout=10)
         if not health.ok:
             raise RuntimeError(f"health check HTTP {health.status_code}")
 
-        response = requests.get(
+        response = get(
             f"{base}/predictions/{normalized.base_symbol}",
             timeout=30,
         )

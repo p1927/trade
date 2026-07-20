@@ -106,9 +106,9 @@ def save_cookies(cookies: list[dict[str, Any]]) -> None:
 
 
 def cookies_to_requests_jar(cookies: list[dict[str, Any]]):
-    import requests
+    from trade_integrations.http import cookie_jar
 
-    jar = requests.cookies.RequestsCookieJar()
+    jar = cookie_jar()
     for item in cookies:
         name = item.get("name")
         value = item.get("value")
