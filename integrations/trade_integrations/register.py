@@ -30,22 +30,10 @@ def _patch_default_config() -> None:
     import tradingagents.default_config as default_config
 
     cfg = default_config.DEFAULT_CONFIG
-    cfg["sentiment_rss_feeds"] = [
-        {
-            "label": "Google News",
-            "url": (
-                "https://news.google.com/rss/search?q={search_term}+stock+when:7d"
-                "&hl=en-US&gl=US&ceid=US:en"
-            ),
-        },
-        {
-            "label": "Yahoo Finance Headlines",
-            "url": (
-                "https://feeds.finance.yahoo.com/rss/2.0/headline"
-                "?s={ticker}&region=US&lang=en-US"
-            ),
-        },
-    ]
+    from trade_integrations.dataflows.rss_feeds import _BUILTIN_RSS_FEEDS
+
+    # Built-ins always merged with TRADINGAGENTS_SENTIMENT_RSS_FEEDS in rss_feeds.py.
+    cfg["sentiment_rss_feeds"] = list(_BUILTIN_RSS_FEEDS)
     cfg["news_aggregator_sources"] = os.getenv(
         "TRADINGAGENTS_NEWS_AGGREGATOR_SOURCES",
         "searxng,yfinance,alpha_vantage",

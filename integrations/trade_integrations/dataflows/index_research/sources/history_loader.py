@@ -18,12 +18,67 @@ from trade_integrations.dataflows.index_research.technical_features import (
 NIFTY_SYMBOL = "^NSEI"
 
 
+def refresh_nifty_history_tail_if_stale(*, end: str | None = None) -> dict[str, object]:
+    """Append recent Nifty daily bars when cold-tier cache lags the trading calendar."""
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+    from trade_integrations.dataflows.index_research.history_ingest import merge_with_priority
+    from trade_integrations.dataflows.index_research.history_store import (
+        load_history_dataset,
+        save_history_dataset,
+    )
+    from trade_integrations.dataflows.index_research.sources.historical_macro import (
+        _fetch_yfinance_ohlcv,
+    )
+
+    target = (end or india_trading_date_iso())[:10]
+    cached = load_history_dataset("nifty_ohlcv_daily")
+    max_date = ""
+    if not cached.empty and "date" in cached.columns:
+        max_date = str(cached["date"].astype(str).str[:10].max())
+    if max_date and max_date >= target:
+        return {"status": "ok", "reason": "fresh", "max_date": max_date}
+
+    if max_date:
+        start_dt = datetime.strptime(max_date[:10], "%Y-%m-%d") - timedelta(days=7)
+        start = start_dt.strftime("%Y-%m-%d")
+    else:
+        start = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%d")
+    end_exclusive = (
+        datetime.strptime(target[:10], "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    tail = _fetch_yfinance_ohlcv(NIFTY_SYMBOL, start, end_exclusive)
+    if tail.empty:
+        return {
+            "status": "error",
+            "reason": "yfinance_tail_empty",
+            "max_date": max_date or None,
+            "target": target,
+        }
+    tail = tail.copy()
+    tail["source"] = "yfinance_tail"
+    merged = merge_with_priority([cached, tail], on=["date"]) if not cached.empty else tail
+    result = save_history_dataset("nifty_ohlcv_daily", merged)
+    new_max = str(merged["date"].astype(str).str[:10].max())
+    return {
+        "status": "ok",
+        "reason": "tail_refreshed",
+        "max_date": new_max,
+        "target": target,
+        **result,
+    }
+
+
 def load_nifty_history(days: int = 365, *, start: str | None = None, end: str | None = None) -> pd.DataFrame:
     """Load Nifty spot close history via yfinance ``^NSEI`` or cold-tier cache."""
     from trade_integrations.dataflows.index_research.history_store import load_history_dataset
 
     cached = load_history_dataset("nifty_ohlcv_daily")
     if not cached.empty and "close" in cached.columns:
+        try:
+            refresh_nifty_history_tail_if_stale()
+            cached = load_history_dataset("nifty_ohlcv_daily")
+        except Exception:
+            pass
         frame = cached.copy()
         frame["date"] = frame["date"].astype(str).str[:10]
         if start:

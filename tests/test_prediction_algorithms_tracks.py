@@ -601,8 +601,23 @@ def test_arimax_macro_unavailable_when_not_converged(monkeypatch):
 
 
 @pytest.mark.unit
-def test_distill_extract_reads_reasoning_content():
-    from trade_integrations.dataflows.index_research.news_distillation import _extract_message_text
+def test_distill_extract_uses_content_only():
+    from trade_integrations.dataflows.index_research.news_distillation import _extract_distill_answer
+
+    msg = MagicMock(
+        content="<title>Title</title><summary>Body</summary>",
+        reasoning_content="The user wants me to summarize these articles...",
+        model_extra={},
+        additional_kwargs={},
+    )
+    text = _extract_distill_answer(msg)
+    assert "<title>Title</title>" in text
+    assert "user wants me to" not in text.lower()
+
+
+@pytest.mark.unit
+def test_distill_extract_ignores_reasoning_channel():
+    from trade_integrations.dataflows.index_research.news_distillation import _extract_distill_answer
 
     msg = MagicMock(
         content="",
@@ -610,6 +625,23 @@ def test_distill_extract_reads_reasoning_content():
         model_extra={},
         additional_kwargs={},
     )
-    text = _extract_message_text(msg)
+    assert _extract_distill_answer(msg) == ""
+
+
+@pytest.mark.unit
+def test_distill_extract_strips_inline_thinking_from_content():
+    from trade_integrations.dataflows.index_research.news_distillation import _extract_distill_answer
+
+    msg = MagicMock(
+        content=(
+            "<think>plan the summary</think>"
+            "<title>Title</title><summary>Body</summary>"
+        ),
+        reasoning_content=None,
+        model_extra={},
+        additional_kwargs={},
+    )
+    text = _extract_distill_answer(msg)
+    assert "plan the summary" not in text
     assert "<title>Title</title>" in text
 

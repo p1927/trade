@@ -603,7 +603,7 @@ def sync_index_ohlcv_via_data_router(*, start: str, end: str) -> dict[str, Any]:
             results[dataset] = {
                 "status": "skipped",
                 "reason": result.status,
-                "attempts": [a.source_id for a in (result.attempts or [])],
+                "attempts": [a.name for a in (result.attempts or [])],
             }
             continue
         overlay = result.data.copy()
@@ -614,6 +614,15 @@ def sync_index_ohlcv_via_data_router(*, start: str, end: str) -> dict[str, Any]:
         merged = merge_with_priority([existing, overlay], on=["date"])
         results[dataset] = save_history_dataset(dataset, merged)
     return {"status": "ok", "datasets": results}
+
+
+def sync_nifty_ohlcv_tail(*, end: str | None = None) -> dict[str, Any]:
+    """Refresh trailing Nifty daily bars when cold-tier cache is behind the trading calendar."""
+    from trade_integrations.dataflows.index_research.sources.history_loader import (
+        refresh_nifty_history_tail_if_stale,
+    )
+
+    return refresh_nifty_history_tail_if_stale(end=end)
 
 
 def run_history_incremental_sync(*, days: int = 30, explicit: bool = False) -> dict[str, Any]:

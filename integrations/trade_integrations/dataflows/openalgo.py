@@ -255,11 +255,14 @@ def _fetch_live_quote(oa_symbol: str, exchange: str) -> dict | None:
     return _quote_data(oa_symbol, exchange)
 
 
-def fetch_openalgo_quote(symbol: str) -> dict | None:
+def fetch_openalgo_quote(symbol: str, *, policy=None) -> dict | None:
     """Fetch a single live quote for an equity or index symbol (hub channel when registered)."""
     from trade_integrations.hub_capture.channel import get_quote
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
 
-    return get_quote(symbol, _fetch_live_quote_raw)
+    if policy is None:
+        policy = FreshnessPolicy.NORMAL
+    return get_quote(symbol, _fetch_live_quote_raw, policy=policy)
 
 
 def fetch_option_chain(

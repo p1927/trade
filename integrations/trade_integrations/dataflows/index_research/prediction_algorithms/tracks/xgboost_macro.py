@@ -81,11 +81,15 @@ def _unavailable(reason: str, **extra) -> ForecastTrack:
 
 
 def _train_xgb(rows_x, rows_y, feature_names):
+    import numpy as np
     import pandas as pd
     import xgboost as xgb
 
-    X = pd.DataFrame(rows_x, columns=list(feature_names))
-    y = pd.Series(rows_y)
+    matrix = np.asarray(rows_x, dtype=np.float64)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    X = pd.DataFrame(matrix, columns=list(feature_names))
+    y = pd.Series(np.asarray(rows_y, dtype=np.float64))
     model = xgb.XGBRegressor(
         n_estimators=80,
         max_depth=4,
@@ -107,6 +111,11 @@ def _predict_xgb(model, live_vec):
     if data.ndim == 1:
         data = data.reshape(1, -1)
     feature_cols = getattr(model, "feature_names_in_", None)
-    if feature_cols is not None:
+    if feature_cols is None:
+        try:
+            feature_cols = model.get_booster().feature_names
+        except Exception:
+            feature_cols = None
+    if feature_cols is not None and len(list(feature_cols)) > 0:
         return model.predict(pd.DataFrame(data, columns=list(feature_cols)))
     return model.predict(data)

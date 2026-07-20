@@ -233,19 +233,68 @@ def _quote_data(oa_symbol: str, exchange: str) -> dict | None:
         return None
 
 
+def _parse_quote_ltp(data: dict[str, Any]) -> tuple[float | None, str | None]:
+    """Return (ltp, error). Treat vendor zero LTP as failure."""
+    error = data.get("error") or data.get("message")
+    raw_ltp = data.get("ltp")
+    if raw_ltp is None:
+        raw_ltp = data.get("last_price")
+    try:
+        ltp = float(raw_ltp) if raw_ltp is not None else None
+    except (TypeError, ValueError):
+        ltp = None
+    if ltp is not None and ltp <= 0:
+        return None, str(error or "vendor_zero_ltp")
+    if ltp is None:
+        return None, str(error or "missing_ltp")
+    if error:
+        return None, str(error)
+    return ltp, None
+
+
 def fetch_quote_raw(symbol: str, *, exchange: str | None = None) -> dict | None:
     """Direct OpenAlgo quote fetch (no hub channel)."""
     from trade_integrations.dataflows import source_availability
 
     if not source_availability.should_attempt("openalgo", "quotes"):
-        return None
+        return {
+            "ltp": None,
+            "volume": None,
+            "change_pct": None,
+            "high_52w": None,
+            "low_52w": None,
+            "source": "openalgo",
+            "quote_error": "openalgo_quotes_circuit_open",
+        }
 
     oa_symbol, resolved_exchange = resolve_openalgo_symbol(symbol)
     data = _quote_data(oa_symbol, exchange or resolved_exchange)
     if not data:
-        return None
+        return {
+            "ltp": None,
+            "volume": None,
+            "change_pct": None,
+            "high_52w": None,
+            "low_52w": None,
+            "source": "openalgo",
+            "quote_error": "no_quote_data",
+        }
+
+    ltp, quote_error = _parse_quote_ltp(data)
+    if ltp is None:
+        return {
+            "ltp": None,
+            "volume": data.get("volume"),
+            "change_pct": data.get("change_percent") or data.get("change_pct"),
+            "high_52w": data.get("high_52w"),
+            "low_52w": data.get("low_52w"),
+            "source": "openalgo",
+            "quote_error": quote_error,
+            "error": data.get("error") or quote_error,
+        }
+
     return {
-        "ltp": data.get("ltp") or data.get("last_price"),
+        "ltp": ltp,
         "volume": data.get("volume"),
         "change_pct": data.get("change_percent") or data.get("change_pct"),
         "high_52w": data.get("high_52w"),

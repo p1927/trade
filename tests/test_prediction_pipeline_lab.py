@@ -189,6 +189,16 @@ def test_run_index_research_runs_forecast_lab_in_pipeline(monkeypatch):
         "trade_integrations.dataflows.index_research.aggregator._fetch_spot",
         lambda _: 24500.0,
     )
+    from trade_integrations.dataflows.index_research.spot_fetch import SpotFetchResult
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.aggregator._fetch_spot_result",
+        lambda _: SpotFetchResult(24500.0, "openalgo", None),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.history_ingest.sync_nifty_ohlcv_tail",
+        lambda **_: {"status": "ok", "reason": "fresh"},
+    )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.aggregator._nifty_trend_20d",
         lambda: "up",

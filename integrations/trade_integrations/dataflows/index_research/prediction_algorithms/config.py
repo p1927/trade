@@ -29,10 +29,10 @@ def default_combiner_id() -> str:
 
 
 def scoreboard_auto_refresh() -> bool:
-    """Refresh walk-forward scoreboard after index research when lab is on."""
+    """Optional walk-forward scoreboard refresh after index research (off by default)."""
     if not lab_enabled():
         return False
-    return _env_bool("INDEX_PREDICTION_SCOREBOARD_AUTO_REFRESH", default=True)
+    return _env_bool("INDEX_PREDICTION_SCOREBOARD_AUTO_REFRESH", default=False)
 
 
 def experimental_tracks_enabled() -> bool:
