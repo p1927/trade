@@ -66,16 +66,36 @@ def _fetch_finverse_beat_probability(normalized: NormalizedTicker) -> dict[str, 
 
 
 def fetch_earnings_signal(normalized: NormalizedTicker, *, market: Market) -> StageResult:
+    payload: dict[str, Any] = {"symbol": normalized.base_symbol, "market": market.value}
+
+    if market == Market.IN:
+        yf_ctx = _fetch_yfinance_earnings_context(normalized)
+        if yf_ctx:
+            payload.update(yf_ctx)
+            return StageResult(
+                stage="earnings_signal",
+                status="partial",
+                vendor=yf_ctx.get("consensus_source", "yfinance:calendar"),
+                fetched_at=_stage_now(),
+                data=payload,
+            )
+        return StageResult(
+            stage="earnings_signal",
+            status="skipped",
+            vendor="yfinance",
+            fetched_at=_stage_now(),
+            data={**payload, "reason": "no India earnings calendar in yfinance"},
+        )
+
     if market != Market.US:
         return StageResult(
             stage="earnings_signal",
             status="skipped",
             vendor="none",
             fetched_at=_stage_now(),
-            data={"reason": "earnings_signal is US-only"},
+            data={**payload, "reason": f"earnings_signal unsupported for {market.value}"},
         )
 
-    payload: dict[str, Any] = {"symbol": normalized.base_symbol}
     payload.update(_fetch_yfinance_earnings_context(normalized))
 
     finverse = _fetch_finverse_beat_probability(normalized)

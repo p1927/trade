@@ -51,17 +51,24 @@ def run_preflight(
         checks["analyzer_mode"] = True
 
     if action == IntentAction.EXIT:
+        import os
+
+        autonomous = bool(str(intent.agent_id or "").strip())
+        analyzer_bypass = os.getenv("ANALYZER", "").strip() == "1"
+        if autonomous or not analyzer_bypass:
+            if not is_bridge_exit_window_open(cfg):
+                return {"blocked": True, "reason": "outside_exit_window", "checks": checks}
+            checks["exit_window_open"] = True
+        else:
+            checks["paper_exit_analyzer_bypass"] = True
+
         if cfg.paper_only:
             try:
-                if client.ensure_analyzer_mode():
-                    checks["paper_exit"] = True
-                    checks["analyzer_mode"] = True
-                    return {"blocked": False, "checks": checks}
+                if not client.ensure_analyzer_mode():
+                    return {"blocked": True, "reason": "analyzer_mode", "checks": checks}
             except RuntimeError as exc:
                 return {"blocked": True, "reason": "analyzer_mode", "error": str(exc), "checks": checks}
-        if not is_bridge_exit_window_open(cfg):
-            return {"blocked": True, "reason": "outside_exit_window", "checks": checks}
-        checks["exit_window_open"] = True
+            checks["analyzer_mode"] = True
         return {"blocked": False, "checks": checks}
 
     if action in (IntentAction.ENTER, IntentAction.ADJUST):

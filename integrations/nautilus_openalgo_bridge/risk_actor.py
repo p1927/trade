@@ -67,18 +67,26 @@ class RiskActor(Actor):
             self.log.warning(f"risk poll failed: {exc}")
 
     def _poll_in_risk(self) -> None:
+        from nautilus_openalgo_bridge.agent_scoping import filter_positions_for_agent
         from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
 
         client = get_openalgo_client()
-        rows = open_positions_from_book(client.get_position_book())
+        book = client.get_position_book()
+        rows = filter_positions_for_agent(book, self._agent_id) if self._agent_id else open_positions_from_book(book)
         pnl = total_unrealized_pnl(rows)
         open_count = len(rows)
+
+        max_loss = self._max_loss
+        if self._agent_id:
+            from nautilus_openalgo_bridge.agent_limits import max_daily_loss_for_agent
+
+            max_loss = max_daily_loss_for_agent(self._agent_id, default=self._max_loss)
 
         if open_count > self._max_positions:
             self._publish_halt(f"max_open_positions breached ({open_count}>{self._max_positions})")
             return
 
-        if pnl is not None and pnl <= -abs(self._max_loss):
+        if pnl is not None and pnl <= -abs(max_loss):
             self._publish_halt(f"max_daily_loss breached P&L ₹{pnl:,.0f}")
             return
 
@@ -107,8 +115,20 @@ class RiskActor(Actor):
                 found = True
             except (TypeError, ValueError):
                 continue
-        if found and total_pnl <= -abs(self._max_loss):
+        if found and total_pnl <= -abs(self._us_max_loss()):
             self._publish_halt(f"max_daily_loss breached P&L ${total_pnl:,.2f}")
+
+    def _us_max_loss(self) -> float:
+        if self._agent_id:
+            from nautilus_openalgo_bridge.agent_limits import agent_constraints
+
+            constraints = agent_constraints(self._agent_id)
+            raw = constraints.get("max_daily_loss_usd") or constraints.get("max_daily_loss")
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                pass
+        return self._max_loss
 
     def _publish_halt(self, message: str) -> None:
         self._halted = True

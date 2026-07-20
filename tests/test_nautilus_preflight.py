@@ -17,14 +17,25 @@ from nautilus_openalgo_bridge.models import ExecutionIntent, ExecutionLeg, Inten
 from nautilus_openalgo_bridge.preflight import run_preflight  # noqa: E402
 
 
-def test_preflight_exit_allowed_in_paper_analyzer_outside_window():
+def test_preflight_exit_blocked_for_autonomous_outside_window():
     client = MagicMock()
     client.ensure_analyzer_mode.return_value = True
     intent = ExecutionIntent(action=IntentAction.EXIT, agent_id="aa_x", rationale="flatten")
     with patch("nautilus_openalgo_bridge.preflight.is_bridge_exit_window_open", return_value=False):
         result = run_preflight(intent, client)
+    assert result["blocked"] is True
+    assert result["reason"] == "outside_exit_window"
+
+
+def test_preflight_exit_analyzer_bypass_only_without_agent_id(monkeypatch):
+    monkeypatch.setenv("ANALYZER", "1")
+    client = MagicMock()
+    client.ensure_analyzer_mode.return_value = True
+    intent = ExecutionIntent(action=IntentAction.EXIT, agent_id="", rationale="flatten")
+    with patch("nautilus_openalgo_bridge.preflight.is_bridge_exit_window_open", return_value=False):
+        result = run_preflight(intent, client)
     assert result["blocked"] is False
-    assert result["checks"].get("paper_exit") is True
+    assert result["checks"].get("paper_exit_analyzer_bypass") is True
 
 
 def test_preflight_exit_blocked_outside_window_when_not_paper():
