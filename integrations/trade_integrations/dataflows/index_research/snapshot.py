@@ -74,11 +74,15 @@ def build_constituent_aggregate_rows(signals: list[ConstituentSignal]) -> list[d
 
 def run_snapshot(*, snapshot_date: str, skip_constituents: bool = False) -> dict:
     """Collect factors and persist a daily snapshot."""
+    from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
+
+    check_pipeline_cancel()
     signals: list[ConstituentSignal] = []
     constituent_sentiments: list[float] | None = None
 
     if not skip_constituents:
         signals = batch_constituent_research(refresh=False)
+        check_pipeline_cancel()
         constituent_sentiments = [
             signal.sentiment_score
             for signal in signals
@@ -101,9 +105,11 @@ def run_snapshot(*, snapshot_date: str, skip_constituents: bool = False) -> dict
     all_rows = macro_rows + aggregate_rows
     save_daily_factors(snapshot_date, all_rows)
 
-    from trade_integrations.context.hub import archive_company_research_snapshots
+    archive_summary: dict = {"skipped": True, "reason": "skip_constituents"}
+    if not skip_constituents:
+        from trade_integrations.context.hub import archive_company_research_snapshots
 
-    archive_summary = archive_company_research_snapshots(as_of_date=snapshot_date)
+        archive_summary = archive_company_research_snapshots(as_of_date=snapshot_date)
 
     out_path = get_factor_data_dir() / f"{snapshot_date}.parquet"
     return {

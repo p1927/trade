@@ -88,6 +88,7 @@ REQUIRED_COLD_DATASETS: dict[str, dict[str, Any]] = {
         "source": "historic_data/India_Stock_Market_Data.xlsx",
         "factors": ("gdp_growth_pct", "inflation_pct", "sensex_return_pct"),
         "tracks": ("macro_only", "cause_layer"),
+        "note": "Annual only — never overwrite daily macro_daily columns (usd_inr); fill NaN gaps only",
     },
 }
 

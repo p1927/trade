@@ -97,6 +97,54 @@ def upsert_daily_factors(day: str, rows: list[dict]) -> None:
     _write_parquet(merged, _daily_path(day))
 
 
+_LIGHT_ENRICHMENT_REQUIRED = frozenset({"repo_rate", "fii_net_5d", "dii_net_5d"})
+_FULL_ENRICHMENT_REQUIRED = _LIGHT_ENRICHMENT_REQUIRED | frozenset(
+    {"nifty_pe", "institutional_net_5d", "nifty_pcr"}
+)
+
+
+def load_day_factor_keys(day: str) -> set[str]:
+    """Return factor keys already stored for a calendar day."""
+    existing = _read_parquet(_daily_path(day))
+    if existing.empty or "factor" not in existing.columns:
+        return set()
+    return {str(key) for key in existing["factor"].astype(str)}
+
+
+def day_enrichment_complete(day: str, *, light_mode: bool = False) -> bool:
+    """Return whether a day already has the required enrichment factor keys."""
+    required = _LIGHT_ENRICHMENT_REQUIRED if light_mode else _FULL_ENRICHMENT_REQUIRED
+    return required.issubset(load_day_factor_keys(day))
+
+
+_MAX_ROLLING_LOOKBACK = 7
+
+
+def select_enrichment_candidate_days(
+    trading_dates: list[str],
+    *,
+    light_mode: bool = False,
+    rolling_only: bool = False,
+    max_lookback: int = _MAX_ROLLING_LOOKBACK,
+) -> list[str]:
+    """Return calendar days that may need enrichment writes.
+
+    When *rolling_only* is set (scheduled light path), only the last
+    *max_lookback* trading sessions are candidates — today plus rolling windows.
+    """
+    if not trading_dates:
+        return []
+    if rolling_only:
+        candidates = trading_dates[-max(1, min(max_lookback, len(trading_dates))):]
+        return filter_days_needing_enrichment(candidates, light_mode=light_mode)
+    return filter_days_needing_enrichment(trading_dates, light_mode=light_mode)
+
+
+def filter_days_needing_enrichment(trading_dates: list[str], *, light_mode: bool = False) -> list[str]:
+    """Return trading dates in *trading_dates* missing required enrichment factors."""
+    return [day for day in trading_dates if not day_enrichment_complete(day, light_mode=light_mode)]
+
+
 def load_factor_history(start: str, end: str) -> pd.DataFrame:
     """Load factor rows for an inclusive date range (YYYY-MM-DD)."""
     start_d = date.fromisoformat(start)

@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from trade_integrations.context.hub import get_hub_dir
-from trade_integrations.dataflows.index_research.factor_store import upsert_daily_factors
+from trade_integrations.dataflows.index_research.factor_store import load_day_factor_keys, upsert_daily_factors
 from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
 
 logger = logging.getLogger(__name__)
@@ -115,11 +115,24 @@ def fetch_participant_oi_day(day: str) -> dict[str, Any] | None:
     return payload
 
 
+_PARTICIPANT_OI_FACTORS = frozenset(
+    {
+        "fii_idx_fut_long",
+        "fii_idx_fut_short",
+        "fii_fut_long_short_ratio",
+        "nifty_pcr",
+        "fii_idx_put_oi",
+        "fii_idx_call_oi",
+    }
+)
+
+
 def backfill_participant_oi(
     *,
     days: int = 365,
     sleep_seconds: float = 0.4,
     max_days: int | None = 120,
+    skip_if_complete: bool = False,
 ) -> dict[str, int | str]:
     """Loop trading days and cache participant OI; upsert derivatives factors."""
     nifty = load_nifty_history(days=days)
@@ -135,6 +148,9 @@ def backfill_participant_oi(
     errors = 0
     for day in trading_days:
         try:
+            if skip_if_complete and _PARTICIPANT_OI_FACTORS.issubset(load_day_factor_keys(day)):
+                skipped += 1
+                continue
             payload = fetch_participant_oi_day(day)
             if not payload:
                 skipped += 1

@@ -189,7 +189,7 @@ def backfill_factor_history(*, days: int = 365, start: str | None = None) -> dic
             enrich_factor_history,
         )
 
-        enrichment = enrich_factor_history(days=days if not start else max(days, 5000))
+        enrichment = enrich_factor_history(days=days if not start else max(days, 5000), batch_historic=True)
     except Exception as exc:
         logger.warning("factor enrichment failed: %s", exc)
 

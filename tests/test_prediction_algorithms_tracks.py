@@ -559,39 +559,12 @@ def test_xgboost_train_does_not_warn_on_feature_names():
 
 @pytest.mark.unit
 def test_arimax_macro_unavailable_when_not_converged(monkeypatch):
-    import pandas as pd
-
     from trade_integrations.dataflows.index_research.prediction_algorithms.tracks import arimax_macro
 
-    panel = pd.DataFrame(
-        {
-            "close": [100.0 + i * 0.1 for i in range(150)],
-            "fii_net_5d": [1.0] * 150,
-            "india_vix": [14.0] * 150,
-        }
-    )
-    monkeypatch.setattr(arimax_macro, "load_aligned_factor_history", lambda **k: panel)
+    def _not_converged(ctx, *, sm_module):
+        raise ValueError("arimax_not_converged")
 
-    class _Fit:
-        mle_retvals = {"converged": False}
-
-        def forecast(self, steps, exog):
-            return pd.Series([0.0])
-
-    class _Model:
-        def fit(self, **kwargs):
-            return _Fit()
-
-    class _SM:
-        class tsa:
-            class statespace:
-                class SARIMAX:
-                    def __init__(self, *a, **k):
-                        pass
-
-                    def fit(self, **kwargs):
-                        return _Fit()
-
+    monkeypatch.setattr(arimax_macro, "_predict_arimax", _not_converged)
     monkeypatch.setattr(arimax_macro, "resolve_direction_oos_pct", lambda _t: 40.0)
     monkeypatch.setattr(arimax_macro, "should_run_experiment", lambda *_a, **_k: True)
     ctx = _base_context()

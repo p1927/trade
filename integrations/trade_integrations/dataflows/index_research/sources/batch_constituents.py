@@ -23,6 +23,7 @@ from trade_integrations.dataflows.index_research.constituent_news_ingest import 
     maybe_ingest_constituent_news,
 )
 from trade_integrations.dataflows.index_research.models import ConstituentRow, ConstituentSignal
+from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
 
 _MAX_WORKERS_ENV = "INDEX_RESEARCH_MAX_WORKERS"
 
@@ -189,6 +190,7 @@ def batch_constituent_research(
         total = len(futures)
         done = 0
         for future in as_completed(futures):
+            check_pipeline_cancel()
             symbol = futures[future]
             docs[symbol] = future.result()
             done += 1

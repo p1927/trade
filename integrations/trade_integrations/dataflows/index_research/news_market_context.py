@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
 
@@ -59,7 +61,23 @@ def _fetch_index_quotes() -> dict[str, dict[str, Any]]:
     return quotes
 
 
-def _fetch_factor_snapshot(*, ticker: str = "NIFTY") -> dict[str, float]:
+def factor_history_days_for_context() -> int:
+    try:
+        return max(7, int(os.getenv("HUB_NEWS_FACTOR_HISTORY_DAYS", "14")))
+    except ValueError:
+        return 14
+
+
+def _factor_feature_columns(frame: pd.DataFrame) -> list[str]:
+    exclude = {"date", "close", "open", "high", "low", "volume", "target", "realized_1d_pct"}
+    return [
+        col
+        for col in frame.columns
+        if col not in exclude and pd.api.types.is_numeric_dtype(frame[col])
+    ]
+
+
+def _fetch_factor_snapshot(*, ticker: str = "NIFTY", days: int | None = None) -> dict[str, float]:
     try:
         from trade_integrations.dataflows.index_research.prediction_miss_analysis import (
             factor_snapshot_at,
@@ -68,8 +86,12 @@ def _fetch_factor_snapshot(*, ticker: str = "NIFTY") -> dict[str, float]:
             load_aligned_factor_history,
         )
 
-        frame, feature_cols = load_aligned_factor_history(ticker=ticker.strip().upper())
+        history_days = days if days is not None else factor_history_days_for_context()
+        frame = load_aligned_factor_history(days=history_days)
         if frame is None or frame.empty:
+            return {}
+        feature_cols = _factor_feature_columns(frame)
+        if not feature_cols:
             return {}
         today = datetime.now(timezone.utc).date().isoformat()
         keys = tuple(k for k in _FACTOR_KEYS if k in MACRO_FACTOR_KEYS)

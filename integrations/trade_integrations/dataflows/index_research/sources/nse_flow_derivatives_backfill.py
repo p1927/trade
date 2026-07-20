@@ -318,19 +318,28 @@ def upsert_flow_cash_cache(rows: list[dict]) -> int:
     incoming["date"] = incoming["date"].astype(str).str[:10]
     if existing.empty:
         merged = incoming
+        changed = True
     else:
         left = existing.copy()
         left["date"] = left["date"].astype(str).str[:10]
         right = incoming.set_index("date")
         merged = left.set_index("date")
+        changed = False
         for day, row in right.iterrows():
             if day not in merged.index:
                 merged.loc[day] = row
+                changed = True
                 continue
             for col, val in row.items():
-                if pd.notna(val):
+                if pd.isna(val):
+                    continue
+                prev = merged.at[day, col] if col in merged.columns else None
+                if col not in merged.columns or pd.isna(prev) or prev != val:
                     merged.at[day, col] = val
+                    changed = True
         merged = merged.reset_index()
+    if not changed:
+        return 0
     merged = merged.sort_values("date").drop_duplicates("date", keep="last")
     path = get_flow_cash_cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,10 +458,14 @@ def fetch_nse_fao_history_frame(
     max_days: int | None = None,
 ) -> pd.DataFrame:
     """Backfill F&O participant OI from NSE archives for trading dates."""
+    from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
+
     rows: list[dict] = []
     targets = trading_dates if max_days is None else trading_dates[-max_days:]
     with nse_session() as session:
         for idx, day in enumerate(targets):
+            if idx % 5 == 0:
+                check_pipeline_cancel()
             frame = _fetch_nse_fao_participant_oi_for_date(day, session)
             if not frame.empty:
                 rows.append(frame.iloc[0].to_dict())

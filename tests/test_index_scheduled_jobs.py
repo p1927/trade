@@ -100,6 +100,11 @@ class TestIndexJobRegistration:
         assert "nifty-index-research" in jobs
         assert "nifty-hub-news-entity" in jobs
         assert jobs["nifty-index-factor-snapshot"].config["job_type"] == JOB_TYPE_INDEX_FACTOR_SNAPSHOT
+        snap_cfg = jobs["nifty-index-factor-snapshot"].config
+        assert snap_cfg.get("skip_constituents") is True
+        assert snap_cfg.get("enrich_rolling_only") is True
+        assert snap_cfg.get("participant_oi_days") == 1
+        assert snap_cfg.get("live_fetch_days") == 1
         assert jobs["nifty-index-research"].config["job_type"] == JOB_TYPE_INDEX_RESEARCH
 
     def test_idempotent_registration(self, tmp_path):
@@ -113,6 +118,396 @@ class TestIndexJobRegistration:
         assert JOB_TYPE_INDEX_RESEARCH in INDEX_JOB_TYPES
         assert JOB_TYPE_INDEX_CALIBRATION in INDEX_JOB_TYPES
         assert JOB_TYPE_COMPANY_RESEARCH_ARCHIVE in INDEX_JOB_TYPES
+
+
+@pytest.mark.unit
+class TestFactorSnapshotEnrichmentPolicy:
+    def test_scheduled_enrichment_skips_batch_historic_ingest(self):
+        with patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment._prepare_nse_repository_layers",
+        ) as prep_mock, patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.purge_anomalous_factor_snapshots",
+            return_value=[],
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.load_nifty_history",
+            return_value=__import__("pandas").DataFrame(),
+        ):
+            from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+                enrich_factor_history,
+            )
+
+            prep_mock.return_value = {"seed": {}, "hub": {}}
+            enrich_factor_history(days=7, batch_historic=False, enrichment_mode="light")
+            prep_mock.assert_called_once_with(
+                allow_live_fetch=True,
+                enrich_days=7,
+                batch_historic=False,
+                skip_niftyinvest_fetch=False,
+                force_hub_mirror=False,
+                live_fetch_days=7,
+            )
+
+    def test_light_enrichment_skips_alpha_zoo_and_news(self):
+        import pandas as pd
+
+        nifty = pd.DataFrame({"date": ["2026-01-01"], "close": [100.0]})
+        with patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment._prepare_nse_repository_layers",
+            return_value={"seed": {}, "hub": {}},
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.purge_anomalous_factor_snapshots",
+            return_value=[],
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.load_nifty_history",
+            return_value=nifty,
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.merge_flow_derivatives_frame",
+            return_value=pd.DataFrame(),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_fii_net_5d_series",
+            return_value=pd.Series(dtype=float),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_dii_net_5d_series",
+            return_value=pd.Series(dtype=float),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_institutional_joint_series",
+            return_value=(pd.Series(dtype=float), pd.Series(dtype=float)),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_nifty_pe_proxy_series",
+            return_value=pd.Series(dtype=float),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_constituent_momentum_series",
+        ) as momentum_mock, patch(
+            "trade_integrations.dataflows.index_research.news_event_features.backfill_news_event_features",
+        ) as news_mock, patch(
+            "trade_integrations.dataflows.index_research.alpha_bridge.backfill.backfill_alpha_zoo_history",
+        ) as alpha_mock, patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.upsert_daily_factors",
+        ):
+            from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+                enrich_factor_history,
+            )
+
+            result = enrich_factor_history(days=7, enrichment_mode="light")
+            momentum_mock.assert_not_called()
+            news_mock.assert_not_called()
+            alpha_mock.assert_not_called()
+            assert result["news_event_features"]["status"] == "skipped"
+            assert result["alpha_zoo_backfill"]["status"] == "skipped"
+
+    def test_factor_snapshot_reraises_pipeline_cancel(self):
+        from trade_integrations.dataflows.index_research.pipeline_cancel import PipelineCancelledError
+
+        with patch(
+            "trade_integrations.dataflows.index_research.snapshot.run_snapshot",
+            return_value={"date": "2026-01-01"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.participant_oi_backfill.backfill_participant_oi",
+            return_value={"status": "ok"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.enrich_factor_history",
+            side_effect=PipelineCancelledError("shutdown"),
+        ):
+            from src.scheduled_research.index_jobs import run_index_factor_snapshot_job
+
+            with pytest.raises(PipelineCancelledError):
+                run_index_factor_snapshot_job({})
+
+
+@pytest.mark.unit
+class TestMacroRefreshPolicy:
+    def test_macro_refresh_uses_light_sync_and_skip_repo_sync(self):
+        with patch(
+            "trade_integrations.nse_browser.repository.sync_light_repo_seed_layers",
+            return_value={"fii_dii": 1},
+        ) as light_mock, patch(
+            "trade_integrations.nse_browser.repository.ingest_repository_to_hub",
+            return_value={"fii_dii": 10},
+        ) as hub_mock:
+            from src.scheduled_research.trade_data_jobs import run_nse_macro_refresh_job
+
+            summary = run_nse_macro_refresh_job({})
+            light_mock.assert_called_once()
+            hub_mock.assert_called_once_with(skip_repo_sync=True, allow_live_fetch=False)
+            assert summary["seed_layers"] == {"fii_dii": 1}
+
+
+@pytest.mark.unit
+class TestOrchestratorHubMirrorPolicy:
+    def test_ingest_nse_repository_skips_batch_repo_sync(self):
+        with patch(
+            "trade_integrations.nse_browser.orchestrator.sync_light_repo_seed_layers",
+            return_value={"sector_indices": 100},
+        ) as light_mock, patch(
+            "trade_integrations.nse_browser.orchestrator.ingest_repository_to_hub",
+            return_value={"fii_dii": 5},
+        ) as hub_mock:
+            from trade_integrations.nse_browser.orchestrator import ingest_nse_repository
+
+            payload = ingest_nse_repository()
+            light_mock.assert_called_once_with(allow_live_fetch=False)
+            hub_mock.assert_called_once_with(skip_repo_sync=True, allow_live_fetch=False)
+            assert payload["seed_layers"]["sector_indices"] == 100
+
+
+@pytest.mark.unit
+class TestIncrementalEnrichment:
+    def test_skips_days_with_complete_light_factors(self):
+        import pandas as pd
+
+        nifty = pd.DataFrame({"date": ["2026-01-01", "2026-01-02"], "close": [100.0, 101.0]})
+        with patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment._prepare_nse_repository_layers",
+            return_value={"seed": {}, "hub": {}},
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.purge_anomalous_factor_snapshots",
+            return_value=[],
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.load_nifty_history",
+            return_value=nifty,
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.merge_flow_derivatives_frame",
+            return_value=pd.DataFrame(),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_fii_net_5d_series",
+            return_value=pd.Series(dtype=float),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_dii_net_5d_series",
+            return_value=pd.Series(dtype=float),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_institutional_joint_series",
+            return_value=(pd.Series(dtype=float), pd.Series(dtype=float)),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.build_nifty_pe_proxy_series",
+            return_value=pd.Series(dtype=float),
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.upsert_daily_factors",
+        ) as upsert_mock, patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.select_enrichment_candidate_days",
+            return_value=["2026-01-02"],
+        ):
+            from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+                enrich_factor_history,
+            )
+
+            result = enrich_factor_history(days=2, enrichment_mode="light")
+            assert result["days_skipped"] == 1
+            assert upsert_mock.call_count == 1
+
+    def test_rolling_only_limits_candidate_days(self):
+        from trade_integrations.dataflows.index_research.factor_store import (
+            select_enrichment_candidate_days,
+        )
+
+        dates = [f"2026-01-{day:02d}" for day in range(1, 11)]
+        with patch(
+            "trade_integrations.dataflows.index_research.factor_store.filter_days_needing_enrichment",
+            side_effect=lambda trading_dates, **kwargs: list(trading_dates),
+        ) as filter_mock:
+            result = select_enrichment_candidate_days(
+                dates,
+                light_mode=True,
+                rolling_only=True,
+                max_lookback=7,
+            )
+        assert filter_mock.call_count == 1
+        assert filter_mock.call_args.args[0] == dates[-7:]
+        assert result == dates[-7:]
+
+    def test_all_days_complete_early_exit(self):
+        import pandas as pd
+
+        nifty = pd.DataFrame({"date": ["2026-01-01", "2026-01-02"], "close": [100.0, 101.0]})
+        with patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment._prepare_nse_repository_layers",
+            return_value={"seed": {}, "hub": {}},
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.purge_anomalous_factor_snapshots",
+            return_value=[],
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.load_nifty_history",
+            return_value=nifty,
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.select_enrichment_candidate_days",
+            return_value=[],
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.merge_flow_derivatives_frame",
+        ) as merge_mock:
+            from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+                enrich_factor_history,
+            )
+
+            result = enrich_factor_history(days=7, enrichment_mode="light", enrich_rolling_only=True)
+            assert result["status"] == "skipped"
+            assert result["reason"] == "all_days_complete"
+            merge_mock.assert_not_called()
+
+
+@pytest.mark.unit
+class TestFlowCacheIncremental:
+    def test_upsert_noop_when_values_unchanged(self, tmp_path, monkeypatch):
+        import pandas as pd
+
+        cache_path = tmp_path / "flow_cash.parquet"
+        existing = pd.DataFrame(
+            [{"date": "2026-01-01", "fii_cash": 100.0, "dii_cash": 50.0}],
+        )
+        existing.to_parquet(cache_path, index=False)
+
+        monkeypatch.setattr(
+            "trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill.get_flow_cash_cache_path",
+            lambda: cache_path,
+        )
+        monkeypatch.setattr(
+            "trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill.load_flow_cash_cache",
+            lambda: existing.copy(),
+        )
+
+        from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+            upsert_flow_cash_cache,
+        )
+
+        written = upsert_flow_cash_cache(
+            [{"date": "2026-01-01", "fii_cash": 100.0, "dii_cash": 50.0}],
+        )
+        assert written == 0
+        assert pd.read_parquet(cache_path)["fii_cash"].iloc[0] == 100.0
+
+
+@pytest.mark.unit
+class TestNewsMarketContext:
+    def test_fetch_factor_snapshot_uses_short_history_window(self, monkeypatch):
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            {
+                "date": ["2026-07-20"],
+                "close": [25000.0],
+                "india_vix": [12.5],
+                "fii_net_5d": [1000.0],
+            }
+        )
+        monkeypatch.setenv("HUB_NEWS_FACTOR_HISTORY_DAYS", "14")
+        with patch(
+            "trade_integrations.dataflows.index_research.sources.history_loader.load_aligned_factor_history",
+            return_value=frame,
+        ) as load_mock:
+            from trade_integrations.dataflows.index_research.news_market_context import (
+                _fetch_factor_snapshot,
+            )
+
+            snap = _fetch_factor_snapshot()
+        load_mock.assert_called_once_with(days=14)
+        assert snap.get("india_vix") == 12.5
+
+    def test_light_ingest_uses_cached_market_context(self, monkeypatch):
+        cached = {
+            "as_of": "2026-07-20T10:00:00+00:00",
+            "quotes": {"NIFTY": {"ltp": 25000.0}},
+            "factors": {"india_vix": 12.0},
+            "quotes_ok": 1,
+            "factors_ok": 1,
+            "source": "cached",
+        }
+        with patch(
+            "trade_integrations.dataflows.index_research.news_market_context.get_market_context_for_pipeline",
+            return_value=cached,
+        ) as ctx_mock, patch(
+            "trade_integrations.dataflows.index_research.news_market_context.refresh_index_market_context",
+        ) as refresh_mock, patch(
+            "trade_integrations.dataflows.index_research.hub_news_ingest._ingest_rss",
+            return_value={"queued": 0, "ingested": 0},
+        ), patch(
+            "trade_integrations.dataflows.news_hub_bridge.hub_news_pipeline_status",
+            return_value={"queued": 0},
+        ):
+            from trade_integrations.dataflows.index_research.hub_news_ingest import run_hub_news_ingest
+
+            result = run_hub_news_ingest(ticker="NIFTY", mode="light", sources="rss")
+        ctx_mock.assert_called_once_with(ticker="NIFTY", refresh=False)
+        refresh_mock.assert_not_called()
+        assert result["market_context"]["source"] == "cached"
+
+
+@pytest.mark.unit
+class TestHubNewsLightSourceGuard:
+    def test_light_mode_drops_heavy_sources_from_config(self):
+        from trade_integrations.dataflows.index_research.hub_news_ingest import (
+            _apply_light_source_guard,
+        )
+
+        selected = {"rss", "searxng", "watcher"}
+        assert _apply_light_source_guard(selected, ingest_mode="light") == {"rss"}
+        assert _apply_light_source_guard(selected, ingest_mode="full") == selected
+
+
+@pytest.mark.unit
+class TestConditionalHubMirror:
+    def test_skips_hub_mirror_when_fingerprint_unchanged(self):
+        with patch(
+            "trade_integrations.nse_browser.repository.sync_all_repo_seed_layers",
+        ), patch(
+            "trade_integrations.nse_browser.repository.repo_hub_sync_fingerprint",
+            return_value="fp-abc",
+        ), patch(
+            "trade_integrations.nse_browser.repository._load_manifest",
+            return_value={"hub_sync": {"fingerprint": "fp-abc", "last_counts": {"fii_dii": 3}}},
+        ), patch(
+            "trade_integrations.nse_browser.repository._ingest_repository_parquet_to_hub",
+        ) as mirror_mock:
+            from trade_integrations.nse_browser.repository import ingest_repository_to_hub
+
+            counts = ingest_repository_to_hub(skip_repo_sync=True)
+            mirror_mock.assert_not_called()
+            assert counts["fii_dii"] == 3
+
+
+@pytest.mark.unit
+class TestRepoConsistencyJob:
+    def test_consistency_job_calls_checker(self):
+        with patch(
+            "trade_integrations.nse_browser.repo_consistency.run_repo_consistency_check",
+            return_value={"status": "ok", "drift": []},
+        ) as check_mock:
+            from src.scheduled_research.trade_data_jobs import run_nse_repo_consistency_job
+
+            summary = run_nse_repo_consistency_job({"trigger_reingest_on_drift": False})
+            check_mock.assert_called_once_with(trigger_reingest_on_drift=False)
+            assert summary["status"] == "ok"
+
+
+@pytest.mark.unit
+class TestHistoricManifestParserVersion:
+    def test_skip_busts_when_parser_version_changes(self, tmp_path: Path) -> None:
+        from trade_integrations.nse_browser.parsers import historic_data as hd
+
+        source = tmp_path / "panel.csv"
+        out = tmp_path / "panel.parquet"
+        source.write_text("date,value\n2024-01-01,1\n", encoding="utf-8")
+        out.write_text("placeholder", encoding="utf-8")
+
+        manifest = {
+            "datasets": {
+                "panel": {
+                    "source_sha256": hd._source_fingerprint(source)["source_sha256"],
+                    "parser_version": "old-version",
+                }
+            }
+        }
+        assert hd._should_skip_historic_dataset(
+            manifest=manifest,
+            dataset_key="panel",
+            source_path=source,
+            out_path=out,
+        ) is False
+
+        manifest["datasets"]["panel"]["parser_version"] = hd._historic_parser_version()
+        assert hd._should_skip_historic_dataset(
+            manifest=manifest,
+            dataset_key="panel",
+            source_path=source,
+            out_path=out,
+        ) is True
 
 
 @pytest.mark.unit

@@ -28,9 +28,9 @@ from trade_integrations.dataflows.index_research.prediction_ledger import (
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
-from trade_integrations.ml_runtime_env import ensure_libomp_loaded
+from trade_integrations.ml_runtime_env import prepare_yfinance_runtime
 
-ensure_libomp_loaded()
+prepare_yfinance_runtime()
 from trade_integrations.dataflows.index_research.calibrator import ensure_ridge_model_artifact
 from trade_integrations.dataflows.index_research.predictor import (
     finalize_index_prediction,

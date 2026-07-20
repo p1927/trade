@@ -11,7 +11,9 @@ INTEGRATIONS = ROOT / "integrations"
 if INTEGRATIONS.is_dir() and str(INTEGRATIONS) not in sys.path:
     sys.path.insert(0, str(INTEGRATIONS))
 
-from trade_integrations.ml_runtime_env import verify_prediction_ml  # noqa: E402
+from trade_integrations.ml_runtime_env import prepare_yfinance_runtime, verify_prediction_ml  # noqa: E402
+
+prepare_yfinance_runtime()
 
 
 def main() -> int:

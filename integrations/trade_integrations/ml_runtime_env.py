@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 _LIBOMP_LOADED = False
+_YFINANCE_WARNING_SUPPRESSED = False
 _LIBOMP_RPATH = Path("/opt/homebrew/opt/libomp/lib/libomp.dylib")
 
 _VERIFY_SNIPPET = """
@@ -99,6 +100,10 @@ def ml_runtime_env() -> dict[str, str]:
     return env
 
 
+def _yfinance_curl_cffi_disabled() -> bool:
+    return os.environ.get("YF_DISABLE_CURL_CFFI", "").lower() in ("1", "true", "yes")
+
+
 def _configure_yfinance_requests_fallback() -> None:
     """Prefer requests over curl_cffi for yfinance when libomp DYLD is injected on macOS.
 
@@ -109,6 +114,20 @@ def _configure_yfinance_requests_fallback() -> None:
     if sys.platform != "darwin":
         return
     os.environ.setdefault("YF_DISABLE_CURL_CFFI", "1")
+
+
+def _suppress_yfinance_curl_fallback_warning() -> None:
+    """Silence yfinance's fallback warning when curl_cffi is intentionally disabled."""
+    global _YFINANCE_WARNING_SUPPRESSED
+    if _YFINANCE_WARNING_SUPPRESSED or not _yfinance_curl_cffi_disabled():
+        return
+    try:
+        import yfinance._http as yf_http
+
+        yf_http._warn_once_on_fallback = lambda: None
+    except ImportError:
+        pass
+    _YFINANCE_WARNING_SUPPRESSED = True
 
 
 def ensure_libomp_loaded() -> bool:
@@ -124,8 +143,16 @@ def ensure_libomp_loaded() -> bool:
     if libdir not in existing.split(":"):
         os.environ["DYLD_LIBRARY_PATH"] = f"{libdir}:{existing}" if existing else libdir
     _configure_yfinance_requests_fallback()
+    _suppress_yfinance_curl_fallback_warning()
     _LIBOMP_LOADED = True
     return True
+
+
+def prepare_yfinance_runtime() -> bool:
+    """Configure libomp and yfinance before the first ``yfinance`` import in this process."""
+    loaded = ensure_libomp_loaded()
+    _suppress_yfinance_curl_fallback_warning()
+    return loaded
 
 
 def _verify_imports_in_process() -> tuple[bool, str]:

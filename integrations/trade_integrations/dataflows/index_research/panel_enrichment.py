@@ -11,6 +11,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from trade_integrations.hub_storage.date_parse import parse_date_series
 from trade_integrations.hub_storage.parquet_io import combine_first_numeric, combine_first_strings
 from trade_integrations.dataflows.index_research.sources.india_rates import (
     cold_tier_credit_spread_series,
@@ -38,12 +39,12 @@ def _cold_tier_cpi_series(trading_dates: list[str]) -> pd.Series:
     if col is None:
         return pd.Series(dtype=float)
     daily = frame[["date", col]].copy()
-    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily["date"] = parse_date_series(daily["date"].astype(str).str[:10])
     daily[col] = pd.to_numeric(daily[col], errors="coerce")
     daily = daily.dropna(subset=[col]).sort_values("date").drop_duplicates("date", keep="last")
     if daily.empty:
         return pd.Series(dtype=float)
-    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    trading = pd.DataFrame({"date": parse_date_series(pd.Series(trading_dates, dtype=str))})
     merged = pd.merge_asof(
         trading.sort_values("date"),
         daily.sort_values("date"),
@@ -69,12 +70,12 @@ def _cold_tier_news_sentiment_series(trading_dates: list[str]) -> pd.Series:
     if col is None:
         return pd.Series(dtype=float)
     daily = frame[["date", col]].copy()
-    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily["date"] = parse_date_series(daily["date"].astype(str).str[:10])
     daily[col] = pd.to_numeric(daily[col], errors="coerce")
     daily = daily.dropna(subset=[col]).sort_values("date").drop_duplicates("date", keep="last")
     if daily.empty:
         return pd.Series(dtype=float)
-    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    trading = pd.DataFrame({"date": parse_date_series(pd.Series(trading_dates, dtype=str))})
     merged = pd.merge_asof(
         trading.sort_values("date"),
         daily.sort_values("date"),
@@ -93,12 +94,12 @@ def _cold_tier_valuation_series(trading_dates: list[str], column: str) -> pd.Ser
     if frame.empty or column not in frame.columns:
         return pd.Series(dtype=float)
     daily = frame[["date", column]].copy()
-    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily["date"] = parse_date_series(daily["date"].astype(str).str[:10])
     daily[column] = pd.to_numeric(daily[column], errors="coerce")
     daily = daily.dropna(subset=[column]).sort_values("date").drop_duplicates("date", keep="last")
     if daily.empty:
         return pd.Series(dtype=float)
-    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    trading = pd.DataFrame({"date": parse_date_series(pd.Series(trading_dates, dtype=str))})
     merged = pd.merge_asof(
         trading.sort_values("date"),
         daily.sort_values("date"),
@@ -123,13 +124,13 @@ def _rolling_sum_on_trading_dates(
     if flow.empty or column not in flow.columns:
         return pd.Series(dtype=float)
     daily = flow[["date", column]].copy()
-    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily["date"] = parse_date_series(daily["date"].astype(str).str[:10])
     daily[column] = pd.to_numeric(daily[column], errors="coerce")
     daily = daily.dropna(subset=[column]).sort_values("date").drop_duplicates("date", keep="last")
     if daily.empty:
         return pd.Series(dtype=float)
     daily[f"{column}_{window}d"] = daily[column].rolling(window, min_periods=1).sum()
-    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    trading = pd.DataFrame({"date": parse_date_series(pd.Series(trading_dates, dtype=str))})
     merged = pd.merge_asof(
         trading.sort_values("date"),
         daily[["date", f"{column}_{window}d"]].sort_values("date"),
@@ -272,10 +273,10 @@ def _append_india_10y_with_sources(out: pd.DataFrame, *, ten_y_override: str) ->
         rbi_slice = rbi_slice.dropna(subset=["india_10y"]).sort_values("date").drop_duplicates("date", keep="last")
         if not rbi_slice.empty:
             last_rbi_date = str(rbi_slice["date"].iloc[-1])[:10]
-            trading = pd.DataFrame({"date": pd.to_datetime(dates)})
+            trading = pd.DataFrame({"date": parse_date_series(pd.Series(dates, dtype=str))})
             merged_rbi = pd.merge_asof(
                 trading.sort_values("date"),
-                rbi_slice.assign(date=pd.to_datetime(rbi_slice["date"])).sort_values("date"),
+                rbi_slice.assign(date=parse_date_series(rbi_slice["date"])).sort_values("date"),
                 on="date",
                 direction="backward",
             )
@@ -288,8 +289,8 @@ def _append_india_10y_with_sources(out: pd.DataFrame, *, ten_y_override: str) ->
     if not fred_series.empty:
         fred_df = fred_series.reset_index()
         fred_df.columns = ["date", "india_10y"]
-        fred_df["date"] = pd.to_datetime(fred_df["date"].astype(str).str[:10])
-        trading = pd.DataFrame({"date": pd.to_datetime(dates)})
+        fred_df["date"] = parse_date_series(fred_df["date"].astype(str).str[:10])
+        trading = pd.DataFrame({"date": parse_date_series(pd.Series(dates, dtype=str))})
         merged_fred = pd.merge_asof(
             trading.sort_values("date"),
             fred_df.sort_values("date"),

@@ -10,7 +10,10 @@ import pandas as pd
 
 from trade_integrations.dataflows.index_research.constituents import load_nifty50_constituents
 from trade_integrations.dataflows.index_research.factor_store import (
+    filter_days_needing_enrichment,
     get_factor_data_dir,
+    load_day_factor_keys,
+    select_enrichment_candidate_days,
     upsert_daily_factors,
 )
 from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
@@ -23,6 +26,7 @@ from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_ba
     upsert_flow_cash_cache,
 )
 from trade_integrations.dataflows.index_research.sources.rbi_repo_schedule import repo_rate_on
+from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +88,40 @@ def _prepare_nse_repository_layers(
     *,
     allow_live_fetch: bool = True,
     enrich_days: int = 365,
+    batch_historic: bool = False,
+    skip_niftyinvest_fetch: bool = False,
+    force_hub_mirror: bool = False,
+    live_fetch_days: int | None = None,
 ) -> dict[str, int | dict[str, int]]:
     """Sync git-tracked data/nse seeds (FII/DII, SEBI monthly, sector CSVs) into hub."""
+    check_pipeline_cancel()
+    fetch_days = enrich_days if live_fetch_days is None else live_fetch_days
     try:
         from trade_integrations.nse_browser.repository import (
             ingest_repository_to_hub,
             sync_all_repo_seed_layers,
+            sync_light_repo_seed_layers,
         )
 
-        seed_counts = sync_all_repo_seed_layers(
-            allow_live_fetch=allow_live_fetch,
-            enrich_days=enrich_days,
-            explicit=True,
+        if batch_historic:
+            seed_counts = sync_all_repo_seed_layers(
+                allow_live_fetch=allow_live_fetch,
+                enrich_days=fetch_days,
+                explicit=True,
+            )
+        else:
+            seed_counts = sync_light_repo_seed_layers(
+                allow_live_fetch=allow_live_fetch,
+                enrich_days=fetch_days,
+                skip_niftyinvest_fetch=skip_niftyinvest_fetch,
+            )
+        hub_counts = ingest_repository_to_hub(
+            allow_live_fetch=False,
+            enrich_days=fetch_days,
+            explicit=batch_historic,
+            skip_repo_sync=True,
+            force_hub_mirror=force_hub_mirror,
         )
-        hub_counts = ingest_repository_to_hub(allow_live_fetch=False, enrich_days=enrich_days, explicit=True)
         return {"seed": seed_counts, "hub": hub_counts}
     except Exception as exc:
         logger.warning("NSE repository sync failed: %s", exc)
@@ -381,79 +405,143 @@ def sync_flow_factors_from_merge(
     return {"status": "ok", "days_upserted": days_upserted, "start": start[:10], "end": end[:10]}
 
 
-def enrich_factor_history(*, days: int = 365, allow_live_fetch: bool = True) -> dict[str, int | str]:
+def enrich_factor_history(
+    *,
+    days: int = 365,
+    allow_live_fetch: bool = True,
+    batch_historic: bool = False,
+    enrichment_mode: str = "full",
+    skip_niftyinvest_fetch: bool = False,
+    force_hub_mirror: bool = False,
+    enrich_rolling_only: bool = False,
+    live_fetch_days: int | None = None,
+) -> dict[str, int | str]:
     """Merge missing factors (repo_rate, FII, PE, momentum, sentiment proxies) into daily store."""
-    repo_sync = _prepare_nse_repository_layers(allow_live_fetch=allow_live_fetch, enrich_days=days)
+    check_pipeline_cancel()
+    light_mode = enrichment_mode.strip().lower() == "light"
+    fetch_days = live_fetch_days if live_fetch_days is not None else days
+    repo_sync = _prepare_nse_repository_layers(
+        allow_live_fetch=allow_live_fetch,
+        enrich_days=days,
+        batch_historic=batch_historic,
+        skip_niftyinvest_fetch=skip_niftyinvest_fetch,
+        force_hub_mirror=force_hub_mirror,
+        live_fetch_days=fetch_days if allow_live_fetch else None,
+    )
     removed = purge_anomalous_factor_snapshots()
     nifty = load_nifty_history(days=days)
     if nifty.empty:
         return {"days_enriched": 0, "reason": "no_nifty_history"}
 
     trading_dates = nifty["date"].astype(str).tolist()
-    start = trading_dates[0]
     end = trading_dates[-1]
+    days_to_enrich = select_enrichment_candidate_days(
+        trading_dates,
+        light_mode=light_mode,
+        rolling_only=enrich_rolling_only,
+        max_lookback=days,
+    )
+    days_skipped = len(trading_dates) - len(days_to_enrich)
+    enrich_set = set(days_to_enrich)
+
+    if not days_to_enrich:
+        return {
+            "days_enriched": 0,
+            "days_skipped": days_skipped,
+            "days_candidates": len(trading_dates),
+            "status": "skipped",
+            "reason": "all_days_complete",
+            "start": trading_dates[0],
+            "end": end,
+            "enrichment_mode": enrichment_mode,
+            "enrich_rolling_only": enrich_rolling_only,
+            "removed_anomalous_files": removed,
+            "repo_sync": repo_sync,
+        }
+
+    first_enrich_idx = trading_dates.index(days_to_enrich[0])
+    compute_dates = trading_dates[max(0, first_enrich_idx - 6) :]
+    start = compute_dates[0]
+    compute_nifty = nifty[nifty["date"].astype(str).isin(compute_dates)].reset_index(drop=True)
 
     fao_backfill: dict[str, int | str] = {"status": "skipped", "reason": "cached_only"}
     if allow_live_fetch:
-        fao_backfill = backfill_nse_fao_to_cache(trading_dates, sleep_s=0.25)
+        fao_targets = trading_dates[-max(1, fetch_days) :]
+        fao_backfill = backfill_nse_fao_to_cache(fao_targets, sleep_s=0.25)
     flow_frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
     if not flow_frame.empty:
-        cash_rows = flow_frame.to_dict("records")
-        upsert_flow_cash_cache(cash_rows)
+        enrich_days_set = set(days_to_enrich)
+        cash_rows = [
+            row
+            for row in flow_frame.to_dict("records")
+            if str(row.get("date", ""))[:10] in enrich_days_set
+        ]
+        if cash_rows:
+            upsert_flow_cash_cache(cash_rows)
 
-    fii_5d = build_fii_net_5d_series(trading_dates, start, end, allow_live_fetch=allow_live_fetch)
-    dii_5d = build_dii_net_5d_series(trading_dates, start, end, allow_live_fetch=allow_live_fetch)
+    fii_5d = build_fii_net_5d_series(compute_dates, start, end, allow_live_fetch=allow_live_fetch)
+    dii_5d = build_dii_net_5d_series(compute_dates, start, end, allow_live_fetch=allow_live_fetch)
     inst_5d, absorption = build_institutional_joint_series(
-        trading_dates,
+        compute_dates,
         start,
         end,
         allow_live_fetch=allow_live_fetch,
     )
-    pe_series = build_nifty_pe_proxy_series(nifty)
-    momentum = build_constituent_momentum_series(trading_dates, start=start, end=end)
+    pe_series = build_nifty_pe_proxy_series(compute_nifty)
+    momentum = (
+        pd.Series(dtype=float)
+        if light_mode
+        else build_constituent_momentum_series(compute_dates, start=start, end=end)
+    )
     flow_summary = flow_backfill_summary(days=days, allow_live_fetch=allow_live_fetch)
 
     sector_factors: dict[str, pd.Series] = {}
-    try:
-        from trade_integrations.dataflows.index_research.sources.sector_index_factors import (
-            build_monthly_equity_flow_series,
-            build_sector_price_factor_series,
-        )
-        from trade_integrations.nse_browser.repository import (
-            load_repo_dataset,
-            load_sector_indices_frame,
-        )
+    if not light_mode or days_to_enrich:
+        try:
+            from trade_integrations.dataflows.index_research.sources.sector_index_factors import (
+                build_monthly_equity_flow_series,
+                build_sector_price_factor_series,
+            )
+            from trade_integrations.nse_browser.repository import (
+                load_repo_dataset,
+                load_sector_indices_frame,
+            )
 
-        sector_frame = load_sector_indices_frame(start, end)
-        sector_factors = build_sector_price_factor_series(sector_frame, trading_dates)
-        mf_monthly = load_repo_dataset("mf_sebi")
-        fii_monthly = load_repo_dataset("fii_sebi")
-        sector_factors["mf_equity_net_monthly_cr"] = build_monthly_equity_flow_series(
-            mf_monthly,
-            trading_dates,
-            factor_name="mf_equity_net_monthly_cr",
-        )
-        sector_factors["fii_equity_net_monthly_cr"] = build_monthly_equity_flow_series(
-            fii_monthly,
-            trading_dates,
-            factor_name="fii_equity_net_monthly_cr",
-        )
-    except Exception as exc:
-        logger.warning("sector / monthly flow factors failed: %s", exc)
+            sector_frame = load_sector_indices_frame(start, end)
+            sector_factors = build_sector_price_factor_series(sector_frame, compute_dates)
+            mf_monthly = load_repo_dataset("mf_sebi")
+            fii_monthly = load_repo_dataset("fii_sebi")
+            sector_factors["mf_equity_net_monthly_cr"] = build_monthly_equity_flow_series(
+                mf_monthly,
+                compute_dates,
+                factor_name="mf_equity_net_monthly_cr",
+            )
+            sector_factors["fii_equity_net_monthly_cr"] = build_monthly_equity_flow_series(
+                fii_monthly,
+                compute_dates,
+                factor_name="fii_equity_net_monthly_cr",
+            )
+        except Exception as exc:
+            logger.warning("sector / monthly flow factors failed: %s", exc)
 
     headline_flags_by_day: dict[str, dict[str, float]] = {}
-    try:
-        from trade_integrations.dataflows.index_research.sources.headline_event_flags import (
-            build_headline_flag_series,
-        )
+    if not light_mode:
+        try:
+            from trade_integrations.dataflows.index_research.sources.headline_event_flags import (
+                build_headline_flag_series,
+            )
 
-        headline_flags_by_day = build_headline_flag_series(trading_dates)
-    except Exception as exc:
-        logger.warning("headline event flags failed: %s", exc)
+            headline_flags_by_day = build_headline_flag_series(compute_dates)
+        except Exception as exc:
+            logger.warning("headline event flags failed: %s", exc)
 
     days_enriched = 0
-    for _, row in nifty.iterrows():
+    for row_idx, (_, row) in enumerate(compute_nifty.iterrows()):
+        if row_idx % 10 == 0:
+            check_pipeline_cancel()
         day = str(row["date"])
+        if day not in enrich_set:
+            continue
         rows: list[dict] = [
             {
                 "factor": "repo_rate",
@@ -608,34 +696,42 @@ def enrich_factor_history(*, days: int = 365, allow_live_fetch: bool = True) -> 
         upsert_daily_factors(day, rows)
         days_enriched += 1
 
-    news_backfill: dict[str, Any] = {}
-    try:
-        from trade_integrations.dataflows.index_research.news_event_features import (
-            backfill_news_event_features,
-        )
+    news_backfill: dict[str, Any] = {"status": "skipped", "reason": "light_enrichment_mode"}
+    if not light_mode:
+        try:
+            from trade_integrations.dataflows.index_research.news_event_features import (
+                backfill_news_event_features,
+            )
 
-        news_backfill = backfill_news_event_features(trading_dates=trading_dates, ticker="NIFTY")
-    except Exception as exc:
-        logger.warning("news event features backfill failed: %s", exc)
-        news_backfill = {"status": "error", "error": str(exc)}
+            news_backfill = backfill_news_event_features(trading_dates=trading_dates, ticker="NIFTY")
+        except Exception as exc:
+            logger.warning("news event features backfill failed: %s", exc)
+            news_backfill = {"status": "error", "error": str(exc)}
 
-    alpha_zoo_backfill: dict[str, Any] = {}
-    try:
-        from trade_integrations.dataflows.index_research.alpha_bridge.backfill import (
-            backfill_alpha_zoo_history,
-        )
+    alpha_zoo_backfill: dict[str, Any] = {"status": "skipped", "reason": "light_enrichment_mode"}
+    if not light_mode:
+        try:
+            from trade_integrations.dataflows.index_research.alpha_bridge.backfill import (
+                backfill_alpha_zoo_history,
+            )
 
-        alpha_zoo_backfill = backfill_alpha_zoo_history(days=days)
-    except Exception as exc:
-        logger.warning("alpha zoo backfill failed: %s", exc)
-        alpha_zoo_backfill = {"status": "error", "error": str(exc)}
+            alpha_zoo_backfill = backfill_alpha_zoo_history(days=days)
+        except Exception as exc:
+            logger.warning("alpha zoo backfill failed: %s", exc)
+            alpha_zoo_backfill = {"status": "error", "error": str(exc)}
 
-    phase_i_persist = _persist_phase_i_derived_factors(days=days)
+    phase_i_persist: dict[str, int | str] = {"status": "skipped", "reason": "light_enrichment_mode"}
+    if not light_mode:
+        phase_i_persist = _persist_phase_i_derived_factors(days=days)
 
     return {
         "days_enriched": days_enriched,
+        "days_skipped": days_skipped,
+        "days_candidates": len(trading_dates),
         "start": start,
         "end": end,
+        "enrichment_mode": enrichment_mode,
+        "enrich_rolling_only": enrich_rolling_only,
         "removed_anomalous_files": removed,
         "repo_sync": repo_sync,
         "fao_backfill": fao_backfill,

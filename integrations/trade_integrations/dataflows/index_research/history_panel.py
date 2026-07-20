@@ -15,7 +15,12 @@ from trade_integrations.dataflows.index_research.sources.history_loader import e
 
 
 def _join_annual_macro_by_year(frame: pd.DataFrame) -> pd.DataFrame:
-    """Attach india_macro_annual columns by calendar year on daily rows."""
+    """Attach india_macro_annual columns by calendar year on daily rows.
+
+    Daily columns already present (e.g. ``usd_inr`` from ``macro_daily``) are never
+    replaced by annual snapshots — annual values only fill NaN gaps. Replacing
+    daily FX with one level per year destroys momentum features and Ridge eligibility.
+    """
     if frame.empty or "date" not in frame.columns:
         return frame
     annual = load_history_dataset("india_macro_annual")
@@ -39,14 +44,19 @@ def _join_annual_macro_by_year(frame: pd.DataFrame) -> pd.DataFrame:
         return frame
 
     macro = macro[["year"] + join_cols].drop_duplicates("year", keep="last")
+    annual_by_year = macro.set_index("year")
     out = frame.copy()
     out["_year"] = out["date"].astype(str).str[:4].astype(int)
-    overlap = set(out.columns) & set(join_cols) - {"_year"}
-    if overlap:
-        out = out.drop(columns=list(overlap), errors="ignore")
-    out = out.merge(macro, left_on="_year", right_on="year", how="left")
-    out = out.drop(columns=["_year", "year"], errors="ignore")
-    return out
+
+    for col in join_cols:
+        mapped = out["_year"].map(annual_by_year[col])
+        if col not in out.columns:
+            out[col] = mapped
+        else:
+            existing = pd.to_numeric(out[col], errors="coerce")
+            out[col] = existing.where(existing.notna(), mapped)
+
+    return out.drop(columns=["_year"], errors="ignore")
 
 
 def _merge_on_date(frames: list[pd.DataFrame]) -> pd.DataFrame:

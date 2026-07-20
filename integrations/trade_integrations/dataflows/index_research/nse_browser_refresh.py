@@ -29,7 +29,12 @@ def refresh_nse_browser_for_prediction(
     )
     from trade_integrations.nse_browser.orchestrator import get_nse_browser_data
 
-    repo_sync = _prepare_nse_repository_layers()
+    repo_sync = _prepare_nse_repository_layers(
+        allow_live_fetch=refresh,
+        enrich_days=days,
+        batch_historic=False,
+        skip_niftyinvest_fetch=True,
+    )
     end = date.today().isoformat()
     start = (date.today() - timedelta(days=max(30, days))).isoformat()
     out: dict[str, Any] = {
@@ -51,7 +56,7 @@ def refresh_nse_browser_for_prediction(
                 seed_niftyinvest_flow_to_repo,
             )
 
-            out["niftyinvest_api"] = seed_niftyinvest_flow_to_repo()
+            out["niftyinvest_api"] = seed_niftyinvest_flow_to_repo(days=days)
             if out["niftyinvest_api"].get("status") != "ok":
                 errors.append(
                     f"niftyinvest_api: {out['niftyinvest_api'].get('error') or out['niftyinvest_api'].get('status')}"

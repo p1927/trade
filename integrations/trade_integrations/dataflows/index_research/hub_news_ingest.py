@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _ALL_SOURCES = frozenset({"rss", "searxng", "searxng_global", "moneycontrol", "watcher"})
+_LIGHT_SOURCES = frozenset({"rss"})
+_HEAVY_SOURCES = _ALL_SOURCES - _LIGHT_SOURCES
 _INDEX_KEYWORDS = re.compile(
     r"\b(nifty|sensex|bank nifty|banknifty|rbi|fii|dii|repo|crude|oil|rupee|"
     r"market|bse|nse|inflation|gdp|fed|geopolit|tariff|budget)\b",
@@ -25,6 +28,24 @@ def _parse_sources(sources: str | list[str] | None) -> set[str]:
         parts = {p.strip().lower() for p in sources.split(",") if p.strip()}
         return parts & _ALL_SOURCES
     return {str(s).strip().lower() for s in sources} & _ALL_SOURCES
+
+
+def _light_ingest_allows_heavy_sources() -> bool:
+    return os.getenv("HUB_NEWS_LIGHT_ALLOW_HEAVY", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _apply_light_source_guard(selected: set[str], *, ingest_mode: str) -> set[str]:
+    """Light scheduled ingest stays on fast sources unless explicitly overridden."""
+    if ingest_mode != "light" or _light_ingest_allows_heavy_sources():
+        return selected
+    filtered = selected & _LIGHT_SOURCES
+    dropped = sorted(selected & _HEAVY_SOURCES)
+    if dropped:
+        logger.warning(
+            "light ingest dropping heavy sources %s (set HUB_NEWS_LIGHT_ALLOW_HEAVY=1 to override)",
+            dropped,
+        )
+    return filtered if filtered else set(_LIGHT_SOURCES)
 
 
 def _merge_stats(out: dict[str, Any], source: str, stats: dict[str, Any]) -> None:
@@ -62,7 +83,10 @@ def _ingest_rss(
 
     feeds = get_sentiment_rss_feeds()
     totals = {"feeds": len(feeds), "queued": 0, "ingested": 0, "entries": 0, "errors": 0}
-    for index, feed in enumerate(feeds):
+    if not feeds:
+        return totals
+
+    def _fetch_feed(index: int, feed: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]] | None, str | None]:
         label = feed.get("label") or "rss"
         url = _resolve_url(feed["url"], ticker)
         try:
@@ -71,25 +95,36 @@ def _ingest_rss(
                 url,
                 limit_per_feed,
                 timeout=10.0,
-                inter_request_delay=0.5,
+                inter_request_delay=0.0,
                 is_first=(index == 0),
             )
+            return label, url, entries, None
         except Exception as exc:
-            logger.warning("RSS fetch failed for %s: %s", label, exc)
-            totals["errors"] += 1
-            continue
-        if not entries:
-            continue
-        totals["entries"] += len(entries)
-        stats = ingest_rss_entries(
-            entries,
-            ticker=ticker,
-            label=label,
-            feed_url=url,
-            sync_distill_limit=sync_distill_limit,
-        )
-        totals["queued"] += int(stats.get("queued") or stats.get("ingested") or 0)
-        totals["ingested"] += int(stats.get("ingested") or 0)
+            return label, url, None, str(exc)
+
+    workers = min(6, max(1, len(feeds)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_fetch_feed, index, feed): index for index, feed in enumerate(feeds)
+        }
+        for future in as_completed(futures):
+            label, url, entries, error = future.result()
+            if error:
+                logger.warning("RSS fetch failed for %s: %s", label, error)
+                totals["errors"] += 1
+                continue
+            if not entries:
+                continue
+            totals["entries"] += len(entries)
+            stats = ingest_rss_entries(
+                entries,
+                ticker=ticker,
+                label=label,
+                feed_url=url,
+                sync_distill_limit=sync_distill_limit,
+            )
+            totals["queued"] += int(stats.get("queued") or stats.get("ingested") or 0)
+            totals["ingested"] += int(stats.get("ingested") or 0)
     return totals
 
 
@@ -268,16 +303,22 @@ def run_hub_news_ingest(
     ``mode`` may be ``full`` or ``light`` — loads sources/lookback from
     :func:`load_news_pipeline_config` when ``sources`` is not explicitly set.
     """
+    from trade_integrations.dataflows.index_research.pipeline_cancel import check_pipeline_cancel
     from trade_integrations.hub_storage.news_pipeline_config import load_news_pipeline_config
     from trade_integrations.dataflows.index_research.news_market_context import (
+        get_market_context_for_pipeline,
         refresh_index_market_context,
     )
 
+    check_pipeline_cancel()
     cfg = load_news_pipeline_config()
     sym = ticker.strip().upper()
     ingest_mode = (mode or "full").strip().lower()
 
-    market_context = refresh_index_market_context(ticker=sym, persist=True)
+    if ingest_mode == "light":
+        market_context = get_market_context_for_pipeline(ticker=sym, refresh=False)
+    else:
+        market_context = refresh_index_market_context(ticker=sym, persist=True)
 
     if sources is None or sources == "default":
         if ingest_mode == "light":
@@ -296,7 +337,7 @@ def run_hub_news_ingest(
         except ValueError:
             days = 3
 
-    selected = _parse_sources(sources)
+    selected = _apply_light_source_guard(_parse_sources(sources), ingest_mode=ingest_mode)
     sync_distill_limit = _sync_distill_limit_for_mode(ingest_mode)
     out: dict[str, Any] = {
         "ticker": sym,
@@ -330,6 +371,7 @@ def run_hub_news_ingest(
             logger.warning("hub ingest rss failed: %s", exc)
             out["sources"]["rss"] = {"error": str(exc)[:200]}
             out["totals"]["error"] += 1
+        check_pipeline_cancel()
 
     if "searxng" in selected:
         try:
@@ -346,6 +388,7 @@ def run_hub_news_ingest(
             logger.warning("hub ingest searxng ticker failed: %s", exc)
             out["sources"]["searxng"] = {"error": str(exc)[:200]}
             out["totals"]["error"] += 1
+        check_pipeline_cancel()
 
     if "searxng_global" in selected:
         try:
@@ -361,6 +404,7 @@ def run_hub_news_ingest(
             logger.warning("hub ingest searxng global failed: %s", exc)
             out["sources"]["searxng_global"] = {"error": str(exc)[:200]}
             out["totals"]["error"] += 1
+        check_pipeline_cancel()
 
     if "moneycontrol" in selected:
         try:
@@ -376,6 +420,7 @@ def run_hub_news_ingest(
             logger.warning("hub ingest moneycontrol failed: %s", exc)
             out["sources"]["moneycontrol"] = {"error": str(exc)[:200]}
             out["totals"]["error"] += 1
+        check_pipeline_cancel()
 
     if "watcher" in selected:
         watch_syms = watcher_tickers or ["NIFTY", "BANKNIFTY"]

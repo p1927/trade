@@ -63,7 +63,7 @@ nse-browser = [
     "openai>=1.40",
     "beautifulsoup4>=4.12",
     "pandas>=2.0",
-    "requests>=2.31",
+    "requests>=2.34.2",
 ]
 nse-browser-agent = [
     "trade-stack[nse-browser]",
@@ -71,8 +71,11 @@ nse-browser-agent = [
 nautilus = [
     "nautilus_trader>=1.228",
     "redis>=5.0",
-    "requests>=2.31",
+    "requests>=2.34.2",
     "websocket-client>=1.8",
+]
+external-predictions = [
+    "crawl4ai>=0.6.0",
 ]
 
 [tool.setuptools.packages.find]
