@@ -47,6 +47,7 @@ __all__ = [
     "hub_news_pipeline_status",
     "run_hub_news_ingest",
     "get_distilled_event",
+    "list_pending_staging_refs",
     "distillation_queue_stats",
 ]
 
@@ -191,6 +192,13 @@ def query_with_staging(
         include_rejected=include_rejected,
     )
     return union_headlines_with_staging(records, ticker=ticker, limit=limit)
+
+
+def list_pending_staging_refs(*, ticker: str = "NIFTY", limit: int = 10_000) -> list[dict[str, Any]]:
+    """Pending staging refs for hub news UI operations."""
+    from trade_integrations.hub_storage.news_staging_store import list_pending_refs
+
+    return list_pending_refs(ticker=ticker, limit=limit)
 
 
 def get_distilled_event(event_id: str) -> dict[str, Any] | None:

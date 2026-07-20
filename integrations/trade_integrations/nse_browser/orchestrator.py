@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from trade_integrations.dataflows.ingest_policy import batch_ingest_allowed
 from trade_integrations.nse_browser.hub_writer import (
     dataset_parquet_path,
     frame_to_records,
@@ -110,7 +111,9 @@ def get_nse_browser_data(
 
     Primary entry point for MCP and Vibe agents.
     """
-    ingest_counts = ingest_repository_to_hub()
+    ingest_counts: dict[str, Any] = {}
+    if refresh or backfill_historical or batch_ingest_allowed(explicit=False):
+        ingest_counts = ingest_repository_to_hub()
     spec = get_dataset(dataset)
     if spec is None:
         return {
