@@ -4,6 +4,7 @@ Uses a local or remote SearXNG instance (JSON API) instead of yfinance Search
 or a paid news API. HTTP access goes through ``searxng_client`` (global queue).
 """
 import logging
+import time
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
@@ -52,7 +53,7 @@ def _ticker_news_query(ticker: str) -> str:
 
 
 def _search(query: str, limit: int) -> list[dict]:
-    news_engines = parse_engine_list(searxng_news_engines()) or ["bing news"]
+    news_engines = parse_engine_list(searxng_news_engines()) or ["bing"]
     web_engines = parse_engine_list(searxng_web_engines()) or ["bing"]
     attempts: list[tuple[str, list[str]]] = [
         ("news", news_engines),
@@ -61,27 +62,40 @@ def _search(query: str, limit: int) -> list[dict]:
     ]
     for cat, engines in attempts:
         for engine in engines:
-            try:
-                payload = search_json(
-                    query,
-                    categories=cat,
-                    engines=engine,
-                    timeout=REQUEST_TIMEOUT,
-                )
-            except RequestException as exc:
-                logger.debug(
-                    "SearXNG search failed (%s/%s) for %r: %s", cat, engine, query, exc
-                )
-                continue
-            except ValueError as exc:
-                logger.warning(
-                    "SearXNG returned invalid JSON (%s/%s) for %r: %s", cat, engine, query, exc
-                )
-                continue
+            for attempt in range(2):
+                try:
+                    payload = search_json(
+                        query,
+                        categories=cat,
+                        engines=engine,
+                        timeout=REQUEST_TIMEOUT,
+                    )
+                except RequestException as exc:
+                    logger.debug(
+                        "SearXNG search failed (%s/%s) for %r: %s", cat, engine, query, exc
+                    )
+                    break
+                except ValueError as exc:
+                    logger.warning(
+                        "SearXNG returned invalid JSON (%s/%s) for %r: %s", cat, engine, query, exc
+                    )
+                    break
 
-            results = payload.get("results") or []
-            if results:
-                return results[:limit]
+                results = payload.get("results") or []
+                if results:
+                    return results[:limit]
+
+                unresponsive = payload.get("unresponsive_engines") or []
+                transient = any(
+                    str(entry[0]).lower() == engine.lower()
+                    and str(entry[1] if len(entry) > 1 else "").lower()
+                    in {"parsing error", "timeout", "unexpected crash"}
+                    for entry in unresponsive
+                )
+                if transient and attempt == 0:
+                    time.sleep(2.0)
+                    continue
+                break
 
     logger.warning("SearXNG search returned no results for %r", query)
     return []

@@ -1,8 +1,15 @@
+# Hub SearXNG — keep_only merges with upstream defaults; override only what we need.
+#
+# Bing news scraper (bing_news.py → /news/infinitescrollajax) intermittently gets empty HTML
+# from Bing bot-detection ("Document is empty"). The bing web engine on categories=news works
+# reliably for the same headlines — use that for hub ingest instead.
+#
+# DuckDuckGo: disabled while IP is CAPTCHA-blocked. Re-enable after solving CAPTCHA from the
+# container network — see https://docs.searxng.org/admin/answer-captcha.html
 use_default_settings:
   engines:
     keep_only:
       - bing
-      - bing news
       - mojeek
       - qwant
 
@@ -15,13 +22,15 @@ server:
 search:
   safe_search: 0
   autocomplete: ""
+  default_lang: "en-IN"
   formats:
     - html
     - json
 
 outgoing:
-  request_timeout: 5.0
-  max_request_timeout: 15.0
+  request_timeout: 10.0
+  max_request_timeout: 20.0
+  enable_http2: false
 
 categories_as_tabs:
   general: General
@@ -30,23 +39,26 @@ categories_as_tabs:
 
 engines:
   - name: bing
-    engine: bing
+    disabled: false
     categories:
       - general
       - finance
-
-  - name: bing news
-    categories:
       - news
+    timeout: 10.0
+    enable_http2: false
 
   - name: mojeek
-    engine: mojeek
+    disabled: false
     categories:
       - general
       - finance
+    timeout: 10.0
+    enable_http2: false
 
   - name: qwant
-    engine: qwant
+    disabled: false
     categories:
       - general
       - finance
+    timeout: 10.0
+    enable_http2: false

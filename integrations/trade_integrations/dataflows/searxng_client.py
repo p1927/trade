@@ -74,8 +74,12 @@ def parse_engine_list(raw: str) -> list[str]:
     return [part.strip() for part in (raw or "").split(",") if part.strip()]
 
 
+def _default_lang() -> str:
+    return os.environ.get("SEARXNG_DEFAULT_LANG", "en-IN").strip()
+
+
 def searxng_news_engines() -> str:
-    return _env_engines("SEARXNG_NEWS_ENGINES", "bing news")
+    return _env_engines("SEARXNG_NEWS_ENGINES", "bing")
 
 
 def searxng_finance_engines() -> str:
@@ -212,6 +216,9 @@ def search_json(
     with _global_drain_slot():
         url = urljoin(_base_url() + "/", "search")
         params: dict[str, str] = {"q": q, "format": "json"}
+        lang = _default_lang()
+        if lang:
+            params["language"] = lang
         if categories:
             params["categories"] = categories
         if engines:
@@ -221,7 +228,10 @@ def search_json(
                 url,
                 params=params,
                 timeout=timeout,
-                headers={"X-Real-IP": "127.0.0.1"},
+                headers={
+                    "X-Real-IP": "127.0.0.1",
+                    "Accept-Language": f"{lang},{lang.split('-')[0]};q=0.9" if lang else "en-IN,en;q=0.9",
+                },
             )
             resp.raise_for_status()
         except RequestException as exc:
