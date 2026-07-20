@@ -16,6 +16,86 @@ from trade_integrations.dataflows.index_research.sources.rbi_repo_schedule impor
 logger = logging.getLogger(__name__)
 
 
+def _cold_tier_cpi_series(trading_dates: list[str]) -> pd.Series:
+    """Merge-asof monthly CPI YoY onto trading dates as cpi_yoy_proxy."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    frame = load_history_dataset("india_cpi_monthly_yoy")
+    if frame.empty:
+        return pd.Series(dtype=float)
+    col = "cpi_yoy_pct" if "cpi_yoy_pct" in frame.columns else None
+    if col is None:
+        for candidate in ("cpi_yoy", "yoy_pct", "inflation_yoy"):
+            if candidate in frame.columns:
+                col = candidate
+                break
+    if col is None:
+        return pd.Series(dtype=float)
+    daily = frame[["date", col]].copy()
+    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily[col] = pd.to_numeric(daily[col], errors="coerce")
+    daily = daily.dropna(subset=[col]).sort_values("date").drop_duplicates("date", keep="last")
+    if daily.empty:
+        return pd.Series(dtype=float)
+    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    merged = pd.merge_asof(
+        trading.sort_values("date"),
+        daily.sort_values("date"),
+        on="date",
+        direction="backward",
+    )
+    return pd.Series(merged[col].values, index=trading_dates)
+
+
+def _cold_tier_rbi_rate_series(trading_dates: list[str], column: str) -> pd.Series:
+    """Merge-asof weekly RBI WSS rate column onto trading dates."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    frame = load_history_dataset("india_rbi_wss_weekly")
+    if frame.empty or column not in frame.columns:
+        return pd.Series(dtype=float)
+    daily = frame[["date", column]].copy()
+    daily["date"] = pd.to_datetime(daily["date"].astype(str).str[:10])
+    daily[column] = pd.to_numeric(daily[column], errors="coerce")
+    daily = daily.dropna(subset=[column]).sort_values("date").drop_duplicates("date", keep="last")
+    if daily.empty:
+        return pd.Series(dtype=float)
+    trading = pd.DataFrame({"date": pd.to_datetime(trading_dates)})
+    merged = pd.merge_asof(
+        trading.sort_values("date"),
+        daily.sort_values("date"),
+        on="date",
+        direction="backward",
+    )
+    return pd.Series(merged[column].values, index=trading_dates)
+
+
+def _cold_tier_news_sentiment_series(trading_dates: list[str]) -> pd.Series:
+    """Map cold-tier news sentiment_mean to index_sentiment [-1, 1]."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    frame = load_history_dataset("india_news_sentiment_daily")
+    if frame.empty:
+        return pd.Series(dtype=float)
+    col = "sentiment_mean" if "sentiment_mean" in frame.columns else None
+    if col is None:
+        for candidate in ("sentiment", "mean_sentiment", "avg_sentiment"):
+            if candidate in frame.columns:
+                col = candidate
+                break
+    if col is None:
+        return pd.Series(dtype=float)
+    daily = frame[["date", col]].copy()
+    daily["date"] = daily["date"].astype(str).str[:10]
+    daily[col] = pd.to_numeric(daily[col], errors="coerce")
+    mapped = daily.set_index("date")[col]
+    out: dict[str, float] = {}
+    for day in trading_dates:
+        if day in mapped.index and pd.notna(mapped[day]):
+            out[day] = float(np.clip(mapped[day], -1.0, 1.0))
+    return pd.Series(out)
+
+
 def _cold_tier_nifty_pe_series(trading_dates: list[str]) -> pd.Series:
     """Per-date trailing P/E from cold-tier valuation — no terminal-close scaling."""
     from trade_integrations.dataflows.index_research.history_store import load_history_dataset
@@ -147,12 +227,19 @@ def _merge_flow_columns(
             _map_series("nifty_pe", cold_pe)
 
     if "index_sentiment" not in out.columns or pd.to_numeric(out.get("index_sentiment"), errors="coerce").isna().all():
-        if "fii_sentiment_score" in out.columns:
+        news_sent = _cold_tier_news_sentiment_series(dates)
+        if not news_sent.empty:
+            _map_series("index_sentiment", news_sent)
+        elif "fii_sentiment_score" in out.columns:
             scores = pd.to_numeric(out["fii_sentiment_score"], errors="coerce")
             out["index_sentiment"] = np.clip((scores - 50.0) / 50.0, -1.0, 1.0)
         elif "india_vix" in out.columns:
             vix = pd.to_numeric(out["india_vix"], errors="coerce")
             out["index_sentiment"] = np.clip(-(vix - 14.0) / 20.0, -1.0, 1.0)
+
+    cold_cpi = _cold_tier_cpi_series(dates)
+    if not cold_cpi.empty:
+        _map_series("cpi_yoy_proxy", cold_cpi)
 
     return out
 
@@ -187,13 +274,28 @@ def _append_repo_and_india_rates(frame: pd.DataFrame) -> pd.DataFrame:
         if tbill_override:
             out["india_91d_tbill"] = float(tbill_override)
         else:
-            out["india_91d_tbill"] = out["repo_rate"]
+            dates = out["date"].astype(str).tolist()
+            rbi_tbill = _cold_tier_rbi_rate_series(dates, "india_91d_tbill")
+            if not rbi_tbill.empty and rbi_tbill.notna().any():
+                out["india_91d_tbill"] = out["date"].map(rbi_tbill).combine_first(out["repo_rate"])
+            else:
+                out["india_91d_tbill"] = out["repo_rate"]
 
     if "india_10y" not in out.columns or pd.to_numeric(out["india_10y"], errors="coerce").isna().all():
         if ten_y_override:
             out["india_10y"] = float(ten_y_override)
         else:
-            out["india_10y"] = out["repo_rate"] + 0.65
+            dates = out["date"].astype(str).tolist()
+            rbi_10y = _cold_tier_rbi_rate_series(dates, "india_10y")
+            if not rbi_10y.empty and rbi_10y.notna().any():
+                out["india_10y"] = out["date"].map(rbi_10y)
+            else:
+                out["india_10y"] = out["repo_rate"] + 0.65
+    elif not ten_y_override:
+        dates = out["date"].astype(str).tolist()
+        rbi_10y = _cold_tier_rbi_rate_series(dates, "india_10y")
+        if not rbi_10y.empty and rbi_10y.notna().any():
+            out["india_10y"] = out["date"].map(rbi_10y).combine_first(out["india_10y"])
 
     if credit_override and (
         "india_credit_spread" not in out.columns
