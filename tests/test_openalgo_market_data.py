@@ -18,6 +18,41 @@ def test_normalize_option_chain_adds_pcr():
     assert out["source"] == "openalgo"
 
 
+def test_to_nselib_expiry_converts_openalgo_formats():
+    from trade_integrations.openalgo.market_data import _to_nselib_expiry
+
+    assert _to_nselib_expiry("28-JUL-26") == "28-07-2026"
+    assert _to_nselib_expiry("16JUL26") == "16-07-2026"
+    assert _to_nselib_expiry("28-07-2026") == "28-07-2026"
+    assert _to_nselib_expiry("bad-expiry") is None
+
+
+def test_fetch_nselib_chain_uses_numeric_expiry(monkeypatch):
+    import sys
+
+    from trade_integrations.openalgo import market_data
+
+    captured: dict[str, Any] = {}
+
+    def fake_nse_live_option_chain(**kwargs):
+        captured.update(kwargs)
+
+        class _Frame:
+            empty = True
+
+        return _Frame()
+
+    fake_derivatives = type(
+        "Derivatives",
+        (),
+        {"nse_live_option_chain": staticmethod(fake_nse_live_option_chain)},
+    )()
+    monkeypatch.setitem(sys.modules, "nselib", type("Nselib", (), {"derivatives": fake_derivatives})())
+
+    market_data._fetch_nselib_chain("BANKNIFTY", "28-JUL-26", is_index=True)
+    assert captured["expiry_date"] == "28-07-2026"
+
+
 def test_fetch_option_chain_with_fallback_uses_nselib(monkeypatch):
     from trade_integrations.openalgo import market_data
 

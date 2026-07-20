@@ -435,6 +435,28 @@ def _nselib_rows_to_chain(rows: list[dict[str, Any]], *, lot_size: int = 1) -> l
     return chain
 
 
+def _to_nselib_expiry(expiry_date: str | None) -> str | None:
+    """Convert OpenAlgo-style expiry strings to nselib ``DD-MM-YYYY`` format."""
+    if not expiry_date or not expiry_date.strip():
+        return None
+
+    from datetime import datetime
+
+    text = expiry_date.strip().upper()
+    candidates = [text.replace("-", ""), text]
+    formats = ("%d%b%y", "%d-%b-%y", "%d-%m-%Y")
+    for value in candidates:
+        for fmt in formats:
+            if fmt == "%d%b%y" and len(value) != 7:
+                continue
+            try:
+                parsed = datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+            return parsed.strftime("%d-%m-%Y")
+    return None
+
+
 def _fetch_nselib_chain(
     underlying: str,
     expiry_date: str | None,
@@ -447,11 +469,7 @@ def _fetch_nselib_chain(
         return None
 
     symbol = underlying.upper()
-    expiry_arg = None
-    if expiry_date:
-        raw = expiry_date.strip().upper().replace("-", "")
-        if len(raw) == 7:
-            expiry_arg = f"{raw[:2]}-{raw[2:5]}-{raw[5:]}"
+    expiry_arg = _to_nselib_expiry(expiry_date)
 
     try:
         if is_index:

@@ -12,6 +12,7 @@ from urllib.parse import urljoin
 import requests
 from dateutil.relativedelta import relativedelta
 
+from trade_integrations.dataflows.searxng_request import run_searxng_search
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.yfinance_news import _in_news_window
 
@@ -55,13 +56,17 @@ def _parse_pub_date(result: dict) -> datetime | None:
 def _search(query: str, limit: int) -> list[dict]:
     url = urljoin(_base_url() + "/", "search")
     try:
-        resp = requests.get(
-            url,
-            params={"q": query, "format": "json", "categories": "news"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
+
+        def _fetch():
+            resp = requests.get(
+                url,
+                params={"q": query, "format": "json", "categories": "news"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        payload = run_searxng_search(_fetch)
     except requests.RequestException as exc:
         logger.warning("SearXNG search failed for %r: %s", query, exc)
         return []

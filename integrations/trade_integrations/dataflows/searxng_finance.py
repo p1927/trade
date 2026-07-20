@@ -10,6 +10,8 @@ from urllib.parse import urljoin
 
 import requests
 
+from trade_integrations.dataflows.searxng_request import run_searxng_search
+
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 30
@@ -102,9 +104,13 @@ def search_finance(
         if cat:
             params["categories"] = cat
         try:
-            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            payload = resp.json()
+
+            def _fetch():
+                resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+                resp.raise_for_status()
+                return resp.json()
+
+            payload = run_searxng_search(_fetch)
         except requests.RequestException as exc:
             logger.debug("SearXNG search failed (%s) for %r: %s", cat or "all", query, exc)
             continue
