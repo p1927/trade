@@ -74,16 +74,101 @@ def test_stress_conditional_high_stress():
 def test_promotion_requires_three_pp_margin():
     board = {
         "eval_count": 65,
-        "tracks": {"quant_ridge": {"direction_hit_rate": 0.50}},
+        "tracks": {"quant_ridge": {"direction_hit_rate": 0.50, "view_hit_rate": 0.50}},
         "combiners": {
-            "equal_weight_2": {"direction_hit_rate": 0.54},
-            "shrinkage_50": {"direction_hit_rate": 0.56},
+            "equal_weight_2": {"direction_hit_rate": 0.54, "view_hit_rate": 0.54},
+            "shrinkage_50": {"direction_hit_rate": 0.56, "view_hit_rate": 0.56},
         },
+        "promotion_run_history": [
+            {"promoted": ["equal_weight_2", "shrinkage_50"]},
+            {"promoted": ["equal_weight_2", "shrinkage_50"]},
+        ],
+        "combiner_weight_history": [
+            {"combiner_id": "shrinkage_50", "weights": {"macro_only_no_overlay": 0.33, "scenario_anchor": 0.33, "event_overlay": 0.34}},
+            {"combiner_id": "shrinkage_50", "weights": {"macro_only_no_overlay": 0.34, "scenario_anchor": 0.33, "event_overlay": 0.33}},
+        ],
     }
     promo = evaluate_promotion(board)
     assert promo["verdicts"]["equal_weight_2"]["promoted"] is True
     assert promo["verdicts"]["shrinkage_50"]["promoted"] is True
     assert "shrinkage_50" in promo["promoted_combiners"]
+
+
+@pytest.mark.unit
+def test_promotion_requires_two_distinct_runs():
+    board_one_run = {
+        "eval_count": 65,
+        "tracks": {"quant_ridge": {"view_hit_rate": 0.50}},
+        "combiners": {"equal_weight_2": {"view_hit_rate": 0.56}},
+        "promotion_run_history": [{"promoted": ["equal_weight_2"]}],
+    }
+    assert evaluate_promotion(board_one_run)["promoted_combiners"] == []
+
+    board_two_runs = {
+        **board_one_run,
+        "promotion_run_history": [
+            {"promoted": ["equal_weight_2"]},
+            {"promoted": ["equal_weight_2"]},
+        ],
+    }
+    assert "equal_weight_2" in evaluate_promotion(board_two_runs)["promoted_combiners"]
+
+
+@pytest.mark.unit
+def test_finalize_scoreboard_promotion_appends_once(monkeypatch):
+    from trade_integrations.dataflows.index_research.prediction_algorithms import promotion as promo_mod
+
+    def _fake_load(_ticker="NIFTY"):
+        return {"promotion_run_history": [{"promoted": ["equal_weight_2"]}]}
+
+    monkeypatch.setattr(promo_mod, "load_scoreboard", _fake_load)
+
+    report = {
+        "eval_count": 65,
+        "tracks": {"quant_ridge": {"view_hit_rate": 0.50}},
+        "combiners": {"equal_weight_2": {"view_hit_rate": 0.56}},
+    }
+    out = promo_mod.finalize_scoreboard_promotion(report, ticker="NIFTY")
+    assert len(out["promotion_run_history"]) == 2
+    assert out["promotion_run_history"][-1]["promoted"] == ["equal_weight_2"]
+    assert "equal_weight_2" in out["promotion"]["promoted_combiners"]
+
+
+@pytest.mark.unit
+def test_promotion_blocks_first_run_without_history():
+    board = {
+        "eval_count": 65,
+        "tracks": {"quant_ridge": {"view_hit_rate": 0.50}},
+        "combiners": {"shrinkage_50": {"view_hit_rate": 0.56}},
+        "promotion_run_history": [],
+    }
+    promo = evaluate_promotion(board)
+    assert promo["verdicts"]["shrinkage_50"]["promoted"] is True
+    assert promo["promoted_combiners"] == []
+
+
+@pytest.mark.unit
+def test_combiner_blocks_macro_only_plus_event_overlay():
+    from trade_integrations.dataflows.index_research.prediction_algorithms.combiners import (
+        _validate_track_set,
+    )
+
+    assert _validate_track_set(["macro_only", "event_overlay"]) is not None
+
+
+@pytest.mark.unit
+def test_inverse_mae_window_differs():
+    from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.scoreboard import (
+        summarize_track_metrics,
+    )
+
+    eval_rows = [
+        {"date": f"2026-01-{i:02d}", "track_id": "macro_only_no_overlay", "error_pct": float(i), "direction_hit": True}
+        for i in range(1, 14)
+    ]
+    mae6 = summarize_track_metrics(eval_rows, "macro_only_no_overlay", window=6, before_date="2026-01-14")["mae_pct"]
+    mae12 = summarize_track_metrics(eval_rows, "macro_only_no_overlay", window=12, before_date="2026-01-14")["mae_pct"]
+    assert mae6 != mae12
 
 
 @pytest.mark.unit

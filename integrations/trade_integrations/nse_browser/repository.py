@@ -225,6 +225,79 @@ def load_monthly_cash_fii_dii_frame() -> pd.DataFrame:
     return parse_fii_dii_monthly_cash_csv(path.read_text(encoding="utf-8"))
 
 
+def historic_fii_dii_trading_activity_path() -> Path:
+    from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
+
+    return historic_data_dir(repo_root()) / "Fii Dii Trading activity.csv"
+
+
+def seed_historic_fii_dii_trading_activity() -> int:
+    """Merge historic_data daily FII/DII cash CSV into repo fii_dii."""
+    from trade_integrations.nse_browser.parsers.fii_dii import (
+        merge_fii_dii_variants,
+        parse_fii_dii_trading_activity_csv,
+    )
+
+    path = historic_fii_dii_trading_activity_path()
+    if not path.is_file():
+        return 0
+    frame = parse_fii_dii_trading_activity_csv(path.read_text(encoding="utf-8"))
+    if frame.empty:
+        return 0
+    existing = load_repo_dataset("fii_dii")
+    merged = merge_fii_dii_variants(existing, frame)
+    return upsert_repo_parquet(merged, dataset_id="fii_dii", source="historic_data_fii_dii")
+
+
+def nifty50_fo_filtered_path() -> Path:
+    from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
+
+    return historic_data_dir(repo_root()) / "nifty50_fo_data_filtered.csv"
+
+
+def seed_historic_nifty50_fo_derivatives() -> int:
+    """Merge Nifty 50 stock F&O bhavcopy PCR / F&O proxies into repo fii_dii."""
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+    from trade_integrations.nse_browser.parsers.fo_derivatives import parse_nifty50_fo_bhavcopy_csv
+
+    path = nifty50_fo_filtered_path()
+    if not path.is_file():
+        return 0
+    frame = parse_nifty50_fo_bhavcopy_csv(path)
+    if frame.empty:
+        return 0
+    existing = load_repo_dataset("fii_dii")
+    merged = overlay_derivative_columns(existing, frame)
+    return upsert_repo_parquet(merged, dataset_id="fii_dii", source="historic_data_nifty50_fo")
+
+
+def seed_aeron7_nifty_futures_derivatives() -> int:
+    """Merge Aeron7 NIFTY F1/F2 futures volume proxies when a local clone exists."""
+    from trade_integrations.nse_browser.parsers.aeron7_intraday import (
+        aggregate_aeron7_nifty_futures,
+        aeron7_intraday_roots,
+    )
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+    from trade_integrations.nse_browser.parsers.historic_data import historic_data_dir
+
+    roots = aeron7_intraday_roots(historic_data_dir(repo_root()))
+    if not roots:
+        return 0
+
+    frames = [aggregate_aeron7_nifty_futures(root) for root in roots]
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return 0
+
+    import pandas as pd
+
+    overlay = pd.concat(frames, ignore_index=True)
+    overlay = overlay.sort_values("date").drop_duplicates("date", keep="last")
+    existing = load_repo_dataset("fii_dii")
+    merged = overlay_derivative_columns(existing, overlay)
+    return upsert_repo_parquet(merged, dataset_id="fii_dii", source="historic_data_aeron7_futures")
+
+
 def seed_nse_monthly_cash_fii_dii() -> int:
     """Merge monthly NSE cash FII/DII seed into repo (month-end dates)."""
     from trade_integrations.nse_browser.parsers.fii_dii import merge_fii_dii_variants
@@ -243,8 +316,11 @@ def seed_nse_monthly_cash_fii_dii() -> int:
 
 
 def sync_fii_dii_repo_layers() -> dict[str, int]:
-    """Apply all repo seed layers: monthly cash → Mr Chartist daily gap fill."""
+    """Apply all repo seed layers: historic CSV → monthly cash → Mr Chartist gap fill."""
     counts: dict[str, int] = {}
+    counts["historic_trading_activity"] = seed_historic_fii_dii_trading_activity()
+    counts["historic_nifty50_fo"] = seed_historic_nifty50_fo_derivatives()
+    counts["aeron7_nifty_futures"] = seed_aeron7_nifty_futures_derivatives()
     counts["monthly_cash"] = seed_nse_monthly_cash_fii_dii()
     existing = load_repo_dataset("fii_dii")
     if existing.empty:
@@ -339,13 +415,34 @@ def sync_niftyinvest_api_flow(*, days: int = 365) -> dict[str, Any]:
 
 def sync_all_repo_seed_layers(*, allow_live_fetch: bool = True, enrich_days: int = 365) -> dict[str, int]:
     """Apply all git-tracked CSV seed layers into repo parquet."""
-    counts = sync_fii_dii_repo_layers()
+    from trade_integrations.nse_browser.parsers.historic_data import ingest_historic_data_folder
+
+    counts: dict[str, int] = {}
+    historic = ingest_historic_data_folder(repo_root())
+    if historic.get("status") == "ok":
+        counts["historic_data"] = int(historic.get("rows") or 0)
+        for name, meta in (historic.get("datasets") or {}).items():
+            if isinstance(meta, dict):
+                row_count = int(meta.get("rows") or meta.get("months") or meta.get("membership_rows") or 0)
+                if row_count:
+                    counts[f"historic_{name}"] = row_count
+    counts.update(sync_fii_dii_repo_layers())
     counts.update(sync_sebi_monthly_repo_layers())
     counts["sector_indices"] = seed_sector_indices_from_nifty50()
     if allow_live_fetch:
         ni = sync_niftyinvest_api_flow(days=enrich_days)
         if isinstance(ni, dict) and ni.get("status") == "ok":
             counts["niftyinvest_api"] = int(ni.get("rows") or 0)
+        try:
+            from trade_integrations.dataflows.index_research.sources.nselib_fetch import (
+                backfill_nifty50_ohlcv_gaps,
+            )
+
+            ohlcv = backfill_nifty50_ohlcv_gaps(repo_root(), allow_live_fetch=True)
+            if ohlcv.get("status") == "ok":
+                counts["nselib_nifty50_ohlcv"] = int(ohlcv.get("rows_added") or 0)
+        except Exception as exc:
+            logger.debug("nselib nifty50 ohlcv gap fill skipped: %s", exc)
     return counts
 
 

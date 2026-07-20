@@ -55,11 +55,61 @@ class HttpBridge:
             return status, body
         return 0, ""
 
-    def get_bytes(self, url: str, *, referer: str | None = None) -> tuple[int, bytes]:
-        status, body = self.get_text(url, referer=referer)
-        if status != 200:
-            return status, b""
-        return status, body.encode("utf-8") if isinstance(body, str) else body
+    def get_bytes(self, url: str, *, referer: str | None = None, retries: int = 2) -> tuple[int, bytes]:
+        for attempt in range(retries + 1):
+            status, body = self._request_bytes(url, referer=referer)
+            if status == 200:
+                return status, body
+            if status in {403, 429} and attempt < retries:
+                time.sleep(min(60.0, 5.0 * (2**attempt)))
+                continue
+            return status, body
+        return 0, b""
+
+    def _request_bytes(self, url: str, *, referer: str | None) -> tuple[int, bytes]:
+        host = urlparse(url).netloc or "nseindia.com"
+        self.rate_limiter.wait_if_needed(host)
+        headers = dict(_BROWSER_HEADERS)
+        if referer:
+            headers["Referer"] = referer
+
+        if self._use_cffi:
+            return self._request_cffi_bytes(url, headers)
+        return self._request_requests_bytes(url, headers)
+
+    def _request_cffi_bytes(self, url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        from curl_cffi import requests as cffi_requests
+
+        jar = cookies_to_requests_jar(self.cookies)
+        try:
+            resp = cffi_requests.get(
+                url,
+                headers=headers,
+                cookies=jar,
+                impersonate="chrome120",
+                timeout=45,
+            )
+            content = resp.content
+            return resp.status_code, content if isinstance(content, bytes) else b""
+        except Exception as exc:
+            logger.debug("curl_cffi GET bytes failed %s: %s", url, exc)
+            return 0, b""
+
+    def _request_requests_bytes(self, url: str, headers: dict[str, str]) -> tuple[int, bytes]:
+        import requests
+
+        session = requests.Session()
+        session.headers.update(headers)
+        session.cookies = cookies_to_requests_jar(self.cookies)
+        try:
+            if not self.cookies and "nseindia.com" in url:
+                session.get("https://www.nseindia.com", timeout=15)
+            resp = session.get(url, timeout=45)
+            content = resp.content
+            return resp.status_code, content if isinstance(content, bytes) else b""
+        except Exception as exc:
+            logger.debug("requests GET bytes failed %s: %s", url, exc)
+            return 0, b""
 
     def _request(self, url: str, *, referer: str | None) -> tuple[int, str]:
         host = urlparse(url).netloc or "nseindia.com"

@@ -15,6 +15,9 @@ from trade_integrations.dataflows.index_research.constituent_backtest import (
     load_constituent_signals_for_day,
 )
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
+from trade_integrations.dataflows.index_research.prediction_algorithms.combiners._math import (
+    select_alignment_lambda,
+)
 from trade_integrations.dataflows.index_research.prediction_algorithms.combiners import run_combiner
 from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.legacy_replay import (
     replay_legacy_headline,
@@ -24,16 +27,21 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator
     save_scoreboard,
     summarize_track_metrics,
 )
-from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import evaluate_promotion
+from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import (
+    finalize_scoreboard_promotion,
+)
 from trade_integrations.dataflows.index_research.prediction_algorithms.registry import run_all_tracks
 from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
     BACKTEST_COMBINER_IDS,
     BACKTEST_TRACK_IDS,
     CANONICAL_TRACK_IDS,
+    COMBINER_THREE_TRACK_IDS,
+    INVERSE_MAE_WINDOWS,
     SCOREBOARD_SCHEMA_VERSION,
     TRACK_BACKTEST_ELIGIBLE,
 )
 from trade_integrations.dataflows.index_research.prediction_algorithms.context_builder import build_track_context
+from trade_integrations.dataflows.index_research.views import classify_index_view
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +72,8 @@ def _append_eval_row(
 ) -> None:
     err = predicted_pct - actual_f
     implied_level = close * (1.0 + predicted_pct / 100.0) if close > 0 else None
+    pred_view = classify_index_view(predicted_pct)
+    actual_view = classify_index_view(actual_f)
     eval_rows.append(
         {
             "date": day_str,
@@ -72,6 +82,7 @@ def _append_eval_row(
             "actual_pct": round(actual_f, 4),
             "error_pct": round(err, 4),
             "direction_hit": (predicted_pct > 0) == (actual_f > 0),
+            "view_hit": pred_view == actual_view,
             "close": round(close, 2),
             "implied_level": round(implied_level, 2) if implied_level is not None else None,
         }
@@ -93,7 +104,7 @@ def run_track_walk_forward(
         return {"status": "error", "message": "sklearn required for track backtest"}
 
     horizon = resolve_horizon(horizon_days)
-    frame = load_aligned_factor_history(days=days)
+    frame = load_aligned_factor_history(days=days, start="2006-01-01" if days > 730 else None)
     if frame is None or frame.empty:
         return {"status": "error", "message": "no_factor_history"}
 
@@ -131,6 +142,7 @@ def run_track_walk_forward(
     indices = list(range(min_train_rows, max_i + 1, max(1, eval_step)))
     eval_rows: list[dict[str, Any]] = []
     hybrid_eval_dates = 0
+    combiner_weight_history: list[dict[str, Any]] = []
 
     for i in indices:
         train = frame.iloc[:i].copy()
@@ -206,14 +218,27 @@ def run_track_walk_forward(
                 close=close,
             )
 
-        mae_by_track = {
+        mae_by_track_w6 = {
             tid: summarize_track_metrics(
-                [r for r in eval_rows if r["date"] < day_str],
+                eval_rows,
                 tid,
+                window=INVERSE_MAE_WINDOWS["inverse_mae_w6"],
+                before_date=day_str,
             ).get("mae_pct")
             or 1.0
-            for tid in _WALK_FORWARD_TRACK_IDS
+            for tid in COMBINER_THREE_TRACK_IDS
         }
+        mae_by_track_w12 = {
+            tid: summarize_track_metrics(
+                eval_rows,
+                tid,
+                window=INVERSE_MAE_WINDOWS["inverse_mae_w12"],
+                before_date=day_str,
+            ).get("mae_pct")
+            or 1.0
+            for tid in COMBINER_THREE_TRACK_IDS
+        }
+        alignment_lam = select_alignment_lambda(eval_rows, before_date=day_str)
         cause_stress = None
         try:
             from trade_integrations.dataflows.index_research.prediction_algorithms.causes.cause_stress_index import (
@@ -225,12 +250,26 @@ def run_track_walk_forward(
             cause_stress = None
 
         for combiner_id in _COMBINER_IDS:
+            mae = None
+            if combiner_id in INVERSE_MAE_WINDOWS:
+                mae = mae_by_track_w6 if combiner_id == "inverse_mae_w6" else mae_by_track_w12
+            elif combiner_id == "shrinkage_50":
+                mae = mae_by_track_w6
             combined = run_combiner(
                 combiner_id,
                 tracks,
-                mae_by_track=mae_by_track,
+                mae_by_track=mae,
                 cause_stress_index=cause_stress,
+                lam=alignment_lam if combiner_id == "alignment_grid" else None,
             )
+            if combined.weights:
+                combiner_weight_history.append(
+                    {
+                        "date": day_str,
+                        "combiner_id": combiner_id,
+                        "weights": dict(combined.weights),
+                    }
+                )
             _append_eval_row(
                 eval_rows,
                 day_str=day_str,
@@ -282,13 +321,7 @@ def run_track_walk_forward(
         "daily_evaluations": eval_rows,
         "nifty_series": nifty_series[-400:],
         "chart": chart,
-        "promotion": evaluate_promotion(
-            {
-                "eval_count": len(primary_dates),
-                "tracks": track_summary,
-                "combiners": combiner_summary,
-            }
-        ),
+        "combiner_weight_history": combiner_weight_history[-300:],
         "limitations": [],
     }
     if hybrid_eval_dates == 0:
@@ -305,5 +338,6 @@ def run_track_walk_forward(
             )
     except Exception:
         pass
-    save_scoreboard(ticker, normalize_scoreboard_report(report))
-    return normalize_scoreboard_report(report)
+    final_report = finalize_scoreboard_promotion(normalize_scoreboard_report(report), ticker=ticker)
+    save_scoreboard(ticker, final_report)
+    return final_report

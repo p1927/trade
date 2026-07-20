@@ -71,7 +71,7 @@ def test_merge_hub_rows_win_over_stale_flow_cache(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
-def test_upsert_flow_cash_cache_last_wins_by_date(monkeypatch, tmp_path):
+def test_upsert_flow_cash_cache_patches_non_null_fields(monkeypatch, tmp_path):
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(tmp_path))
     from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
         load_flow_cash_cache,
@@ -80,10 +80,12 @@ def test_upsert_flow_cash_cache_last_wins_by_date(monkeypatch, tmp_path):
 
     upsert_flow_cash_cache([{"date": "2026-07-10", "fii_net": 10.0, "source": "a"}])
     upsert_flow_cash_cache([{"date": "2026-07-10", "fii_net": 20.0, "source": "b"}])
+    upsert_flow_cash_cache([{"date": "2026-07-10", "nifty_pcr": 0.55, "source": "c"}])
     frame = load_flow_cash_cache()
 
     assert len(frame) == 1
     assert float(frame.iloc[0]["fii_net"]) == pytest.approx(20.0)
+    assert float(frame.iloc[0]["nifty_pcr"]) == pytest.approx(0.55)
 
 
 @pytest.mark.unit

@@ -260,8 +260,7 @@ def run_index_research(
         logger.debug("ohlcv prefetch skipped: %s", exc)
 
     log.info("momentum", "Fetching 7-day price momentum per constituent…")
-    momentum_force = True if not refresh_constituents else refresh_constituents
-    signals = attach_constituent_momentum(signals, force_refresh=momentum_force)
+    signals = attach_constituent_momentum(signals, force_refresh=refresh_constituents)
     momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
     log.info(
         "momentum",
@@ -437,14 +436,15 @@ def run_index_research(
     log.info("attribution", "Attributing constituent contributions to index…")
     attributed = attribute_constituents(signals, horizon_days=horizon.days)
     rollup = rollup_attribution(attributed)
-    prediction["top_drivers"] = rollup.get("top_drivers", [])[:5]
-    if rollup.get("top_drivers"):
-        top = rollup["top_drivers"][0]
-        log.info(
-            "attribution",
-            f"Top driver: {top.get('symbol')} ({top.get('contribution_to_index_pct'):+.2f}%)",
-            top_drivers=rollup.get("top_drivers", [])[:3],
-        )
+    if spot > 0 and prediction:
+        prediction["top_drivers"] = rollup.get("top_drivers", [])[:5]
+        if rollup.get("top_drivers"):
+            top = rollup["top_drivers"][0]
+            log.info(
+                "attribution",
+                f"Top driver: {top.get('symbol')} ({top.get('contribution_to_index_pct'):+.2f}%)",
+                top_drivers=rollup.get("top_drivers", [])[:3],
+            )
 
     if spot > 0 and prediction and scenarios:
         artifact = load_stored_model_artifact()
@@ -471,14 +471,6 @@ def run_index_research(
             macro_factors=macro_factors,
             scenario_anchor_return_pct=scenario_anchor,
         )
-
-    legacy_prediction = None
-    if spot > 0 and prediction:
-        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
-            snapshot_legacy_prediction,
-        )
-
-        legacy_prediction = snapshot_legacy_prediction(prediction)
 
     from trade_integrations.context.hub import load_agent_debate_json
     from trade_integrations.research.debate_synthesis import (
@@ -512,6 +504,17 @@ def run_index_research(
             "debate",
             f"Merged agent debate view: {debate_struct.get('view')}",
             debate_view=debate_struct.get("view"),
+        )
+
+    legacy_prediction = None
+    if spot > 0 and prediction:
+        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
+            snapshot_legacy_prediction,
+        )
+
+        legacy_prediction = snapshot_legacy_prediction(
+            prediction,
+            debate_merged=bool(debate_struct),
         )
 
     if spot > 0 and prediction:

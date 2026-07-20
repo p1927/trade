@@ -10,6 +10,7 @@ from trade_integrations.dataflows.index_research.day_attribution import (
 )
 
 
+@pytest.mark.integration
 @pytest.mark.unit
 def test_build_nifty_price_series_returns_rows():
     rows = build_nifty_price_series(days=30)
@@ -19,6 +20,7 @@ def test_build_nifty_price_series_returns_rows():
     assert "close" in rows[0]
 
 
+@pytest.mark.integration
 @pytest.mark.unit
 def test_explain_nifty_day_for_known_date():
     rows = build_nifty_price_series(days=60)

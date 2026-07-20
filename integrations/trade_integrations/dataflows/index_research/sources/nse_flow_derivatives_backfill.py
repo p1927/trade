@@ -71,8 +71,34 @@ def fetch_mrchartist_flow_frame(
     *,
     include_seeded: bool = False,
     allow_live_fetch: bool = True,
+    local_path: Path | None = None,
 ) -> pd.DataFrame:
-    """Load FII/DII/PCR/F&O OI from Mr. Chartist history-full JSON."""
+    """Load FII/DII/PCR/F&O OI from local history-full JSON or Mr. Chartist API."""
+    if local_path is None:
+        try:
+            from trade_integrations.nse_browser.repository import repo_root
+            from trade_integrations.nse_browser.parsers.historic_data import (
+                local_mrchartist_history_path,
+                parse_mrchartist_history_json,
+            )
+
+            candidate = local_mrchartist_history_path(repo_root())
+            if candidate.is_file():
+                local_frame = parse_mrchartist_history_json(candidate)
+                if not local_frame.empty:
+                    return local_frame
+        except Exception:
+            pass
+    elif local_path.is_file():
+        try:
+            from trade_integrations.nse_browser.parsers.historic_data import parse_mrchartist_history_json
+
+            local_frame = parse_mrchartist_history_json(local_path)
+            if not local_frame.empty:
+                return local_frame
+        except Exception:
+            pass
+
     if not allow_live_fetch:
         return pd.DataFrame()
     try:
@@ -291,7 +317,7 @@ def load_flow_cash_cache() -> pd.DataFrame:
 
 
 def upsert_flow_cash_cache(rows: list[dict]) -> int:
-    """Merge new daily flow rows into the hub cache (by date, last wins)."""
+    """Merge new daily flow rows into the hub cache (by date, patch non-null fields)."""
     if not rows:
         return 0
     existing = load_flow_cash_cache()
@@ -300,8 +326,18 @@ def upsert_flow_cash_cache(rows: list[dict]) -> int:
     if existing.empty:
         merged = incoming
     else:
-        keep = existing[~existing["date"].isin(incoming["date"])]
-        merged = pd.concat([keep, incoming], ignore_index=True)
+        left = existing.copy()
+        left["date"] = left["date"].astype(str).str[:10]
+        right = incoming.set_index("date")
+        merged = left.set_index("date")
+        for day, row in right.iterrows():
+            if day not in merged.index:
+                merged.loc[day] = row
+                continue
+            for col, val in row.items():
+                if pd.notna(val):
+                    merged.at[day, col] = val
+        merged = merged.reset_index()
     merged = merged.sort_values("date").drop_duplicates("date", keep="last")
     path = get_flow_cash_cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)

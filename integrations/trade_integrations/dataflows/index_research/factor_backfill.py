@@ -102,9 +102,9 @@ def _count_existing_snapshots() -> int:
     return count
 
 
-def backfill_factor_history(*, days: int = 365) -> dict[str, int | str]:
+def backfill_factor_history(*, days: int = 365, start: str | None = None) -> dict[str, int | str]:
     """Write daily macro factor snapshots for Nifty trading days via historical prices."""
-    nifty = load_nifty_history(days=days)
+    nifty = load_nifty_history(days=days, start=start)
     if nifty.empty:
         return {"days_written": 0, "reason": "no_nifty_history"}
 
@@ -189,7 +189,7 @@ def backfill_factor_history(*, days: int = 365) -> dict[str, int | str]:
             enrich_factor_history,
         )
 
-        enrichment = enrich_factor_history(days=days)
+        enrichment = enrich_factor_history(days=days if not start else max(days, 5000))
     except Exception as exc:
         logger.warning("factor enrichment failed: %s", exc)
 

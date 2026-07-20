@@ -17,7 +17,13 @@ _OPENALGO_ALIASES: dict[str, tuple[str, str]] = {
     "SENSEX": ("SENSEX", "BSE_INDEX"),
     "^INDIAVIX": ("INDIAVIX", "NSE_INDEX"),
     "INDIAVIX": ("INDIAVIX", "NSE_INDEX"),
+    "NIFTYIT": ("NIFTY IT", "NSE_INDEX"),
+    "TATAMOTORS": ("TMPV", "NSE"),  # renamed on NSE (2025)
+    "TMPV": ("TMPV", "NSE"),
 }
+
+# Symbols not listed in INDmoney instruments — skip OpenAlgo fetch (no broker scrip code).
+_INDMONEY_UNAVAILABLE: frozenset[str] = frozenset({"LTIM"})
 
 
 def resolve_openalgo_symbol(symbol: str) -> tuple[str, str]:

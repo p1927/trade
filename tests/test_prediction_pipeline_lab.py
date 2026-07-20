@@ -74,6 +74,34 @@ def test_attach_forecast_lab_stores_context(monkeypatch):
 
 
 @pytest.mark.unit
+def test_attach_forecast_lab_surfaces_error(monkeypatch):
+    from trade_integrations.dataflows.index_research.prediction_algorithms import pipeline_lab
+
+    monkeypatch.setattr(pipeline_lab, "lab_enabled", lambda: True)
+    monkeypatch.setattr(pipeline_lab, "lab_mode", lambda: "log")
+
+    def _boom(*a, **k):
+        raise RuntimeError("lab exploded")
+
+    monkeypatch.setattr(pipeline_lab, "run_forecast_lab", _boom)
+    monkeypatch.setattr(pipeline_lab, "build_track_context", lambda **k: object())
+
+    pred = {"expected_return_pct": 0.5, "view": "neutral"}
+    out = pipeline_lab.attach_forecast_lab(
+        pred,
+        ticker="NIFTY",
+        spot=24000.0,
+        horizon_days=14,
+        macro_factors={},
+        signals=[],
+        scenarios=[],
+        scenario_anchor=None,
+        as_of_day="2026-07-01",
+    )
+    assert "lab exploded" in out.get("forecast_lab_error", "")
+
+
+@pytest.mark.unit
 def test_combine_mode_does_not_override_headline_without_promotion(monkeypatch):
     from trade_integrations.dataflows.index_research.prediction_algorithms import pipeline_lab
 

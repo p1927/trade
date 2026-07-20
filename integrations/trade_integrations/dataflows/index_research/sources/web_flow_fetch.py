@@ -140,6 +140,22 @@ def _months_for_range(
     return [ym for ym in months if start_ym[:7] <= str(ym)[:7] <= end_ym[:7]]
 
 
+def _month_keys_for_range(start: str, end: str) -> list[str]:
+    from datetime import date
+
+    start_d = date.fromisoformat(start[:10]).replace(day=1)
+    end_d = date.fromisoformat(end[:10])
+    months: list[str] = []
+    cursor = start_d
+    while cursor <= end_d:
+        months.append(f"{cursor.year}-{cursor.strftime('%b')}")
+        if cursor.month == 12:
+            cursor = cursor.replace(year=cursor.year + 1, month=1)
+        else:
+            cursor = cursor.replace(month=cursor.month + 1)
+    return months
+
+
 def fetch_niftyinvest_flow_frame(
     *,
     months: list[str] | None = None,
@@ -147,11 +163,15 @@ def fetch_niftyinvest_flow_frame(
     end: str | None = None,
     sleep_s: float = 0.25,
     allow_live_fetch: bool = True,
+    synthesize_months: bool = False,
 ) -> pd.DataFrame:
     """Fetch daily FII/DII cash (+ partial F&O) from Nifty Invest public API."""
     if not allow_live_fetch:
         return pd.DataFrame()
     available = months or list_niftyinvest_calendar_months()
+    if synthesize_months and start and end:
+        synthesized = _month_keys_for_range(start, end)
+        available = sorted(set(available) | set(synthesized))
     available = _months_for_range(available, start=start, end=end)
     if not available:
         return pd.DataFrame()

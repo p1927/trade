@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable
 
 from trade_integrations.dataflows.index_research.prediction_algorithms.types import ForecastTrack
 from trade_integrations.dataflows.index_research.views import classify_index_view
@@ -68,3 +68,40 @@ def weighted_forecast(tracks: list[ForecastTrack], weights: dict[str, float]) ->
 
 def classify_combined(value: float) -> str:
     return classify_index_view(value)
+
+
+def select_alignment_lambda(
+    eval_rows: list[dict[str, Any]],
+    *,
+    before_date: str | None = None,
+    grid: tuple[float, ...] = (0.25, 0.5, 0.75),
+) -> float:
+    """Pick λ minimizing MAE of λ·quant + (1-λ)·scenario on prior eval rows."""
+    prior = [r for r in eval_rows if r.get("date") and (before_date is None or r["date"] < before_date)]
+    by_date: dict[str, dict[str, float]] = {}
+    for row in prior:
+        tid = str(row.get("track_id") or "")
+        if tid not in {"quant_ridge", "scenario_anchor"}:
+            continue
+        day = str(row["date"])
+        by_date.setdefault(day, {})[tid] = float(row.get("predicted_pct") or 0.0)
+        if row.get("actual_pct") is not None:
+            by_date[day]["_actual"] = float(row["actual_pct"])
+
+    pairs = [
+        (vals["quant_ridge"], vals["scenario_anchor"], vals["_actual"])
+        for vals in by_date.values()
+        if "quant_ridge" in vals and "scenario_anchor" in vals and "_actual" in vals
+    ]
+    if not pairs:
+        return 0.5
+
+    best_lam = 0.5
+    best_mae = float("inf")
+    for lam in grid:
+        errors = [abs(lam * q + (1.0 - lam) * s - actual) for q, s, actual in pairs]
+        mae = sum(errors) / len(errors)
+        if mae < best_mae:
+            best_mae = mae
+            best_lam = lam
+    return best_lam

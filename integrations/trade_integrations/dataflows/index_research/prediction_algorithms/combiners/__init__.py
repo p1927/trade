@@ -13,6 +13,10 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.combiners
     shrink_weights,
     weighted_forecast,
 )
+from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
+    COMBINER_THREE_TRACK_IDS,
+    COMBINER_TWO_TRACK_IDS,
+)
 from trade_integrations.dataflows.index_research.prediction_algorithms.types import (
     CombinationResult,
     ForecastTrack,
@@ -48,12 +52,17 @@ def combine_quant_only(tracks: dict[str, ForecastTrack], **_kwargs) -> Combinati
 def combine_equal_weight(tracks: dict[str, ForecastTrack], track_ids: list[str], combiner_id: str) -> CombinationResult:
     usable = available_tracks(tracks, track_ids)
     value, weights = equal_weight_combine(usable)
+    provenance: dict[str, object] = {}
+    if len(usable) != len(track_ids):
+        provenance["requested_tracks"] = list(track_ids)
+        provenance["available_count"] = len(usable)
     return CombinationResult(
         combiner_id=combiner_id,
         expected_return_pct=round(value, 4),
         view=classify_combined(value),
         weights=weights,
         tracks_used=[t.track_id for t in usable],
+        provenance=provenance,
     )
 
 
@@ -125,7 +134,7 @@ def combine_stress_conditional(
     if stress >= 60:
         return combine_equal_weight(
             tracks,
-            ["macro_only", "scenario_anchor", "event_overlay"],
+            list(COMBINER_THREE_TRACK_IDS),
             "stress_conditional",
         )
     return combine_quant_only(tracks)
@@ -147,20 +156,20 @@ def combine_fixed_legacy(tracks: dict[str, ForecastTrack], **_kwargs) -> Combina
 COMBINER_REGISTRY: dict[str, CombinerFn] = {
     "quant_only": combine_quant_only,
     "equal_weight_2": lambda tracks, **kw: combine_equal_weight(
-        tracks, ["macro_only", "scenario_anchor"], "equal_weight_2"
+        tracks, list(COMBINER_TWO_TRACK_IDS), "equal_weight_2"
     ),
     "equal_weight_3": lambda tracks, **kw: combine_equal_weight(
-        tracks, ["macro_only", "scenario_anchor", "event_overlay"], "equal_weight_3"
+        tracks, list(COMBINER_THREE_TRACK_IDS), "equal_weight_3"
     ),
     "inverse_mae_w6": lambda tracks, **kw: combine_inverse_mae(
-        tracks, ["macro_only", "scenario_anchor", "event_overlay"], "inverse_mae_w6", kw.get("mae_by_track")
+        tracks, list(COMBINER_THREE_TRACK_IDS), "inverse_mae_w6", kw.get("mae_by_track")
     ),
     "inverse_mae_w12": lambda tracks, **kw: combine_inverse_mae(
-        tracks, ["macro_only", "scenario_anchor", "event_overlay"], "inverse_mae_w12", kw.get("mae_by_track")
+        tracks, list(COMBINER_THREE_TRACK_IDS), "inverse_mae_w12", kw.get("mae_by_track")
     ),
     "shrinkage_50": lambda tracks, **kw: combine_shrinkage(
         tracks,
-        ["macro_only", "scenario_anchor", "event_overlay"],
+        list(COMBINER_THREE_TRACK_IDS),
         "shrinkage_50",
         kw.get("mae_by_track"),
         lam=0.5,
@@ -175,6 +184,7 @@ INVALID_COMBINER_TRACK_SETS: frozenset[frozenset[str]] = frozenset(
     {
         frozenset({"quant_ridge", "bottom_up"}),
         frozenset({"quant_ridge", "event_overlay"}),
+        frozenset({"macro_only", "event_overlay"}),
     }
 )
 

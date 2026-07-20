@@ -1,4 +1,4 @@
-"""headline_legacy track — post-reconcile + debate headline for A/B."""
+"""headline_legacy track — post-reconcile headline (+ debate when merged live)."""
 
 from __future__ import annotations
 

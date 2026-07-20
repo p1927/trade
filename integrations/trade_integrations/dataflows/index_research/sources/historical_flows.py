@@ -1,0 +1,160 @@
+"""Historical FII/DII + India VIX backfill into cold-tier storage."""
+
+from __future__ import annotations
+
+import logging
+from datetime import date, datetime, timezone
+from typing import Any
+
+import pandas as pd
+
+from trade_integrations.dataflows.index_research.history_store import save_history_dataset
+from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+    fetch_mrchartist_flow_frame,
+    load_flow_cash_cache,
+    upsert_flow_cash_cache,
+)
+from trade_integrations.dataflows.index_research.sources.web_flow_fetch import fetch_niftyinvest_flow_frame
+
+logger = logging.getLogger(__name__)
+
+
+def _month_keys(start: str, end: str) -> list[str]:
+    """Generate Nifty Invest yearMonth keys between start and end."""
+    start_d = date.fromisoformat(start[:10]).replace(day=1)
+    end_d = date.fromisoformat(end[:10])
+    months: list[str] = []
+    cursor = start_d
+    while cursor <= end_d:
+        months.append(f"{cursor.year}-{cursor.strftime('%b')}")
+        if cursor.month == 12:
+            cursor = cursor.replace(year=cursor.year + 1, month=1)
+        else:
+            cursor = cursor.replace(month=cursor.month + 1)
+    return months
+
+
+def _load_repo_fii_dii(start: str, end: str) -> pd.DataFrame:
+    try:
+        from trade_integrations.nse_browser.repository import load_repo_dataset
+
+        frame = load_repo_dataset("fii_dii")
+    except Exception:
+        return pd.DataFrame()
+    if frame.empty or "date" not in frame.columns:
+        return pd.DataFrame()
+    out = frame.copy()
+    out["date"] = out["date"].astype(str).str[:10]
+    out = out[(out["date"] >= start[:10]) & (out["date"] <= end[:10])]
+    return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
+def _merge_flow_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    valid = [frame for frame in frames if frame is not None and not frame.empty]
+    if not valid:
+        return pd.DataFrame()
+    combined = pd.concat(valid, ignore_index=True)
+    combined["date"] = combined["date"].astype(str).str[:10]
+    return combined.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+
+
+def fetch_india_vix_history(*, start: str, end: str) -> pd.DataFrame:
+    try:
+        from trade_integrations.dataflows.index_research.sources.nselib_fetch import fetch_india_vix_range
+
+        parsed = fetch_india_vix_range(start[:10], end[:10])
+        if not parsed.empty:
+            return parsed
+    except Exception as exc:
+        logger.debug("india_vix_data failed: %s", exc)
+
+    try:
+        import yfinance as yf
+        from datetime import datetime, timedelta
+
+        end_exclusive = (datetime.strptime(end[:10], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        hist = yf.Ticker("^INDIAVIX").history(start=start[:10], end=end_exclusive, auto_adjust=True)
+        if hist.empty:
+            return pd.DataFrame()
+        frame = hist.reset_index()
+        date_col = "Date" if "Date" in frame.columns else frame.columns[0]
+        frame["date"] = pd.to_datetime(frame[date_col]).dt.strftime("%Y-%m-%d")
+        frame["india_vix"] = frame["Close"].astype(float)
+        return frame[["date", "india_vix"]].dropna().sort_values("date").reset_index(drop=True)
+    except Exception as exc:
+        logger.debug("yfinance VIX fallback failed: %s", exc)
+        return pd.DataFrame()
+
+
+def backfill_flow_history(
+    *,
+    start: str = "2006-01-01",
+    end: str | None = None,
+    allow_live_fetch: bool = True,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    months = _month_keys(start, end_day)
+
+    niftyinvest = fetch_niftyinvest_flow_frame(
+        months=months,
+        start=start,
+        end=end_day,
+        allow_live_fetch=allow_live_fetch,
+        synthesize_months=True,
+    )
+    mrchartist = fetch_mrchartist_flow_frame(allow_live_fetch=allow_live_fetch, include_seeded=False)
+    if not mrchartist.empty:
+        mrchartist = mrchartist[(mrchartist["date"] >= start[:10]) & (mrchartist["date"] <= end_day)]
+
+    repo_flows = _load_repo_fii_dii(start, end_day)
+    cache = load_flow_cash_cache()
+    if not cache.empty:
+        cache = cache[(cache["date"] >= start[:10]) & (cache["date"] <= end_day)]
+
+    cash = _merge_flow_frames([repo_flows, niftyinvest, mrchartist, cache])
+
+    vix = fetch_india_vix_history(start=start, end=end_day)
+
+    if cash.empty and vix.empty:
+        return {"status": "error", "reason": "no_flow_data", "start": start, "end": end_day}
+
+    coverage = 0.0
+    if not cash.empty and "fii_net" in cash.columns:
+        coverage = float(cash["fii_net"].notna().mean())
+
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "cash_rows": len(cash),
+            "vix_rows": len(vix),
+            "fii_coverage_pct": round(coverage * 100.0, 1),
+            "start": start,
+            "end": end_day,
+            "months_fetched": len(months),
+        }
+
+    cash_result: dict[str, Any] = {"status": "skipped"}
+    if not cash.empty:
+        cash_result = save_history_dataset("flow_cash_daily", cash)
+        upsert_flow_cash_cache(cash.to_dict(orient="records"))
+
+    deriv_cols = [c for c in cash.columns if c not in {"date", "source", "fii_net", "dii_net", "fii_buy", "fii_sell", "dii_buy", "dii_sell"}]
+    deriv_result: dict[str, Any] = {"status": "skipped"}
+    if deriv_cols:
+        deriv = cash[["date"] + deriv_cols].copy()
+        deriv_result = save_history_dataset("flow_derivatives_daily", deriv)
+
+    vix_result: dict[str, Any] = {"status": "skipped"}
+    if not vix.empty:
+        vix_result = save_history_dataset("india_vix_daily", vix)
+
+    return {
+        "status": "ok",
+        "cash_rows": len(cash),
+        "vix_rows": len(vix),
+        "fii_coverage_pct": round(coverage * 100.0, 1),
+        "cash": cash_result,
+        "derivatives": deriv_result,
+        "vix": vix_result,
+    }

@@ -345,39 +345,74 @@ def _persist_ledger_miss_analysis(ledger: pd.DataFrame) -> None:
 def list_factor_history_series(
     *,
     days: int = 90,
+    start: str | None = None,
     factors: list[str] | None = None,
     include_nifty_close: bool = True,
 ) -> dict[str, Any]:
     """Return wide-format daily factor + optional Nifty close series for charting."""
     from datetime import datetime, timedelta, timezone
 
+    from trade_integrations.dataflows.index_research.history_panel import load_aligned_panel_history
     from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
 
     end = datetime.now(timezone.utc).date()
-    start = end - timedelta(days=max(1, days))
-    long_df = load_factor_history(start.isoformat(), end.isoformat())
+    max_days = 5000
+    window_days = max(1, min(days, max_days))
+    if start:
+        start_date = date.fromisoformat(start[:10])
+    else:
+        start_date = end - timedelta(days=window_days)
+
+    panel = load_aligned_panel_history(days=0, start=start_date.isoformat())
     series: dict[str, dict[str, float]] = {}
 
-    if not long_df.empty and "factor" in long_df.columns:
-        value_col = "value" if "value" in long_df.columns else long_df.columns[-1]
-        for _, row in long_df.iterrows():
-            day = str(row.get("date", ""))[:10]
-            factor = str(row.get("factor", ""))
-            if not day or not factor:
-                continue
-            if factors and factor not in factors:
-                continue
-            try:
-                series.setdefault(day, {})[factor] = float(row[value_col])
-            except (TypeError, ValueError):
-                continue
-
-    if include_nifty_close:
-        nifty = load_nifty_history(days=days + 5)
-        for _, row in nifty.iterrows():
+    if panel is not None and not panel.empty:
+        panel = panel[panel["date"] >= start_date.isoformat()]
+        panel = panel[panel["date"] <= end.isoformat()]
+        for _, row in panel.iterrows():
             day = str(row["date"])[:10]
-            if start.isoformat() <= day <= end.isoformat():
-                series.setdefault(day, {})["nifty_close"] = float(row["close"])
+            bucket = series.setdefault(day, {})
+            for col in panel.columns:
+                if col == "date":
+                    continue
+                if factors and col not in factors:
+                    continue
+                val = row[col]
+                if pd.isna(val):
+                    continue
+                try:
+                    bucket[col] = float(val)
+                except (TypeError, ValueError):
+                    continue
+        if include_nifty_close:
+            for day, bucket in series.items():
+                if "nifty_close" in bucket and "close" not in bucket:
+                    bucket["nifty_close"] = bucket.get("close") or bucket["nifty_close"]
+                if "close" in bucket:
+                    bucket["nifty_close"] = bucket["close"]
+
+    if not series:
+        long_df = load_factor_history(start_date.isoformat(), end.isoformat())
+        if not long_df.empty and "factor" in long_df.columns:
+            value_col = "value" if "value" in long_df.columns else long_df.columns[-1]
+            for _, row in long_df.iterrows():
+                day = str(row.get("date", ""))[:10]
+                factor = str(row.get("factor", ""))
+                if not day or not factor:
+                    continue
+                if factors and factor not in factors:
+                    continue
+                try:
+                    series.setdefault(day, {})[factor] = float(row[value_col])
+                except (TypeError, ValueError):
+                    continue
+
+        if include_nifty_close:
+            nifty = load_nifty_history(days=window_days + 5, start=start_date.isoformat())
+            for _, row in nifty.iterrows():
+                day = str(row["date"])[:10]
+                if start_date.isoformat() <= day <= end.isoformat():
+                    series.setdefault(day, {})["nifty_close"] = float(row["close"])
 
     ordered_days = sorted(series.keys())
     rows = [{"date": day, **series[day]} for day in ordered_days]
@@ -398,7 +433,7 @@ def list_factor_history_series(
     return {
         "series": rows,
         "factors": factor_names,
-        "start": start.isoformat(),
+        "start": start_date.isoformat(),
         "end": end.isoformat(),
         "coverage": coverage,
         "coverage_notes": coverage_notes,

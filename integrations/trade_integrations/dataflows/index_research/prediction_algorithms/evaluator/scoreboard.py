@@ -7,15 +7,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import scoreboard_path
+from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.prediction_algorithms.track_constants import (
     BACKTEST_COMBINER_IDS,
     BACKTEST_TRACK_IDS,
     CANONICAL_TRACK_IDS,
+    COMBINER_THREE_TRACK_IDS,
     SCOREBOARD_SCHEMA_VERSION,
     TRACK_BACKTEST_ELIGIBLE,
     TRACK_IMPLEMENTATION_NOTES,
 )
+from trade_integrations.dataflows.index_research.views import classify_index_view
+
+
+def scoreboard_path(ticker: str = "NIFTY") -> Path:
+    return get_hub_dir() / ticker.strip().upper() / "index_research" / "track_scoreboard_latest.json"
 
 
 def scoreboard_needs_refresh(
@@ -88,22 +94,65 @@ def load_scoreboard(ticker: str = "NIFTY") -> dict[str, Any] | None:
         return None
 
 
-def summarize_track_metrics(eval_rows: list[dict[str, Any]], track_id: str) -> dict[str, Any]:
+def _view_hit(predicted_pct: float, actual_pct: float) -> bool:
+    return classify_index_view(predicted_pct) == classify_index_view(actual_pct)
+
+
+def summarize_track_metrics(
+    eval_rows: list[dict[str, Any]],
+    track_id: str,
+    *,
+    window: int | None = None,
+    before_date: str | None = None,
+) -> dict[str, Any]:
     preds = [r for r in eval_rows if r.get("track_id") == track_id]
+    if before_date:
+        preds = [r for r in preds if str(r.get("date") or "") < before_date]
+    if window is not None and window > 0:
+        preds = preds[-window:]
     if not preds:
         return {"track_id": track_id, "eval_count": 0}
     errors = [abs(float(r.get("error_pct") or 0.0)) for r in preds]
-    hits = sum(1 for r in preds if r.get("direction_hit"))
+    dir_hits = sum(1 for r in preds if r.get("direction_hit"))
+    if any(r.get("view_hit") is not None for r in preds):
+        view_hits = sum(1 for r in preds if r.get("view_hit"))
+    else:
+        view_hits = sum(
+            1
+            for r in preds
+            if _view_hit(float(r.get("predicted_pct") or 0.0), float(r.get("actual_pct") or 0.0))
+        )
     total = len(preds)
-    misses = total - hits
+    misses = total - dir_hits
     return {
         "track_id": track_id,
         "eval_count": total,
         "mae_pct": round(sum(errors) / total, 4),
-        "direction_hit_rate": round(hits / total, 4) if total else None,
-        "direction_hit_count": hits,
+        "direction_hit_rate": round(dir_hits / total, 4) if total else None,
+        "view_hit_rate": round(view_hits / total, 4) if total else None,
+        "direction_hit_count": dir_hits,
         "direction_miss_count": misses,
     }
+
+
+def mae_by_track_from_scoreboard(
+    scoreboard: dict[str, Any] | None,
+    *,
+    track_ids: tuple[str, ...] | list[str] | None = None,
+    window: int | None = None,
+    before_date: str | None = None,
+) -> dict[str, float]:
+    """Build MAE map for combiner weighting from scoreboard daily evaluations."""
+    if not scoreboard:
+        return {}
+    daily = scoreboard.get("daily_evaluations") or []
+    ids = list(track_ids or COMBINER_THREE_TRACK_IDS)
+    out: dict[str, float] = {}
+    for tid in ids:
+        metrics = summarize_track_metrics(daily, tid, window=window, before_date=before_date)
+        mae = metrics.get("mae_pct")
+        out[tid] = float(mae) if mae is not None else 1.0
+    return out
 
 
 def enrich_track_metrics_from_daily(report: dict[str, Any]) -> dict[str, Any]:
@@ -121,13 +170,16 @@ def enrich_track_metrics_from_daily(report: dict[str, Any]) -> dict[str, Any]:
                 continue
             lookup_id = f"combiner:{tid}" if combiner_prefix else tid
             if row.get("direction_hit_count") is not None and row.get("direction_miss_count") is not None:
-                continue
+                if row.get("view_hit_rate") is not None:
+                    continue
             metrics = summarize_track_metrics(daily, lookup_id)
             row = dict(row)
             row["direction_hit_count"] = metrics.get("direction_hit_count")
             row["direction_miss_count"] = metrics.get("direction_miss_count")
             if row.get("direction_hit_rate") is None and metrics.get("direction_hit_rate") is not None:
                 row["direction_hit_rate"] = metrics["direction_hit_rate"]
+            if row.get("view_hit_rate") is None and metrics.get("view_hit_rate") is not None:
+                row["view_hit_rate"] = metrics["view_hit_rate"]
             if row.get("mae_pct") is None and metrics.get("mae_pct") is not None:
                 row["mae_pct"] = metrics["mae_pct"]
             if row.get("eval_count") in (None, 0) and metrics.get("eval_count"):

@@ -26,6 +26,7 @@ def run_forecast_lab(
     combiner_id: str | None = None,
     include_causes: bool = True,
     mae_by_track: dict[str, float] | None = None,
+    lam: float | None = None,
 ) -> ForecastLabResult:
     """Run all forecast tracks and optionally combine."""
     tracks = run_all_tracks(context)
@@ -40,13 +41,15 @@ def run_forecast_lab(
         channel = compute_channel_attribution(context.macro_factors, coefficients=coefs)
 
     combiner_result = None
-    active = combiner_id or resolve_active_combiner(default=default_combiner_id())
+    active = None
     if mode == "combine":
+        active = combiner_id or resolve_active_combiner(default=default_combiner_id())
         combined = run_combiner(
             active,
             tracks,
             cause_stress_index=cause_meta.get("cause_stress_index"),
             mae_by_track=mae_by_track,
+            lam=lam,
         )
         combiner_result = combined.to_dict()
 

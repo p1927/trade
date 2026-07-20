@@ -17,7 +17,7 @@ def test_walk_forward_sets_target_and_produces_eval_rows(monkeypatch):
         mae = 1.5
         coefficients = {"india_vix": 0.1}
 
-    def fake_load(days=365):
+    def fake_load(days=365, **kwargs):
         return frame.copy()
 
     def fake_train(_train, _horizon):

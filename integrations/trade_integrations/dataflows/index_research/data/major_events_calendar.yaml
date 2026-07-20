@@ -1,0 +1,213 @@
+# Curated major market-moving events for India prediction backtesting (2006+).
+# severity: 1=minor, 3=moderate, 5=major shock
+
+events:
+  - date: "2008-09-15"
+    event_type: global_crisis
+    topic: us_markets
+    severity: 5
+    description: Lehman Brothers bankruptcy — global risk-off
+
+  - date: "2008-10-24"
+    event_type: global_crisis
+    topic: fii
+    severity: 5
+    description: GFC peak — FII exodus from EM including India
+
+  - date: "2011-08-05"
+    event_type: global_crisis
+    topic: us_markets
+    severity: 4
+    description: US credit downgrade — risk-off globally
+
+  - date: "2013-05-22"
+    event_type: policy
+    topic: fii
+    severity: 5
+    description: Fed taper tantrum — EM outflows
+
+  - date: "2013-08-28"
+    event_type: fx_crisis
+    topic: fii
+    severity: 4
+    description: INR record weakness — RBI measures
+
+  - date: "2014-06-13"
+    event_type: oil_shock
+    topic: oil
+    severity: 3
+    description: Iraq unrest — Brent spike
+
+  - date: "2014-11-28"
+    event_type: oil_shock
+    topic: oil
+    severity: 4
+    description: OPEC decision — oil collapse begins
+
+  - date: "2016-11-08"
+    event_type: policy
+    topic: rbi
+    severity: 5
+    description: India demonetization announcement
+
+  - date: "2017-06-08"
+    event_type: geopolitical
+    topic: oil
+    severity: 3
+    description: Qatar diplomatic crisis — oil volatility
+
+  - date: "2018-02-01"
+    event_type: budget
+    topic: rbi
+    severity: 3
+    description: Union Budget 2018 — LTCG tax introduced
+
+  - date: "2018-09-21"
+    event_type: credit_stress
+    topic: fii
+    severity: 4
+    description: IL&FS default — NBFC credit stress
+
+  - date: "2019-02-14"
+    event_type: geopolitical
+    topic: war
+    severity: 4
+    description: Pulwama attack — India-Pakistan tensions
+
+  - date: "2020-03-09"
+    event_type: oil_shock
+    topic: oil
+    severity: 5
+    description: Oil price war — Brent crash
+
+  - date: "2020-03-23"
+    event_type: global_crisis
+    topic: fii
+    severity: 5
+    description: COVID market bottom — nationwide lockdown fears
+
+  - date: "2020-05-22"
+    event_type: policy
+    topic: rbi
+    severity: 4
+    description: RBI emergency rate cut during COVID
+
+  - date: "2021-02-01"
+    event_type: budget
+    topic: rbi
+    severity: 3
+    description: Union Budget 2021 — fiscal expansion
+
+  - date: "2022-02-24"
+    event_type: geopolitical
+    topic: war
+    severity: 5
+    description: Russia-Ukraine war begins — oil/commodity shock
+
+  - date: "2022-03-07"
+    event_type: oil_shock
+    topic: oil
+    severity: 5
+    description: Brent spike above $130 on war supply fears
+
+  - date: "2022-06-08"
+    event_type: policy
+    topic: rbi
+    severity: 4
+    description: RBI off-cycle rate hike — inflation fight
+
+  - date: "2022-09-30"
+    event_type: fx_crisis
+    topic: fii
+    severity: 4
+    description: INR all-time low — FII selling pressure
+
+  - date: "2023-02-01"
+    event_type: budget
+    topic: rbi
+    severity: 3
+    description: Union Budget 2023
+
+  - date: "2023-10-07"
+    event_type: geopolitical
+    topic: war
+    severity: 4
+    description: Middle East conflict escalation — oil risk premium
+
+  - date: "2008-10-10"
+    event_type: global_crisis
+    topic: war
+    severity: 4
+    description: GFC panic week — global equity selloff
+
+  - date: "2011-08-08"
+    event_type: global_crisis
+    topic: us_markets
+    severity: 4
+    description: S&P downgrade aftermath — volatility spike
+
+  - date: "2014-06-19"
+    event_type: geopolitical
+    topic: war
+    severity: 3
+    description: Iraq ISIS advance — oil supply fears
+
+  - date: "2015-08-24"
+    event_type: global_crisis
+    topic: us_markets
+    severity: 4
+    description: China devaluation shock — global risk-off
+
+  - date: "2016-06-24"
+    event_type: geopolitical
+    topic: us_markets
+    severity: 4
+    description: Brexit referendum — global uncertainty
+
+  - date: "2019-08-05"
+    event_type: geopolitical
+    topic: war
+    severity: 4
+    description: Article 370 move — geopolitical tension
+
+  - date: "2020-01-30"
+    event_type: global_crisis
+    topic: us_markets
+    severity: 4
+    description: COVID declared PHEIC — early global risk repricing
+
+  - date: "2021-03-04"
+    event_type: oil_shock
+    topic: oil
+    severity: 3
+    description: OPEC+ supply discipline — Brent rally
+
+  - date: "2022-04-05"
+    event_type: policy
+    topic: rbi
+    severity: 3
+    description: RBI surprise rate hike cycle start
+
+  - date: "2023-03-10"
+    event_type: global_crisis
+    topic: us_markets
+    severity: 4
+    description: SVB collapse — global banking stress
+
+  - date: "2024-02-01"
+    event_type: budget
+    topic: rbi
+    severity: 3
+    description: Union Budget 2024
+
+  - date: "2024-06-04"
+    event_type: policy
+    topic: fii
+    severity: 4
+    description: India election results — market volatility
+
+  - date: "2025-02-01"
+    event_type: budget
+    topic: rbi
+    severity: 3
+    description: Union Budget 2025

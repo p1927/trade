@@ -18,7 +18,7 @@ def _parse_nse_date(raw: Any) -> str | None:
         return None
     from datetime import datetime
 
-    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d", "%d/%m/%Y"):
+    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(text[:11], fmt).date().isoformat()
         except ValueError:
@@ -125,6 +125,50 @@ def parse_fii_dii_json(text: str) -> pd.DataFrame:
     return _rows_from_category_frame(frame, variant="json", source="nse_api_fiidii_react")
 
 
+_DERIVATIVE_COLUMNS: tuple[str, ...] = (
+    "nifty_pcr",
+    "fii_fut_long_short_ratio",
+    "fii_idx_fut_long",
+    "fii_idx_fut_short",
+    "fii_idx_put_oi",
+    "fii_idx_call_oi",
+    "fii_sentiment_score",
+)
+
+
+def overlay_derivative_columns(base: pd.DataFrame, overlay: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing PCR / F&O columns on existing daily rows; append deriv-only dates."""
+    if overlay is None or overlay.empty:
+        return base.copy() if base is not None else pd.DataFrame()
+    if base is None or base.empty:
+        out = overlay.copy()
+        out["date"] = out["date"].astype(str).str[:10]
+        return out.sort_values("date").reset_index(drop=True)
+
+    out = base.copy()
+    out["date"] = out["date"].astype(str).str[:10]
+    layer = overlay.copy()
+    layer["date"] = layer["date"].astype(str).str[:10]
+    layer = layer.sort_values("date").drop_duplicates("date", keep="last")
+    indexed = layer.set_index("date")
+
+    for col in _DERIVATIVE_COLUMNS:
+        if col not in indexed.columns:
+            continue
+        mapped = out["date"].map(indexed[col])
+        if col in out.columns:
+            out[col] = out[col].combine_first(mapped)
+        else:
+            out[col] = mapped
+
+    missing_dates = indexed.index.difference(out["date"])
+    if len(missing_dates):
+        append = layer[layer["date"].isin(missing_dates)].copy()
+        out = pd.concat([out, append], ignore_index=True)
+
+    return out.sort_values("date").reset_index(drop=True)
+
+
 def merge_fii_dii_variants(*frames: pd.DataFrame) -> pd.DataFrame:
     """Merge NSE-only and combined frames; prefer combined net values."""
     valid = [f for f in frames if f is not None and not f.empty]
@@ -147,6 +191,7 @@ def merge_fii_dii_variants(*frames: pd.DataFrame) -> pd.DataFrame:
         "nse_browser_nse_only": 2,
         "nse_browser_combined": 3,
         "nse_browser_csv": 3,
+        "historic_data_fii_dii": 3,
         "nse_api_fiidii_react": 4,
         "nse_repository": 2,
     }
@@ -192,6 +237,78 @@ def _parse_money(raw: Any) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def parse_fii_dii_trading_activity_csv(
+    text: str,
+    *,
+    source: str = "historic_data_fii_dii",
+) -> pd.DataFrame:
+    """
+    Parse NSE historic daily FII/DII cash CSV (DD-MM-YYYY dates, ₹ Cr).
+
+    Expects columns like: Date, FII_Gross_Purchase, FII_Gross_Sales,
+    FII_Net_Purchase/Sales, DII_* counterparts.
+    """
+    if not text or len(text.strip()) < 20:
+        return pd.DataFrame()
+    try:
+        raw = pd.read_csv(StringIO(text), encoding="utf-8-sig")
+    except Exception:
+        return pd.DataFrame()
+    if raw.empty:
+        return pd.DataFrame()
+
+    frame = _normalize_columns(raw)
+    date_col = next((c for c in frame.columns if "date" in c), frame.columns[0])
+    fii_buy = next((c for c in frame.columns if "fii" in c and "purchase" in c and "net" not in c), None)
+    fii_sell = next((c for c in frame.columns if "fii" in c and ("sales" in c or "sale" in c)), None)
+    fii_net = next((c for c in frame.columns if "fii" in c and "net" in c), None)
+    dii_buy = next((c for c in frame.columns if "dii" in c and "purchase" in c and "net" not in c), None)
+    dii_sell = next((c for c in frame.columns if "dii" in c and ("sales" in c or "sale" in c)), None)
+    dii_net = next((c for c in frame.columns if "dii" in c and "net" in c), None)
+
+    if not fii_net and len(frame.columns) >= 7:
+        cols = list(frame.columns)
+        fii_buy, fii_sell, fii_net = cols[1], cols[2], cols[3]
+        dii_buy, dii_sell, dii_net = cols[4], cols[5], cols[6]
+
+    rows: list[dict[str, Any]] = []
+    for _, item in frame.iterrows():
+        day = _parse_nse_date(item.get(date_col))
+        if not day:
+            continue
+        row: dict[str, Any] = {
+            "date": day,
+            "source": source,
+            "variant": "combined",
+            "granularity": "daily",
+        }
+        mapping = (
+            (fii_buy, "fii_buy"),
+            (fii_sell, "fii_sell"),
+            (fii_net, "fii_net"),
+            (dii_buy, "dii_buy"),
+            (dii_sell, "dii_sell"),
+            (dii_net, "dii_net"),
+        )
+        for col, dest in mapping:
+            if col is None:
+                continue
+            val = _parse_money(item.get(col))
+            if val is not None:
+                row[dest] = val
+        if "fii_net" in row or "dii_net" in row:
+            rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows).sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+    from trade_integrations.nse_browser.parsers.structural_adjustments import (
+        adjust_institutional_flow_expiry_settlement,
+    )
+
+    return adjust_institutional_flow_expiry_settlement(frame)
 
 
 def parse_fii_dii_monthly_cash_csv(text: str) -> pd.DataFrame:

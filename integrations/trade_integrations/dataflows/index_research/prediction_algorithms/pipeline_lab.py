@@ -10,9 +10,13 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.config im
 from trade_integrations.dataflows.index_research.prediction_algorithms.context_builder import (
     build_track_context,
 )
+from trade_integrations.dataflows.index_research.prediction_algorithms.evaluator.scoreboard import (
+    load_scoreboard,
+)
 from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import (
     evaluate_promotion,
-    load_scoreboard,
+    resolve_combiner_runtime_kwargs,
+    resolve_active_combiner,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,13 +37,20 @@ def snapshot_pre_reconcile_prediction(prediction: dict[str, Any]) -> dict[str, A
     return {k: prediction[k] for k in keys if k in prediction}
 
 
-def snapshot_legacy_prediction(prediction: dict[str, Any]) -> dict[str, Any]:
-    """Headline after reconcile+finalize, before debate merge (backtest parity)."""
+def snapshot_legacy_prediction(
+    prediction: dict[str, Any],
+    *,
+    debate_merged: bool | None = None,
+) -> dict[str, Any]:
+    """Headline after reconcile+finalize (+ optional debate merge)."""
+    merged = debate_merged
+    if merged is None:
+        merged = bool(prediction.get("debate_merged"))
     return {
         "expected_return_pct": prediction.get("expected_return_pct"),
         "view": prediction.get("view"),
         "reconciled_with_scenarios": prediction.get("reconciled_with_scenarios"),
-        "debate_merged": False,
+        "debate_merged": merged,
     }
 
 
@@ -87,8 +98,21 @@ def attach_forecast_lab(
             legacy_prediction=legacy,
         )
         run_mode = "combine" if lab_mode() == "combine" else "tracks_only"
-        lab_result = run_forecast_lab(ctx, mode=run_mode)
+        active = resolve_active_combiner(default=None, ticker=ticker) if run_mode == "combine" else None
+        runtime_kwargs = (
+            resolve_combiner_runtime_kwargs(str(active or ""), ticker=ticker, as_of_day=as_of_day)
+            if run_mode == "combine" and active
+            else {}
+        )
+        lab_result = run_forecast_lab(
+            ctx,
+            mode=run_mode,
+            combiner_id=active,
+            mae_by_track=runtime_kwargs.get("mae_by_track"),
+            lam=runtime_kwargs.get("lam"),
+        )
         lab_dict = lab_result.to_dict()
+        prediction.pop("forecast_lab_error", None)
 
         prediction["forecast_tracks"] = lab_dict.get("forecast_tracks") or {}
         if lab_dict.get("cause_stress_index") is not None:
@@ -113,7 +137,8 @@ def attach_forecast_lab(
         elif lab_mode() == "combine" and combiner:
             prediction.setdefault("headline_source", "quant_pipeline")
     except Exception as exc:
-        logger.debug("forecast lab skipped: %s", exc)
+        logger.warning("forecast lab failed: %s", exc)
+        prediction["forecast_lab_error"] = str(exc)
 
     return prediction
 

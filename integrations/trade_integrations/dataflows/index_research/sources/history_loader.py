@@ -18,13 +18,36 @@ from trade_integrations.dataflows.index_research.technical_features import (
 NIFTY_SYMBOL = "^NSEI"
 
 
-def load_nifty_history(days: int = 365) -> pd.DataFrame:
-    """Load Nifty spot close history via yfinance ``^NSEI``."""
+def load_nifty_history(days: int = 365, *, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+    """Load Nifty spot close history via yfinance ``^NSEI`` or cold-tier cache."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    cached = load_history_dataset("nifty_ohlcv_daily")
+    if not cached.empty and "close" in cached.columns:
+        frame = cached.copy()
+        frame["date"] = frame["date"].astype(str).str[:10]
+        if start:
+            frame = frame[frame["date"] >= start[:10]]
+        if end:
+            frame = frame[frame["date"] <= end[:10]]
+        if days > 0 and not start:
+            frame = frame.tail(max(1, days))
+        cols = ["date", "close"]
+        for optional in ("high", "low", "open", "volume"):
+            if optional in frame.columns:
+                cols.append(optional)
+        return frame[cols].sort_values("date").reset_index(drop=True)
+
     import yfinance as yf
 
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
-    hist = yf.Ticker(NIFTY_SYMBOL).history(start=start, end=end)
+    end_dt = datetime.now(timezone.utc)
+    if end:
+        end_dt = datetime.strptime(end[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    if start:
+        start_dt = datetime.strptime(start[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    else:
+        start_dt = end_dt - timedelta(days=days)
+    hist = yf.Ticker(NIFTY_SYMBOL).history(start=start_dt, end=end_dt + timedelta(days=1))
     if hist.empty:
         return pd.DataFrame(columns=["date", "close"])
 
@@ -112,9 +135,18 @@ def enrich_history_features(frame: pd.DataFrame) -> pd.DataFrame:
     return enriched
 
 
-def load_aligned_factor_history(days: int = 365) -> pd.DataFrame:
-    """Merge Nifty closes with wide-format daily factor columns from the factor store."""
-    nifty = load_nifty_history(days=days)
+def load_aligned_factor_history(days: int = 365, *, start: str | None = None) -> pd.DataFrame:
+    """Merge Nifty closes with wide-format daily factor columns from panel or factor store."""
+    try:
+        from trade_integrations.dataflows.index_research.history_panel import load_aligned_panel_history
+
+        panel = load_aligned_panel_history(days=days, start=start)
+        if panel is not None and not panel.empty and "close" in panel.columns:
+            return panel.sort_values("date").reset_index(drop=True)
+    except Exception:
+        pass
+
+    nifty = load_nifty_history(days=days, start=start)
     if nifty.empty:
         return pd.DataFrame()
 

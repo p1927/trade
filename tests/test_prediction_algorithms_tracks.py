@@ -286,6 +286,42 @@ def test_bottom_up_with_full_constituents():
 
 
 @pytest.mark.unit
+def test_macro_only_no_overlay_skips_event_overlay(monkeypatch):
+    calls: list = []
+
+    def _fake_macro(macro_factors, horizon, artifact, **kwargs):
+        calls.append(kwargs)
+        return 0.3, {"include_event_overlay": kwargs.get("include_event_overlay", True)}
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.prediction_algorithms.tracks.macro_only_no_overlay.compute_macro_only_return",
+        _fake_macro,
+    )
+    ctx = _base_context()
+    track = run_all_tracks(ctx, track_ids=["macro_only_no_overlay"])["macro_only_no_overlay"]
+    assert track.available is True
+    assert any(c.get("include_event_overlay") is False for c in calls)
+
+
+@pytest.mark.unit
+def test_equal_weight_3_uses_split_macro_track():
+    from trade_integrations.dataflows.index_research.prediction_algorithms.combiners import run_combiner
+    from trade_integrations.dataflows.index_research.prediction_algorithms.types import ForecastTrack
+
+    def _t(tid, val):
+        return ForecastTrack(track_id=tid, expected_return_pct=val, view="neutral", available=True)
+
+    tracks = {
+        "macro_only_no_overlay": _t("macro_only_no_overlay", 1.0),
+        "scenario_anchor": _t("scenario_anchor", -1.0),
+        "event_overlay": _t("event_overlay", 0.0),
+    }
+    result = run_combiner("equal_weight_3", tracks)
+    assert set(result.tracks_used) == {"macro_only_no_overlay", "scenario_anchor", "event_overlay"}
+    assert result.expected_return_pct == pytest.approx(0.0)
+
+
+@pytest.mark.unit
 def test_event_overlay_available_when_disabled(monkeypatch):
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.prediction_algorithms.tracks.event_overlay.compute_event_overlay",

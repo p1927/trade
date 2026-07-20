@@ -24,7 +24,7 @@ def test_backfill_writes_technical_and_calendar_factors(monkeypatch):
         monkeypatch.setenv("TRADE_STACK_HUB_DIR", tmp)
         monkeypatch.setattr(
             "trade_integrations.dataflows.index_research.factor_backfill.load_nifty_history",
-            lambda days=365: nifty,
+            lambda days=365, start=None: nifty,
         )
         monkeypatch.setattr(
             "trade_integrations.dataflows.index_research.factor_backfill._fetch_yfinance_close_series",
