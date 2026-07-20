@@ -30,7 +30,7 @@ def start_required_infra(
     warnings: list[str] = []
     constraints = dict(proposal.get("constraints") or {})
 
-    if profile.uses_openalgo_auto_paper:
+    if profile.uses_openalgo_auto_paper and not profile.uses_nautilus_handoff:
         try:
             from trade_integrations.auto_paper.mcp_actions import start_auto_paper
 

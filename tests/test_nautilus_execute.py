@@ -41,23 +41,24 @@ def test_execute_hold_skips():
     mock_rec.assert_called_once()
 
 
-def test_execute_exit_close_all():
+def test_execute_exit_blocked_without_scoped_positions():
     client = MagicMock()
-    client.ensure_analyzer_mode.return_value = True
-    client.close_all_positions.return_value = {"status": "ok"}
-    client.get_position_book.return_value = []
+    client.get_position_book.return_value = [
+        {"symbol": "BANKNIFTY24JUL52000CE", "exchange": "NFO", "quantity": 25, "strategy": "aa_other"}
+    ]
     intent = ExecutionIntent(
         action=IntentAction.EXIT,
         agent_id="aa_x",
         rationale="flatten",
+        underlying="NIFTY",
     )
     with patch("nautilus_openalgo_bridge.execute.run_preflight", return_value={"blocked": False}), patch(
-        "nautilus_openalgo_bridge.execute.reconcile_after_intent", return_value={"open_positions": 0}
-    ), patch("nautilus_openalgo_bridge.handoff.clear_agent_position_state"):
+        "nautilus_openalgo_bridge.handoff.clear_agent_position_state"
+    ):
         result = execute_intent(intent, client=client, persist=False, skip_preflight=True)
-    assert result["status"] == "executed"
-    assert result["mode"] == "close_all"
-    client.close_all_positions.assert_called_once()
+    assert result["status"] == "blocked"
+    client.close_all_positions.assert_not_called()
+    client.place_basket.assert_not_called()
 
 
 def test_execute_exit_with_legs_basket():
@@ -117,9 +118,16 @@ def test_execute_enter_requires_legs():
 
 def test_execute_exit_records_outcome_ledger():
     client = MagicMock()
-    client.ensure_analyzer_mode.return_value = True
-    client.close_all_positions.return_value = {"status": "ok"}
-    client.get_position_book.return_value = [{"pnl": -120.5, "quantity": 25, "symbol": "NIFTY24JUL24500CE"}]
+    client.get_position_book.return_value = [
+        {
+            "pnl": -120.5,
+            "quantity": 25,
+            "symbol": "NIFTY24JUL24500CE",
+            "exchange": "NFO",
+            "underlying": "NIFTY",
+            "strategy": "aa_x",
+        }
+    ]
     intent = ExecutionIntent(
         action=IntentAction.EXIT,
         agent_id="aa_x",
@@ -137,6 +145,7 @@ def test_execute_exit_records_outcome_ledger():
     ) as reconcile_mock:
         result = execute_intent(intent, client=client, persist=False, skip_preflight=True)
     assert result["status"] == "executed"
+    assert result["mode"] == "leg_basket"
     append_mock.assert_called_once()
     reconcile_mock.assert_called_once()
     kwargs = reconcile_mock.call_args.kwargs
@@ -145,9 +154,17 @@ def test_execute_exit_records_outcome_ledger():
 
 def test_execute_exit_realized_pnl_from_partial_reconcile():
     client = MagicMock()
-    client.ensure_analyzer_mode.return_value = True
-    client.close_all_positions.return_value = {"status": "ok"}
-    client.get_position_book.return_value = [{"pnl": -200.0, "quantity": 25, "symbol": "NIFTY24JUL24500CE"}]
+    client.get_position_book.return_value = [
+        {
+            "pnl": -200.0,
+            "quantity": 25,
+            "symbol": "NIFTY24JUL24500CE",
+            "exchange": "NFO",
+            "underlying": "NIFTY",
+            "strategy": "aa_x",
+        }
+    ]
+    client.place_basket.return_value = [{"orderid": "1"}]
     intent = ExecutionIntent(
         action=IntentAction.EXIT,
         agent_id="aa_x",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from nautilus_openalgo_bridge.agent_scoping import strategy_tag_for_agent
 from nautilus_openalgo_bridge.handoff import load_handoff
 from nautilus_openalgo_bridge.models import ExecutionIntent, IntentAction, WatchAlert
 
@@ -36,8 +37,8 @@ def dispatch_exit_intent(
         agent_id=agent_id,
         rationale=alert.message,
         underlying=underlying or (handoff.underlying if handoff else "NIFTY"),
-        legs=list(handoff.legs) if handoff and handoff.legs else [],
-        strategy="nautilus_stop",
+        legs=[],
+        strategy=strategy_tag_for_agent(agent_id),
     )
     path = submit_intent(intent)
     return {

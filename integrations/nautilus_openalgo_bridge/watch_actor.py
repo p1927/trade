@@ -197,8 +197,14 @@ class WatchActor(Actor):
                 return None
         try:
             from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
+            from nautilus_openalgo_bridge.agent_scoping import filter_positions_for_agent
 
-            rows = open_positions_from_book(get_openalgo_client().get_position_book())
+            client = get_openalgo_client()
+            book = client.get_position_book()
+            if self._agent_id:
+                rows = filter_positions_for_agent(book, self._agent_id)
+            else:
+                rows = open_positions_from_book(book)
             return total_unrealized_pnl(rows)
         except Exception:
             return None

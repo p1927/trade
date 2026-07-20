@@ -73,40 +73,47 @@ def execute_intent(
     strategy = intent.strategy or "nautilus_bridge"
 
     if action == IntentAction.EXIT:
+        from nautilus_openalgo_bridge.agent_scoping import filter_positions_for_agent, resolve_exit_legs_for_agent
+
         pre_exit_pnl: float | None = None
         try:
-            pre_rows = open_positions_from_book(oa.get_position_book())
-            pre_exit_pnl = total_unrealized_pnl(pre_rows)
+            book_rows = oa.get_position_book()
+            scoped_pre = (
+                filter_positions_for_agent(book_rows, str(intent.agent_id or ""))
+                if intent.agent_id
+                else open_positions_from_book(book_rows)
+            )
+            pre_exit_pnl = total_unrealized_pnl(scoped_pre)
         except Exception:
             logger.debug("pre-exit pnl snapshot skipped", exc_info=True)
 
-        if intent.legs:
-            orders = legs_to_openalgo_orders(intent.legs)
-            if not orders:
-                payload = {"status": "error", "error": "EXIT intent has no valid legs", "agent_id": intent.agent_id}
-                if persist:
-                    archive_intent(intent, payload)
-                return payload
-            results = oa.place_basket(orders, strategy=strategy)
+        underlying = str(intent.underlying or "NIFTY").upper()
+        exit_legs = resolve_exit_legs_for_agent(
+            agent_id=str(intent.agent_id or ""),
+            position_rows=oa.get_position_book(),
+            underlying=underlying,
+            explicit_legs=list(intent.legs) if intent.legs else None,
+        )
+        orders = legs_to_openalgo_orders(exit_legs)
+        if not orders:
             payload = {
-                "status": "executed",
-                "action": action.value,
-                "mode": "leg_basket",
-                "orders_placed": len(orders),
-                "results": results,
+                "status": "blocked",
+                "error": "EXIT blocked — no agent-scoped positions (close_all disabled for multi-agent)",
                 "agent_id": intent.agent_id,
-                "intent_id": intent.intent_id,
             }
-        else:
-            close_result = oa.close_all_positions(strategy=strategy)
-            payload = {
-                "status": "executed",
-                "action": action.value,
-                "mode": "close_all",
-                "result": close_result,
-                "agent_id": intent.agent_id,
-                "intent_id": intent.intent_id,
-            }
+            if persist:
+                archive_intent(intent, payload)
+            return payload
+        results = oa.place_basket(orders, strategy=strategy)
+        payload = {
+            "status": "executed",
+            "action": action.value,
+            "mode": "leg_basket",
+            "orders_placed": len(orders),
+            "results": results,
+            "agent_id": intent.agent_id,
+            "intent_id": intent.intent_id,
+        }
         if intent.agent_id:
             try:
                 from nautilus_openalgo_bridge.handoff import clear_agent_position_state

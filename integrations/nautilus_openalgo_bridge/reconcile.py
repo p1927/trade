@@ -67,7 +67,12 @@ def sync_handoff_from_position_book(
         handoff = build_handoff_shell_from_agent(agent)
 
     rows = oa.get_position_book()
-    open_rows = open_positions_from_book(rows)
+    if agent_id:
+        from nautilus_openalgo_bridge.agent_scoping import filter_positions_for_agent
+
+        open_rows = filter_positions_for_agent(rows, agent_id)
+    else:
+        open_rows = open_positions_from_book(rows)
     ul = underlying or handoff.underlying
     legs = position_rows_to_legs(open_rows, underlying=ul)
 
@@ -97,7 +102,12 @@ def reconcile_after_intent(
 
     oa = client or get_openalgo_client()
     rows = oa.get_position_book()
-    open_rows = open_positions_from_book(rows)
+    if agent_id:
+        from nautilus_openalgo_bridge.agent_scoping import filter_positions_for_agent
+
+        open_rows = filter_positions_for_agent(rows, agent_id)
+    else:
+        open_rows = open_positions_from_book(rows)
     pnl = total_unrealized_pnl(open_rows)
 
     payload: dict[str, Any] = {
