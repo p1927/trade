@@ -8,7 +8,7 @@ import threading
 import time
 
 import pytest
-import requests
+from trade_integrations.http import HTTPError, RequestException
 
 from trade_integrations.dataflows import searxng_client
 
@@ -17,6 +17,10 @@ from trade_integrations.dataflows import searxng_client
 def _reset_client(monkeypatch, tmp_path):
     monkeypatch.setenv("SEARXNG_MIN_INTERVAL_SEC", "0")
     monkeypatch.setattr("trade_integrations.context.hub.get_hub_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.source_availability.should_attempt",
+        lambda *args, **kwargs: True,
+    )
     searxng_client.reset_searxng_client_for_tests()
     yield
     searxng_client.reset_searxng_client_for_tests()
@@ -46,7 +50,7 @@ def test_search_json_serializes_concurrent_calls(monkeypatch):
         calls["n"] += 1
         return FakeResponse()
 
-    monkeypatch.setattr(searxng_client.requests, "get", fake_get)
+    monkeypatch.setattr(searxng_client, "get", fake_get)
     monkeypatch.setattr(searxng_client, "_base_url", lambda: "http://searxng.test")
 
     threads = [
@@ -98,7 +102,7 @@ def test_min_interval_spacing(monkeypatch):
         def json(self):
             return {"results": []}
 
-    monkeypatch.setattr(searxng_client.requests, "get", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(searxng_client, "get", lambda *a, **k: FakeResponse())
     monkeypatch.setattr(searxng_client, "_base_url", lambda: "http://searxng.test")
 
     searxng_client.search_json("spacing test")
@@ -139,10 +143,10 @@ def test_cross_process_drain_lock_blocks(tmp_path):
 @pytest.mark.unit
 def test_search_json_propagates_http_errors(monkeypatch):
     def fake_get(*args, **kwargs):
-        raise requests.HTTPError("429 Too Many Requests")
+        raise HTTPError("429 Too Many Requests")
 
-    monkeypatch.setattr(searxng_client.requests, "get", fake_get)
+    monkeypatch.setattr(searxng_client, "get", fake_get)
     monkeypatch.setattr(searxng_client, "_base_url", lambda: "http://searxng.test")
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(RequestException):
         searxng_client.search_json("fail query")

@@ -218,6 +218,11 @@ def backfill_flow_history(
 
     cash_result: dict[str, Any] = {"status": "skipped"}
     if not cash.empty:
+        if "is_fo_monthly_expiry" in cash.columns:
+            cash = cash.copy()
+            cash["is_fo_monthly_expiry"] = (
+                pd.to_numeric(cash["is_fo_monthly_expiry"], errors="coerce").fillna(0).astype(bool)
+            )
         cash_result = save_history_dataset("flow_cash_daily", cash)
         upsert_flow_cash_cache(cash.to_dict(orient="records"))
 

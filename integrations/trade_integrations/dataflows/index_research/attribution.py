@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 from trade_integrations.dataflows.index_research.models import ConstituentSignal
+from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 
 _SENTIMENT_BETA = 5.0
 _MOMENTUM_BLEND = 0.3
@@ -110,6 +111,7 @@ def attribute_constituents(
     *,
     horizon_days: int = 14,
     use_calibration: bool = True,
+    pipeline: PipelineLogger | None = None,
 ) -> list[ConstituentSignal]:
     """Attribute all constituents and sort by absolute contribution descending."""
     sentiment_beta = _SENTIMENT_BETA
@@ -122,11 +124,26 @@ def attribute_constituents(
                 calibrate_bottom_up_coeffs,
             )
 
-            coeffs = calibrate_bottom_up_coeffs()
+            if pipeline is not None:
+                pipeline.info(
+                    "predict",
+                    "Calibrating bottom-up coefficients from archived constituent history…",
+                )
+            coeffs = calibrate_bottom_up_coeffs(horizon_days=horizon_days)
             sentiment_beta = coeffs.sentiment_beta
             momentum_scale = coeffs.momentum_scale
             sentiment_blend = coeffs.sentiment_blend
             momentum_blend = coeffs.momentum_blend
+            if pipeline is not None:
+                pipeline.info(
+                    "predict",
+                    (
+                        f"Bottom-up calibration {'applied' if coeffs.calibrated else 'using defaults'}"
+                        f" (samples={coeffs.sample_count})"
+                    ),
+                    calibrated=coeffs.calibrated,
+                    sample_count=coeffs.sample_count,
+                )
         except Exception:
             pass
 

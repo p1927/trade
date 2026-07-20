@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 LogCallback = Callable[["PipelineLogEntry"], None]
 
@@ -59,6 +61,17 @@ class PipelineLogger:
 
     def error(self, stage: str, message: str, **detail: Any) -> None:
         self.log(stage, message, level="error", **detail)
+
+    @contextmanager
+    def stage_timer(self, stage: str, message: str, **detail: Any) -> Iterator[None]:
+        """Log start message and append elapsed_ms on exit."""
+        start = time.perf_counter()
+        self.info(stage, message, **detail)
+        try:
+            yield
+        finally:
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+            self.info(stage, message, elapsed_ms=elapsed_ms, **detail)
 
     def to_dicts(self) -> list[dict[str, Any]]:
         return [entry.to_dict() for entry in self._entries]

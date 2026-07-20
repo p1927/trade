@@ -328,11 +328,28 @@ def process_staging_ref(
     return out
 
 
+def _adaptive_drain_batch_size(*, ticker: str | None = None) -> int:
+    from trade_integrations.hub_storage.news_staging_store import staging_queue_detail
+
+    queued = int(staging_queue_detail(ticker=ticker).get("queued") or 0)
+    if queued <= 0:
+        return 50
+    return min(500, max(50, queued // 4))
+
+
+def _background_drain_limit(*, ticker: str | None = None) -> int:
+    from trade_integrations.hub_storage.news_staging_store import staging_queue_detail
+
+    queued = int(staging_queue_detail(ticker=ticker).get("queued") or 0)
+    return min(100, max(20, queued // 20 if queued > 0 else 20))
+
+
 def process_staging_batch(
     *,
     ticker: str | None = None,
     limit: int = 20,
     force_reverify: bool = False,
+    run_wiki_rescan: bool = False,
 ) -> dict[str, Any]:
     """Process up to ``limit`` queued staging refs."""
     if not is_entity_pipeline_enabled():
@@ -393,7 +410,7 @@ def process_staging_batch(
         except Exception as exc:
             summary["errors"] += 1
             logger.warning("staging ref %s failed: %s", ref.get("ref_id"), exc)
-    if int(summary.get("wiki_exports") or 0) > 0:
+    if run_wiki_rescan and int(summary.get("wiki_exports") or 0) > 0:
         try:
             from trade_integrations.dataflows.hub_wiki.compile import batch_rescan_if_enabled
 
@@ -408,7 +425,7 @@ def process_staging_batch(
     return summary
 
 
-def schedule_staging_processing(*, ticker: str | None = None, limit: int = 15) -> None:
+def schedule_staging_processing(*, ticker: str | None = None, limit: int | None = None) -> None:
     """Fire-and-forget background batch (debounced)."""
     import time
 
@@ -416,13 +433,17 @@ def schedule_staging_processing(*, ticker: str | None = None, limit: int = 15) -
     if not is_entity_pipeline_enabled():
         return
 
-    from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status
+    from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status, staging_queue_detail
 
     if pipeline_pause_status(ticker=ticker).get("pipeline_paused"):
         return
 
+    queued = int(staging_queue_detail(ticker=ticker).get("queued") or 0)
+    batch_limit = limit if limit is not None else _background_drain_limit(ticker=ticker)
+    debounce_sec = 10.0 if queued > 500 else 30.0
+
     now = time.time()
-    if now - _last_run_at < 30:
+    if now - _last_run_at < debounce_sec:
         return
 
     def _run() -> None:
@@ -430,11 +451,23 @@ def schedule_staging_processing(*, ticker: str | None = None, limit: int = 15) -
         with _worker_lock:
             _last_run_at = time.time()
             try:
-                process_staging_batch(ticker=ticker, limit=limit)
+                process_staging_batch(ticker=ticker, limit=batch_limit)
             except Exception as exc:
                 logger.debug("background staging batch failed: %s", exc)
 
     threading.Thread(target=_run, daemon=True, name="hub-news-entity-worker").start()
+
+
+def _safe_stage(name: str, fn: Any, /, **kwargs: Any) -> dict[str, Any]:
+    """Run a pipeline stage; return error dict instead of raising."""
+    try:
+        result = fn(**kwargs)
+        if isinstance(result, dict):
+            return result
+        return {"status": "ok", "result": result}
+    except Exception as exc:
+        logger.exception("hub news entity stage %s failed", name)
+        return {"status": "error", "stage": name, "error": str(exc)}
 
 
 def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -444,11 +477,31 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
 
     cfg = config or {}
     ticker = str(cfg.get("ticker") or "NIFTY")
-    limit = int(cfg.get("batch_size") or 200)
+    batch_raw = cfg.get("batch_size")
+    if cfg.get("adaptive_batch") or batch_raw == "adaptive":
+        limit = _adaptive_drain_batch_size(ticker=ticker)
+    else:
+        limit = int(batch_raw or 200)
     lookback = int(cfg.get("lookback_days") or 365)
-    migration = ensure_hub_news_migrations(ticker=ticker)
+    mode = str(cfg.get("mode") or "full").strip().lower()
+    run_maintenance = mode in {"full", "maintenance"}
+    run_drain = mode in {"full", "drain"}
+    run_wiki_rescan = bool(cfg.get("run_wiki_rescan"))
+
+    migration = _safe_stage("migration", ensure_hub_news_migrations, ticker=ticker)
     pause = pipeline_pause_status(ticker=ticker)
-    staging = process_staging_batch(ticker=ticker, limit=limit, force_reverify=False)
+
+    staging: dict[str, Any] = {"skipped": True, "reason": "drain_disabled"}
+    if run_drain:
+        staging = _safe_stage(
+            "staging",
+            process_staging_batch,
+            ticker=ticker,
+            limit=limit,
+            force_reverify=False,
+            run_wiki_rescan=run_wiki_rescan,
+        )
+
     if pause.get("pipeline_paused"):
         skipped = {
             "skipped": True,
@@ -456,6 +509,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "pause_reason": str(pause.get("pause_reason") or ""),
         }
         return {
+            "mode": mode,
             "migration": migration,
             "staging": staging,
             "repair": dict(skipped),
@@ -463,16 +517,49 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "compact_events": dict(skipped),
             "pipeline_paused": True,
             "pause_reason": pause.get("pause_reason") or "",
+            "had_errors": any(
+                isinstance(part, dict) and part.get("status") == "error"
+                for part in (migration, staging)
+            ),
         }
-    repair = repair_leaked_distilled_summaries(ticker=ticker)
-    backfill = backfill_distilled_event_metadata(ticker=ticker)
-    compact_events = compact_distilled_events(ticker=ticker, lookback_days=lookback)
+
+    if not run_maintenance:
+        return {
+            "mode": mode,
+            "migration": migration,
+            "staging": staging,
+            "repair": {"skipped": True, "reason": "drain_only"},
+            "backfill": {"skipped": True, "reason": "drain_only"},
+            "compact_events": {"skipped": True, "reason": "drain_only"},
+            "cleanup": {"skipped": True, "reason": "drain_only"},
+            "rollup": {"skipped": True, "reason": "drain_only"},
+            "had_errors": any(
+                isinstance(part, dict) and part.get("status") == "error"
+                for part in (migration, staging)
+            ),
+        }
+
+    repair = _safe_stage("repair", repair_leaked_distilled_summaries, ticker=ticker)
+    backfill = _safe_stage("backfill", backfill_distilled_event_metadata, ticker=ticker)
+    compact_events = _safe_stage(
+        "compact_events",
+        compact_distilled_events,
+        ticker=ticker,
+        lookback_days=lookback,
+    )
     from trade_integrations.dataflows.index_research.news_cleanup import cleanup_hub_news
     from trade_integrations.dataflows.index_research.news_rollup import rollup_parent_topic_events
 
-    cleanup = cleanup_hub_news(ticker=ticker)
-    rollup = rollup_parent_topic_events(ticker=ticker, lookback_days=7)
+    cleanup = _safe_stage("cleanup", cleanup_hub_news, ticker=ticker)
+    rollup = _safe_stage(
+        "rollup",
+        rollup_parent_topic_events,
+        ticker=ticker,
+        lookback_days=7,
+    )
+    stages = (migration, staging, repair, backfill, compact_events, cleanup, rollup)
     return {
+        "mode": mode,
         "migration": migration,
         "staging": staging,
         "repair": repair,
@@ -480,6 +567,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         "compact_events": compact_events,
         "cleanup": cleanup,
         "rollup": rollup,
+        "had_errors": any(isinstance(part, dict) and part.get("status") == "error" for part in stages),
     }
 
 

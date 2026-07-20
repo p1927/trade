@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from trade_integrations.dataflows.index_research.prediction_algorithms.api import run_forecast_lab
+from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.index_research.prediction_algorithms.config import lab_enabled, lab_mode
 from trade_integrations.dataflows.index_research.prediction_algorithms.context_builder import (
     build_track_context,
@@ -54,6 +55,65 @@ def snapshot_legacy_prediction(
     }
 
 
+def apply_forecast_lab_result_to_prediction(
+    prediction: dict[str, Any],
+    lab_dict: dict[str, Any],
+    *,
+    ticker: str,
+    pre_reconcile_snapshot: dict[str, Any] | None = None,
+    legacy_prediction: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge forecast lab output into a prediction dict (no track execution)."""
+    pre = pre_reconcile_snapshot or snapshot_pre_reconcile_prediction(prediction)
+    legacy = legacy_prediction or snapshot_legacy_prediction(prediction)
+    prediction["forecast_lab_context"] = {
+        "pre_reconcile_snapshot": pre,
+        "legacy_prediction": legacy,
+    }
+    prediction.pop("forecast_lab_error", None)
+    prediction["forecast_tracks"] = lab_dict.get("forecast_tracks") or {}
+    if lab_dict.get("cause_stress_index") is not None:
+        prediction["cause_stress_index"] = lab_dict.get("cause_stress_index")
+        prediction["cause_stress_label"] = lab_dict.get("cause_stress_label")
+        prediction["active_causes"] = lab_dict.get("active_causes") or []
+    if lab_dict.get("channel_attribution"):
+        prediction["channel_attribution"] = lab_dict.get("channel_attribution")
+
+    combiner = lab_dict.get("combiner")
+    active = lab_dict.get("active_combiner")
+    if combiner:
+        prediction["combiner_preview"] = combiner
+    if active:
+        prediction["active_combiner"] = active
+
+    if lab_mode() == "combine" and combiner and _promoted_combiner_active(ticker, str(active or "")):
+        prediction["expected_return_pct"] = combiner.get("expected_return_pct")
+        prediction["view"] = combiner.get("view")
+        prediction["headline_source"] = f"combiner:{active}"
+    elif lab_mode() == "combine" and combiner:
+        prediction.setdefault("headline_source", "quant_pipeline")
+    return prediction
+
+
+def persist_forecast_lab_to_hub(
+    ticker: str,
+    lab_dict: dict[str, Any],
+) -> bool:
+    """Merge forecast lab tracks into hub latest.json prediction block."""
+    from trade_integrations.context.hub import load_index_research_json, save_index_research
+
+    doc = load_index_research_json(ticker)
+    if doc is None or not doc.prediction:
+        return False
+    doc.prediction = apply_forecast_lab_result_to_prediction(
+        dict(doc.prediction),
+        lab_dict,
+        ticker=ticker.strip().upper(),
+    )
+    save_index_research(doc)
+    return True
+
+
 def attach_forecast_lab(
     prediction: dict[str, Any],
     *,
@@ -69,6 +129,7 @@ def attach_forecast_lab(
     debate_payload: dict[str, Any] | None = None,
     pre_reconcile_snapshot: dict[str, Any] | None = None,
     legacy_prediction: dict[str, Any] | None = None,
+    pipeline: PipelineLogger | None = None,
 ) -> dict[str, Any]:
     """Run forecast lab and merge track output into ``prediction``."""
     if not lab_enabled() or spot <= 0 or not prediction:
@@ -110,32 +171,16 @@ def attach_forecast_lab(
             combiner_id=active,
             mae_by_track=runtime_kwargs.get("mae_by_track"),
             lam=runtime_kwargs.get("lam"),
+            pipeline=pipeline,
         )
         lab_dict = lab_result.to_dict()
-        prediction.pop("forecast_lab_error", None)
-
-        prediction["forecast_tracks"] = lab_dict.get("forecast_tracks") or {}
-        if lab_dict.get("cause_stress_index") is not None:
-            prediction["cause_stress_index"] = lab_dict.get("cause_stress_index")
-            prediction["cause_stress_label"] = lab_dict.get("cause_stress_label")
-            prediction["active_causes"] = lab_dict.get("active_causes") or []
-        if lab_dict.get("channel_attribution"):
-            prediction["channel_attribution"] = lab_dict.get("channel_attribution")
-
-        combiner = lab_dict.get("combiner")
-        active = lab_dict.get("active_combiner")
-        if combiner:
-            prediction["combiner_preview"] = combiner
-        if active:
-            prediction["active_combiner"] = active
-
-        # Only override headline when combine mode + scoreboard promotion gates pass.
-        if lab_mode() == "combine" and combiner and _promoted_combiner_active(ticker, str(active or "")):
-            prediction["expected_return_pct"] = combiner.get("expected_return_pct")
-            prediction["view"] = combiner.get("view")
-            prediction["headline_source"] = f"combiner:{active}"
-        elif lab_mode() == "combine" and combiner:
-            prediction.setdefault("headline_source", "quant_pipeline")
+        prediction = apply_forecast_lab_result_to_prediction(
+            prediction,
+            lab_dict,
+            ticker=ticker,
+            pre_reconcile_snapshot=pre,
+            legacy_prediction=legacy,
+        )
     except Exception as exc:
         logger.warning("forecast lab failed: %s", exc)
         prediction["forecast_lab_error"] = str(exc)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import pandas as pd
+
 from trade_integrations.dataflows.index_research.factor_store import load_factor_history
 from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
 
@@ -21,19 +23,55 @@ PCR_DATA_BOUNDARY_NOTE = (
 )
 
 
-def measure_flow_coverage(
-    *,
-    days: int = DEFAULT_ENRICH_DAYS,
-    allow_live_fetch: bool = False,
-) -> dict[str, Any]:
-    """Return per-factor non-null coverage (%) over the Nifty trading window.
+def _resolve_trading_day(trading_day: str | None) -> str:
+    if trading_day:
+        return trading_day[:10]
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
 
-    FII/DII gate uses *flow-era* coverage (days on/after first real cash flow row)
-    so pre-history calendar days do not fail the gate when sources only publish ~6mo.
-    """
+    return india_trading_date_iso()[:10]
+
+
+def _cached_merge_flow_derivatives_frame(
+    start: str,
+    end: str,
+    *,
+    allow_live_fetch: bool,
+    trading_day: str,
+    force: bool = False,
+) -> pd.DataFrame:
+    from trade_integrations.dataflows.index_research.day_cache import get_or_fetch
+    from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+        merge_flow_derivatives_frame,
+    )
+
+    namespace = f"merge_flow_derivatives:{start[:10]}:{end[:10]}"
+
+    def fetch() -> list[dict[str, Any]]:
+        frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
+        if frame is None or frame.empty:
+            return []
+        return frame.to_dict(orient="records")
+
+    records, _cached = get_or_fetch(
+        namespace=namespace,
+        trading_day=trading_day,
+        fetch_fn=fetch,
+        force=force,
+    )
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame(records)
+
+
+def _measure_flow_coverage_impl(
+    *,
+    days: int,
+    allow_live_fetch: bool,
+    trading_day: str,
+    force: bool,
+) -> dict[str, Any]:
     from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
         flow_effective_start,
-        merge_flow_derivatives_frame,
         pcr_effective_start,
     )
 
@@ -49,7 +87,21 @@ def measure_flow_coverage(
     long_df = load_factor_history(start, end)
     day_count = max(1, len(trading_dates))
 
-    flow_frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=allow_live_fetch)
+    if allow_live_fetch:
+        from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+            merge_flow_derivatives_frame,
+        )
+
+        flow_frame = merge_flow_derivatives_frame(start, end, allow_live_fetch=True)
+    else:
+        flow_frame = _cached_merge_flow_derivatives_frame(
+            start,
+            end,
+            allow_live_fetch=False,
+            trading_day=trading_day,
+            force=force,
+        )
+
     era_start = flow_effective_start(flow_frame)
     era_dates = [d for d in trading_dates if era_start is None or d >= era_start[:10]]
     era_day_count = max(1, len(era_dates))
@@ -118,6 +170,46 @@ def measure_flow_coverage(
     }
 
 
+def measure_flow_coverage(
+    *,
+    days: int = DEFAULT_ENRICH_DAYS,
+    allow_live_fetch: bool = False,
+    trading_day: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Return per-factor non-null coverage (%) over the Nifty trading window.
+
+    FII/DII gate uses *flow-era* coverage (days on/after first real cash flow row)
+    so pre-history calendar days do not fail the gate when sources only publish ~6mo.
+    """
+    day = _resolve_trading_day(trading_day)
+
+    if allow_live_fetch:
+        return _measure_flow_coverage_impl(
+            days=days,
+            allow_live_fetch=True,
+            trading_day=day,
+            force=force,
+        )
+
+    from trade_integrations.dataflows.index_research.day_cache import get_or_fetch
+
+    payload, cached = get_or_fetch(
+        namespace="flow_coverage",
+        trading_day=day,
+        fetch_fn=lambda: _measure_flow_coverage_impl(
+            days=days,
+            allow_live_fetch=False,
+            trading_day=day,
+            force=force,
+        ),
+        force=force,
+    )
+    out = dict(payload)
+    out["_cached"] = cached
+    return out
+
+
 def ensure_factor_data_complete(
     *,
     days: int = DEFAULT_ENRICH_DAYS,
@@ -125,6 +217,8 @@ def ensure_factor_data_complete(
     force_enrich: bool = False,
     enrich: bool = True,
     allow_live_fetch: bool = False,
+    trading_day: str | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Run factor enrichment when flow coverage is below threshold.
 
@@ -132,7 +226,13 @@ def ensure_factor_data_complete(
     block on NiftyInvest / Mr. Chartist live backfill. Live HTTP is opt-in via
     ``allow_live_fetch=True`` (scheduled jobs / manual backfill only).
     """
-    before = measure_flow_coverage(days=days, allow_live_fetch=False)
+    day = _resolve_trading_day(trading_day)
+    before = measure_flow_coverage(
+        days=days,
+        allow_live_fetch=allow_live_fetch,
+        trading_day=day,
+        force=force,
+    )
     enriched = False
     enrich_result: dict[str, Any] | None = None
 
@@ -157,7 +257,18 @@ def ensure_factor_data_complete(
                 "skipped_enrich": not enrich,
             }
 
-    after = measure_flow_coverage(days=days, allow_live_fetch=False)
+    if not enrich and before.get("passes_gate") and not enriched:
+        after = before
+        skipped_second_measure = True
+    else:
+        after = measure_flow_coverage(
+            days=days,
+            allow_live_fetch=allow_live_fetch,
+            trading_day=day,
+            force=force or enriched,
+        )
+        skipped_second_measure = False
+
     return {
         "enriched": enriched,
         "before": before,
@@ -165,4 +276,6 @@ def ensure_factor_data_complete(
         "enrich_result": enrich_result,
         "passes_gate": bool(after.get("passes_gate")),
         "skipped_enrich": not enrich and not enriched,
+        "skipped_second_measure": skipped_second_measure,
+        "_cached": bool(before.get("_cached")),
     }

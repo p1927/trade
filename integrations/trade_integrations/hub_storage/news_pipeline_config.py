@@ -22,6 +22,8 @@ _LIGHT_SOURCES_DEFAULT = "rss,watcher"
 _JOB_ID_FULL = "nifty-hub-news-ingest-full"
 _JOB_ID_LIGHT = "nifty-hub-news-ingest-light"
 _JOB_ID_ENTITY = "nifty-hub-news-entity"
+_JOB_ID_ENTITY_CONTINUOUS = "nifty-hub-news-entity-drain-continuous"
+_JOB_ID_ENTITY_MAINTENANCE = "nifty-hub-news-entity-maintenance"
 
 
 def _config_path() -> Path:
@@ -51,6 +53,10 @@ class NewsPipelineConfig:
     light_ingest_cron: str = "0 */4 * * *"
     light_ingest_enabled: bool = True
     entity_drain_cron: str = "35 18 * * *"
+    entity_drain_continuous_cron: str = "*/15 * * * *"
+    entity_drain_continuous_enabled: bool = True
+    entity_maintenance_cron: str = "0 3 * * 0"
+    entity_backpressure_threshold: int = 400
     full_ingest_sources: str = _FULL_SOURCES_DEFAULT
     light_ingest_sources: str = _LIGHT_SOURCES_DEFAULT
     full_lookback_days: int = 3
@@ -88,6 +94,10 @@ class NewsPipelineConfig:
             base.discard_retention_days = int(base.discard_retention_days)
         except (TypeError, ValueError):
             base.discard_retention_days = 30
+        try:
+            base.entity_backpressure_threshold = int(base.entity_backpressure_threshold)
+        except (TypeError, ValueError):
+            base.entity_backpressure_threshold = 400
         return base
 
 
@@ -101,6 +111,10 @@ def env_defaults() -> NewsPipelineConfig:
         ).strip(),
         light_ingest_enabled=_env_bool("HUB_NEWS_LIGHT_INGEST_ENABLED", True),
         entity_drain_cron=os.getenv("HUB_NEWS_ENTITY_CRON", "35 18 * * *").strip(),
+        entity_drain_continuous_cron=os.getenv("HUB_NEWS_ENTITY_CONTINUOUS_CRON", "*/15 * * * *").strip(),
+        entity_drain_continuous_enabled=_env_bool("HUB_NEWS_ENTITY_CONTINUOUS_ENABLED", True),
+        entity_maintenance_cron=os.getenv("HUB_NEWS_ENTITY_MAINTENANCE_CRON", "0 3 * * 0").strip(),
+        entity_backpressure_threshold=_env_int("HUB_NEWS_BACKPRESSURE_THRESHOLD", 400),
         full_ingest_sources=os.getenv("HUB_NEWS_FULL_SOURCES", _FULL_SOURCES_DEFAULT).strip(),
         light_ingest_sources=os.getenv("HUB_NEWS_LIGHT_SOURCES", _LIGHT_SOURCES_DEFAULT).strip(),
         full_lookback_days=_env_int("HUB_NEWS_FULL_LOOKBACK_DAYS", _env_int("HUB_NEWS_INGEST_LOOKBACK_DAYS", 3)),
@@ -159,6 +173,8 @@ def config_for_api() -> dict[str, Any]:
             "full_ingest": _JOB_ID_FULL,
             "light_ingest": _JOB_ID_LIGHT,
             "entity_drain": _JOB_ID_ENTITY,
+            "entity_drain_continuous": _JOB_ID_ENTITY_CONTINUOUS,
+            "entity_maintenance": _JOB_ID_ENTITY_MAINTENANCE,
         },
         "ingest_modes": {
             "full": {
@@ -197,6 +213,9 @@ def sync_scheduled_jobs_from_config() -> dict[str, Any]:
     validate_schedule(cfg.full_ingest_cron)
     validate_schedule(cfg.light_ingest_cron)
     validate_schedule(cfg.entity_drain_cron)
+    validate_schedule(cfg.entity_maintenance_cron)
+    if cfg.entity_drain_continuous_enabled:
+        validate_schedule(cfg.entity_drain_continuous_cron)
 
     store = ScheduledResearchJobStore()
     jobs = store.load()
@@ -256,8 +275,39 @@ def sync_scheduled_jobs_from_config() -> dict[str, Any]:
         prompt="Drain staging into distilled hub events",
         config={
             "job_type": JOB_TYPE_HUB_NEWS_ENTITY,
+            "mode": "drain",
             "ticker": cfg.ticker,
             "batch_size": cfg.entity_batch_size,
+        },
+    )
+
+    if cfg.entity_drain_continuous_enabled:
+        upsert(
+            _JOB_ID_ENTITY_CONTINUOUS,
+            schedule=cfg.entity_drain_continuous_cron,
+            prompt="Continuous staging drain (adaptive batch)",
+            config={
+                "job_type": JOB_TYPE_HUB_NEWS_ENTITY,
+                "mode": "drain",
+                "ticker": cfg.ticker,
+                "batch_size": "adaptive",
+                "adaptive_batch": True,
+                "run_wiki_rescan": True,
+            },
+        )
+    elif _JOB_ID_ENTITY_CONTINUOUS in jobs:
+        store.delete(_JOB_ID_ENTITY_CONTINUOUS)
+
+    upsert(
+        _JOB_ID_ENTITY_MAINTENANCE,
+        schedule=cfg.entity_maintenance_cron,
+        prompt="Heavy hub news maintenance (repair, backfill, compact)",
+        config={
+            "job_type": JOB_TYPE_HUB_NEWS_ENTITY,
+            "mode": "maintenance",
+            "ticker": cfg.ticker,
+            "batch_size": cfg.entity_batch_size,
+            "lookback_days": 365,
         },
     )
 
@@ -270,4 +320,9 @@ def sync_scheduled_jobs_from_config() -> dict[str, Any]:
         "full_cron": cfg.full_ingest_cron,
         "light_cron": cfg.light_ingest_cron if cfg.light_ingest_enabled else None,
         "entity_cron": cfg.entity_drain_cron,
+        "entity_continuous_cron": cfg.entity_drain_continuous_cron
+        if cfg.entity_drain_continuous_enabled
+        else None,
+        "entity_maintenance_cron": cfg.entity_maintenance_cron,
+        "entity_backpressure_threshold": cfg.entity_backpressure_threshold,
     }

@@ -79,6 +79,10 @@ def bottom_up_return_from_archives(day: str, *, horizon_days: int) -> float | No
     signals = load_constituent_signals_for_day(day)
     if len(signals) < MIN_HYBRID_CONSTITUENTS:
         return None
-    attributed = attribute_constituents(signals, horizon_days=horizon_days)
+    attributed = attribute_constituents(
+        signals,
+        horizon_days=horizon_days,
+        use_calibration=False,
+    )
     rollup = rollup_attribution(attributed)
     return float(rollup["total_contribution_pct"])

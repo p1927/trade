@@ -23,6 +23,7 @@ from trade_integrations.dataflows.index_research.constituent_backtest import (
 
 _DEFAULT_WINDOW_DAYS = 60
 _MIN_SAMPLES = 12
+_CALIB_CACHE: dict[tuple[date, int, int], BottomUpCoeffs] = {}
 
 
 @dataclass(frozen=True)
@@ -81,13 +82,21 @@ def calibrate_bottom_up_coeffs(
     horizon_days: int = 14,
 ) -> BottomUpCoeffs:
     """Fit sentiment/momentum scaling on archived rollups when enough history exists."""
+    end = as_of or date.today()
+    cache_key = (end, window_days, horizon_days)
+    cached = _CALIB_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
 
     end = as_of or date.today()
     start = end - timedelta(days=max(window_days + horizon_days + 7, 90))
     nifty = load_nifty_history(days=(end - start).days + 14)
     if nifty.empty or "date" not in nifty.columns:
-        return BottomUpCoeffs()
+        result = BottomUpCoeffs()
+        _CALIB_CACHE[cache_key] = result
+        return result
 
     dates = [str(d)[:10] for d in nifty["date"].astype(str).tolist()]
     dates = [d for d in dates if start.isoformat() <= d <= end.isoformat()][-window_days:]
@@ -109,7 +118,9 @@ def calibrate_bottom_up_coeffs(
         targets.append(float(actual))
 
     if len(targets) < _MIN_SAMPLES:
-        return BottomUpCoeffs(sample_count=len(targets))
+        result = BottomUpCoeffs(sample_count=len(targets))
+        _CALIB_CACHE[cache_key] = result
+        return result
 
     sent_arr = np.asarray(sentiments, dtype=float)
     mom_arr = np.asarray(momentums, dtype=float)
@@ -119,14 +130,18 @@ def calibrate_bottom_up_coeffs(
     mom_scale = _fit_linear(mom_arr, tgt_arr) if np.any(np.abs(mom_arr) > 1e-9) else None
 
     if sent_beta is None and mom_scale is None:
-        return BottomUpCoeffs(sample_count=len(targets))
+        result = BottomUpCoeffs(sample_count=len(targets))
+        _CALIB_CACHE[cache_key] = result
+        return result
 
-    return BottomUpCoeffs(
+    result = BottomUpCoeffs(
         sentiment_beta=max(0.5, min(12.0, sent_beta if sent_beta is not None else _SENTIMENT_BETA)),
         momentum_scale=max(0.05, min(2.0, mom_scale if mom_scale is not None else _MOMENTUM_SCALE)),
         sample_count=len(targets),
         calibrated=True,
     )
+    _CALIB_CACHE[cache_key] = result
+    return result
 
 
 def apply_bottom_up_coeffs(

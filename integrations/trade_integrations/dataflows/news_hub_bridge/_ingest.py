@@ -131,9 +131,9 @@ def searxng_result_to_hub_row(result: dict[str, Any]) -> dict[str, Any]:
 
 def _sync_distill_limit() -> int:
     try:
-        return max(0, int(os.getenv("HUB_NEWS_SYNC_DISTILL_LIMIT", "0")))
+        return max(0, int(os.getenv("HUB_NEWS_SYNC_DISTILL_LIMIT", "10")))
     except ValueError:
-        return 0
+        return 10
 
 
 def ingest_rows_to_hub(
@@ -152,6 +152,7 @@ def ingest_rows_to_hub(
             is_entity_pipeline_enabled,
             is_legacy_ingest_enabled,
             pipeline_pause_status,
+            staging_backpressure_active,
         )
 
         hub_sym = hub_ticker_for_symbol(ticker)
@@ -173,6 +174,21 @@ def ingest_rows_to_hub(
         from trade_integrations.dataflows.index_research.news_tags import build_article_tags
 
         pause = pipeline_pause_status(ticker=hub_sym)
+        backpressure_active, backlog = staging_backpressure_active(ticker=hub_sym)
+        if backpressure_active:
+            pending = pause.get("pending") or {}
+            return {
+                "ingested": 0,
+                "queued": 0,
+                "cache_hits": 0,
+                "verified": 0,
+                "backpressure": True,
+                "pipeline_paused": bool(pause.get("pipeline_paused")),
+                "pause_reason": str(pause.get("pause_reason") or ""),
+                "minimax_configured": bool(pause.get("minimax_configured")),
+                "pending_queued": int(pending.get("queued") or backlog),
+            }
+
         queued = 0
         for row in merged:
             tagged = build_article_tags(
@@ -194,7 +210,7 @@ def ingest_rows_to_hub(
             if sync_limit > 0:
                 sync_stats = process_staging_batch(ticker=hub_sym, limit=sync_limit)
                 distill_mode = "sync"
-            schedule_staging_processing(ticker=hub_sym, limit=20)
+            schedule_staging_processing(ticker=hub_sym)
 
         pending = pause.get("pending") or {}
         return {
@@ -208,6 +224,7 @@ def ingest_rows_to_hub(
             "pipeline_paused": bool(pause.get("pipeline_paused")),
             "pause_reason": str(pause.get("pause_reason") or ""),
             "minimax_configured": bool(pause.get("minimax_configured")),
+            "backpressure": backpressure_active,
             "pending_queued": int(pending.get("queued") or 0),
         }
     except Exception as exc:

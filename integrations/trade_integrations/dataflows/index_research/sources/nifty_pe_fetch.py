@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _MIN_CONSTITUENT_COVERAGE = 10
+_WEIGHTED_PE_WORKERS = 8
+
+
+def _resolve_trading_day(trading_day: str | None) -> str:
+    if trading_day:
+        return trading_day[:10]
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
+    return india_trading_date_iso()[:10]
 
 
 def _fetch_yfinance_index_pe() -> dict[str, Any] | None:
@@ -33,12 +43,31 @@ def _fetch_yfinance_index_pe() -> dict[str, Any] | None:
     }
 
 
+def _constituent_pe_row(symbol: str, weight: float) -> tuple[float, float] | None:
+    import yfinance as yf
+
+    sym = symbol.strip().upper()
+    if weight <= 0:
+        return None
+    info = yf.Ticker(f"{sym}.NS").info or {}
+    pe = info.get("trailingPE") or info.get("forwardPE")
+    if pe is None:
+        return None
+    try:
+        pe_val = float(pe)
+    except (TypeError, ValueError):
+        return None
+    if pe_val <= 0 or pe_val > 500:
+        return None
+    return pe_val, weight
+
+
 def _fetch_weighted_constituent_pe() -> dict[str, Any] | None:
     """Weighted average of constituent trailing P/E (Nifty 50 weights)."""
     from trade_integrations.dataflows import source_availability
 
     try:
-        import yfinance as yf
+        import yfinance as yf  # noqa: F401 — availability check
     except ImportError:
         return None
 
@@ -56,24 +85,28 @@ def _fetch_weighted_constituent_pe() -> dict[str, Any] | None:
     pe_weighted = 0.0
     weight_sum = 0.0
     used = 0
-    for row in constituents:
-        sym = row.symbol.strip().upper()
-        weight = float(weights.get(sym) or row.weight or 0.0)
-        if weight <= 0:
-            continue
-        info = yf.Ticker(f"{sym}.NS").info or {}
-        pe = info.get("trailingPE") or info.get("forwardPE")
-        if pe is None:
-            continue
-        try:
-            pe_val = float(pe)
-        except (TypeError, ValueError):
-            continue
-        if pe_val <= 0 or pe_val > 500:
-            continue
-        pe_weighted += pe_val * weight
-        weight_sum += weight
-        used += 1
+
+    with ThreadPoolExecutor(max_workers=_WEIGHTED_PE_WORKERS) as pool:
+        futures = {
+            pool.submit(
+                _constituent_pe_row,
+                row.symbol,
+                float(weights.get(row.symbol.strip().upper()) or row.weight or 0.0),
+            ): row.symbol
+            for row in constituents
+        }
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+            except Exception as exc:
+                logger.debug("constituent pe fetch failed: %s", exc)
+                continue
+            if result is None:
+                continue
+            pe_val, weight = result
+            pe_weighted += pe_val * weight
+            weight_sum += weight
+            used += 1
 
     if used < _MIN_CONSTITUENT_COVERAGE or weight_sum <= 0:
         return None
@@ -88,7 +121,7 @@ def _fetch_weighted_constituent_pe() -> dict[str, Any] | None:
     }
 
 
-def resolve_nifty_trailing_pe() -> dict[str, Any] | None:
+def _resolve_nifty_trailing_pe_live() -> dict[str, Any] | None:
     """Primary vendors first, then SearXNG finance portals — no manual env required."""
     for fetcher in (_fetch_yfinance_index_pe, _fetch_weighted_constituent_pe):
         try:
@@ -120,3 +153,21 @@ def resolve_nifty_trailing_pe() -> dict[str, Any] | None:
             },
         }
     return None
+
+
+def resolve_nifty_trailing_pe(
+    *,
+    trading_day: str | None = None,
+    force: bool = False,
+) -> dict[str, Any] | None:
+    """Resolve trailing P/E with trading-day cache."""
+    from trade_integrations.dataflows.index_research.day_cache import get_or_fetch
+
+    day = _resolve_trading_day(trading_day)
+    payload, _cached = get_or_fetch(
+        namespace="nifty_pe",
+        trading_day=day,
+        fetch_fn=_resolve_nifty_trailing_pe_live,
+        force=force,
+    )
+    return payload if isinstance(payload, dict) else None

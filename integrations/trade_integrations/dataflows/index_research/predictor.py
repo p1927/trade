@@ -23,6 +23,7 @@ from trade_integrations.dataflows.index_research.factor_store import (
 )
 from trade_integrations.dataflows.index_research.horizon import HorizonProfile
 from trade_integrations.dataflows.index_research.models import ConstituentSignal
+from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 
 _DEFAULT_MAE_PCT = 1.5
 _MACRO_DELTA_CAP_PCT = 5.0
@@ -524,6 +525,15 @@ def finalize_index_prediction(
     return updated
 
 
+def _predict_log(
+    pipeline: PipelineLogger | None,
+    message: str,
+    **detail: Any,
+) -> None:
+    if pipeline is not None:
+        pipeline.info("predict", message, **detail)
+
+
 def predict_nifty(
     spot: float,
     signals: list[ConstituentSignal],
@@ -535,19 +545,33 @@ def predict_nifty(
     as_of_day: str | None = None,
     macro_trust_multiplier: float = 1.0,
     apply_event_overlay: bool = True,
+    pipeline: PipelineLogger | None = None,
 ) -> dict[str, Any]:
     """Hybrid forecast: bottom-up constituent attribution + macro Ridge delta."""
     from trade_integrations.dataflows.index_research.event_overlay import enrich_macro_with_news_features
     from trade_integrations.dataflows.company_research.market import india_trading_date_iso
 
     as_of = (as_of_day or india_trading_date_iso())[:10]
+    _predict_log(pipeline, "Enriching macro factors with news event features…")
     macro_factors = enrich_macro_with_news_features(macro_factors, as_of_day=as_of)
 
+    _predict_log(pipeline, "Loading hybrid model artifact…")
     artifact = model_artifact or load_stored_model_artifact()
-    attributed = attribute_constituents(signals, horizon_days=horizon.days)
+    _predict_log(pipeline, "Attributing bottom-up constituent contributions…")
+    attributed = attribute_constituents(
+        signals,
+        horizon_days=horizon.days,
+        pipeline=pipeline,
+    )
     rollup = rollup_attribution(attributed)
     bottom_up = float(rollup["total_contribution_pct"])
+    _predict_log(
+        pipeline,
+        f"Bottom-up rollup: {bottom_up:+.2f}%",
+        bottom_up_return_pct=bottom_up,
+    )
 
+    _predict_log(pipeline, "Computing macro Ridge delta…")
     raw_macro = _predict_macro_delta(
         macro_factors,
         horizon,
@@ -564,6 +588,11 @@ def predict_nifty(
     )
     if abs(gated_raw) > 1e-9:
         raw_macro = gated_raw
+    _predict_log(
+        pipeline,
+        f"Macro delta (post regime gates): {raw_macro:+.2f}%",
+        macro_delta_pct=raw_macro,
+    )
 
     from trade_integrations.dataflows.index_research.event_overlay import (
         compute_event_overlay,
@@ -583,6 +612,11 @@ def predict_nifty(
             as_of_day=as_of,
         )
         macro_for_shrink = raw_macro
+    _predict_log(
+        pipeline,
+        "Applying event overlay and macro shrink toward scenarios…",
+        event_overlay_pct=event_overlay.get("return_pct"),
+    )
     macro_delta = shrink_macro_delta(macro_for_shrink, scenario_anchor_return_pct)
     expected_return_pct = bottom_up + macro_delta
     mae = artifact.mae if artifact else _DEFAULT_MAE_PCT
@@ -595,6 +629,7 @@ def predict_nifty(
     r2 = artifact.r2_walk_forward if artifact else None
 
     direction_prob_raw = _predict_direction_probability(macro_factors, artifact) if artifact else None
+    _predict_log(pipeline, "Scoring direction head and calibrating confidence…")
     from trade_integrations.dataflows.index_research.direction_calibration import (
         calibrate_direction_confidence,
         load_walk_forward_accuracy,

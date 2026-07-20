@@ -55,8 +55,26 @@ def test_ensure_factor_data_complete_skips_enrich_when_disabled():
     assert result["skipped_enrich"] is True
     assert result["enriched"] is False
     assert measure_mock.call_count == 2
+    assert result["skipped_second_measure"] is False
     assert measure_mock.call_args.kwargs.get("allow_live_fetch") is False
     enrich_mock.assert_not_called()
+
+
+@pytest.mark.unit
+def test_ensure_factor_data_complete_skips_second_measure_when_gate_passes():
+    with patch(
+        "trade_integrations.dataflows.index_research.data_completeness.measure_flow_coverage",
+        return_value={"passes_gate": True, "min_pct": 96.9},
+    ) as measure_mock:
+        from trade_integrations.dataflows.index_research.data_completeness import (
+            ensure_factor_data_complete,
+        )
+
+        result = ensure_factor_data_complete(enrich=False)
+
+    assert measure_mock.call_count == 1
+    assert result["skipped_second_measure"] is True
+    assert result["after"] == result["before"]
 
 
 @pytest.mark.unit
@@ -77,13 +95,16 @@ def test_measure_flow_coverage_passes_when_all_factors_full():
         "trade_integrations.dataflows.index_research.data_completeness.load_factor_history",
         return_value=factors,
     ), patch(
-        "trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill.merge_flow_derivatives_frame",
+        "trade_integrations.dataflows.index_research.data_completeness._cached_merge_flow_derivatives_frame",
         return_value=flow,
+    ), patch(
+        "trade_integrations.dataflows.index_research.day_cache.get_or_fetch",
+        side_effect=lambda *, namespace, trading_day, fetch_fn, force=False: (fetch_fn(), False),
     ), patch(
         "trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill.flow_effective_start",
         return_value="2026-01-01",
     ):
-        report = measure_flow_coverage(days=30)
+        report = measure_flow_coverage(days=30, trading_day="2026-01-02")
 
     assert report["passes_gate"] is True
     assert report["min_pct"] >= MIN_FLOW_COVERAGE_PCT
@@ -107,8 +128,11 @@ def test_measure_flow_coverage_pcr_uses_separate_threshold():
         "trade_integrations.dataflows.index_research.data_completeness.load_factor_history",
         return_value=factors,
     ), patch(
-        "trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill.merge_flow_derivatives_frame",
+        "trade_integrations.dataflows.index_research.data_completeness._cached_merge_flow_derivatives_frame",
         return_value=flow,
+    ), patch(
+        "trade_integrations.dataflows.index_research.day_cache.get_or_fetch",
+        side_effect=lambda *, namespace, trading_day, fetch_fn, force=False: (fetch_fn(), False),
     ), patch(
         "trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill.flow_effective_start",
         return_value="2026-01-01",
@@ -116,7 +140,7 @@ def test_measure_flow_coverage_pcr_uses_separate_threshold():
         "trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill.pcr_effective_start",
         return_value="2026-01-01",
     ):
-        report = measure_flow_coverage(days=30)
+        report = measure_flow_coverage(days=30, trading_day="2026-01-02")
 
     pcr = report["factors"]["nifty_pcr"]
     assert pcr["gate_threshold_pct"] == 90.0

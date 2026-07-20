@@ -110,6 +110,36 @@ def test_build_duplicate_group_uses_star_topology_not_transitive():
     assert "evt:c" not in ids
 
 
+def test_run_hub_news_entity_job_drain_mode_skips_maintenance(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(
+        worker,
+        "process_staging_batch",
+        lambda **_: {"processed": 2, "created": 1, "updated": 1},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.pipeline_pause_status",
+        lambda **_: {"pipeline_paused": False, "pause_reason": "", "pending": {"queued": 0}},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_migrations.ensure_hub_news_migrations",
+        lambda **_: {"status": "ok"},
+    )
+
+    def _should_not_run(*_a, **_k):
+        raise AssertionError("maintenance stages must not run in drain mode")
+
+    monkeypatch.setattr(worker, "repair_leaked_distilled_summaries", _should_not_run)
+    monkeypatch.setattr(worker, "backfill_distilled_event_metadata", _should_not_run)
+    monkeypatch.setattr(worker, "compact_distilled_events", _should_not_run)
+
+    result = worker.run_hub_news_entity_job({"ticker": "NIFTY", "mode": "drain"})
+    assert result.get("mode") == "drain"
+    assert result.get("repair", {}).get("skipped") is True
+    assert result.get("staging", {}).get("processed") == 2
+
+
 def test_run_hub_news_entity_job_skips_repair_when_pipeline_paused(monkeypatch):
     from trade_integrations.dataflows.index_research import news_entity_worker as worker
 
@@ -138,3 +168,54 @@ def test_run_hub_news_entity_job_skips_repair_when_pipeline_paused(monkeypatch):
     assert result.get("pipeline_paused") is True
     assert result.get("repair", {}).get("skipped") is True
     assert result.get("compact_events", {}).get("skipped") is True
+
+
+def test_enqueue_respects_backpressure(hub_tmp, monkeypatch):
+    from trade_integrations.hub_storage import news_staging_store as staging
+
+    monkeypatch.setattr(staging, "entity_backpressure_threshold", lambda: 2)
+    _, first = staging.enqueue_raw_ref({"title": "a", "url": "http://example.com/a"}, ticker="NIFTY")
+    _, second = staging.enqueue_raw_ref({"title": "b", "url": "http://example.com/b"}, ticker="NIFTY")
+    _, third = staging.enqueue_raw_ref({"title": "c", "url": "http://example.com/c"}, ticker="NIFTY")
+    assert first is True
+    assert second is True
+    assert third is False
+
+
+def test_adaptive_drain_batch_size(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.staging_queue_detail",
+        lambda **_: {"queued": 800},
+    )
+    assert worker._adaptive_drain_batch_size(ticker="NIFTY") == 200
+
+
+def test_run_hub_news_entity_job_uses_adaptive_batch(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    captured: dict[str, int] = {}
+
+    def _fake_batch(**kwargs):
+        captured["limit"] = int(kwargs.get("limit") or 0)
+        return {"processed": 1, "created": 1, "updated": 0}
+
+    monkeypatch.setattr(worker, "process_staging_batch", _fake_batch)
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.staging_queue_detail",
+        lambda **_: {"queued": 1000},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.pipeline_pause_status",
+        lambda **_: {"pipeline_paused": False, "pause_reason": "", "pending": {"queued": 1000}},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_migrations.ensure_hub_news_migrations",
+        lambda **_: {"status": "ok"},
+    )
+
+    worker.run_hub_news_entity_job(
+        {"ticker": "NIFTY", "mode": "drain", "batch_size": "adaptive", "adaptive_batch": True}
+    )
+    assert captured["limit"] == 250

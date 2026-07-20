@@ -28,6 +28,8 @@ from .sources.rbi_cpi import fetch_rbi_cpi_context
 
 logger = logging.getLogger(__name__)
 
+_macro_fetch_ctx: dict[str, Any] = {}
+
 _YFINANCE_FACTORS: dict[str, str] = {
     "oil_brent": "BZ=F",
     "oil_wti": "CL=F",
@@ -303,7 +305,10 @@ def _fetch_nifty_pe() -> dict[str, Any] | None:
         resolve_nifty_trailing_pe,
     )
 
-    payload = resolve_nifty_trailing_pe()
+    payload = resolve_nifty_trailing_pe(
+        trading_day=_macro_fetch_ctx.get("trading_day"),
+        force=bool(_macro_fetch_ctx.get("force")),
+    )
     if not payload:
         return None
     return {
@@ -471,7 +476,53 @@ def collect_global_factor_rows(*, constituent_sentiments: list[float] | None = N
     ).data.get("factor_rows", [])
 
 
-def fetch_global_macro_snapshot(
+def _stage_result_to_cache(stage: StageResult) -> dict[str, Any]:
+    return {
+        "stage": stage.stage,
+        "status": stage.status,
+        "vendor": stage.vendor,
+        "fetched_at": stage.fetched_at.isoformat(),
+        "data": stage.data,
+        "errors": list(stage.errors),
+    }
+
+
+def _stage_result_from_cache(payload: dict[str, Any]) -> StageResult:
+    fetched_raw = payload.get("fetched_at") or ""
+    try:
+        fetched_at = datetime.fromisoformat(str(fetched_raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        fetched_at = _stage_now()
+    return StageResult(
+        stage=str(payload.get("stage") or "macro_global"),
+        status=payload.get("status") or "ok",
+        vendor=str(payload.get("vendor") or "macro_global"),
+        fetched_at=fetched_at,
+        data=dict(payload.get("data") or {}),
+        errors=list(payload.get("errors") or []),
+    )
+
+
+def _fetch_yfinance_factors_parallel() -> list[tuple[str, SourceAttempt]]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    out: list[tuple[str, SourceAttempt]] = []
+    with ThreadPoolExecutor(max_workers=len(_YFINANCE_FACTORS) or 1) as pool:
+        futures = {
+            pool.submit(_attempt_from_fetch, factor, lambda f=factor, s=symbol: _fetch_yfinance_factor(f, s)): factor
+            for factor, symbol in _YFINANCE_FACTORS.items()
+        }
+        for future in as_completed(futures):
+            factor = futures[future]
+            try:
+                out.append((factor, future.result()))
+            except Exception as exc:
+                out.append((factor, SourceAttempt(name=factor, status="error", error=str(exc))))
+    out.sort(key=lambda row: row[0])
+    return out
+
+
+def _fetch_global_macro_snapshot_uncached(
     *,
     constituent_sentiments: list[float] | None = None,
 ) -> StageResult:
@@ -480,13 +531,12 @@ def fetch_global_macro_snapshot(
     factor_rows: list[dict[str, Any]] = []
     factors: dict[str, Any] = {}
 
-    for factor, symbol in _YFINANCE_FACTORS.items():
-        attempt = _attempt_from_fetch(factor, lambda f=factor, s=symbol: _fetch_yfinance_factor(f, s))
+    for _factor, attempt in _fetch_yfinance_factors_parallel():
         attempts.append(attempt)
         if attempt.status == "ok" and attempt.data:
             row = _factor_row_from_payload(attempt.data)
             factor_rows.append(row)
-            factors[factor] = attempt.data["value"]
+            factors[_factor] = attempt.data["value"]
 
     for name, fetcher in (
         ("us_10y", _fetch_us_10y),
@@ -617,3 +667,37 @@ def fetch_global_macro_snapshot(
         },
         errors=[f"{a.name}: {a.error}" for a in attempts if a.status != "ok" and a.error],
     )
+
+
+def fetch_global_macro_snapshot(
+    *,
+    constituent_sentiments: list[float] | None = None,
+    trading_day: str | None = None,
+    force: bool = False,
+) -> StageResult:
+    """Collect daily global macro factors for index research (trading-day cache)."""
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+    from trade_integrations.dataflows.index_research.day_cache import get_or_fetch
+
+    day = (trading_day or india_trading_date_iso())[:10]
+    _macro_fetch_ctx["trading_day"] = day
+    _macro_fetch_ctx["force"] = force
+    try:
+
+        def fetch() -> dict[str, Any]:
+            stage = _fetch_global_macro_snapshot_uncached(
+                constituent_sentiments=constituent_sentiments,
+            )
+            return _stage_result_to_cache(stage)
+
+        payload, cached = get_or_fetch(
+            namespace="macro_snapshot",
+            trading_day=day,
+            fetch_fn=fetch,
+            force=force,
+        )
+        stage = _stage_result_from_cache(payload)
+        stage.data["_cached"] = cached
+        return stage
+    finally:
+        _macro_fetch_ctx.clear()

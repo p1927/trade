@@ -27,6 +27,34 @@ def test_apply_bottom_up_coeffs_respects_cap():
 
 
 @pytest.mark.unit
+def test_bottom_up_replay_skips_calibration_to_avoid_recursion(monkeypatch):
+    from trade_integrations.dataflows.index_research.models import ConstituentSignal
+
+    calls = {"calibrate": 0}
+
+    def _boom(*args, **kwargs):
+        calls["calibrate"] += 1
+        raise AssertionError("calibrate_bottom_up_coeffs should not run during archive replay")
+
+    signals = [
+        ConstituentSignal(symbol=f"S{i}", weight=0.02, sentiment_score=0.1)
+        for i in range(10)
+    ]
+
+    import trade_integrations.dataflows.index_research.constituent_backtest as cb
+
+    monkeypatch.setattr(cb, "load_constituent_signals_for_day", lambda day: signals)
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.calibrate_bottom_up.calibrate_bottom_up_coeffs",
+        _boom,
+    )
+    result = cb.bottom_up_return_from_archives("2026-07-01", horizon_days=14)
+
+    assert result is not None
+    assert calls["calibrate"] == 0
+
+
+@pytest.mark.unit
 def test_calibrate_bottom_up_fits_when_archives_available(monkeypatch):
     from datetime import date, timedelta
 

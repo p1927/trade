@@ -44,6 +44,7 @@ def main() -> int:
         print(json.dumps({"fao_bulk": fao_result}, indent=2))
         if fao_result.get("status") not in {"ok", "dry_run"}:
             return 1
+        return 0
 
     result = backfill_flow_history(
         start=args.start,

@@ -32,6 +32,7 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.tracks.qu
 )
 from trade_integrations.dataflows.index_research.prediction_algorithms.tracks.scenario_anchor import run_scenario_anchor
 from trade_integrations.dataflows.index_research.prediction_algorithms.tracks.xgboost_macro import run_xgboost_macro
+from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.index_research.prediction_algorithms.types import ForecastTrack, TrackContext
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,12 @@ EXPERIMENTAL_TRACK_REGISTRY: dict[str, TrackRunner] = {
 }
 
 
-def run_all_tracks(ctx: TrackContext, track_ids: list[str] | None = None) -> dict[str, ForecastTrack]:
+def run_all_tracks(
+    ctx: TrackContext,
+    track_ids: list[str] | None = None,
+    *,
+    pipeline: PipelineLogger | None = None,
+) -> dict[str, ForecastTrack]:
     ids = track_ids or list(TRACK_REGISTRY.keys())
     if track_ids is None and experimental_tracks_enabled():
         ids = list(ids) + [tid for tid in EXPERIMENTAL_TRACK_IDS if tid in EXPERIMENTAL_TRACK_REGISTRY]
@@ -71,5 +77,24 @@ def run_all_tracks(ctx: TrackContext, track_ids: list[str] | None = None) -> dic
         if runner is None:
             logger.warning("Unknown forecast track id: %s", track_id)
             continue
+        if pipeline is not None:
+            pipeline.info("forecast_lab", f"Running track: {track_id}…", track_id=track_id)
         out[track_id] = safe_run_track(track_id, runner, ctx)
+        if pipeline is not None:
+            track = out[track_id]
+            if track.available:
+                pipeline.info(
+                    "forecast_lab",
+                    f"Track {track_id}: {track.view} {track.expected_return_pct:+.2f}%",
+                    track_id=track_id,
+                    expected_return_pct=track.expected_return_pct,
+                )
+            else:
+                reason = (track.provenance or {}).get("reason") or (track.provenance or {}).get("error") or "unavailable"
+                pipeline.info(
+                    "forecast_lab",
+                    f"Track {track_id}: skipped ({reason})",
+                    track_id=track_id,
+                    reason=reason,
+                )
     return out

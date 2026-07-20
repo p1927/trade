@@ -15,6 +15,7 @@ from trade_integrations.dataflows.index_research.prediction_algorithms.config im
 from trade_integrations.dataflows.index_research.prediction_algorithms.promotion import resolve_active_combiner
 from trade_integrations.dataflows.index_research.prediction_algorithms.registry import run_all_tracks
 from trade_integrations.dataflows.index_research.prediction_algorithms.types import ForecastLabResult, TrackContext
+from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 
 LabRunMode = Literal["tracks_only", "combine"]
 
@@ -27,9 +28,10 @@ def run_forecast_lab(
     include_causes: bool = True,
     mae_by_track: dict[str, float] | None = None,
     lam: float | None = None,
+    pipeline: PipelineLogger | None = None,
 ) -> ForecastLabResult:
     """Run all forecast tracks and optionally combine."""
-    tracks = run_all_tracks(context)
+    tracks = run_all_tracks(context, pipeline=pipeline)
     track_dict = {tid: row.to_dict() for tid, row in tracks.items()}
 
     cause_meta = compute_cause_stress_index(context.macro_factors) if include_causes else {}
@@ -43,6 +45,8 @@ def run_forecast_lab(
     combiner_result = None
     active = None
     if mode == "combine":
+        if pipeline is not None:
+            pipeline.info("forecast_lab", "Running combiner…")
         active = combiner_id or resolve_active_combiner(default=default_combiner_id())
         combined = run_combiner(
             active,

@@ -27,6 +27,9 @@ from trade_integrations.dataflows.index_research.prediction_ledger import (
     compute_accuracy_metrics,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
+from trade_integrations.ml_runtime_env import ensure_libomp_loaded
+
+ensure_libomp_loaded()
 from trade_integrations.dataflows.index_research.predictor import (
     finalize_index_prediction,
     load_stored_model_artifact,
@@ -123,6 +126,7 @@ def run_index_research(
     *,
     horizon_days: int | None = None,
     refresh_constituents: bool = False,
+    run_forecast_lab: bool = False,
     pipeline: PipelineLogger | None = None,
 ) -> IndexResearchDoc:
     """Build a full index research dossier with prediction, scenarios, and ledger entry."""
@@ -152,15 +156,21 @@ def run_index_research(
         ensure_factor_data_complete,
     )
     try:
-        completeness = ensure_factor_data_complete(
-            enrich=refresh_constituents,
-            allow_live_fetch=False,
-        )
+        with log.stage_timer("data_completeness", "Flow coverage gate"):
+            completeness = ensure_factor_data_complete(
+                enrich=refresh_constituents,
+                allow_live_fetch=False,
+                trading_day=trading_day,
+                force=refresh_constituents,
+            )
+        after = completeness.get("after") or {}
         log.info(
             "data_completeness",
-            f"Flow coverage min {completeness.get('after', {}).get('min_pct')}% "
+            f"Flow coverage min {after.get('min_pct')}% "
             f"(gate={'pass' if completeness.get('passes_gate') else 'fail'}"
             f"{'; cached-only check' if completeness.get('skipped_enrich') else ''})",
+            cached=completeness.get("_cached"),
+            skipped_second_measure=completeness.get("skipped_second_measure"),
             **{k: completeness.get(k) for k in ("enriched", "passes_gate")},
         )
     except Exception as exc:
@@ -287,9 +297,12 @@ def run_index_research(
 
     log.info("macro", "Collecting global macro, technical, calendar, and PCR factors…")
     sentiments = [signal.sentiment_score for signal in signals if signal.sentiment_score is not None]
-    macro_stage = fetch_global_macro_snapshot(
-        constituent_sentiments=sentiments or None,
-    )
+    with log.stage_timer("macro", "Macro snapshot"):
+        macro_stage = fetch_global_macro_snapshot(
+            constituent_sentiments=sentiments or None,
+            trading_day=trading_day,
+            force=refresh_constituents,
+        )
     stages.append(macro_stage)
     macro_factors = dict(macro_stage.data.get("factors") or {})
     factor_names = sorted(macro_factors.keys())
@@ -298,6 +311,7 @@ def run_index_research(
         f"Macro snapshot: {len(factor_names)} factors",
         factors=factor_names,
         status=macro_stage.status,
+        cached=bool(macro_stage.data.get("_cached")),
     )
     for err in macro_stage.errors or []:
         log.warn("macro", err)
@@ -386,6 +400,7 @@ def run_index_research(
         as_of_day=trading_day,
         scenario_anchor_return_pct=scenario_anchor,
         macro_trust_multiplier=macro_trust_multiplier,
+        pipeline=log,
     ) if spot > 0 else {}
     if prediction and not completeness.get("passes_gate"):
         after = completeness.get("after") or {}
@@ -520,7 +535,8 @@ def run_index_research(
             debate_merged=bool(debate_struct),
         )
 
-    if spot > 0 and prediction:
+    if run_forecast_lab and spot > 0 and prediction:
+        log.info("forecast_lab", "Running forecast lab tracks (quant_ridge, debate, combiner)…")
         from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
             attach_forecast_lab,
         )
@@ -539,7 +555,9 @@ def run_index_research(
             debate_payload=debate_raw if debate_struct else None,
             pre_reconcile_snapshot=pre_reconcile_snapshot,
             legacy_prediction=legacy_prediction,
+            pipeline=log,
         )
+        log.info("forecast_lab", "Forecast lab tracks attached")
 
     factor_bundle: dict[str, Any] = {}
     if spot > 0 and prediction:

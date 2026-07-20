@@ -14,6 +14,7 @@ from trade_integrations.hub_storage.parquet_io import concat_dataframes, concat_
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.history_ingest import _frames_for_concat
+from trade_integrations.http import get, nse_session
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,7 @@ def fetch_mrchartist_flow_frame(
     if not allow_live_fetch:
         return pd.DataFrame()
     try:
-        import requests
-
-        response = requests.get(_FII_HISTORY_URL, timeout=45)
+        response = get(_FII_HISTORY_URL, timeout=45)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -163,9 +162,7 @@ def fetch_mrchartist_latest_session(*, allow_live_fetch: bool = True) -> pd.Data
     if not allow_live_fetch:
         return pd.DataFrame()
     try:
-        import requests
-
-        response = requests.get(_FII_LIVE_URL, timeout=20)
+        response = get(_FII_LIVE_URL, timeout=20)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -234,23 +231,11 @@ def fetch_nselib_fii_dii_frame(
     if not allow_live_fetch:
         return pd.DataFrame()
     try:
-        import requests
-    except ImportError:
-        return pd.DataFrame()
-
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
-            "Referer": "https://www.nseindia.com/reports/fii-dii",
-        }
-    )
-    try:
-        session.get("https://www.nseindia.com", timeout=15)
-        response = session.get("https://www.nseindia.com/api/fiidiiTradeReact", timeout=15)
-        response.raise_for_status()
-        payload = response.json()
+        with nse_session() as session:
+            session.headers.update({"Accept": "application/json"})
+            response = session.get("https://www.nseindia.com/api/fiidiiTradeReact", timeout=15)
+            response.raise_for_status()
+            payload = response.json()
     except Exception as exc:
         logger.debug("NSE fiidiiTradeReact unavailable: %s", exc)
         return pd.DataFrame()
@@ -353,25 +338,53 @@ def upsert_flow_cash_cache(rows: list[dict]) -> int:
     return len(incoming)
 
 
-def _nse_session():
+def _fetch_nse_fao_participant_oi_for_date(day: str, session) -> pd.DataFrame:
+    """Historical F&O participant OI for one session using an open NSE session."""
     try:
-        import requests
-    except ImportError:
-        return None
-    session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "*/*",
-            "Referer": "https://www.nseindia.com/reports/fii-dii",
-        }
-    )
-    try:
-        session.get("https://www.nseindia.com", timeout=15)
-    except Exception as exc:
-        logger.debug("NSE session bootstrap failed: %s", exc)
-        return None
-    return session
+        parsed = datetime.strptime(day[:10], "%Y-%m-%d")
+    except ValueError:
+        return pd.DataFrame()
+    date_key = parsed.strftime("%d%m%Y")
+    csv_text = None
+    for template in _FAO_ARCHIVE_BASES:
+        url = template.format(date=date_key)
+        try:
+            response = session.get(url, timeout=15)
+            if response.status_code == 200 and len(response.content) > 100:
+                text = response.text
+                if "html" not in text[:80].lower():
+                    csv_text = text
+                    break
+        except Exception as exc:
+            logger.debug("FAO archive miss %s: %s", url, exc)
+    if not csv_text:
+        return pd.DataFrame()
+
+    parsed_rows = _parse_fao_participant_csv(csv_text)
+    if not parsed_rows:
+        return pd.DataFrame()
+
+    row: dict = {"date": day[:10], "source": "nse_fao_archive"}
+    fii = parsed_rows.get("FII") or {}
+    for key, val in fii.items():
+        row[key] = val
+    if row.get("fii_idx_fut_long") and row.get("fii_idx_fut_short"):
+        row["fii_fut_long_short_ratio"] = float(row["fii_idx_fut_long"]) / max(
+            float(row["fii_idx_fut_short"]), 1e-9
+        )
+    put_oi = row.get("fii_idx_put_oi")
+    call_oi = row.get("fii_idx_call_oi")
+    if put_oi and call_oi:
+        row["nifty_pcr"] = float(put_oi) / max(float(call_oi), 1e-9)
+    return pd.DataFrame([row])
+
+
+def fetch_nse_fao_participant_oi_for_date(day: str, *, session=None) -> pd.DataFrame:
+    """Historical F&O participant OI for one session (NSE archives)."""
+    if session is not None:
+        return _fetch_nse_fao_participant_oi_for_date(day, session)
+    with nse_session() as scoped:
+        return _fetch_nse_fao_participant_oi_for_date(day, scoped)
 
 
 def _parse_fao_participant_csv(csv_text: str) -> dict[str, dict[str, float]]:
@@ -424,50 +437,6 @@ def _parse_fao_participant_csv(csv_text: str) -> dict[str, dict[str, float]]:
     return out
 
 
-def fetch_nse_fao_participant_oi_for_date(day: str) -> pd.DataFrame:
-    """Historical F&O participant OI for one session (NSE archives)."""
-    session = _nse_session()
-    if session is None:
-        return pd.DataFrame()
-    try:
-        parsed = datetime.strptime(day[:10], "%Y-%m-%d")
-    except ValueError:
-        return pd.DataFrame()
-    date_key = parsed.strftime("%d%m%Y")
-    csv_text = None
-    for template in _FAO_ARCHIVE_BASES:
-        url = template.format(date=date_key)
-        try:
-            response = session.get(url, timeout=15)
-            if response.status_code == 200 and len(response.content) > 100:
-                text = response.text
-                if "html" not in text[:80].lower():
-                    csv_text = text
-                    break
-        except Exception as exc:
-            logger.debug("FAO archive miss %s: %s", url, exc)
-    if not csv_text:
-        return pd.DataFrame()
-
-    parsed_rows = _parse_fao_participant_csv(csv_text)
-    if not parsed_rows:
-        return pd.DataFrame()
-
-    row: dict = {"date": day[:10], "source": "nse_fao_archive"}
-    fii = parsed_rows.get("FII") or {}
-    for key, val in fii.items():
-        row[key] = val
-    if row.get("fii_idx_fut_long") and row.get("fii_idx_fut_short"):
-        row["fii_fut_long_short_ratio"] = float(row["fii_idx_fut_long"]) / max(
-            float(row["fii_idx_fut_short"]), 1e-9
-        )
-    put_oi = row.get("fii_idx_put_oi")
-    call_oi = row.get("fii_idx_call_oi")
-    if put_oi and call_oi:
-        row["nifty_pcr"] = float(put_oi) / max(float(call_oi), 1e-9)
-    return pd.DataFrame([row])
-
-
 def fetch_nse_fao_history_frame(
     trading_dates: list[str],
     *,
@@ -477,12 +446,13 @@ def fetch_nse_fao_history_frame(
     """Backfill F&O participant OI from NSE archives for trading dates."""
     rows: list[dict] = []
     targets = trading_dates if max_days is None else trading_dates[-max_days:]
-    for idx, day in enumerate(targets):
-        frame = fetch_nse_fao_participant_oi_for_date(day)
-        if not frame.empty:
-            rows.append(frame.iloc[0].to_dict())
-        if sleep_s > 0 and idx < len(targets) - 1:
-            time.sleep(sleep_s)
+    with nse_session() as session:
+        for idx, day in enumerate(targets):
+            frame = _fetch_nse_fao_participant_oi_for_date(day, session)
+            if not frame.empty:
+                rows.append(frame.iloc[0].to_dict())
+            if sleep_s > 0 and idx < len(targets) - 1:
+                time.sleep(sleep_s)
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("date").drop_duplicates("date", keep="last")
@@ -866,70 +836,71 @@ def backfill_nse_fao_to_cold_tier(
     total_fetched = 0
     nselib_ok = 0
     fao_ok = 0
-    for idx, day in enumerate(missing):
-        frame = fetch_nse_fao_participant_oi_for_date(day)
-        if not frame.empty:
-            fao_ok += 1
-        if frame.empty:
-            from trade_integrations.dataflows import source_availability
+    with nse_session() as nse_http:
+        for idx, day in enumerate(missing):
+            frame = fetch_nse_fao_participant_oi_for_date(day, session=nse_http)
+            if not frame.empty:
+                fao_ok += 1
+            if frame.empty:
+                from trade_integrations.dataflows import source_availability
 
-            if not source_availability.should_attempt("nselib", "participant_oi"):
-                skipped.add(day[:10])
-                if sleep_s > 0 and idx < len(missing) - 1:
-                    time.sleep(sleep_s)
-                continue
-            try:
-                from trade_integrations.dataflows.index_research.participant_oi_backfill import (
-                    fetch_participant_oi_day,
-                )
-
-                payload = fetch_participant_oi_day(day)
-                if payload:
-                    frame = pd.DataFrame([payload])
-                    nselib_ok += 1
-            except Exception as exc:
-                logger.debug("nselib FAO fallback failed %s: %s", day, exc)
-        if not frame.empty:
-            fetched_rows.append(frame.iloc[0].to_dict())
-            completed.add(day[:10])
-        else:
-            skipped.add(day[:10])
-        if sleep_s > 0 and idx < len(missing) - 1:
-            time.sleep(sleep_s)
-        if (idx + 1) % 50 == 0:
-            _save_fao_backfill_progress(completed, skipped)
-            if fetched_rows:
-                from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
-
-                batch_overlay = pd.DataFrame(fetched_rows)
-                existing = load_history_dataset("flow_derivatives_daily")
-                merged_batch = overlay_derivative_columns(existing, batch_overlay)
-                save_history_dataset("flow_derivatives_daily", merged_batch, merge=False)
-                batch_start = min(r["date"][:10] for r in fetched_rows if r.get("date"))
-                batch_end = max(r["date"][:10] for r in fetched_rows if r.get("date"))
+                if not source_availability.should_attempt("nselib", "participant_oi"):
+                    skipped.add(day[:10])
+                    if sleep_s > 0 and idx < len(missing) - 1:
+                        time.sleep(sleep_s)
+                    continue
                 try:
-                    from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
-                        sync_flow_factors_from_merge,
-                    )
-                    from trade_integrations.dataflows.index_research.sources.historical_flows import (
-                        sync_merged_flow_derivatives_to_cold_tier,
+                    from trade_integrations.dataflows.index_research.participant_oi_backfill import (
+                        fetch_participant_oi_day,
                     )
 
-                    sync_merged_flow_derivatives_to_cold_tier(batch_start, batch_end, allow_live_fetch=True)
-                    sync_flow_factors_from_merge(start=batch_start, end=batch_end, allow_live_fetch=True)
+                    payload = fetch_participant_oi_day(day)
+                    if payload:
+                        frame = pd.DataFrame([payload])
+                        nselib_ok += 1
                 except Exception as exc:
-                    logger.debug("batch cold/factor sync failed: %s", exc)
-                total_fetched += len(fetched_rows)
-                fetched_rows = []
-            logger.info(
-                "FAO batch %d/%d fetched=%d nselib_ok=%d fao_ok=%d completed=%d",
-                idx + 1,
-                len(missing),
-                len(completed),
-                nselib_ok,
-                fao_ok,
-                len(completed),
-            )
+                    logger.debug("nselib FAO fallback failed %s: %s", day, exc)
+            if not frame.empty:
+                fetched_rows.append(frame.iloc[0].to_dict())
+                completed.add(day[:10])
+            else:
+                skipped.add(day[:10])
+            if sleep_s > 0 and idx < len(missing) - 1:
+                time.sleep(sleep_s)
+            if (idx + 1) % 50 == 0:
+                _save_fao_backfill_progress(completed, skipped)
+                if fetched_rows:
+                    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+                    batch_overlay = pd.DataFrame(fetched_rows)
+                    existing = load_history_dataset("flow_derivatives_daily")
+                    merged_batch = overlay_derivative_columns(existing, batch_overlay)
+                    save_history_dataset("flow_derivatives_daily", merged_batch, merge=False)
+                    batch_start = min(r["date"][:10] for r in fetched_rows if r.get("date"))
+                    batch_end = max(r["date"][:10] for r in fetched_rows if r.get("date"))
+                    try:
+                        from trade_integrations.dataflows.index_research.factor_backfill_enrichment import (
+                            sync_flow_factors_from_merge,
+                        )
+                        from trade_integrations.dataflows.index_research.sources.historical_flows import (
+                            sync_merged_flow_derivatives_to_cold_tier,
+                        )
+
+                        sync_merged_flow_derivatives_to_cold_tier(batch_start, batch_end, allow_live_fetch=True)
+                        sync_flow_factors_from_merge(start=batch_start, end=batch_end, allow_live_fetch=True)
+                    except Exception as exc:
+                        logger.debug("batch cold/factor sync failed: %s", exc)
+                    total_fetched += len(fetched_rows)
+                    fetched_rows = []
+                logger.info(
+                    "FAO batch %d/%d fetched=%d nselib_ok=%d fao_ok=%d completed=%d",
+                    idx + 1,
+                    len(missing),
+                    len(completed),
+                    nselib_ok,
+                    fao_ok,
+                    len(completed),
+                )
 
     _save_fao_backfill_progress(completed, skipped)
 

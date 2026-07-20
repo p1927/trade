@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from trade_integrations.context.hub import get_hub_dir
+
+logger = logging.getLogger(__name__)
+_backpressure_log_at: float = 0.0
 
 _STAGING_DIR = Path("_data") / "news_staging"
 _PENDING_FILE = "pending.jsonl"
@@ -47,11 +52,51 @@ def ref_id_for_url(url: str) -> str:
     return f"ref:{digest}"
 
 
+def entity_backpressure_threshold() -> int:
+    try:
+        from trade_integrations.hub_storage.news_pipeline_config import load_news_pipeline_config
+
+        return int(load_news_pipeline_config().entity_backpressure_threshold)
+    except Exception:
+        try:
+            return max(1, int(os.getenv("HUB_NEWS_BACKPRESSURE_THRESHOLD", "400")))
+        except ValueError:
+            return 400
+
+
+def staging_backpressure_active(*, ticker: str | None = None) -> tuple[bool, int]:
+    """Return whether staging queue depth exceeds the backpressure threshold."""
+    detail = staging_queue_detail(ticker=ticker)
+    queued = int(detail.get("queued") or 0)
+    threshold = entity_backpressure_threshold()
+    return queued >= threshold, queued
+
+
+def _log_backpressure_skip(*, queued: int) -> None:
+    global _backpressure_log_at
+    now = time.time()
+    if now - _backpressure_log_at < 60.0:
+        return
+    _backpressure_log_at = now
+    logger.warning(
+        "news staging backpressure active: queued=%s threshold=%s — skipping enqueue",
+        queued,
+        entity_backpressure_threshold(),
+    )
+
+
 def enqueue_raw_ref(row: dict[str, Any], *, ticker: str) -> tuple[str, bool]:
     """Append a raw article ref to the staging queue; skip exact URL duplicates.
 
     Returns ``(ref_id, appended)`` where ``appended`` is False when deduped.
     """
+    active, queued = staging_backpressure_active(ticker=ticker)
+    if active:
+        url = str(row.get("url") or "").strip()
+        ref_id = ref_id_for_url(url or str(row.get("title") or ""))
+        _log_backpressure_skip(queued=queued)
+        return ref_id, False
+
     url = str(row.get("url") or "").strip()
     ref_id = ref_id_for_url(url or str(row.get("title") or ""))
     url_key = _url_dedupe_key(url)

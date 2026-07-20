@@ -38,6 +38,17 @@ def artifact_feature_row(macro_factors: dict, feature_names: list[str]) -> list[
     return values
 
 
+def as_float_matrix(rows_x: list[list[float]]) -> np.ndarray:
+    """LightGBM 4.x requires ndarray input — plain nested lists fail in lgb.train."""
+    if not rows_x:
+        return np.empty((0, 0), dtype=np.float64)
+    return np.asarray(rows_x, dtype=np.float64)
+
+
+def as_float_vector(rows_y: list[float]) -> np.ndarray:
+    return np.asarray(rows_y, dtype=np.float64)
+
+
 def row_factor_dict(row: pd.Series, *, skip: frozenset[str] | None = None) -> dict[str, float]:
     skip_cols = skip or _SKIP_COLS
     out: dict[str, float] = {}
@@ -60,7 +71,7 @@ def build_training_matrix(
     *,
     as_of_day: str | None = None,
     min_train_rows: int = _MIN_TRAIN_ROWS,
-) -> tuple[list[list[float]], list[float], list[str]]:
+) -> tuple[list[list[float]], list[float], list[str], list[int]]:
     panel = load_aligned_factor_history(days=400)
     if panel is None or panel.empty or "close" not in panel.columns:
         raise ValueError("insufficient_panel_rows:0")
@@ -71,21 +82,20 @@ def build_training_matrix(
     fwd = _forward_return_pct(closes, horizon_days)
     rows_x: list[list[float]] = []
     rows_y: list[float] = []
+    panel_indices: list[int] = []
 
     for i in range(len(panel)):
         target = fwd.iloc[i]
         if target != target:
             continue
-        day = str(panel.iloc[i].get("date", ""))[:10]
         factors = row_factor_dict(panel.iloc[i])
-        if day:
-            factors = enrich_macro_with_news_features(factors, as_of_day=day)
         rows_x.append(artifact_feature_row(factors, feature_names))
         rows_y.append(float(target))
+        panel_indices.append(i)
 
     if len(rows_y) < min_train_rows:
         raise ValueError(f"insufficient_training_pairs:{len(rows_y)}")
-    return rows_x, rows_y, feature_names
+    return rows_x, rows_y, feature_names, panel_indices
 
 
 def regime_mask_from_panel(
@@ -123,15 +133,17 @@ def predict_tabular_macro(
     predict_fn: Callable[[Any, list[list[float]]], np.ndarray | list[float]],
     regime_key: str | None = "repo_rate_velocity_3d",
 ) -> tuple[float, dict]:
-    rows_x, rows_y, feature_names = build_training_matrix(artifact, horizon, as_of_day=as_of_day)
+    rows_x, rows_y, feature_names, panel_indices = build_training_matrix(
+        artifact, horizon, as_of_day=as_of_day
+    )
     panel = load_aligned_factor_history(days=400)
     mask = regime_mask_from_panel(panel, regime_key=regime_key) if regime_key else None
-    if mask is not None and len(mask) >= len(rows_y):
-        mask = mask[: len(rows_y)]
+    if mask is not None and panel_indices:
+        mask = mask[np.asarray(panel_indices, dtype=int)]
     rising, falling = split_by_regime(rows_x, rows_y, mask)
 
     live_factors = enrich_macro_with_news_features(dict(macro_factors), as_of_day=as_of_day)
-    live_vec = [artifact_feature_row(live_factors, feature_names)]
+    live_vec = as_float_matrix([artifact_feature_row(live_factors, feature_names)])
 
     regime_label = "all"
     train_x, train_y = rows_x, rows_y
@@ -144,7 +156,7 @@ def predict_tabular_macro(
             train_x, train_y = falling
             regime_label = "falling_rates"
 
-    model = train_fn(train_x, train_y, feature_names)
+    model = train_fn(as_float_matrix(train_x), as_float_vector(train_y), feature_names)
     pred = float(predict_fn(model, live_vec)[0])
     return round(pred, 4), {
         "train_rows": len(train_y),
