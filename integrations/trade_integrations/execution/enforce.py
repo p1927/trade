@@ -44,8 +44,8 @@ def assert_direct_order_tool_allowed(
         return
     if session_kind == "autonomous_agent" or is_bridge_autonomous_agent(autonomous_agent_id):
         raise PermissionError(
-            "Direct basket order blocked for autonomous/bridge agents — use execute_auto_paper_basket "
-            "or bridge intent queue"
+            "Direct basket order blocked for autonomous/bridge agents — "
+            "use plan approval flow or bridge intent queue"
         )
 
 
