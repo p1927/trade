@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any
-from urllib.parse import urljoin
 
 import requests
 
-from trade_integrations.dataflows.searxng_request import run_searxng_search
+from trade_integrations.dataflows.searxng_client import search_json
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +58,6 @@ _UNTRUSTED_PE_URL_FRAGMENTS = (
 )
 
 
-def _default_base_url() -> str:
-    from trade_integrations.stack_ports import searxng_base_url
-
-    return searxng_base_url()
-
-
-def searxng_base() -> str:
-    return os.environ.get("SEARXNG_BASE_URL", _default_base_url()).rstrip("/")
-
-
 def _trusted_result(result: dict[str, Any]) -> bool:
     url = str(result.get("url") or "").lower()
     return any(domain in url for domain in TRUSTED_FINANCE_DOMAINS)
@@ -99,18 +87,8 @@ def search_finance(
     collected: list[dict[str, Any]] = []
 
     for cat in category_attempts:
-        url = urljoin(searxng_base() + "/", "search")
-        params: dict[str, str] = {"q": query, "format": "json"}
-        if cat:
-            params["categories"] = cat
         try:
-
-            def _fetch():
-                resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-                resp.raise_for_status()
-                return resp.json()
-
-            payload = run_searxng_search(_fetch)
+            payload = search_json(query, categories=cat, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as exc:
             logger.debug("SearXNG search failed (%s) for %r: %s", cat or "all", query, exc)
             continue
