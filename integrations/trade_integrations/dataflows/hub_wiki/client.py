@@ -151,12 +151,18 @@ def trigger_sources_rescan(*, project_id: str | None = None) -> dict[str, Any]:
     return _request("POST", f"/api/v1/projects/{pid}/sources/rescan")
 
 
-def search_wiki(query: str, *, top_k: int = 10, project_id: str | None = None) -> dict[str, Any]:
+def search_wiki(
+    query: str,
+    *,
+    top_k: int = 10,
+    include_content: bool = False,
+    project_id: str | None = None,
+) -> dict[str, Any]:
     pid = project_id or resolve_project_id()
     if not pid:
         return {"ok": False, "error": "LLM_Wiki project id not configured"}
     return _request(
         "POST",
         f"/api/v1/projects/{pid}/search",
-        body={"query": query, "topK": top_k, "includeContent": False},
+        body={"query": query, "topK": top_k, "includeContent": include_content},
     )
