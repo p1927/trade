@@ -389,7 +389,7 @@ def test_shap_context_uses_same_poly_path_as_predictor():
     import numpy as np
 
     from trade_integrations.dataflows.index_research.explain import _prepare_linear_shap_context
-    from trade_integrations.dataflows.index_research.predictor import _predict_macro_delta
+    from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
 
     artifact = ModelArtifact(
         coefficients={"usd_inr": 0.05, "oil_brent": -0.03},
@@ -406,7 +406,7 @@ def test_shap_context_uses_same_poly_path_as_predictor():
     ctx = _prepare_linear_shap_context(macro, artifact)
     assert ctx is not None
     ridge_pred = float(ctx["ridge"].predict(ctx["x_poly"])[0])
-    live_pred = _predict_macro_delta(macro, horizon, artifact)
+    live_pred = predict_macro_delta_gated(macro, horizon, artifact)
     assert ridge_pred == pytest.approx(live_pred, abs=1e-6)
 
 

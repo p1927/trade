@@ -114,7 +114,7 @@ def _prepare_linear_shap_context(
     *,
     panel_background: Any | None = None,
 ) -> dict[str, Any] | None:
-    """Build Ridge SHAP inputs using the same scale/poly path as ``_predict_macro_delta``."""
+    """Build Ridge SHAP inputs using the same gated scale/poly path as ``predict_macro_delta_gated``."""
     if not artifact.feature_names or not artifact.coefficients:
         return None
     try:
@@ -123,13 +123,20 @@ def _prepare_linear_shap_context(
 
         from trade_integrations.dataflows.index_research.predictor import (
             _expand_poly,
+            _macro_trust_weight,
             _scale_features,
+        )
+        from trade_integrations.dataflows.index_research.regime_gates import (
+            factor_gate_weight,
+            resolve_regime_label,
         )
     except ImportError:
         return None
 
     names = list(artifact.feature_names)
     values = np.array([_macro_factor_value(macro_factors, n) for n in names], dtype=float).reshape(1, -1)
+    current_regime = resolve_regime_label(macro_factors)
+    current_gates = np.array([factor_gate_weight(n, current_regime) for n in names], dtype=float)
 
     panel_for_background = panel_background
     if panel_for_background is None:
@@ -146,7 +153,8 @@ def _prepare_linear_shap_context(
     else:
         scaled_current = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
 
-    x_poly, poly_names = _expand_poly(scaled_current, names, artifact.poly_degree)
+    gated_current = scaled_current * current_gates.reshape(1, -1)
+    x_poly, poly_names = _expand_poly(gated_current, names, artifact.poly_degree)
     if x_poly.ndim == 1:
         x_poly = x_poly.reshape(1, -1)
 
@@ -156,11 +164,21 @@ def _prepare_linear_shap_context(
             scaled_background = _scale_features(panel_for_background, means, stds)
         else:
             scaled_background = np.nan_to_num(panel_for_background, nan=0.0, posinf=0.0, neginf=0.0)
-        background_poly, _ = _expand_poly_matrix(scaled_background, names, artifact.poly_degree)
+        gated_rows: list[Any] = []
+        for row_idx, row in enumerate(scaled_background):
+            row_factors = {
+                names[col_idx]: float(panel_for_background[row_idx, col_idx])
+                for col_idx in range(len(names))
+            }
+            row_regime = resolve_regime_label(row_factors)
+            row_gates = np.array([factor_gate_weight(n, row_regime) for n in names], dtype=float)
+            gated_rows.append(row * row_gates)
+        background_poly, _ = _expand_poly_matrix(np.vstack(gated_rows), names, artifact.poly_degree)
 
+    trust = _macro_trust_weight(float(artifact.mae or 1.5))
     ridge = Ridge(alpha=float(artifact.ridge_alpha or 50.0), solver="lsqr")
-    ridge.coef_ = np.array([artifact.coefficients.get(n, 0.0) for n in poly_names], dtype=float)
-    ridge.intercept_ = float(artifact.intercept)
+    ridge.coef_ = np.array([artifact.coefficients.get(n, 0.0) for n in poly_names], dtype=float) * trust
+    ridge.intercept_ = float(artifact.intercept) * trust
     return {
         "ridge": ridge,
         "poly_names": poly_names,
@@ -175,8 +193,10 @@ def _uncapped_macro_delta(
     horizon: HorizonProfile,
     artifact: ModelArtifact | None,
 ) -> float:
-    """Raw Ridge macro delta before the ±5% cap (used for attribution math)."""
-    return _predict_macro_delta(macro_factors, horizon, artifact)
+    """Regime-gated Ridge macro delta before the ±5% cap (matches live predictor path)."""
+    from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
+
+    return predict_macro_delta_gated(macro_factors, horizon, artifact)
 
 
 def _capped_macro_delta(
