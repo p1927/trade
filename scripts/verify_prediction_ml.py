@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify prediction ML runtime (libomp + lightgbm/xgboost/darts). Used by trade preflight."""
+"""Verify prediction ML runtime (libomp + sklearn/shap + lightgbm/xgboost/darts). Used by trade preflight."""
 
 from __future__ import annotations
 

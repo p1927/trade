@@ -74,7 +74,7 @@ if ! "$PY" -c "import trade_integrations; import tradingagents" 2>/dev/null; the
   log "Installing trade integrations + TradingAgents ..."
   "$PY" -m pip install -q --upgrade pip
   "$PY" -m pip install -q -e "$ROOT/tradingagents"
-  "$PY" -m pip install -q -e ".[dev,research,external-predictions]"
+  "$PY" -m pip install -q -e ".[dev,research,external-predictions,prediction]"
   "$PY" -m pip install -q 'requests>=2.34.2'
 fi
 
@@ -87,7 +87,7 @@ log "Syncing root .env defaults + ports into OpenAlgo/Vibe agent ..."
 stack_sync_env
 
 if [[ -x "$ROOT/scripts/ensure_prediction_ml.sh" ]]; then
-  log "Installing prediction ML runtime (libomp + lightgbm/xgboost/darts) ..."
+  log "Installing prediction ML runtime (libomp + sklearn/shap + lightgbm/xgboost/darts) ..."
   bash "$ROOT/scripts/ensure_prediction_ml.sh"
 else
   die "Missing scripts/ensure_prediction_ml.sh"

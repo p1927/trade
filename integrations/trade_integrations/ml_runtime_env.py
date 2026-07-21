@@ -18,8 +18,11 @@ _YFINANCE_WARNING_SUPPRESSED = False
 _LIBOMP_RPATH = Path("/opt/homebrew/opt/libomp/lib/libomp.dylib")
 
 _VERIFY_SNIPPET = """
-import lightgbm, xgboost, darts
-print(f"lightgbm={lightgbm.__version__}, xgboost={xgboost.__version__}, darts={darts.__version__}")
+import lightgbm, xgboost, darts, shap, sklearn
+print(
+    f"lightgbm={lightgbm.__version__}, xgboost={xgboost.__version__}, "
+    f"darts={darts.__version__}, shap={shap.__version__}, sklearn={sklearn.__version__}"
+)
 """
 
 
@@ -158,7 +161,7 @@ def prepare_yfinance_runtime() -> bool:
 def _verify_imports_in_process() -> tuple[bool, str]:
     errors: list[str] = []
     versions: list[str] = []
-    for mod in ("lightgbm", "xgboost", "darts"):
+    for mod in ("lightgbm", "xgboost", "darts", "shap", "sklearn"):
         try:
             imported = __import__(mod)
             version = getattr(imported, "__version__", "?")

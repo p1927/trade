@@ -31,6 +31,8 @@ fi
 echo "[prediction-ml] installing Python packages into $(dirname "$PY") ..."
 "$PIP" install -q --upgrade pip
 "$PIP" install -q \
+  "scikit-learn>=1.3" \
+  "shap>=0.44" \
   "lightgbm>=4.0" \
   "xgboost>=2.0" \
   "statsmodels>=0.14" \
