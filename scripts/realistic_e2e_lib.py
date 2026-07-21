@@ -699,6 +699,13 @@ def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = N
     if symbol_execution_market(syms[0]) == "US":
         stop_auto_paper_session()
 
+    from trade_integrations.auto_paper.mandate_config import resolve_allowed_instruments
+
+    exec_market = symbol_execution_market(syms[0])
+    instruments = resolve_allowed_instruments(syms, mandate, execution_market=exec_market)
+    if instruments is None:
+        instruments = ("equity",) if exec_market == "US" else ("options",)
+
     e2e = bool(os.getenv("REALISTIC_E2E_MARKET"))
     proposal = propose_autonomous_agent(
         symbols=syms,
@@ -709,7 +716,13 @@ def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = N
         budget_inr=25_000,
         max_daily_loss_inr=2_500,
         watch_interval_min=5,
+        allowed_instruments=list(instruments),
     )
+    if str(proposal.get("status") or "") != "ready":
+        raise RuntimeError(
+            f"proposal not ready: status={proposal.get('status')} "
+            f"missing={proposal.get('missing_fields')} errors={proposal.get('routing_errors')}"
+        )
     commit = vibe_post(
         "/autonomous-agents/commit",
         {"proposal_id": proposal["proposal_id"], "consent_ack": True},
