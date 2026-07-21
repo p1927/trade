@@ -44,7 +44,9 @@ from trade_integrations.dataflows.index_research.scenarios import (
     scenario_weighted_return_pct,
 )
 from trade_integrations.context.hub import load_index_research_json
-from trade_integrations.dataflows.index_research.constituent_snapshot import signals_from_cached_doc
+from trade_integrations.dataflows.index_research.constituent_snapshot import (
+    resolve_cached_constituent_signals,
+)
 from trade_integrations.dataflows.index_research.sources.batch_constituents import (
     batch_constituent_research,
 )
@@ -268,7 +270,8 @@ def run_index_research(
                     f"No index research snapshot for {sym}; run full analysis with "
                     "'Refresh all 50 constituents' checked first"
                 )
-            signals = signals_from_cached_doc(cached_doc)
+            signals, cache_warnings = resolve_cached_constituent_signals(cached_doc, ticker=sym)
+            data_warnings.extend(cache_warnings)
             if not signals:
                 raise RuntimeError(
                     f"Cached index snapshot for {sym} has no constituent signals; "

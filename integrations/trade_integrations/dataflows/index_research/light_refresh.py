@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from trade_integrations.context.hub import load_index_research_json, save_index_research
-from trade_integrations.dataflows.index_research.constituent_snapshot import signals_from_cached_doc
+from trade_integrations.dataflows.index_research.constituent_snapshot import resolve_cached_constituent_signals
 from trade_integrations.dataflows.company_research.models import StageResult
 from trade_integrations.dataflows.index_research.attribution import (
     attribute_constituents,
@@ -252,6 +252,7 @@ def _try_spot_touch(
     cached_doc: IndexResearchDoc,
     *,
     horizon,
+    disk_as_of_at_start: datetime | None = None,
 ) -> tuple[IndexResearchDoc | None, str | None]:
     """Fetch live spot and persist when macro/news are unchanged."""
     from dataclasses import replace
@@ -263,15 +264,36 @@ def _try_spot_touch(
     if spot_result.spot <= 0:
         return None, None
 
+    base = _reload_index_doc(sym, cached_doc) or cached_doc
+    if _concurrent_full_run_saved(
+        disk_as_of_at_start=disk_as_of_at_start,
+        existing=base,
+    ):
+        logger.info(
+            "light_refresh spot_touch skipped save for %s — full analysis saved during poll",
+            sym,
+        )
+        return base, "superseded_by_full_run"
+
     refresh_at = _stage_now()
     doc = replace(
-        cached_doc,
+        base,
         spot=spot_result.spot,
         spot_source=spot_result.source,
         spot_error=None,
-        data_warnings=_strip_spot_data_warnings(cached_doc.data_warnings),
+        data_warnings=_strip_spot_data_warnings(base.data_warnings),
         as_of=refresh_at,
     )
+    existing = _reload_index_doc(sym, base)
+    if _concurrent_full_run_saved(
+        disk_as_of_at_start=disk_as_of_at_start,
+        existing=existing if existing is not base else None,
+    ):
+        logger.info(
+            "light_refresh spot_touch skipped save for %s — full analysis saved during poll",
+            sym,
+        )
+        return existing, "superseded_by_full_run"
     save_index_research(doc)
     logger.info("light_refresh spot_touch for %s spot=%.2f", sym, spot_result.spot)
     return doc, "spot_touch"
@@ -299,7 +321,7 @@ def run_index_light_refresh(
             f"No index research snapshot for {sym}; run full analysis before enabling live refresh"
         )
 
-    signals = signals_from_cached_doc(cached_doc)
+    signals, cache_warnings = resolve_cached_constituent_signals(cached_doc, ticker=sym)
     momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
 
     previous_factors: dict[str, Any] = {}
@@ -328,7 +350,12 @@ def run_index_light_refresh(
     # stable (hub news ingest handles material headlines separately).
     if poll_mode and not force and cached_doc is not None and not macro_changed:
         _check_light_refresh_budget(deadline, "before_spot_touch")
-        touched, reason = _try_spot_touch(sym, cached_doc, horizon=horizon)
+        touched, reason = _try_spot_touch(
+            sym,
+            cached_doc,
+            horizon=horizon,
+            disk_as_of_at_start=disk_as_of_at_start,
+        )
         if touched is not None and reason:
             return touched, reason
         fresh = _reload_index_doc(sym, cached_doc)
@@ -342,7 +369,12 @@ def run_index_light_refresh(
         news_hit = bool(headlines) or _heavyweight_news(signals, headlines=headlines)
 
     if not force and cached_doc is not None and not macro_changed and not news_hit:
-        touched, reason = _try_spot_touch(sym, cached_doc, horizon=horizon)
+        touched, reason = _try_spot_touch(
+            sym,
+            cached_doc,
+            horizon=horizon,
+            disk_as_of_at_start=disk_as_of_at_start,
+        )
         if touched is not None and reason:
             return touched, reason
         fresh = _reload_index_doc(sym, cached_doc)
@@ -496,6 +528,8 @@ def run_index_light_refresh(
     spot_source = spot_result.source
     spot_error = spot_result.error
     data_warnings: list[str] = list(getattr(cached_doc, "data_warnings", None) or [])
+    data_warnings = [w for w in data_warnings if not w.startswith("Only ") or "constituent signals" not in w]
+    data_warnings.extend(cache_warnings)
     if spot_error:
         data_warnings.append(f"Live spot unavailable: {spot_error}")
     log.info(
