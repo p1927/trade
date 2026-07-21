@@ -1,0 +1,23 @@
+---
+description: When a fix requires a service restart, restart it in-session — do not tell the user to restart manually.
+alwaysApply: true
+---
+
+# Restart Services Yourself
+
+When code or config changes require a running process to reload (API server, Vite dev server, OpenAlgo, stack daemon, etc.):
+
+1. **Restart it yourself** in the same session — do not end with "restart the server" as a user todo.
+2. Use the **trade CLI only** — one lifecycle for humans and agents:
+   - `trade up` — preflight + start/heal background stack
+   - `trade restart` — heal (start only what's down)
+   - `trade restart --force` — full stop + preflight + start
+   - `trade reload app` — after Python edits (if not using `trade dev`)
+   - `trade down` — stop stack
+   - `trade status` — read-only health check (does not start services)
+3. **Verify** after restart: `trade status` or hit the failing endpoint; confirm the fix is live. Use `trade heal` to start missing services — not `trade status`.
+4. Only ask the user to restart if restart fails (port in use you cannot kill, missing permissions, Docker daemon down, preflight failure) — and say what you tried.
+
+Prefer the **smallest restart** that loads the change (`trade reload app` or `trade restart`) over `trade restart --force` unless a full reset is required.
+
+Do **not** call deprecated `scripts/*_vibe_stack.sh` wrappers (removed) or ad-hoc `stack_kill_port` — use `trade` for locking and PID claims.

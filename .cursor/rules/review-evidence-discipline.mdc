@@ -1,0 +1,84 @@
+---
+description: Mandatory evidence discipline for every review — primary sources, full verification runs, live artifact proof, confidence labels on findings
+alwaysApply: true
+---
+
+# Review Evidence Discipline
+
+When performing **any review** (code review, audit, deep study, issue register, premortem, bug report, subagent synthesis), complete **all three pillars** before presenting conclusions. Subagent or prior-session output is **discovery only** — not proof.
+
+Works with `test-before-report` (implementation) and `change-verification-and-commits` (diff review).
+
+---
+
+## Pillar 1 — Primary-source re-audit
+
+Before publishing or updating findings:
+
+1. **Re-read primary sources** for every cited claim — open the file, read the exact lines, trace callers. Do not ship line numbers or behavior from memory or subagent summaries alone.
+2. **Label every finding** with exactly one status:
+
+| Status | Meaning |
+|--------|---------|
+| **CONFIRMED** | Primary source read + runtime or test evidence this session |
+| **HYPOTHESIS** | Code reading only; repro or test still needed |
+| **BY DESIGN** | Intentional behavior; document, do not treat as defect |
+| **UNKNOWN** | Blocked on data, product decision, or missing access |
+
+3. **Issue registers** must use these labels in each row. Downgrade any finding that lacks repro from CONFIRMED → HYPOTHESIS.
+4. Never write "confirmed bug" without CONFIRMED bar. Never write "verified" without fresh command output from this session.
+
+---
+
+## Pillar 2 — Full automated verification
+
+Run the **full** verification suite for the review scope in **this session** — not a partial subset — unless a step is genuinely blocked (document why).
+
+**Prediction / index-research reviews** (minimum):
+
+```bash
+python scripts/audit_prediction_data.py --days 500
+python scripts/verify_prediction_pipeline.py
+python -m pytest tests/test_prediction_data_consistency.py tests/test_history_panel.py -q --timeout=120
+```
+
+**Other scopes:** map to the project's full check (CI job, `pytest` path, `trade status`, relevant audit script). Partial pytest is not "full verification."
+
+Report: command, exit code, and the specific output lines that support or falsify your claims. If a step fails, say so — do not omit it.
+
+---
+
+## Pillar 3 — Live run + artifact diff
+
+For pipeline, API, or UI reviews where runtime behavior matters:
+
+1. **Execute one real path** end-to-end (e.g. Prediction **Run analysis**, API call, or the smallest repro that exercises the claim).
+2. **Diff artifact vs claim** using ground truth:
+   - Hub: `reports/hub/{TICKER}/index_research/latest.json`
+   - Job: `log/index_prediction_jobs/{job_id}/job.json`
+   - API: `GET /trade/index-prediction?ticker=NIFTY` (stack up)
+3. **Walk cross-checks** from [`docs/superpowers/reviews/2026-07-21-prediction-deep-study/00-verification-playbook.md`](docs/superpowers/reviews/2026-07-21-prediction-deep-study/00-verification-playbook.md) when reviewing prediction output — especially:
+   - `expected_return_pct` vs `bottom_up + macro_delta` **only when** `debate_merged` / combiner / reconcile flags allow it
+   - `data_completeness.passes_gate` vs macro trust behavior
+   - `pipeline_log` stage order vs orchestrator
+
+If stack is down: run `trade heal` or `trade up`, then retry once. Only skip Pillar 3 after honest effort; mark affected findings **UNKNOWN** or **HYPOTHESIS**.
+
+---
+
+## Review is invalid if
+
+- Findings lack CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN labels
+- Citations were not re-read from primary sources this session
+- Full verification suite was skipped without documented blocker
+- Pipeline/UI claims were made with no live artifact or runtime check when one was feasible
+- Subagent output was pasted as fact without independent verification
+
+---
+
+## Done criteria for reporting a review
+
+1. Issue table (or equivalent) with confidence labels and proof command per CONFIRMED row
+2. Verification commands run this session with exit codes cited
+3. Live artifact diff summarized (or explicit skip reason)
+4. Separate **facts** (evidence) from **recommendations** (fixes)

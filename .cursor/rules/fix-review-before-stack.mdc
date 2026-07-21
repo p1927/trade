@@ -1,0 +1,77 @@
+---
+description: After review findings — propose fixes for approval, implement carefully, pre-commit diff audit so bugs shrink per commit
+alwaysApply: true
+---
+
+# Fix Review Before Stack — Avoid Mistake Accumulation
+
+Works with `review-evidence-discipline`, `targeted-bug-fix-discipline`, `change-verification-and-commits`, and `test-before-report`.
+
+**Goal:** Each commit leaves the branch **fewer bugs**, not more. Never stack unverified fixes on top of sloppy implementation.
+
+---
+
+## When you find issues (review, audit, self-check, or user report)
+
+### 1. Stop and research first
+
+- Re-read primary sources; trace callers; label each finding **CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN** (see `review-evidence-discipline`).
+- Do **not** patch immediately unless the user already approved fixing this specific finding in the same message.
+
+### 2. Propose before implementing (default)
+
+Present a short **fix plan** to the user before writing code:
+
+| Field | Content |
+|-------|---------|
+| Issue ID | Register row or file:line |
+| Root cause | One sentence, ≥80% confidence |
+| Proposed fix | Smallest correct change; files touched |
+| Alternatives considered | Why not the other approach |
+| Verification | Exact commands that will prove the fix |
+| Risk | What this fix does *not* cover |
+
+Wait for user approval when:
+
+- Fix changes behavior users see (headline forecast, UI labels, gates)
+- Confidence is below 80%
+- Multiple valid approaches exist
+
+Proceed without waiting only when the user explicitly said **fix it**, **commit**, or scoped the finding in the same turn.
+
+### 3. Implement one root cause at a time
+
+- One targeted diff per issue; no drive-by refactors.
+- Grep for the same bug class elsewhere (e.g. null-date skip in both `scenarios.py` and `attribution.py`).
+- Update the issue register: open → **FIXED** with proof command, or **pending** with reason.
+
+---
+
+## Pre-commit gate (mandatory before every commit)
+
+Do **not** commit until all steps pass:
+
+1. **`git diff` audit** — read every changed hunk line by line; confirm it matches the approved fix plan and nothing unrelated slipped in.
+2. **Cross-caller check** — for API/signature changes, grep all call sites; fix orphans in the same commit or a dependency-ordered prior commit.
+3. **Verification suite** — run tests/checks for the touched scope; cite exit codes in your summary.
+4. **Regression scan** — ask: “Could this fix introduce a new bug?” If yes, add a guard or test before commit.
+5. **Issue register** — convert fixed rows; do not leave “FIXED” claims without proof from this session.
+
+If pre-commit audit finds new problems: **fix them in the same session** before pushing — do not push and stack more issues.
+
+---
+
+## Commit discipline (with `change-verification-and-commits`)
+
+- Split commits by logical unit (one bugfix ≠ one giant misc commit).
+- Commit order: shared utils → core logic → wiring → UI → tests/docs for that slice.
+- Push only after pre-commit gate passes on **all** commits being pushed.
+
+---
+
+## Forbidden
+
+- Committing review findings marked FIXED without re-reading the diff and running verification this session
+- Shipping a fix that duplicates the same bug pattern in an adjacent file you did not grep
+- Pushing while known failing tests or unreviewed hunks remain in the commit
+- Treating “user asked to commit” as permission to skip the diff audit

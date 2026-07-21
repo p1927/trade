@@ -1,0 +1,82 @@
+---
+description: Re-verify every change before completion; split commits by logical unit when committing
+alwaysApply: true
+---
+
+# Change Verification & Commit Discipline
+
+## After every change — re-verify before claiming done
+
+Do not mark work complete until you have **reviewed the actual diff**, not just what you intended to write.
+
+1. **Read the diff** — walk changed hunks line by line; confirm each edit matches the task and nothing unrelated slipped in.
+2. **Run targeted checks** — linter/tests/build for touched paths; fix failures before reporting success.
+3. **Cross-check intent** — does behavior, types, imports, and edge cases still hold? If a plan/spec exists, confirm the diff satisfies it.
+4. **Report honestly** — if something is partial, untested, or risky, say so; do not assert "fixed" or "done" without evidence.
+
+Verification is mandatory after each logical chunk of work, not only at session end.
+
+## Pre-commit diff audit (mandatory)
+
+Before **every** commit — even when the user asked to commit — complete the pre-commit gate in `fix-review-before-stack`:
+
+1. Read the full staged diff line by line.
+2. Confirm each hunk matches an approved fix or explicit user scope.
+3. Run verification for touched paths; fix failures before `git commit`.
+4. Do not push commits that add new bugs found during the audit — fix first.
+
+See also `fix-review-before-stack` for the full propose → approve → implement → audit workflow.
+
+## When the user asks to commit (or commit and push)
+
+Only commit when explicitly asked. Then **split into multiple focused commits** — never one giant "misc fixes" commit unless the change is truly a single atomic unit.
+
+### How to group commits
+
+| Group together | Keep separate |
+|---|---|
+| One feature, bugfix, or refactor across its files | Unrelated features or unrelated bugs |
+| Backend + frontend for the **same** user-visible change | Drive-by cleanup in files you didn't need to touch |
+| Tests/fixtures for the commit they cover | Formatting-only sweeps mixed with logic changes |
+| Config/env for the feature that needs it | Reverts or rollbacks of a prior commit's work |
+
+**Rule of thumb:** one commit = one revert-safe unit. `git revert <sha>` should undo one coherent change without breaking unrelated work.
+
+### Commit order
+
+Commit in dependency order when splitting:
+
+```
+foundation / types / shared utils
+→ core logic
+→ API / integration wiring
+→ UI consuming the change
+→ tests & fixtures for that slice
+```
+
+### Commit message format
+
+- **Subject:** imperative, ≤72 chars — what this unit does (`fix bridge retry on timeout`, not `updates`).
+- **Body (when useful):** why this change exists and what it does *not* include.
+- **Never:** `wip`, `misc`, `fix stuff`, or messages that only make sense with other uncommitted hunks.
+
+Example split for one feature touching 8 files:
+
+```
+feat(nautilus-bridge): add OpenAlgo quote feed adapter
+feat(nautilus-bridge): wire WatchActor to bridge quotes
+fix(nautilus-bridge): handle stale quote timestamp in evaluate
+test(nautilus-bridge): cover stale-quote path in watch rules
+```
+
+### Workflow when splitting
+
+1. `git status` + `git diff` — inventory all changes.
+2. **Plan the commit map** — list each commit (files + message) before staging.
+3. Stage and commit **one unit at a time** (`git add -p` or path-specific adds).
+4. After each commit: `git show --stat` to confirm scope matches intent.
+5. Push only when the user asked to push; never force-push `main`/`master`.
+
+## Debugging mindset
+
+Commits are a timeline for bisect and revert. Prefer **more small, coherent commits** over fewer large ones. Related fixes belong together; unrelated work never shares a commit.

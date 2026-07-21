@@ -1,0 +1,81 @@
+---
+description: Product intention — event-driven options/stock advisor with predictions, scenarios, P&L, charges, and guided execution
+alwaysApply: true
+---
+
+# Product Intention
+
+This project exists to build a **single tool** where a trader can:
+
+1. **See what is available** — browse live options (expiries, strikes, chain, OI, Greeks) or the underlying stock.
+2. **Ask an agent** — "Based on past data and upcoming dates/events, what should my approach be for option trading (or stock trading)?"
+3. **Get researched answers** that explain:
+   - Which option or stock strategy to choose and why
+   - What the prediction is (direction, range, volatility, event outcome)
+   - Which events can drive which moves
+   - In which scenarios to choose which strategy
+   - What is **highly likely recommended** (ranked, with confidence — not vague prose)
+4. **See it visually** — profit/loss graph for the recommended strategy at expiry and over time.
+5. **Implement step-by-step** — a guided walkthrough to place the trade (options multi-leg or stock), with:
+   - Per-leg detail
+   - Gross and **net** P&L after **all charges** (brokerage, STT, GST, stamp, exchange) **fully visible in the UI**
+   - Margin check before confirm
+   - Execute only after explicit user approval
+
+**Every action in this repo must move toward this intention.** If a change does not help a user go from "what's available?" → "what should I do and why?" → "show me P&L and charges" → "walk me through placing it", do not do it.
+
+## What is still missing (gaps to close)
+
+Phase 4 in progress. Interactive payoff (drag strikes) + live per-leg charges in Strategy Builder; stock advisor pipeline mirrors options.
+
+| User expectation | Status today |
+|------------------|--------------|
+| List options | **Met** — `get_options_browse` MCP + `browse_summary` + `scripts/browse_options.py` |
+| List stocks (browse) | **Met** — `get_stock_browse` MCP + `stock_research` hub |
+| Agent uses past data + future events | **Met** — options + stock trade plans; company_research feeds both |
+| Explains strategy choice, predictions, scenarios | **Met** — ranked strategies in hub JSON; options + stock skills |
+| Highly likely recommendation with confidence | **Met** — strategy_ranker scores + tiers |
+| P&L graph in the same flow | **Met** — payoff + `payoff_over_time`; Strategy Builder `?tab=pnl` |
+| **Drag chart lines to adjust orders** | **Met (options)** — draggable CE/PE strike lines on PayoffChart update legs |
+| **Per-transaction GST/brokerage visible** | **Met (options)** — `/api/trade-charges` + per-leg breakdown in PositionsPanel |
+| Step-by-step execution with charges | **Met (options)** — ExecutePlanWizard; **Partial (stock)** — MCP steps, SB equity loader pending |
+
+## End-to-end user flow (target)
+
+```
+Browse options/stock
+  → Ask agent (with event + history context loaded automatically)
+  → Agent returns: prediction, scenarios, ranked strategies, recommended pick
+  → UI shows: payoff chart, breakevens, max loss/profit, charge breakdown, net P&L
+  → User confirms recommended strategy
+  → Step-by-step leg placement (preview each leg → margin → execute)
+```
+
+## What the agent must produce (structured, not chat-only)
+
+Research must save as a reusable artifact (`reports/hub/{SYMBOL}/options_research/latest.json` + `latest.md`) containing at minimum:
+
+- Underlying view and prediction
+- Upcoming events and how each affects price/volatility
+- Scenario table (event × outcome → suggested strategy)
+- Ranked strategies with scores and rationale
+- One **recommended** strategy with legs, payoff curve data, and full charge breakdown
+- Numbered implementation steps ready for OpenAlgo basket execution
+
+Free-form chat alone is not sufficient.
+
+## Constraints (how we build, not what we build)
+
+- Prefer **open-source libraries and free APIs** only (no paid data vendors).
+- India live options data and execution → **OpenAlgo** + MCP.
+- Agent chat → **Vibe Trading** wired to hub research + OpenAlgo MCP.
+- New pipelines → `integrations/trade_integrations/` (mirror `company_research` pattern).
+
+## Before starting any task, ask
+
+1. Does this help the user browse → ask → get researched recommendation → see P&L/charges → execute step-by-step?
+2. Does it make predictions, events, scenarios, and the recommended strategy more explicit — not more vague?
+3. Are payoff and charges visible in the UI path, not hidden in a separate tool?
+4. Is the output structured enough to drive the step-by-step execution flow?
+
+If any answer is no, reconsider or reframe the work.

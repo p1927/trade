@@ -1,0 +1,45 @@
+---
+description: Require deep root-cause analysis before fixes; forbid patch/quick-fix-only responses
+alwaysApply: true
+---
+
+# Deep Root Cause Analysis (Mandatory)
+
+When the user reports a failure, crash, outage, or "it's not working":
+
+## Do first — investigate, do not restart
+
+1. **Evidence before action** — read logs, PIDs, claims, timestamps, and exit signals. Do not run `trade up`, `trade restart`, or `trade dev` as the first response unless the user explicitly asks to start services.
+2. **Distinguish crash vs kill vs config** — OOM/traceback/SIGSEGV ≠ SIGTERM from `stack_stop_claimed` ≠ port conflict ≠ stale `stack.mode`.
+3. **Timeline** — correlate log timestamps with terminal sessions, scheduled jobs, and stack lifecycle events.
+4. **State files** — check `log/stack.mode`, `log/stack.instance`, `log/claims/*.claim`, pidfiles vs live processes.
+
+## Root cause bar
+
+A root cause is valid only when you can answer:
+
+- **What failed** (which process, which port, which job)
+- **How it failed** (signal, exception, refused connection — with log line)
+- **Who/what triggered it** (trade dev, trade down, agent heal loop, user Ctrl+C, scheduled job — not guesses)
+- **Why it stayed broken** (orphaned dev flag, no supervisor, mutual exclusion, etc.)
+- **What prevents recurrence** (structural fix or documented operational contract — not "run restart")
+
+## Forbidden as "done"
+
+- Restarting services without explaining why they died
+- Patch fixes that treat symptoms (e.g. auto-heal loops) without addressing lifecycle gaps
+- Claiming "crash" when logs show graceful SIGTERM shutdown
+- One-off "it works now" without recurrence prevention
+
+## Fix order (when user asks to fix)
+
+1. Document root cause in the response (or issue log if master-todo tick).
+2. Propose **structural** fix if the lifecycle is wrong; otherwise state the **operational contract** (e.g. dev is foreground — terminal close stops the stack).
+3. Implement minimal code change only after the above is agreed or clearly required.
+4. Verify with evidence matching the original failure mode.
+
+## Stack-specific reminders
+
+- **`trade dev`** kills the daemon tier on purpose (`stack_dev.sh` → SIGTERM). Dev exit leaves no background stack unless something else starts it.
+- **`log/stack.mode=dev`** blocks `trade up` / `trade heal` via `stack_refuse_if_dev_mode`.
+- **Nautilus watch** is separate; OpenAlgo/Vibe can be down while Nautilus still shows alive.

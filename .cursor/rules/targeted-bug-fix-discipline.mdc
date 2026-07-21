@@ -1,0 +1,37 @@
+---
+description: Fix issues when encountered — research first, targeted diff, no regressions, high confidence only
+alwaysApply: true
+---
+
+# Targeted Bug Fix Discipline
+
+When you encounter a bug, error, test failure, linter issue, or broken behavior during any task, **fix it** — do not defer, ignore, or paper over it unless the user explicitly scoped work to exclude it.
+
+## Before writing a fix
+
+1. **Research the root cause** — read the failing code path, stack trace, related callers, and recent changes; grep for similar patterns; confirm *why* it breaks, not just *where*.
+2. **Define the smallest correct change** — one root cause, one targeted fix. No drive-by refactors, unrelated cleanup, or speculative hardening.
+3. **Reach ≥80% confidence** — you can explain the cause, why this fix addresses it, and what could still go wrong. If confidence is lower, investigate further or mark the issue **pending** with a concrete plan — do not ship a guess.
+4. **Propose to the user first** (see `fix-review-before-stack`) unless they already approved fixing this finding in the same message.
+
+## While implementing
+
+- **Improve quality in the fix footprint only** — clearer naming, tighter logic, or a minimal guard is welcome when it directly supports the fix; do not expand scope.
+- **Match existing conventions** — same patterns, imports, error handling, and test style as surrounding code.
+- **Prefer the simplest correct solution** — avoid over-engineering, new abstractions, or broad behavior changes.
+
+## After implementing — no regressions
+
+1. **Run targeted verification** — linter/tests/build for touched paths; reproduce the original failure and confirm it is resolved.
+2. **Check adjacent behavior** — callers, edge cases, and related tests still pass; read the actual diff line by line.
+3. **Add a regression test only when** the bug could recur and a focused test fits existing project patterns; do not add tests the user did not ask for when the fix is trivial or already covered.
+
+## When not to fix inline
+
+- Root cause is architectural or needs a product decision → document in issue/backlog, continue the scoped task.
+- Fix would touch many unrelated files → isolate to a separate follow-up unless the user asked for a broader fix.
+- Live/production risk without a safe rollback path → stop and report before changing behavior.
+
+## Done criteria
+
+A fix is complete only when: root cause is understood, change is minimal and targeted, verification passed, and you can state honestly what was fixed and what was not.

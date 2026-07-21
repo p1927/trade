@@ -1,0 +1,26 @@
+---
+description: Execute multi-task implementation plans via subagent-driven development (SDD)
+alwaysApply: true
+---
+
+# Subagent-Driven Development (Default)
+
+When a written implementation plan exists under `docs/superpowers/plans/`, **always execute it with subagent-driven development** — not inline/manual execution in the parent session.
+
+## Required workflow
+
+1. Read the plan once; create todos for all tasks.
+2. **One implementer subagent per task** (sequential, never parallel implementers).
+3. After each task: run `review-package`, dispatch **task reviewer** subagent; fix loop until spec ✅ and quality approved.
+4. After all tasks: dispatch **final whole-branch code reviewer**.
+5. Track progress in `.superpowers/sdd/progress.md` (recover from `git log` if lost).
+
+## Dispatch rules
+
+- Extract task brief via `scripts/task-brief PLAN_FILE N` from the SDD skill directory; hand subagent the brief path + report path — do not paste the full plan.
+- Specify model explicitly: cheap for mechanical/transcription tasks; standard for integration; most capable for architecture/final review.
+- Parent coordinates only — do not implement task code directly unless fixing a blocked review loop.
+
+## User preference
+
+If the user asks to "implement the plan" without specifying a mode, use **Subagent-Driven** (this rule), not inline execution or executing-plans parallel session.

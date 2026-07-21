@@ -1,0 +1,126 @@
+---
+description: Product intention — always-on autonomous agents that research, watch, revise, and execute to maximize profit via Vibe + TradingAgents + Nautilus + OpenAlgo
+alwaysApply: true
+---
+
+# Autonomous Trading Intention
+
+This project extends the interactive advisor (`options-advisor-north-star`) with **always-on autonomous agents** — user-defined traders that run 24/7 (market-hours gated), maximize profit within mandate, and loop: **research → decide → watch → revise → execute**.
+
+**Every action in this repo must move toward this loop.** If a change does not help a user create an agent → get parallel research → finalize strategy → watch live → act on alerts → reconcile positions, do not do it.
+
+## Component roles (locked)
+
+| Component | Role |
+|-----------|------|
+| **`/autonomous` hub** | Create agents (orchestrator chat), monitor cards, drill into per-agent session chat |
+| **Vibe agent (brain)** | Strategy mind — thesis, confidence, ranked plans, user guidance, entry decisions |
+| **TradingAgents + hub** | Deep batch research — debate dossiers saved to `reports/hub/{SYMBOL}/` |
+| **Vibe built-in tools** | Live browse, market feedback, options/stock widgets, strategy ranker, hub context |
+| **NautilusTrader** | Watch engine — rules, timers, signals, portfolio cache, risk gates (India) |
+| **OpenAlgo** | Sole execution authority — live India data, basket orders, positionbook (source of truth) |
+| **`nautilus_openalgo_bridge`** | OpenAlgo feed → Nautilus; alerts → Vibe; ExecutionIntent → OpenAlgo |
+
+Nautilus **never** talks to the broker directly. OpenAlgo `positionbook` wins on conflict.
+
+## End-to-end loop (target)
+
+```
+/autonomous → orchestrator chat → propose_autonomous_agent → user Confirm
+  → agent instance (aa_*) + vibe_session_id + schedules + watch_spec
+
+FIRST TURN + RESEARCH TICKS (parallel where possible)
+  ├─ TradingAgents pipeline → hub artifact (options_research / company_research latest.json)
+  └─ Vibe built-in → browse, events, market feedback, strategy ranker, widgets
+  → synthesize thesis, ranked strategies, confidence, watch_rules
+
+WATCH (Nautilus — India, always-on default)
+  OpenAlgo quotes/chain → Nautilus WatchActor → evaluate watch_spec
+  → REVIEW_NEEDED | EXIT_NOW | THESIS_BROKEN → trigger Vibe full-reasoning turn
+
+REVISE
+  Vibe reads alert + hub report + positions + user guidance
+  → update thesis; optional re-run TradingAgents or built-in ranker
+  → output revised strategy + updated watch_spec
+
+ACT (when confidence ≥ threshold)
+  ENTER / ADJUST → Vibe → OpenAlgo MCP basket (charges, margin, widget)
+  EXIT / STOP / FLATTEN → Nautilus ExecutionIntent → bridge execute.py → OpenAlgo
+  → PositionHandoff → Nautilus reloads watchers on live legs
+
+ONGOING
+  Nautilus reconciles OpenAlgo positionbook ↔ cached state
+  → alert → Vibe → OpenAlgo command
+  → record decision; calibrate ranker from outcome ledger
+```
+
+Lightweight **watch ticks** (5–10 min) run between full **research ticks** (60–120 min). Material alerts bypass the schedule and dispatch immediate full reasoning.
+
+## What each agent instance must persist
+
+`reports/hub/_data/autonomous_agents/{id}.json` at minimum:
+
+- Mandate, symbols, constraints (budget, max daily loss, confidence threshold, paper/live)
+- `thesis` — direction, strategy, confidence, rationale, `updated_at`
+- `watch_spec` — Nautilus rules (spot move %, VIX, flatten-at-close, thesis-break)
+- `vibe_session_id` — 1:1 chat transcript (user guidance + scheduler turns)
+- Last watch / research / decision timestamps
+
+Hub research artifacts remain the shared research layer — autonomous agents **consume and refresh** them, not replace them.
+
+## Order authority (critical)
+
+```
+ENTERS (multi-leg, charges, widget)  →  Vibe agent → OpenAlgo MCP basket
+EXITS / STOPS / FLATTEN / ROLLS      →  Nautilus intent → execute.py → OpenAlgo
+RECONCILIATION                       →  OpenAlgo positionbook
+WATCH RULES                          →  Nautilus (from agent watch_spec)
+STRATEGY / CONFIDENCE                →  Vibe (TradingAgents + built-in ranker inform, not override mandate)
+```
+
+## Relationship to `/agent`
+
+| Surface | Purpose |
+|---------|---------|
+| `/agent` | Ad-hoc interactive research, one-off questions, manual execution help |
+| `/autonomous` | Always-on agents — persistent chat, scheduler, Nautilus watch, bounded autonomy |
+
+Same Vibe session runtime. Autonomous sessions tagged `session_kind: autonomous_agent`; surfaced only on `/autonomous` hub.
+
+## Constraints
+
+- **Paper first** — India market hours; live only after explicit user mandate + infra review.
+- **Consent** — agent creation via propose → confirmation card → commit; execution after confidence threshold (user can guide anytime in agent chat).
+- **Reuse** — `autonomous_agents/`, `auto_paper/`, `scheduled_research/`, OpenAlgo MCP, hub research, Nautilus bridge; no duplicate chat or execution paths.
+- **Structured output** — thesis, watch_spec, ExecutionIntent, and hub artifacts must be JSON — not chat-only prose.
+- **Open source / free APIs** — same as options advisor; India via OpenAlgo.
+
+## Status & gaps (update as shipped)
+
+| Capability | Status |
+|------------|--------|
+| Agent create (orchestrator propose/commit) | In progress — see `docs/superpowers/specs/2026-07-16-autonomous-agents-design.md` |
+| Parallel hub + TradingAgents research | **Met** — hub artifacts + async debate API |
+| Vibe synthesis + strategy ranker | **Met** — options/stock skills, widgets |
+| Nautilus watch + OpenAlgo bridge | Planned — `docs/superpowers/plans/2026-07-16-nautilus-openalgo-bridge.md` |
+| Alert → Vibe revision turn | Planned — `vibe_trigger.py` + `autonomous_agents/turns.py` |
+| Entry handoff + position reconciliation | Planned — `handoff.py` + bridge execute |
+| Outcome ledger → ranker calibration | Planned — `autonomous-remaining-phases.md` Phase 3 |
+| Autonomous hub UI (cards, health, runtime) | Planned — remaining phases Phase 4 |
+
+## Before starting any task, ask
+
+1. Does this advance create → parallel research → watch → revise → execute → reconcile?
+2. Does it keep Vibe as strategy mind and OpenAlgo as sole execution authority?
+3. Are watch_spec, thesis, and hub artifacts structured enough for Nautilus and the bridge?
+4. Does it reuse existing session runtime, MCP tools, and hub research — not fork them?
+5. Can the user see agent status, decisions, and reasoning in `/autonomous` session chat?
+
+If any answer is no, reconsider or reframe the work.
+
+## Reference docs
+
+- `docs/superpowers/specs/2026-07-16-autonomous-agents-design.md`
+- `docs/superpowers/plans/2026-07-16-nautilus-openalgo-bridge.md`
+- `docs/superpowers/plans/2026-07-16-autonomous-remaining-phases.md`
+- `docs/superpowers/plans/2026-07-16-orchestrator-ux-holistic.md`

@@ -1,0 +1,26 @@
+---
+description: Mandatory workflow when Master TODO scheduler tick fires (AGENT_LOOP_TICK_MASTER_TODO) or user requests a master-todo tick
+alwaysApply: true
+---
+
+# Master TODO Ticker — Mandatory Rules
+
+When **`AGENT_LOOP_TICK_MASTER_TODO`** fires, the user asks for a master-todo tick, or you merge tick work into `.superpowers/master-todo.md`, follow **`.superpowers/master-todo.md` Operating amendments A, F, G, H, I** in full.
+
+## Non-negotiable (tick is INVALID if any step skipped)
+
+1. **Write every finding to `.superpowers/master-todo.md` Issue log** — ID, file, brief issue, fix plan, status. Reviewer subagent output must land in the doc; never report issues only in chat.
+2. **Launch two Task subagents in parallel every tick:**
+   - **Reviewer** — line-by-line sweep from Review cursor; superpowers for investigation; **no commits**.
+   - **Fixer (Planner + Executor)** — superpowers to **plan strategy** for open issues; apply **targeted** fixes only when **≥80% confident**; regression tests; Bugbot; **`master todo:` commit + push** per fix.
+3. **Fixer must commit** when confident — not optional. Major design changes → mark **`pending`**, do not commit.
+4. **Parent merges** subagent reports into master-todo: issue log, cursor, tick log, commit audit SHAs.
+5. **No regressions** — pytest before/after each fix; add regression test when the bug could recur.
+
+## Tick success criteria
+
+- Issue log grew (or explicit “files clean” rows for reviewed files with no findings).
+- Fixer attempted open backlog (critical first); shipped commits when confidence met, else documented why pending.
+- Cursor advanced; tick log row added.
+
+Read the full mandate and backlog in `.superpowers/master-todo.md` before launching subagents.

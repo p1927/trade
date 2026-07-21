@@ -1,0 +1,53 @@
+---
+description: Test every change and verify the goal is met before reporting back; never claim success without evidence
+alwaysApply: true
+---
+
+# Test Before Report
+
+## Iron rule
+
+Do not tell the user a change is done, fixed, or working until you have **tested it yourself** and confirmed the goal is actually met. If tests fail, errors appear, or behavior is wrong — **keep working**. Do not hand the problem back as if it were solved.
+
+## After every change
+
+1. **Identify proof** — what command, endpoint, UI flow, or script output proves this change works?
+2. **Run it fresh** — execute the full check in this session; do not rely on prior runs or assumptions.
+3. **Read the result** — exit code, stderr, response body, rendered UI, logs. Zero errors is the bar.
+4. **Match the goal** — does behavior match what the user asked for, not just "no crash"?
+5. **Only then report** — success claims must cite what you ran and what you saw.
+
+## When you must keep working
+
+- Test or linter failures
+- Runtime errors, stack traces, or unexpected responses
+- Feature partially works but goal not achieved
+- Component not responding correctly (API, UI, service, script)
+- You have not yet run any verification
+
+Fix and re-test. Repeat until proof passes or you hit a genuine blocker.
+
+## When you may report without a fix
+
+Only after honest effort (multiple approaches, root-cause investigation). Report:
+
+- What you tried and what failed (with evidence)
+- What is blocked and why (missing access, architectural decision, external dependency)
+- What still works and what does not
+
+Never imply success. Never say "should work", "probably fixed", or "done" without fresh verification.
+
+## Examples
+
+```
+❌ "I updated the handler — that should fix it."
+✅ [run pytest tests/test_handler.py] "34 passed. Handler returns 200 for valid input."
+
+❌ "Restart the server and it will work."
+✅ [restart service] [curl /health] "Health returns 200; endpoint returns expected JSON."
+
+❌ "Fixed the bug" (code changed, no test run)
+✅ Reproduce original failure → apply fix → re-run → same scenario passes → then report.
+```
+
+Verification is mandatory after each logical chunk of work, not only at session end.

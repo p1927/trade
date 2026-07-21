@@ -1,0 +1,102 @@
+---
+description: Product intention — robust, evidence-driven index predictions on Vibe Trading /prediction tab via factor equations, backtesting, and continuous learning
+globs: integrations/trade_integrations/dataflows/index_research/**,integrations/trade_integrations/bridge/quant_review.py,integrations/trade_integrations/dataflows/news_hub_bridge/**,vibetrading/frontend/src/pages/Prediction.tsx,vibetrading/frontend/src/components/prediction/**,vibetrading/frontend/src/hooks/useIndexPrediction*.ts,vibetrading/frontend/src/lib/predictionVerification.ts,vibetrading/frontend/src/lib/pipelineSnapshot.ts,vibetrading/frontend/src/lib/factorHistoryUtils.ts,vibetrading/frontend/src/lib/forecastReplayUtils.ts,vibetrading/frontend/src/lib/newsScenarioUtils.ts,vibetrading/frontend/src/components/charts/IndexFactorTimelineChart.tsx,vibetrading/frontend/src/components/charts/NiftyForecastReplayChart.tsx,vibetrading/frontend/src/components/charts/NiftyMarketContextChart.tsx,vibetrading/frontend/src/components/charts/PredictionDecompositionChart.tsx,vibetrading/agent/src/trade/index_prediction*.py,vibetrading/agent/src/tools/alpha_zoo_index_tool.py,vibetrading/agent/src/tools/alpha_bench_tool.py,vibetrading/agent/src/scheduled_research/index_jobs.py,vibetrading/agent/src/api/trade_routes.py,scripts/run_prediction*.py,scripts/audit_prediction*.py,scripts/ingest_news_for_prediction*.py,scripts/bench_alpha_zoo_nifty50.py,tests/test_index_*.py,tests/test_prediction_*.py,tests/test_news_event_scenarios.py,tests/test_news_scenario*.py,tests/test_news_impact_engine.py,tests/test_pipeline_snapshot.py
+alwaysApply: false
+---
+
+# Prediction Intention (Vibe Trading `/prediction`)
+
+The **Prediction tab** in Vibe Trading must produce **great predictions** — robust, directionally sound, and as accurate as the data and model allow. Every change to prediction logic, factors, sources, or UI must move toward that outcome.
+
+**Scope:** This rule applies when working on index prediction — the `/prediction` tab (default **Analysis** mode and **News Scenarios** mode), pipeline runs, factor/equation work, backtest/miss-analysis, and related API, jobs, scripts, and tests (see `globs` in frontmatter).
+
+**Every change in scope must move toward this intention.** If a change does not help collect data → model relations → predict → backtrack → attribute → learn → improve with evidence, do not do it.
+
+## How predictions are built
+
+Predictions are not guesses. They follow a repeatable pipeline:
+
+```
+Collect data (macro, flows, constituents, news, new sources)
+  → Understand relations between factors and outcomes
+  → Fit / maintain a polynomial equation (or equivalent structured relation)
+  → Predict a value (direction + magnitude) from that relation
+  → Cross-verify by backtracking: predicted vs actual
+  → Attribute: which factor led to what; quantify each factor's impact
+  → Record decisions and outcomes → feed the next learning cycle
+```
+
+1. **Collect data** — ingest and maintain factor panels, constituent inputs, and hub artifacts for the index (NIFTY 50 and its constituents).
+2. **Model relations** — express how factors combine into an expected return (or level) via a **polynomial equation** or other explicit, inspectable relation — not opaque black-box tuning.
+3. **Predict** — apply the current equation to today's factor snapshot to produce structured prediction output (direction, expected return, confidence, equation reference).
+4. **Include new sources** — when a factor or data source is added, wire it through ingest → factor matrix → equation → backtest before trusting it in live predictions.
+5. **Cross-verify (backtrack)** — compare what the model predicted on past dates with what actually happened; use miss analysis, counterfactuals, and diagnostics — not eyeballing.
+6. **Factor attribution** — for each prediction and each miss, answer: *which factor could have led to what?* and *what impact does each factor have?* Attribution must be traceable in artifacts, not chat-only prose.
+
+## Robustness: continuous learning
+
+The system must **constantly learn from new data** as it arrives:
+
+- Refresh correlations between **models**, **factors**, and **NIFTY 50 constituents** as new observations land.
+- Treat constituent bottom-up and macro top-down as linked — hybrid coherence is part of robustness.
+- Prefer walk-forward / out-of-sample evaluation over in-sample fit when judging whether learning improved the system.
+- Mechanical dedup, ledger hygiene, and data-audit fixes are enablers — they do not replace equation quality.
+
+## Change discipline: no random edits
+
+Model changes **cannot be random**. Every change must be **carefully thought through** with explicit reasoning:
+
+| Requirement | Meaning |
+|-------------|---------|
+| **Hypothesis first** | State what you expect to improve (direction accuracy, magnitude error, regime stability, attribution clarity) before changing coefficients, factors, or gates. |
+| **Evidence before merge** | Backtest, ablation, or walk-forward result must support the change; record accept/reject with numbers. |
+| **Logic on file** | Document *why* a change helps in decision records (e.g. `equation_improvement_decisions`) — future readers must understand what improved and what did not. |
+| **Reject anti-patterns** | Do not optimize in-sample R², add factors without OOS gain, or ship changes that flip direction without documented justification. |
+
+## Hypothesis validation (including web research)
+
+When applying a **hypothesis** (new factor, regime gate, source, or equation term):
+
+1. **State the hypothesis** — one clear claim about market mechanism or factor behavior.
+2. **Check if it is right or wrong** — use backtests *and*, when the hypothesis is about real-world causality or regime narrative, **web research** to validate or falsify the story before encoding it in the model.
+3. **Only then change predictions** — merge coefficient/factor/gate changes after hypothesis + quantitative + (when needed) external validation; mark rejected hypotheses with reason.
+
+Do not ship prediction changes driven by narrative alone or by a single lucky backtest window.
+
+## What the Prediction tab must deliver (structured)
+
+Hub index research artifacts (`reports/hub/{TICKER}/index_research/latest.json` and related diagnostics) should expose at minimum:
+
+- Current prediction (view, expected return, horizon, confidence)
+- Active equation / coefficients and factor snapshot at prediction time
+- Backtest and miss-analysis pointers (predicted vs actual, factor attribution)
+- Scenario and news overlays that **simulate** from the frozen baseline — not silent pipeline drift
+
+Free-form chat about predictions is insufficient without structured artifacts.
+
+## Primary code areas (reuse, do not fork)
+
+| Area | Role |
+|------|------|
+| `integrations/trade_integrations/dataflows/index_research/` | Factor matrix, aggregator, simulate, light refresh, ledger |
+| `equation_diagnostics`, `equation_improvement_decisions` | Miss analysis, ablation decisions, accept/reject log |
+| `prediction_miss_analysis`, `backtest_runner`, `prediction_counterfactual` | Backtracking and attribution |
+| `factor_catalog`, `factor_backfill_enrichment` | New sources and factor coverage |
+| `sources/batch_constituents` | NIFTY 50 constituent inputs |
+| `vibetrading/frontend/src/pages/Prediction.tsx` + `components/prediction/` | Analysis + News Scenarios UI panels |
+| `vibetrading/agent/src/trade/index_prediction*.py` + `/index-prediction` routes | Run jobs, API surface; bind tools to `pipeline_as_of` |
+
+## Before starting any prediction-related task, ask
+
+1. Does this help predictions become **more accurate, more robust, or better attributed** — not just more complex?
+2. Does it collect data, model a relation, predict, backtrack, or learn from new observations?
+3. If adding/changing a factor or equation term, is there a **stated hypothesis**, **quantitative check**, and (if needed) **web research** before changing live output?
+4. Is the reasoning **documented** so we know what improved the system and what did not?
+5. Does output stay **structured** for the Prediction tab and hub — equation ref, factors, predicted vs actual history?
+
+If any answer is no, reconsider or reframe the work.
+
+## Reference docs
+
+- `docs/superpowers/specs/2026-07-17-news-event-scenario-prediction-design.md`
+- `integrations/trade_integrations/dataflows/index_research/equation_improvement_decisions.py` (decision log pattern)
