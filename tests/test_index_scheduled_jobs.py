@@ -213,6 +213,75 @@ class TestFactorSnapshotEnrichmentPolicy:
             with pytest.raises(PipelineCancelledError):
                 run_index_factor_snapshot_job({})
 
+    def test_factor_snapshot_skips_finalize_when_enrich_fails(self):
+        with patch(
+            "trade_integrations.dataflows.index_research.history_ingest.persist_daily_hub_market_data",
+            return_value={"status": "ok"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.snapshot.run_snapshot",
+            return_value={"date": "2026-01-01"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.participant_oi_backfill.backfill_participant_oi",
+            return_value={"status": "ok"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.enrich_factor_history",
+            return_value={"status": "error", "reason": "mock"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.history_ingest.finalize_daily_cold_tier",
+        ) as finalize_mock:
+            from src.scheduled_research.index_jobs import run_index_factor_snapshot_job
+
+            summary = run_index_factor_snapshot_job({})
+            finalize_mock.assert_not_called()
+            assert summary["cold_tier_finalize"]["reason"] == "factor_enrichment_failed"
+            assert summary.get("had_errors") is True
+
+    def test_factor_snapshot_skips_finalize_when_persist_fails(self):
+        with patch(
+            "trade_integrations.dataflows.index_research.history_ingest.persist_daily_hub_market_data",
+            return_value={"status": "error", "reason": "mock", "ohlcv": {"status": "error"}},
+        ), patch(
+            "trade_integrations.dataflows.index_research.snapshot.run_snapshot",
+            return_value={"date": "2026-01-01"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.participant_oi_backfill.backfill_participant_oi",
+            return_value={"status": "ok"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.enrich_factor_history",
+            return_value={"status": "ok"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.history_ingest.finalize_daily_cold_tier",
+        ) as finalize_mock:
+            from src.scheduled_research.index_jobs import run_index_factor_snapshot_job
+
+            summary = run_index_factor_snapshot_job({})
+            finalize_mock.assert_not_called()
+            assert summary["cold_tier_finalize"]["reason"] == "persist_failed"
+            assert summary.get("had_errors") is True
+
+    def test_factor_snapshot_skips_finalize_when_no_nifty_history(self):
+        with patch(
+            "trade_integrations.dataflows.index_research.history_ingest.persist_daily_hub_market_data",
+            return_value={"status": "ok"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.snapshot.run_snapshot",
+            return_value={"date": "2026-01-01"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.participant_oi_backfill.backfill_participant_oi",
+            return_value={"status": "ok"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.factor_backfill_enrichment.enrich_factor_history",
+            return_value={"days_enriched": 0, "reason": "no_nifty_history"},
+        ), patch(
+            "trade_integrations.dataflows.index_research.history_ingest.finalize_daily_cold_tier",
+        ) as finalize_mock:
+            from src.scheduled_research.index_jobs import run_index_factor_snapshot_job
+
+            summary = run_index_factor_snapshot_job({})
+            finalize_mock.assert_not_called()
+            assert summary["cold_tier_finalize"]["reason"] == "no_nifty_history"
+            assert summary.get("had_errors") is True
+
 
 @pytest.mark.unit
 class TestMacroRefreshPolicy:

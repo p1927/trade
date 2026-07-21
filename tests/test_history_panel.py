@@ -124,3 +124,20 @@ def test_save_panel_rejects_corrupted_panel(tmp_path, monkeypatch):
 
     with pytest.raises(PanelInvariantError):
         history_store.save_panel(bad, name="test_panel", skip_invariants=False)
+
+
+@pytest.mark.unit
+def test_ffill_lagged_macro_skips_india_vix():
+    from trade_integrations.dataflows.index_research.history_panel import _ffill_lagged_macro_columns
+
+    frame = pd.DataFrame(
+        {
+            "date": ["2026-07-20", "2026-07-21"],
+            "close": [24238.5, 24150.8],
+            "usd_inr": [96.28, float("nan")],
+            "india_vix": [13.0, float("nan")],
+        }
+    )
+    out = _ffill_lagged_macro_columns(frame)
+    assert float(out.loc[1, "usd_inr"]) == pytest.approx(96.28)
+    assert pd.isna(out.loc[1, "india_vix"])
