@@ -55,7 +55,7 @@ class NewsPipelineConfig:
     entity_drain_cron: str = "35 18 * * *"
     entity_drain_continuous_cron: str = "*/15 * * * *"
     entity_drain_continuous_enabled: bool = True
-    entity_maintenance_cron: str = "0 3 * * 0"
+    entity_maintenance_cron: str = "0 4 * * *"
     entity_backpressure_threshold: int = 400
     full_ingest_sources: str = _FULL_SOURCES_DEFAULT
     light_ingest_sources: str = _LIGHT_SOURCES_DEFAULT
@@ -73,6 +73,10 @@ class NewsPipelineConfig:
     adjudication_discard_hoax: bool = True
     adjudication_max_tokens: int = 8192
     story_dedup_max_tokens: int = 8192
+    wiki_search_enabled: bool = True
+    wiki_search_top_k: int = 5
+    wiki_search_max_per_pass: int = 150
+    wiki_search_min_score: float = 0.75
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -116,6 +120,19 @@ class NewsPipelineConfig:
             base.story_dedup_max_tokens = int(base.story_dedup_max_tokens)
         except (TypeError, ValueError):
             base.story_dedup_max_tokens = 8192
+        base.wiki_search_enabled = bool(base.wiki_search_enabled)
+        try:
+            base.wiki_search_top_k = int(base.wiki_search_top_k)
+        except (TypeError, ValueError):
+            base.wiki_search_top_k = 5
+        try:
+            base.wiki_search_max_per_pass = int(base.wiki_search_max_per_pass)
+        except (TypeError, ValueError):
+            base.wiki_search_max_per_pass = 150
+        try:
+            base.wiki_search_min_score = float(base.wiki_search_min_score)
+        except (TypeError, ValueError):
+            base.wiki_search_min_score = 0.75
         return base
 
 
@@ -131,7 +148,7 @@ def env_defaults() -> NewsPipelineConfig:
         entity_drain_cron=os.getenv("HUB_NEWS_ENTITY_CRON", "35 18 * * *").strip(),
         entity_drain_continuous_cron=os.getenv("HUB_NEWS_ENTITY_CONTINUOUS_CRON", "*/15 * * * *").strip(),
         entity_drain_continuous_enabled=_env_bool("HUB_NEWS_ENTITY_CONTINUOUS_ENABLED", True),
-        entity_maintenance_cron=os.getenv("HUB_NEWS_ENTITY_MAINTENANCE_CRON", "0 3 * * 0").strip(),
+        entity_maintenance_cron=os.getenv("HUB_NEWS_ENTITY_MAINTENANCE_CRON", "0 4 * * *").strip(),
         entity_backpressure_threshold=_env_int("HUB_NEWS_BACKPRESSURE_THRESHOLD", 400),
         full_ingest_sources=os.getenv("HUB_NEWS_FULL_SOURCES", _FULL_SOURCES_DEFAULT).strip(),
         light_ingest_sources=os.getenv("HUB_NEWS_LIGHT_SOURCES", _LIGHT_SOURCES_DEFAULT).strip(),
@@ -149,6 +166,10 @@ def env_defaults() -> NewsPipelineConfig:
         adjudication_discard_hoax=_env_bool("HUB_NEWS_ADJUDICATION_DISCARD_HOAX", True),
         adjudication_max_tokens=_env_int("MINIMAX_ADJUDICATION_MAX_TOKENS", 8192),
         story_dedup_max_tokens=_env_int("MINIMAX_STORY_DEDUP_MAX_TOKENS", 8192),
+        wiki_search_enabled=_env_bool("HUB_NEWS_WIKI_SEARCH_ENABLED", True),
+        wiki_search_top_k=_env_int("HUB_NEWS_WIKI_SEARCH_TOP_K", 5),
+        wiki_search_max_per_pass=_env_int("HUB_NEWS_WIKI_SEARCH_MAX_PER_PASS", 150),
+        wiki_search_min_score=float(os.getenv("HUB_NEWS_WIKI_SEARCH_MIN_SCORE", "0.75")),
     )
 
 
@@ -332,6 +353,7 @@ def sync_scheduled_jobs_from_config() -> dict[str, Any]:
             "ticker": cfg.ticker,
             "batch_size": cfg.entity_batch_size,
             "lookback_days": 365,
+            "dispatch_timeout_ms": 3_600_000,
         },
     )
 
