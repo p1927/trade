@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -379,9 +379,10 @@ def enrich_eval_row_horizon(
     try:
         from trade_integrations.dataflows.index_research.event_overlay import compute_event_overlay
 
-        overlay = compute_event_overlay(t0, as_of_day=pred_day)
-        out["event_overlay_pct"] = overlay.get("return_pct")
-        out["event_overlay"] = overlay
+        if eval_row.get("event_overlay_pct") is None:
+            overlay = compute_event_overlay(t0, as_of_day=pred_day)
+            out["event_overlay_pct"] = overlay.get("return_pct")
+            out["event_overlay"] = overlay
     except Exception:
         pass
 
@@ -607,7 +608,8 @@ def analyze_ledger_misses(
             "actual_forward_return_pct": row.get("actual_return_pct"),
             "direction_correct": False,
             "macro_delta_pct": (row.get("metadata") or {}).get("macro_delta_pct"),
-            "macro_raw_pct": (row.get("metadata") or {}).get("macro_delta_pct"),
+            "macro_raw_pct": (row.get("metadata") or {}).get("raw_macro_delta_pct")
+            or (row.get("metadata") or {}).get("ridge_raw_macro_delta_pct"),
         }
         out.append(
             analyze_prediction_miss(

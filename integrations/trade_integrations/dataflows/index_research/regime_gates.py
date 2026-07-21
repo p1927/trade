@@ -106,16 +106,22 @@ def factor_gate_weight(factor_name: str, regime_label: str) -> float:
     return 1.0
 
 
-def predict_macro_delta_gated(
+def _flow_regime_enabled() -> bool:
+    return os.getenv("INDEX_PREDICTION_FLOW_REGIME_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def gated_ridge_macro_delta(
     macro_factors: dict[str, Any],
-    horizon: Any,
     artifact: Any,
     *,
     macro_trust_multiplier: float = 1.0,
 ) -> float:
-    """Apply pre-specified regime gates to macro Ridge output (no new coefficients)."""
+    """Regime-gated Ridge macro delta before flow-regime overlay."""
     from trade_integrations.dataflows.index_research.predictor import (
-        ModelArtifact,
         _expand_poly,
         _macro_trust_weight,
         _scale_features,
@@ -146,14 +152,58 @@ def predict_macro_delta_gated(
     expanded, poly_names = _expand_poly(gated_input, artifact.feature_names, artifact.poly_degree)
     coefs = np.array([artifact.coefficients.get(name, 0.0) for name in poly_names], dtype=float)
     trust = _macro_trust_weight(float(artifact.mae or 1.5)) * max(0.0, macro_trust_multiplier)
-    raw_delta = float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
-    if os.getenv("INDEX_PREDICTION_FLOW_REGIME_ENABLED", "0").strip().lower() in {"1", "true", "yes"}:
+    return float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
+
+
+def flow_regime_breakdown(
+    macro_factors: dict[str, Any],
+    artifact: Any,
+    *,
+    macro_trust_multiplier: float = 1.0,
+) -> dict[str, Any]:
+    """Split gated ridge output vs optional flow-regime overlay."""
+    regime = resolve_regime_label(macro_factors)
+    pre_flow = gated_ridge_macro_delta(
+        macro_factors,
+        artifact,
+        macro_trust_multiplier=macro_trust_multiplier,
+    )
+    enabled = _flow_regime_enabled()
+    bucket: str | None = None
+    post_flow = pre_flow
+    if enabled:
         from trade_integrations.dataflows.index_research.flow_regime_buckets import (
             apply_flow_regime_adjustment,
+            flow_regime_bucket,
         )
 
-        return apply_flow_regime_adjustment(raw_delta, macro_factors, regime)
-    return raw_delta
+        post_flow = apply_flow_regime_adjustment(pre_flow, macro_factors, regime)
+        bucket = flow_regime_bucket(macro_factors, regime)
+    return {
+        "flow_regime_enabled": enabled,
+        "regime_label": regime,
+        "pre_flow_macro_delta_pct": round(pre_flow, 4),
+        "post_flow_macro_delta_pct": round(post_flow, 4),
+        "flow_regime_offset_pct": round(post_flow - pre_flow, 4),
+        "flow_regime_bucket": bucket,
+    }
+
+
+def predict_macro_delta_gated(
+    macro_factors: dict[str, Any],
+    horizon: Any,
+    artifact: Any,
+    *,
+    macro_trust_multiplier: float = 1.0,
+) -> float:
+    """Apply pre-specified regime gates to macro Ridge output (no new coefficients)."""
+    del horizon
+    breakdown = flow_regime_breakdown(
+        macro_factors,
+        artifact,
+        macro_trust_multiplier=macro_trust_multiplier,
+    )
+    return float(breakdown["post_flow_macro_delta_pct"])
 
 
 def apply_regime_gates_to_contributions(
@@ -166,7 +216,7 @@ def apply_regime_gates_to_contributions(
     gated_rows: list[dict[str, Any]] = []
     total = 0.0
     for row in contributors:
-        term = str(row.get("term") or "")
+        term = str(row.get("factor") or row.get("term") or "")
         base_factor = term.split(" ")[0] if term else term
         weight = factor_gate_weight(base_factor, regime)
         contrib = float(row.get("contribution_pct") or 0.0) * weight

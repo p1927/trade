@@ -73,6 +73,11 @@ def build_prediction_metadata(
         "refresh": refresh,
         "bottom_up_return_pct": float(prediction.get("bottom_up_return_pct") or 0.0),
         "macro_delta_pct": float(prediction.get("macro_delta_pct") or 0.0),
+        "raw_macro_delta_pct": float(
+            prediction.get("raw_macro_delta_pct")
+            or prediction.get("ridge_raw_macro_delta_pct")
+            or 0.0
+        ),
         "direction_view": prediction.get("direction_view"),
         "direction_confidence": prediction.get("direction_confidence"),
         "scenario_anchor_return_pct": prediction.get("scenario_anchor_return_pct"),

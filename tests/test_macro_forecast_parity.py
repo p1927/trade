@@ -68,11 +68,11 @@ def test_parity_macro_only_matches_backtest_row(monkeypatch):
 
     history = pd.DataFrame(
         {
-            "date": pd.date_range("2025-01-02", periods=55, freq="B").strftime("%Y-%m-%d"),
-            "close": [23000 + i * 10 for i in range(55)],
-            "usd_inr": [83.0] * 55,
-            "india_vix": [14.0 + (i % 5) * 0.2 for i in range(55)],
-            "oil_brent": [80.0] * 55,
+            "date": pd.date_range("2025-01-02", periods=90, freq="B").strftime("%Y-%m-%d"),
+            "close": [23000 + i * 10 for i in range(90)],
+            "usd_inr": [83.0] * 90,
+            "india_vix": [14.0 + (i % 5) * 0.2 for i in range(90)],
+            "oil_brent": [80.0] * 90,
         }
     )
     monkeypatch.setattr(
