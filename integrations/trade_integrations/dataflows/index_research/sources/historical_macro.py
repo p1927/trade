@@ -164,7 +164,9 @@ def backfill_macro_history(
     dry_run: bool = False,
 ) -> dict[str, object]:
     """Fetch macro + NIFTY OHLCV and write cold-tier parquets."""
-    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
+    end_day = (end or india_trading_date_iso())[:10]
     end_exclusive = (
         datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)
     ).strftime("%Y-%m-%d")

@@ -137,7 +137,9 @@ def backfill_flow_history(
     allow_live_fetch: bool = True,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
+    end_day = (end or india_trading_date_iso())[:10]
     months = _month_keys(start, end_day)
 
     niftyinvest = fetch_niftyinvest_flow_frame(

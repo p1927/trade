@@ -483,11 +483,10 @@ def sync_historic_news_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
 
 def sync_nifty_ohlcv_overlay(*, start: str = "2006-01-01", end: str | None = None) -> dict[str, Any]:
     """Overlay NSE sector CSV Nifty closes onto existing nifty_ohlcv_daily."""
-    from datetime import datetime, timezone
-
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
     from trade_integrations.nse_browser.repository import load_sector_indices_frame
 
-    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    end_day = (end or india_trading_date_iso())[:10]
     sector = load_sector_indices_frame(start=start[:10], end=end_day)
     if sector.empty:
         return {"status": "skipped", "reason": "no_sector_data", "dataset": "nifty_ohlcv_daily"}
@@ -596,8 +595,7 @@ def sync_historic_derivatives_to_cold_tier(
     end: str | None = None,
 ) -> dict[str, Any]:
     """Merge historic OI / FO bhavcopy / MrChartist JSON into flow_derivatives_daily."""
-    from datetime import datetime, timezone
-
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
     from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
         load_fo_bhavcopy_derivatives_frame,
         load_nifty_oi_daily_frame,
@@ -610,7 +608,7 @@ def sync_historic_derivatives_to_cold_tier(
     )
     from trade_integrations.nse_browser.repository import repo_root
 
-    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    end_day = (end or india_trading_date_iso())[:10]
     existing = load_history_dataset("flow_derivatives_daily")
     merged = existing.copy() if not existing.empty else pd.DataFrame()
 
