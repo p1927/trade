@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from nautilus_openalgo_bridge.config import (
@@ -13,6 +14,8 @@ from nautilus_openalgo_bridge.config import (
 from nautilus_openalgo_bridge.orders import legs_to_openalgo_orders
 from nautilus_openalgo_bridge.models import ExecutionIntent, IntentAction
 from nautilus_openalgo_bridge.openalgo_client import BridgeOpenAlgoClient
+
+logger = logging.getLogger(__name__)
 
 
 def _margin_positions_from_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -89,7 +92,30 @@ def run_preflight(
         checks["margin_inr"] = margin
         checks["orders"] = len(orders)
         if margin is None:
-            checks["margin_warning"] = "margin_unavailable"
+            return {"blocked": True, "reason": "margin_unavailable", "checks": checks}
+        agent_id = str(intent.agent_id or "").strip()
+        if agent_id:
+            try:
+                from trade_integrations.autonomous_agents.store import get_agent
+
+                agent = get_agent(agent_id)
+                if agent:
+                    budget = float((agent.get("constraints") or {}).get("budget_inr") or 0)
+                    if budget > 0 and float(margin) > budget:
+                        checks["budget_inr"] = budget
+                        return {
+                            "blocked": True,
+                            "reason": "margin_exceeds_budget",
+                            "checks": checks,
+                        }
+            except Exception as exc:
+                logger.warning("budget check failed for agent %s: %s", agent_id, exc)
+                return {
+                    "blocked": True,
+                    "reason": "budget_check_failed",
+                    "error": str(exc),
+                    "checks": checks,
+                }
         return {"blocked": False, "checks": checks}
 
     return {"blocked": False, "checks": checks}

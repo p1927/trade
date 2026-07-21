@@ -349,6 +349,14 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
         logger.info("skip full reasoning for %s: turn already in flight", agent_id)
         return False
 
+    if turn_kind in {"strategy_revision", "research"}:
+        try:
+            from trade_integrations.autonomous_agents.bootstrap import prefetch_turn_research
+
+            await prefetch_turn_research(agent_id, turn_kind=turn_kind)
+        except Exception as exc:
+            logger.warning("prefetch_turn_research failed for %s: %s", agent_id, exc)
+
     svc = _session_service()
     session_id = str(agent.get("vibe_session_id") or "")
     if not svc or not session_id:

@@ -8,7 +8,10 @@ from typing import Any
 from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
 from trade_integrations.auto_paper.strategy_scorer import format_scorer_for_prompt, score_ranked_strategies
 from trade_integrations.execution.profile import resolve_profile
-from trade_integrations.execution.routing_context import resolve_agent_routing
+from trade_integrations.execution.routing_context import (
+    format_advisor_skill_block,
+    resolve_agent_routing,
+)
 from trade_integrations.execution.prompt_fragments import (
     kind_note_for,
     prompt_fragment_for,
@@ -118,7 +121,13 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 
     bootstrap_block = ""
     if turn_kind == "bootstrap":
-        if routing.primary_instrument == "equity" and not profile.is_us:
+        if routing.research_asset_type == "index" and not profile.is_us:
+            research_step = (
+                f"2. Call `get_research_status(ticker=\"{focus}\", asset_type=\"index\")` **once**; "
+                "if overall `status` is `complete`, proceed to `get_index_trade_plan` — "
+                "do not retry because individual stage rows show `complete: false`.\n"
+            )
+        elif routing.primary_instrument == "equity" and not profile.is_us:
             research_step = (
                 f"2. Call `get_research_status(ticker=\"{focus}\", asset_type=\"stock\")` **once**; "
                 "if overall `status` is `complete`, proceed to `get_stock_trade_plan` — "
@@ -170,6 +179,17 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
             "and record EXIT.\n"
         )
 
+    skill_block = format_advisor_skill_block(routing, turn_kind=turn_kind)
+
+    index_flow_note = ""
+    if routing.research_asset_type == "index" and not profile.is_us:
+        index_flow_note = (
+            "\n## Index research flow\n"
+            f"For index outlook on **{focus}**, use `get_research_status(ticker=\"{focus}\", "
+            "asset_type=\"index\")`, `get_index_trade_plan`, and `get_index_trade_widget`. "
+            "Use options plan/widget tools only when recommending concrete F&O legs.\n"
+        )
+
     return f"""# Autonomous agent turn ({turn_kind}){title_suffix}
 
 {header}
@@ -187,7 +207,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 
 {mandate_json}
 {thesis_block}{guidance_block}{scorer_block}
-{bootstrap_block}{flow}
+{skill_block}{index_flow_note}{bootstrap_block}{flow}
 {harness_block}
 {_RUNNING_AGENT_FOOTER}"""
 

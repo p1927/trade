@@ -37,10 +37,56 @@ def infer_debate_asset_type(ticker: str, explicit: str | None = None) -> str:
     return "stock"
 
 
+def format_debate_context_for_agent(debate_artifact: dict[str, Any] | None) -> str:
+    """Build TradingAgents debate block for Vibe agent prompts."""
+    if not debate_artifact:
+        return ""
+    from trade_integrations.research.debate_synthesis import extract_structured_debate
+
+    structured = extract_structured_debate(debate_artifact)
+    inv = debate_artifact.get("investment_debate") or {}
+    risk = debate_artifact.get("risk_debate") or {}
+    lines = [
+        "[debate_context]",
+        f"ticker: {debate_artifact.get('ticker')}",
+        f"rating: {debate_artifact.get('rating')}",
+        f"asset_type: {debate_artifact.get('asset_type', 'stock')}",
+    ]
+    if structured.get("view"):
+        lines.append(f"debate_view: {structured['view']}")
+    if structured.get("direction_confidence") is not None:
+        lines.append(f"debate_confidence: {structured['direction_confidence']}")
+    if structured.get("expected_return_pct") is not None:
+        lines.append(f"debate_expected_return_pct: {structured['expected_return_pct']}")
+    bull = str(inv.get("bull_summary") or "")[:400]
+    bear = str(inv.get("bear_summary") or "")[:400]
+    if bull:
+        lines.append(f"bull_summary: {bull}")
+    if bear:
+        lines.append(f"bear_summary: {bear}")
+    judge = str(inv.get("judge_decision") or "")[:400]
+    if judge:
+        lines.append(f"investment_judge: {judge}")
+    risk_judge = str(risk.get("judge_decision") or "")[:400]
+    if risk_judge:
+        lines.append(f"risk_judge: {risk_judge}")
+    final = str(debate_artifact.get("final_trade_decision") or "")[:500]
+    if final:
+        lines.append(f"final_trade_decision: {final}")
+    lines.append("[/debate_context]")
+    lines.append(
+        "Reconcile debate_view with [research_context] ranked strategies before finalizing "
+        "a trade widget. If debate conflicts with the quant plan, prefer the higher-confidence "
+        "signal or call get_*_trade_widget(refresh=true) after explaining the conflict."
+    )
+    return "\n".join(lines)
+
+
 def format_research_context_for_agent(
     artifact: dict[str, Any] | None,
     *,
     index_artifact: dict[str, Any] | None = None,
+    debate_artifact: dict[str, Any] | None = None,
     widget_intent: str = "none",
     session_config: dict[str, Any] | None = None,
 ) -> str:
@@ -52,6 +98,9 @@ def format_research_context_for_agent(
         parts.append(_format_index_research_context(index_artifact, widget_intent=widget_intent))
     elif artifact and artifact.get("asset_type") == "index":
         parts.append(_format_index_research_context(artifact, widget_intent=widget_intent))
+    debate_block = format_debate_context_for_agent(debate_artifact)
+    if debate_block:
+        parts.append(debate_block)
     news_block = format_news_scenario_context(session_config)
     if news_block:
         parts.append(news_block)

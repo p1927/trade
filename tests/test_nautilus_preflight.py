@@ -69,6 +69,60 @@ def test_preflight_enter_checks_margin():
     assert result["checks"]["margin_inr"] == 12500.0
 
 
+def test_preflight_enter_blocked_when_margin_unavailable():
+    client = MagicMock()
+    client.ensure_analyzer_mode.return_value = True
+    client.calculate_margin.return_value = None
+    intent = ExecutionIntent(
+        action=IntentAction.ENTER,
+        agent_id="aa_x",
+        rationale="go",
+        legs=[ExecutionLeg(symbol="X", exchange="NFO", action="BUY", quantity=1)],
+    )
+    with patch("nautilus_openalgo_bridge.preflight.is_bridge_market_open", return_value=True):
+        result = run_preflight(intent, client)
+    assert result["blocked"] is True
+    assert result["reason"] == "margin_unavailable"
+
+
+def test_preflight_enter_blocked_when_margin_exceeds_budget():
+    client = MagicMock()
+    client.ensure_analyzer_mode.return_value = True
+    client.calculate_margin.return_value = 50000.0
+    intent = ExecutionIntent(
+        action=IntentAction.ENTER,
+        agent_id="aa_budget",
+        rationale="go",
+        legs=[ExecutionLeg(symbol="X", exchange="NFO", action="BUY", quantity=1)],
+    )
+    agent = {"id": "aa_budget", "constraints": {"budget_inr": 20000}}
+    with patch("nautilus_openalgo_bridge.preflight.is_bridge_market_open", return_value=True), patch(
+        "trade_integrations.autonomous_agents.store.get_agent", return_value=agent
+    ):
+        result = run_preflight(intent, client)
+    assert result["blocked"] is True
+    assert result["reason"] == "margin_exceeds_budget"
+
+
+def test_preflight_enter_blocked_when_budget_check_fails():
+    client = MagicMock()
+    client.ensure_analyzer_mode.return_value = True
+    client.calculate_margin.return_value = 5000.0
+    intent = ExecutionIntent(
+        action=IntentAction.ENTER,
+        agent_id="aa_budget",
+        rationale="go",
+        legs=[ExecutionLeg(symbol="X", exchange="NFO", action="BUY", quantity=1)],
+    )
+    with patch("nautilus_openalgo_bridge.preflight.is_bridge_market_open", return_value=True), patch(
+        "trade_integrations.autonomous_agents.store.get_agent",
+        side_effect=RuntimeError("store down"),
+    ):
+        result = run_preflight(intent, client)
+    assert result["blocked"] is True
+    assert result["reason"] == "budget_check_failed"
+
+
 def test_preflight_enter_blocked_outside_hours():
     client = MagicMock()
     client.ensure_analyzer_mode.return_value = True

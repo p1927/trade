@@ -24,3 +24,19 @@ class TestAutonomousTurns:
         assert "record_autonomous_decision" in prompt
         assert "Decision: ENTER" in prompt
         assert "handoff cycle" in prompt
+        assert 'load_skill("index-advisor")' in prompt
+        assert "get_index_trade_plan" in prompt
+
+    def test_equity_agent_prompt_uses_stock_advisor(self):
+        agent = {
+            "id": "aa_eq1",
+            "name": "RELIANCE swing",
+            "symbols": ["RELIANCE"],
+            "mandate": "Equity swing paper",
+            "constraints": {"mode": "paper", "confidence_threshold": 75},
+            "execution_market": "IN",
+            "mandate_config": {"allowed_instruments": ["equity"]},
+        }
+        prompt = build_full_reasoning_prompt(agent=agent, turn_kind="research")
+        assert 'load_skill("stock-advisor")' in prompt
+        assert 'load_skill("options-advisor")' not in prompt

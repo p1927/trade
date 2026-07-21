@@ -192,4 +192,35 @@ def run_agent_debate(
     }
     save_agent_debate(display_ticker, payload)
     logger.info("Saved agent debate for %s (rating=%s)", display_ticker, rating)
+    refresh_hub_research_after_debate(display_ticker, asset_type=resolved_asset)
     return payload
+
+
+def refresh_hub_research_after_debate(ticker: str, *, asset_type: str | None = None) -> None:
+    """Re-run hub aggregators so debate_synthesis re-ranks strategies after debate."""
+    from trade_integrations.bridge.hub_context import infer_debate_asset_type
+    from trade_integrations.research.orchestrator import ensure_research_complete
+    from trade_integrations.research.registry import ResearchKind, eligible_kinds_for_ticker, resolve_kind_for_ticker
+
+    sym = ticker.strip().upper()
+    resolved = infer_debate_asset_type(sym, asset_type)
+    prefer = ResearchKind.OPTIONS if resolved == "options" else ResearchKind.STOCK
+    primary = resolve_kind_for_ticker(sym, prefer=prefer)
+    if primary is None:
+        return
+    kinds: list[ResearchKind] = [primary]
+    eligible = set(eligible_kinds_for_ticker(sym))
+    if ResearchKind.INDEX in eligible and primary != ResearchKind.INDEX:
+        kinds.append(ResearchKind.INDEX)
+    if (
+        ResearchKind.OPTIONS in eligible
+        and primary != ResearchKind.OPTIONS
+        and resolved != "stock"
+    ):
+        kinds.append(ResearchKind.OPTIONS)
+    for kind in dict.fromkeys(kinds):
+        try:
+            ensure_research_complete(sym, kind=kind, refresh=True)
+            logger.info("Refreshed hub %s research after debate for %s", kind.value, sym)
+        except Exception:
+            logger.exception("Hub refresh after debate failed for %s (%s)", sym, kind.value)

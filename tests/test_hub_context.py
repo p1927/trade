@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from trade_integrations.bridge.hub_context import (
+    format_debate_context_for_agent,
     format_research_context_for_agent,
     has_strategy_options_to_present,
     infer_debate_asset_type,
@@ -100,3 +101,36 @@ class TestHubContext:
         )
         assert "get_index_trade_widget" in block
         assert "Do not call get_index_trade_widget for browse-only" not in block
+
+    def test_format_debate_context_includes_structured_view(self):
+        block = format_debate_context_for_agent(
+            {
+                "ticker": "NIFTY",
+                "rating": "BUY",
+                "asset_type": "options",
+                "final_trade_decision": "Bullish outlook with +3% target",
+                "investment_debate": {
+                    "bull_summary": "Momentum supports upside",
+                    "bear_summary": "Event risk ahead",
+                    "judge_decision": "Moderately bullish",
+                },
+                "risk_debate": {"judge_decision": "Accept moderate risk"},
+            }
+        )
+        assert "[debate_context]" in block
+        assert "debate_view: bullish" in block
+        assert "bull_summary:" in block
+        assert "Reconcile debate_view" in block
+
+    def test_format_research_context_includes_debate_when_provided(self):
+        block = format_research_context_for_agent(
+            {
+                "underlying": "NIFTY",
+                "asset_type": "options",
+                "plan_status": "ready",
+                "ranked_strategies": [{"name": "Iron condor", "tier": "A", "score": 0.8}],
+            },
+            debate_artifact={"ticker": "NIFTY", "rating": "HOLD", "final_trade_decision": "Hold"},
+        )
+        assert "[research_context]" in block
+        assert "[debate_context]" in block
