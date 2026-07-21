@@ -90,6 +90,26 @@ def test_run_all_tracks_returns_core_ids():
 
 
 @pytest.mark.unit
+def test_run_all_tracks_parallel_avoids_shared_context_race(monkeypatch):
+    """Regression: one shared copy_context() under parallel pool raises 'already entered'."""
+    import trade_integrations.dataflows.index_research.prediction_algorithms.registry as reg
+
+    monkeypatch.setattr(reg, "_TRACK_POOL_WORKERS", 2)
+    ctx = _base_context()
+    tracks = run_all_tracks(
+        ctx,
+        track_ids=["quant_ridge", "macro_only", "naive_zero", "scenario_anchor"],
+    )
+    context_errors = [
+        tid
+        for tid, track in tracks.items()
+        if "cannot enter context" in str((track.provenance or {}).get("error", ""))
+    ]
+    assert not context_errors, f"parallel context race: {context_errors}"
+    assert sum(1 for track in tracks.values() if track.available) >= 2
+
+
+@pytest.mark.unit
 def test_naive_zero_is_zero():
     ctx = _base_context()
     tracks = run_all_tracks(ctx)

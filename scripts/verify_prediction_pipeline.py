@@ -39,13 +39,13 @@ def main() -> int:
     if not args.skip_backtest:
         steps.append(
             _run(
-                [py, str(ROOT / "scripts" / "run_track_backtest.py"), "--ticker", "NIFTY", "--days", "60", "--eval-step", "5"],
+                [py, str(ROOT / "scripts" / "run_track_backtest.py"), "--ticker", "NIFTY", "--days", "365", "--eval-step", "5"],
                 label="backtest_run_1",
             )
         )
         steps.append(
             _run(
-                [py, str(ROOT / "scripts" / "run_track_backtest.py"), "--ticker", "NIFTY", "--days", "60", "--eval-step", "5"],
+                [py, str(ROOT / "scripts" / "run_track_backtest.py"), "--ticker", "NIFTY", "--days", "365", "--eval-step", "5"],
                 label="backtest_run_2",
             )
         )
@@ -104,6 +104,7 @@ def main() -> int:
         )
 
     promotion_status: dict[str, object] = {"loaded": False}
+    scoreboard_eval_count = 0
     try:
         if str(ROOT / "integrations") not in sys.path:
             sys.path.insert(0, str(ROOT / "integrations"))
@@ -115,10 +116,28 @@ def main() -> int:
         )
 
         board = load_scoreboard("NIFTY")
+        scoreboard_eval_count = int((board or {}).get("eval_count") or 0)
         promotion_status = evaluate_promotion(board or {}, ticker="NIFTY")
         promotion_status["loaded"] = True
+        promotion_status["scoreboard_eval_count"] = scoreboard_eval_count
     except Exception as exc:
-        promotion_status = {"loaded": False, "error": str(exc)}
+        promotion_status = {
+            "loaded": False,
+            "error": str(exc),
+            "scoreboard_eval_count": scoreboard_eval_count,
+        }
+
+    backtest_steps = [s for s in steps if str(s.get("label", "")).startswith("backtest_run")]
+    backtest_any_ok = any(s.get("returncode") == 0 for s in backtest_steps)
+    if not args.skip_backtest and backtest_steps and backtest_any_ok and scoreboard_eval_count <= 0:
+        steps.append(
+            {
+                "label": "scoreboard_eval_count",
+                "returncode": 1,
+                "cmd": ["scoreboard_eval_count_check"],
+                "stderr_tail": "track scoreboard eval_count is 0 after backtest — walk-forward produced no OOS rows",
+            }
+        )
 
     failed = [s for s in steps if s["returncode"] != 0]
     report = {

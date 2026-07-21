@@ -155,19 +155,19 @@ def run_all_tracks(
             out[track_id] = _run_track_timed(track_id, runner, ctx, pipeline=pipeline)
         return out
 
-    ctx_vars = contextvars.copy_context()
+    def _submit_track(track_id: str, runner: TrackRunner):
+        # Fresh context per worker — one shared Context cannot be entered concurrently.
+        return pool.submit(
+            contextvars.copy_context().run,
+            _run_track_timed,
+            track_id,
+            runner,
+            ctx,
+            pipeline=pipeline,
+        )
+
     with ThreadPoolExecutor(max_workers=_TRACK_POOL_WORKERS, thread_name_prefix="forecast-tracks") as pool:
-        futures = {
-            pool.submit(
-                ctx_vars.run,
-                _run_track_timed,
-                track_id,
-                runner,
-                ctx,
-                pipeline=pipeline,
-            ): track_id
-            for track_id, runner in runnable
-        }
+        futures = {_submit_track(track_id, runner): track_id for track_id, runner in runnable}
         for fut in as_completed(futures):
             track_id = futures[fut]
             try:
