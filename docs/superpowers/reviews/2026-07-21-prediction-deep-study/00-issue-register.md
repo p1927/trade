@@ -17,7 +17,7 @@ Severity: **critical** | **high** | **medium** | **low**
 | C4 | **FIXED (Tier 1+2)** | Group + covariance-aware SHAP when correlated; channel-first UI. |
 | C5 | **FIXED** | `simulate.py` baseline now uses reconciled/debate headline when no overrides (`headline_return_pct`). |
 | C6 | **Confirmed** | Cached constituents default; first run requires refresh or existing hub snapshot. |
-| C7 | **Confirmed** | `MACRO_MODEL_KEYS` (24) ⊂ `MACRO_FACTOR_KEYS` (52) — UI audit under-counts Phase I / TA inputs. |
+| C7 | **FIXED** | UI `MACRO_MODEL_KEYS` (51) matches backend `MACRO_FACTOR_KEYS`; regression test added. |
 | C8 | **FIXED (UI)** | Flow gate sets `macro_trust_multiplier=0.5`; PredictionSummary shows flow coverage banner and trust multiplier when gate fails. |
 | C9 | **Confirmed** | `INDEX_PREDICTION_LAB_MODE=combine` can replace headline via combiner. |
 | C10 | **Confirmed** | ~18 OOS eval rows; ±3pp promotion gates statistically noisy. |

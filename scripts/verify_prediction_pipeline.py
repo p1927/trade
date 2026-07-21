@@ -56,16 +56,28 @@ def main() -> int:
                     py,
                     "-m",
                     "pytest",
+                    "tests/test_index_explain.py",
+                    "tests/test_prediction_review_fixes.py",
+                    "tests/test_prediction_data_consistency.py",
+                    "tests/test_history_panel.py",
+                    "-q",
+                    "--timeout=120",
+                ],
+                label="pytest_explain_panel",
+            )
+        )
+        steps.append(
+            _run(
+                [
+                    py,
+                    "-m",
+                    "pytest",
                     "tests/test_enrich_macro_panel_news.py",
                     "tests/test_prediction_pipeline_lab.py",
                     "tests/test_prediction_algorithms_combiners.py",
                     "tests/test_calibrate_bottom_up.py",
                     "tests/test_phase_i_coverage.py",
                     "tests/test_spread_features.py",
-                    "tests/test_prediction_data_consistency.py",
-                    "tests/test_history_panel.py",
-                    "tests/test_index_explain.py",
-                    "tests/test_prediction_review_fixes.py",
                     "tests/test_data_router_ohlcv.py",
                     "tests/test_data_router_worker.py",
                     "tests/test_prediction_algorithms_tracks.py",
@@ -74,7 +86,7 @@ def main() -> int:
                     "-q",
                     "--timeout=120",
                 ],
-                label="pytest",
+                label="pytest_debate",
             )
         )
 
