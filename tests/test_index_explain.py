@@ -384,6 +384,52 @@ def test_build_perturbation_groups_merges_correlated_pairs():
 
 
 @pytest.mark.unit
+def test_shap_context_uses_same_poly_path_as_predictor():
+    """SHAP feature expansion must match ``_predict_macro_delta`` (template poly, not panel-fit)."""
+    import numpy as np
+
+    from trade_integrations.dataflows.index_research.explain import _prepare_linear_shap_context
+    from trade_integrations.dataflows.index_research.predictor import _predict_macro_delta
+
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 0.05, "oil_brent": -0.03},
+        intercept=0.1,
+        mae=1.2,
+        feature_names=["usd_inr", "oil_brent"],
+        poly_degree=1,
+        horizon_name="B",
+        feature_means=[83.0, 82.0],
+        feature_stds=[1.0, 2.0],
+    )
+    macro = {"usd_inr": 83.2, "oil_brent": 82.0}
+    horizon = resolve_horizon(14)
+    ctx = _prepare_linear_shap_context(macro, artifact)
+    assert ctx is not None
+    ridge_pred = float(ctx["ridge"].predict(ctx["x_poly"])[0])
+    live_pred = _predict_macro_delta(macro, horizon, artifact)
+    assert ridge_pred == pytest.approx(live_pred, abs=1e-6)
+
+
+@pytest.mark.unit
+def test_macro_model_keys_match_backend_factor_matrix():
+    import re
+    from pathlib import Path
+
+    from trade_integrations.dataflows.index_research.factor_matrix import MACRO_FACTOR_KEYS
+
+    ts_path = (
+        Path(__file__).resolve().parents[1]
+        / "vibetrading/frontend/src/lib/predictionVerification.ts"
+    )
+    text = ts_path.read_text(encoding="utf-8")
+    core_block = text.split("MACRO_CORE_KEYS = [", 1)[1].split("] as const", 1)[0]
+    ext_block = text.split("MACRO_EXTENDED_KEYS = [", 1)[1].split("] as const", 1)[0]
+    frontend_keys = re.findall(r'"([a-z0-9_]+)"', core_block + ext_block)
+    assert set(frontend_keys) == set(MACRO_FACTOR_KEYS)
+    assert len(frontend_keys) == len(MACRO_FACTOR_KEYS)
+
+
+@pytest.mark.unit
 def test_explanation_bundle_structure():
     horizon = resolve_horizon(14)
     bundle = build_factor_explanation_bundle(

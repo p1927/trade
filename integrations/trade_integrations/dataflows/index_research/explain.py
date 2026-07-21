@@ -20,13 +20,12 @@ _NON_SCALAR_MACRO_KEYS = frozenset({"rbi_events", "rbi_context", "metadata", "so
 
 def _macro_factor_value(macro_factors: dict[str, Any], factor: str) -> float:
     """Coerce one macro factor to float; non-scalar entries resolve to 0."""
+    from trade_integrations.dataflows.index_research.predictor import _finite_float
+
     raw = macro_factors.get(factor, 0.0)
     if raw is None or isinstance(raw, (dict, list, tuple, set)):
         return 0.0
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return 0.0
+    return _finite_float(raw, 0.0)
 
 
 def _iter_macro_factor_names(
@@ -90,57 +89,75 @@ def _load_panel_background_matrix(
     return matrix
 
 
+def _expand_poly_matrix(
+    scaled_matrix: Any,
+    feature_names: list[str],
+    poly_degree: int,
+) -> tuple[Any, list[str]]:
+    """Batch poly expansion using the same template-fit path as live Ridge inference."""
+    import numpy as np
+
+    from trade_integrations.dataflows.index_research.predictor import _expand_poly
+
+    rows: list[Any] = []
+    poly_names: list[str] = []
+    for row in scaled_matrix:
+        expanded, poly_names = _expand_poly(row.reshape(1, -1), feature_names, poly_degree)
+        rows.append(np.asarray(expanded).reshape(-1))
+
+    return np.vstack(rows), poly_names
+
+
 def _prepare_linear_shap_context(
     macro_factors: dict[str, Any],
     artifact: ModelArtifact,
     *,
     panel_background: Any | None = None,
 ) -> dict[str, Any] | None:
-    """Fit scaler/poly from artifact + optional panel background; return Ridge SHAP inputs."""
+    """Build Ridge SHAP inputs using the same scale/poly path as ``_predict_macro_delta``."""
     if not artifact.feature_names or not artifact.coefficients:
         return None
     try:
         import numpy as np
         from sklearn.linear_model import Ridge
 
-        from trade_integrations.dataflows.index_research.ridge_pipeline import make_ridge_pipeline
+        from trade_integrations.dataflows.index_research.predictor import (
+            _expand_poly,
+            _scale_features,
+        )
     except ImportError:
         return None
 
     names = list(artifact.feature_names)
     values = np.array([_macro_factor_value(macro_factors, n) for n in names], dtype=float).reshape(1, -1)
-    pipe = make_ridge_pipeline(alpha=float(artifact.ridge_alpha or 50.0), poly_degree=artifact.poly_degree)
-    scaler = pipe.named_steps["scaler"]
-    panel_for_fit = panel_background
+
+    panel_for_background = panel_background
+    if panel_for_background is None:
+        panel_for_background = _load_panel_background_matrix(artifact)
+
     if artifact.feature_means and artifact.feature_stds:
-        scaler.mean_ = np.asarray(artifact.feature_means, dtype=float)
-        scaler.scale_ = np.asarray(artifact.feature_stds, dtype=float)
-        scaler.var_ = scaler.scale_ ** 2
-        scaler.n_features_in_ = len(artifact.feature_means)
+        means: list[float] | np.ndarray = artifact.feature_means
+        stds: list[float] | np.ndarray = artifact.feature_stds
     else:
-        if panel_for_fit is None:
-            panel_for_fit = _load_panel_background_matrix(artifact)
-        if panel_for_fit is not None and len(panel_for_fit) >= _MIN_PANEL_BACKGROUND_ROWS:
-            scaler.fit(panel_for_fit)
-        else:
-            scaler.mean_ = np.zeros(len(names), dtype=float)
-            scaler.scale_ = np.ones(len(names), dtype=float)
-            scaler.var_ = scaler.scale_ ** 2
-            scaler.n_features_in_ = len(names)
+        means, stds = [], []
 
-    scaled_current = scaler.transform(values)
-    poly = pipe.named_steps["poly"]
+    if len(means) and len(stds):
+        scaled_current = _scale_features(values, means, stds)
+    else:
+        scaled_current = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
+
+    x_poly, poly_names = _expand_poly(scaled_current, names, artifact.poly_degree)
+    if x_poly.ndim == 1:
+        x_poly = x_poly.reshape(1, -1)
+
     background_poly = None
-    fit_background = panel_for_fit if panel_for_fit is not None and len(panel_for_fit) >= _MIN_PANEL_BACKGROUND_ROWS else None
-    if fit_background is not None:
-        scaled_background = scaler.transform(fit_background)
-        poly.fit(scaled_background)
-        background_poly = poly.transform(scaled_background)
-    else:
-        poly.fit(scaled_current)
+    if panel_for_background is not None and len(panel_for_background) >= _MIN_PANEL_BACKGROUND_ROWS:
+        if len(means) and len(stds):
+            scaled_background = _scale_features(panel_for_background, means, stds)
+        else:
+            scaled_background = np.nan_to_num(panel_for_background, nan=0.0, posinf=0.0, neginf=0.0)
+        background_poly, _ = _expand_poly_matrix(scaled_background, names, artifact.poly_degree)
 
-    poly_names = [str(n) for n in poly.get_feature_names_out(names)]
-    x_poly = poly.transform(scaled_current)
     ridge = Ridge(alpha=float(artifact.ridge_alpha or 50.0), solver="lsqr")
     ridge.coef_ = np.array([artifact.coefficients.get(n, 0.0) for n in poly_names], dtype=float)
     ridge.intercept_ = float(artifact.intercept)
