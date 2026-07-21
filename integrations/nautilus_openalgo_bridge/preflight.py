@@ -96,18 +96,20 @@ def run_preflight(
         agent_id = str(intent.agent_id or "").strip()
         if agent_id:
             try:
+                from trade_integrations.autonomous_agents.defaults import DEFAULT_BUDGET_INR
                 from trade_integrations.autonomous_agents.store import get_agent
 
                 agent = get_agent(agent_id)
-                if agent:
-                    budget = float((agent.get("constraints") or {}).get("budget_inr") or 0)
-                    if budget > 0 and float(margin) > budget:
-                        checks["budget_inr"] = budget
-                        return {
-                            "blocked": True,
-                            "reason": "margin_exceeds_budget",
-                            "checks": checks,
-                        }
+                if agent is None:
+                    return {"blocked": True, "reason": "agent_not_found", "checks": checks}
+                budget = float((agent.get("constraints") or {}).get("budget_inr") or DEFAULT_BUDGET_INR)
+                if float(margin) > budget:
+                    checks["budget_inr"] = budget
+                    return {
+                        "blocked": True,
+                        "reason": "margin_exceeds_budget",
+                        "checks": checks,
+                    }
             except Exception as exc:
                 logger.warning("budget check failed for agent %s: %s", agent_id, exc)
                 return {

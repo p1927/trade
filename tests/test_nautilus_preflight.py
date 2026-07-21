@@ -63,7 +63,10 @@ def test_preflight_enter_checks_margin():
             ExecutionLeg(symbol="NIFTY24JUL24500CE", exchange="NFO", action="SELL", quantity=50),
         ],
     )
-    with patch("nautilus_openalgo_bridge.preflight.is_bridge_market_open", return_value=True):
+    with patch("nautilus_openalgo_bridge.preflight.is_bridge_market_open", return_value=True), patch(
+        "trade_integrations.autonomous_agents.store.get_agent",
+        return_value={"id": "aa_x", "constraints": {"budget_inr": 50_000}},
+    ):
         result = run_preflight(intent, client)
     assert result["blocked"] is False
     assert result["checks"]["margin_inr"] == 12500.0
@@ -102,6 +105,24 @@ def test_preflight_enter_blocked_when_margin_exceeds_budget():
         result = run_preflight(intent, client)
     assert result["blocked"] is True
     assert result["reason"] == "margin_exceeds_budget"
+
+
+def test_preflight_enter_blocked_when_agent_not_found():
+    client = MagicMock()
+    client.ensure_analyzer_mode.return_value = True
+    client.calculate_margin.return_value = 5000.0
+    intent = ExecutionIntent(
+        action=IntentAction.ENTER,
+        agent_id="aa_missing",
+        rationale="go",
+        legs=[ExecutionLeg(symbol="X", exchange="NFO", action="BUY", quantity=1)],
+    )
+    with patch("nautilus_openalgo_bridge.preflight.is_bridge_market_open", return_value=True), patch(
+        "trade_integrations.autonomous_agents.store.get_agent", return_value=None
+    ):
+        result = run_preflight(intent, client)
+    assert result["blocked"] is True
+    assert result["reason"] == "agent_not_found"
 
 
 def test_preflight_enter_blocked_when_budget_check_fails():
