@@ -231,6 +231,11 @@ def evaluate_promotion(scoreboard: dict[str, Any], *, ticker: str = "NIFTY") -> 
             )
     if not daily:
         stable_bootstrap = stable
+        if not headline_bootstrap:
+            headline_bootstrap = {
+                "insufficient_evidence": True,
+                "reason": "missing_daily_evaluations",
+            }
     else:
         bootstrap_ok: list[str] = []
         for cid in raw_promoted:
@@ -250,6 +255,7 @@ def evaluate_promotion(scoreboard: dict[str, Any], *, ticker: str = "NIFTY") -> 
         "promoted_combiners": stable_bootstrap,
         "raw_promoted_combiners": raw_promoted,
         "auto_promote_allowed": bool(stable_bootstrap)
+        and bool(daily)
         and eval_count >= _MIN_EVAL_COUNT
         and not bool(headline_bootstrap.get("insufficient_evidence")),
         "min_eval_count_required": _MIN_EVAL_COUNT,
