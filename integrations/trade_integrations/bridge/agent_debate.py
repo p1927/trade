@@ -6,10 +6,14 @@ import copy
 import logging
 import os
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_debate_running: set[str] = set()
+_debate_lock = threading.Lock()
 
 _INDEX_YF = {
     "NIFTY": "^NSEI",
@@ -194,6 +198,36 @@ def run_agent_debate(
     logger.info("Saved agent debate for %s (rating=%s)", display_ticker, rating)
     refresh_hub_research_after_debate(display_ticker, asset_type=resolved_asset)
     return payload
+
+
+def is_debate_running(ticker: str) -> bool:
+    return ticker.strip().upper() in _debate_running
+
+
+def run_agent_debate_locked(
+    ticker: str,
+    *,
+    trade_date: str | None = None,
+    asset_type: str = "stock",
+    allow_stale_cache: bool = True,
+) -> dict:
+    """Run debate with a process-wide lock; return fresh cache if already running."""
+    key = ticker.strip().upper()
+    with _debate_lock:
+        if key in _debate_running:
+            from trade_integrations.context.hub import is_agent_debate_cache_fresh, load_agent_debate_json
+
+            cached = load_agent_debate_json(key)
+            if cached:
+                if is_agent_debate_cache_fresh(key) or allow_stale_cache:
+                    return cached
+            raise RuntimeError(f"Agent debate already running for {key}")
+        _debate_running.add(key)
+    try:
+        return run_agent_debate(ticker, trade_date=trade_date, asset_type=asset_type)
+    finally:
+        with _debate_lock:
+            _debate_running.discard(key)
 
 
 def refresh_hub_research_after_debate(ticker: str, *, asset_type: str | None = None) -> None:

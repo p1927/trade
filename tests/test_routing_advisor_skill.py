@@ -6,7 +6,9 @@ import pytest
 
 from trade_integrations.execution.routing_context import (
     advisor_skill_id_for_routing,
+    debate_asset_type_for_agent,
     format_advisor_skill_block,
+    india_debate_eligible_for_agent,
     research_kinds_for_agent,
     resolve_agent_routing,
 )
@@ -100,3 +102,20 @@ class TestAdvisorSkillRouting:
             )
         )
         assert kinds == (ResearchKind.INDEX,)
+
+    def test_debate_asset_type_nifty_options_is_options(self):
+        routing = resolve_agent_routing(_agent())
+        assert debate_asset_type_for_agent(_agent()) == "options"
+
+    def test_debate_asset_type_reliance_equity_is_stock(self):
+        agent = _agent(
+            symbols=["RELIANCE"],
+            mandate_config={"allowed_instruments": ["equity"]},
+        )
+        assert debate_asset_type_for_agent(agent) == "stock"
+
+    def test_us_agent_skips_india_debate(self):
+        agent = _agent(symbols=["SPY"], execution_market="US")
+        eligible, reason = india_debate_eligible_for_agent(agent, "SPY")
+        assert eligible is False
+        assert reason == "us_agent"

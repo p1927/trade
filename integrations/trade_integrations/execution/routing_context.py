@@ -195,3 +195,24 @@ def research_kinds_for_agent(agent: dict[str, Any], *, mode: str | None = None) 
     ):
         kinds.append(ResearchKind.OPTIONS)
     return tuple(dict.fromkeys(kinds))
+
+
+def debate_asset_type_for_agent(agent: dict[str, Any]) -> str:
+    """TradingAgents debate asset_type for this autonomous agent."""
+    from trade_integrations.bridge.hub_context import infer_debate_asset_type
+
+    routing = resolve_agent_routing(agent)
+    sym = routing.trade_symbols[0] if routing.trade_symbols else "NIFTY"
+    if routing.research_asset_type == "stock":
+        return "stock"
+    return infer_debate_asset_type(sym, "options")
+
+
+def india_debate_eligible_for_agent(agent: dict[str, Any], symbol: str) -> tuple[bool, str | None]:
+    """Return whether India TradingAgents debate should run for this agent."""
+    from trade_integrations.autonomous_agents.market import agent_execution_market
+    from trade_integrations.bridge.agent_debate import debate_eligible_for_ticker
+
+    if agent_execution_market(agent) != "IN":
+        return False, "us_agent"
+    return debate_eligible_for_ticker(symbol)

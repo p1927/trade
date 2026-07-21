@@ -294,8 +294,9 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
 
     requires_action = bool(feedback.get("requires_action")) or bool(feedback.get("alerts"))
     if requires_action and mc.revision_policy != "scheduled_only":
-        await dispatch_full_reasoning(agent_id, turn_kind="strategy_revision")
-        return {"status": "alert", "summary": summary, "feedback": feedback, "watch_path": "auto_paper_legacy"}
+        dispatched = await dispatch_full_reasoning(agent_id, turn_kind="strategy_revision")
+        status = "alert" if dispatched else "revision_skipped"
+        return {"status": status, "summary": summary, "feedback": feedback, "watch_path": "auto_paper_legacy"}
 
     return {"status": "watch", "summary": summary, "feedback": feedback, "watch_path": "auto_paper_legacy"}
 
@@ -349,13 +350,18 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
         logger.info("skip full reasoning for %s: turn already in flight", agent_id)
         return False
 
+    prefetch_note = ""
     if turn_kind in {"strategy_revision", "research"}:
         try:
-            from trade_integrations.autonomous_agents.bootstrap import prefetch_turn_research
+            from trade_integrations.autonomous_agents.research_prefetch import prefetch_turn_research
 
             await prefetch_turn_research(agent_id, turn_kind=turn_kind)
         except Exception as exc:
             logger.warning("prefetch_turn_research failed for %s: %s", agent_id, exc)
+            prefetch_note = (
+                f"\n## Research prefetch warning\n"
+                f"Hub/debate prefetch failed: {exc}. Call research tools with refresh=true before deciding.\n"
+            )
 
     svc = _session_service()
     session_id = str(agent.get("vibe_session_id") or "")
@@ -363,7 +369,7 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
         logger.warning("no session service for autonomous agent %s", agent_id)
         return False
 
-    prompt = build_full_reasoning_prompt(agent=agent, turn_kind=turn_kind)
+    prompt = build_full_reasoning_prompt(agent=agent, turn_kind=turn_kind) + prefetch_note
     agent["streaming"] = True
     agent["last_full_reasoning_at"] = datetime.now(timezone.utc).isoformat()
     if turn_kind == "strategy_revision":

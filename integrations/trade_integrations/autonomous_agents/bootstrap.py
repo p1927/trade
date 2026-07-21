@@ -80,60 +80,9 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
 
 
 async def _prefetch_bootstrap_research(agent_id: str) -> None:
-    """Warm hub research + debate in parallel before the bootstrap Vibe turn."""
-    agent = get_agent(agent_id) or {}
-    symbols = list(agent.get("symbols") or [])
-    if not symbols:
-        return
-    sym = str(symbols[0]).strip().upper()
-    from trade_integrations.bridge.agent_debate import debate_eligible_for_ticker, run_agent_debate
-    from trade_integrations.execution.routing_context import research_kinds_for_agent
-    from trade_integrations.research.orchestrator import ensure_research_complete
+    from trade_integrations.autonomous_agents.research_prefetch import prefetch_bootstrap_research
 
-    kinds = research_kinds_for_agent(agent)
-
-    def hub(*, refresh: bool = False) -> None:
-        for kind in kinds:
-            ensure_research_complete(sym, kind=kind, refresh=refresh)
-
-    def debate() -> None:
-        eligible, _ = debate_eligible_for_ticker(sym)
-        if eligible:
-            run_agent_debate(sym)
-
-    await asyncio.to_thread(hub, refresh=False)
-    await asyncio.to_thread(debate)
-
-
-async def prefetch_turn_research(agent_id: str, *, turn_kind: str = "research") -> None:
-    """Warm hub research and TradingAgents debate before full-reasoning turns."""
-    agent = get_agent(agent_id) or {}
-    symbols = list(agent.get("symbols") or [])
-    if not symbols:
-        return
-    sym = str(symbols[0]).strip().upper()
-    from trade_integrations.bridge.agent_debate import debate_eligible_for_ticker, run_agent_debate
-    from trade_integrations.context.hub import is_agent_debate_cache_fresh
-    from trade_integrations.execution.routing_context import research_kinds_for_agent
-    from trade_integrations.research.orchestrator import ensure_research_complete
-
-    kinds = research_kinds_for_agent(agent)
-    refresh_hub = turn_kind in {"strategy_revision", "research"}
-    eligible, _ = debate_eligible_for_ticker(sym)
-    will_debate = bool(eligible) and (
-        turn_kind == "strategy_revision" or not is_agent_debate_cache_fresh(sym)
-    )
-
-    def hub(*, refresh: bool = False) -> None:
-        for kind in kinds:
-            ensure_research_complete(sym, kind=kind, refresh=refresh)
-
-    if will_debate:
-        await asyncio.to_thread(run_agent_debate, sym)
-    elif refresh_hub:
-        await asyncio.to_thread(hub, refresh=True)
-    else:
-        await asyncio.to_thread(hub, refresh=False)
+    await prefetch_bootstrap_research(agent_id)
 
 
 async def bootstrap_agent(agent_id: str) -> None:
