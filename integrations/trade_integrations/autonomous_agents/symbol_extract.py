@@ -157,7 +157,7 @@ def extract_orchestrator_symbols(text: str) -> list[str]:
 
     for match in _FOR_SYMBOL_RE.finditer(upper):
         token = match.group(1).upper()
-        if token in seen:
+        if token in seen or token in _STOPWORDS:
             continue
         market = symbol_execution_market(token)
         if market in {"US", "IN"}:

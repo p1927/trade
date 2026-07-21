@@ -65,6 +65,28 @@ _TRADING_GOAL_RE = re.compile(
     r")\b",
     re.I,
 )
+_PROPOSAL_READY_RE = re.compile(
+    r"\b("
+    r"confirm the (proposal )?card|proposal (is )?ready|card above|"
+    r"tap confirm|click confirm|use the card|see the card|proposal card"
+    r")\b",
+    re.I,
+)
+_CARD_CREATE_RE = re.compile(
+    r"\b(create|show|select|make|generate|display)\s+(the\s+)?(proposal\s+)?card\b",
+    re.I,
+)
+_INDEX_SYMBOLS = frozenset(
+    {
+        "NIFTY",
+        "NIFTY50",
+        "BANKNIFTY",
+        "FINNIFTY",
+        "MIDCPNIFTY",
+        "SENSEX",
+        "BANKEX",
+    }
+)
 
 
 def orchestrator_auto_propose_enabled() -> bool:
@@ -163,6 +185,44 @@ def _assistant_hallucinated_proposal_id(text: str) -> bool:
     return bool(_PROPOSAL_ID_RE.search(text))
 
 
+def assistant_claims_proposal_ready(text: str) -> bool:
+    """Assistant prose implies a card exists without calling the propose tool."""
+    blob = text or ""
+    return bool(
+        _PROPOSAL_READY_RE.search(blob)
+        or _CARD_CREATE_RE.search(blob)
+        or _assistant_hallucinated_proposal_id(blob)
+    )
+
+
+def orchestrator_has_propose_intent(user_message: str, assistant_text: str = "") -> bool:
+    """True when the user turn warrants a proposal card."""
+    text = user_message or ""
+    if _has_create_intent(text) or _has_symbol_plus_goal_intent(text) or _has_adjust_intent(text):
+        return True
+    if assistant_claims_proposal_ready(assistant_text):
+        return True
+    return False
+
+
+def _should_default_index_options(symbols: list[str], text: str) -> bool:
+    """Default NIFTY/BANKNIFTY autonomous agents to options when instrument type is ambiguous."""
+    sym0 = str(symbols[0] if symbols else "").strip().upper()
+    if sym0 not in _INDEX_SYMBOLS:
+        return False
+    lower = (text or "").lower()
+    if any(w in lower for w in ("equity", "stock", "shares", "etf", "not options", "no options")):
+        return False
+    if _instruments_clarified(text):
+        return True
+    return bool(
+        _has_create_intent(text)
+        or _has_symbol_plus_goal_intent(text)
+        or _PAPER_TRADE_RE.search(text)
+        or (_AUTONOMOUS_RE.search(text) and re.search(r"\b(agent|trade|watch)\b", text, re.I))
+    )
+
+
 def _default_symbol(*, text: str) -> str | None:
     if _US_HINT_RE.search(text) and not _IN_HINT_RE.search(text):
         return "SPY"
@@ -207,7 +267,7 @@ def build_auto_propose_kwargs(
     create_intent = _has_create_intent(user_message)
     symbol_goal_intent = _has_symbol_plus_goal_intent(user_message)
     adjust_intent = _has_adjust_intent(user_message)
-    hallucinated = _assistant_hallucinated_proposal_id(assistant_text)
+    hallucinated = assistant_claims_proposal_ready(assistant_text)
 
     if not symbols:
         if create_intent or symbol_goal_intent or hallucinated:
@@ -226,8 +286,9 @@ def build_auto_propose_kwargs(
         if not all(symbol_execution_market(str(s)) == "US" for s in symbols):
             return None
 
-    if latest and "allowed_instruments" in list(latest.get("missing_fields") or []):
-        if not _instruments_clarified(user_message):
+    instruments_missing = latest and "allowed_instruments" in list(latest.get("missing_fields") or [])
+    if instruments_missing and not _instruments_clarified(user_message):
+        if not (_should_default_index_options(symbols, text) or adjust_intent):
             return None
 
     if not (create_intent or symbol_goal_intent or adjust_intent or hallucinated):
@@ -276,6 +337,9 @@ def build_auto_propose_kwargs(
     sym0 = symbols[0]
     if not kwargs.get("name"):
         kwargs["name"] = f"{sym0} autonomous"
+
+    if _should_default_index_options(symbols, text) and "allowed_instruments" not in kwargs:
+        kwargs["allowed_instruments"] = ["options"]
 
     return kwargs
 

@@ -105,6 +105,12 @@ def test_reliance_paper_trade_without_create_agent_phrase(agents_hub, monkeypatc
     assert kwargs.get("user_text") == "Reliance paper trade ₹50k intraday"
 
 
+def test_create_nifty_agent_does_not_extract_agent_ticker() -> None:
+    from trade_integrations.autonomous_agents.symbol_extract import extract_orchestrator_symbols
+
+    assert extract_orchestrator_symbols("Create NIFTY paper trade agent ₹20k intraday") == ["NIFTY"]
+
+
 @pytest.fixture
 def agents_hub(tmp_path, monkeypatch):
     hub = tmp_path / "hub"
