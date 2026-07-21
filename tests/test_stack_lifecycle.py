@@ -67,6 +67,45 @@ def test_stack_ensure_searxng_returns_nonzero_when_docker_down():
     assert "exit:1" in proc.stdout
 
 
+def test_searxng_probe_ignores_unrelated_unresponsive_engines():
+    proc = _bash(
+        """
+        source scripts/stack_docker_lib.sh
+        echo '{"unresponsive_engines":[["mojeek","403"],["qwant","CAPTCHA"]],"results":[]}' \\
+          | _searxng_probe_check_unresponsive bing
+        echo exit:$?
+        """
+    )
+    assert proc.returncode == 0
+    assert "exit:0" in proc.stdout
+
+
+def test_searxng_probe_fails_when_required_engine_unresponsive():
+    proc = _bash(
+        """
+        source scripts/stack_docker_lib.sh
+        echo '{"unresponsive_engines":[["bing","CAPTCHA"]],"results":[]}' \\
+          | _searxng_probe_check_unresponsive bing 2>/dev/null
+        echo exit:$?
+        """
+    )
+    assert proc.returncode == 0
+    assert "exit:1" in proc.stdout
+
+
+def test_searxng_probe_engine_match_is_case_insensitive():
+    proc = _bash(
+        """
+        source scripts/stack_docker_lib.sh
+        echo '{"unresponsive_engines":[["Bing","CAPTCHA"]],"results":[]}' \\
+          | _searxng_probe_check_unresponsive bing 2>/dev/null
+        echo exit:$?
+        """
+    )
+    assert proc.returncode == 0
+    assert "exit:1" in proc.stdout
+
+
 def test_stack_hub_docker_required_when_searxng_on():
     proc = _bash(
         """

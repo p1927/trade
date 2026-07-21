@@ -74,6 +74,35 @@ def parse_engine_list(raw: str) -> list[str]:
     return [part.strip() for part in (raw or "").split(",") if part.strip()]
 
 
+_TRANSIENT_UNRESPONSIVE_REASONS = frozenset(
+    {"parsing error", "timeout", "unexpected crash"}
+)
+
+
+def engine_unresponsive_reason(payload: dict[str, Any], engine: str) -> str | None:
+    """Return the unresponsive reason for ``engine``, or None when it responded."""
+    target = (engine or "").strip().lower()
+    if not target:
+        return None
+    for entry in payload.get("unresponsive_engines") or []:
+        name = str(entry[0] if entry else "").lower()
+        if name == target:
+            return str(entry[1] if len(entry) > 1 else "")
+    return None
+
+
+def engine_unresponsive_transient(payload: dict[str, Any], engine: str) -> bool:
+    reason = engine_unresponsive_reason(payload, engine)
+    if reason is None:
+        return False
+    return reason.lower() in _TRANSIENT_UNRESPONSIVE_REASONS
+
+
+def should_retry_engine_search(payload: dict[str, Any], engine: str, *, attempt: int) -> bool:
+    """Retry once when SearXNG marks the requested engine as transiently down."""
+    return attempt == 0 and engine_unresponsive_transient(payload, engine)
+
+
 def _default_lang() -> str:
     return os.environ.get("SEARXNG_DEFAULT_LANG", "en-IN").strip()
 
@@ -83,7 +112,7 @@ def searxng_news_engines() -> str:
 
 
 def searxng_finance_engines() -> str:
-    return _env_engines("SEARXNG_FINANCE_ENGINES", "bing,mojeek,qwant")
+    return _env_engines("SEARXNG_FINANCE_ENGINES", "bing")
 
 
 def searxng_web_engines() -> str:
