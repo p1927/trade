@@ -74,6 +74,7 @@ _MIN_ABS_CORR = 0.05
 _MIN_COLUMN_COVERAGE_RATIO = 0.45
 _MIN_COLUMN_COVERAGE_ROWS = 10
 _MIN_FEATURE_STD = 1e-12
+_HIGH_CORR_PAIR_THRESHOLD = 0.85
 
 # Always include in Ridge training when present in history (flows, vol, oil).
 # Keep FII + DII legs separately (distinct foreign vs domestic signals); omit
@@ -155,6 +156,35 @@ def _credit_spread_observed_for_frame(history_df: pd.DataFrame) -> bool:
         return india_credit_spread_is_observed(history_df)
     except Exception:
         return False
+
+
+def _prune_high_correlation_pairs(
+    columns: list[str],
+    usable: pd.DataFrame,
+) -> list[str]:
+    """Drop one member of pairs with |r| > threshold not already pruned by redundancy rules."""
+    if len(columns) < 2:
+        return columns
+    present = list(columns)
+    drop: set[str] = set()
+    for i, col_a in enumerate(present):
+        if col_a in drop:
+            continue
+        for col_b in present[i + 1 :]:
+            if col_b in drop:
+                continue
+            corr = _safe_abs_corr(usable[col_a], usable[col_b])
+            if corr is None or corr < _HIGH_CORR_PAIR_THRESHOLD:
+                continue
+            # Keep the factor with stronger |corr| to forward return when available.
+            target = usable["target"] if "target" in usable.columns else None
+            if target is not None:
+                corr_a = _safe_abs_corr(usable[col_a], target) or 0.0
+                corr_b = _safe_abs_corr(usable[col_b], target) or 0.0
+                drop.add(col_b if corr_a >= corr_b else col_a)
+            else:
+                drop.add(col_b)
+    return [col for col in present if col not in drop]
 
 
 def _apply_redundancy_prune(
@@ -347,6 +377,7 @@ def build_factor_matrix(
             selected.append(col)
 
     selected = _apply_redundancy_prune(selected, credit_spread_observed=credit_observed)
+    selected = _prune_high_correlation_pairs(selected, usable)
 
     final = usable.dropna(subset=["target"] + selected).copy()
     if len(final) < 3:

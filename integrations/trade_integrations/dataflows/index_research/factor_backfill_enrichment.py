@@ -440,6 +440,7 @@ def enrich_factor_history(
         light_mode=light_mode,
         rolling_only=enrich_rolling_only,
         max_lookback=days,
+        latest_trading_date=end,
     )
     days_skipped = len(trading_dates) - len(days_to_enrich)
     enrich_set = set(days_to_enrich)

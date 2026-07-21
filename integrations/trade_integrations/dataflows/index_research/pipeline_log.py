@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -35,10 +36,12 @@ class PipelineLogger:
     def __init__(self, on_entry: LogCallback | None = None) -> None:
         self._entries: list[PipelineLogEntry] = []
         self._on_entry = on_entry
+        self._lock = threading.Lock()
 
     @property
     def entries(self) -> list[PipelineLogEntry]:
-        return list(self._entries)
+        with self._lock:
+            return list(self._entries)
 
     def log(
         self,
@@ -49,9 +52,11 @@ class PipelineLogger:
         **detail: Any,
     ) -> None:
         entry = PipelineLogEntry(stage=stage, message=message, level=level, detail=detail)
-        self._entries.append(entry)
-        if self._on_entry is not None:
-            self._on_entry(entry)
+        with self._lock:
+            self._entries.append(entry)
+            callback = self._on_entry
+        if callback is not None:
+            callback(entry)
 
     def info(self, stage: str, message: str, **detail: Any) -> None:
         self.log(stage, message, level="info", **detail)
@@ -63,15 +68,34 @@ class PipelineLogger:
         self.log(stage, message, level="error", **detail)
 
     @contextmanager
-    def stage_timer(self, stage: str, message: str, **detail: Any) -> Iterator[None]:
+    def stage_timer(
+        self,
+        stage: str,
+        message: str,
+        *,
+        budget_token: str | None = None,
+        **detail: Any,
+    ) -> Iterator[None]:
         """Log start message and append elapsed_ms on exit."""
+        from trade_integrations.dataflows.index_research.stage_budget import (
+            begin_stage,
+            check_stage_budget,
+            end_stage,
+        )
+
+        token = begin_stage(stage, token=budget_token)
         start = time.perf_counter()
         self.info(stage, message, **detail)
         try:
             yield
         finally:
             elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+            try:
+                check_stage_budget(stage, token=token)
+            finally:
+                end_stage(token)
             self.info(stage, message, elapsed_ms=elapsed_ms, **detail)
 
     def to_dicts(self) -> list[dict[str, Any]]:
-        return [entry.to_dict() for entry in self._entries]
+        with self._lock:
+            return [entry.to_dict() for entry in self._entries]

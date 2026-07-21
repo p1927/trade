@@ -18,11 +18,16 @@ def load_walk_forward_accuracy(*, ticker: str = "NIFTY") -> dict[str, Any]:
 
     metrics = backtest.get("metrics") or {}
     walk_forward = metrics.get("direction_hit_rate_walk_forward") or metrics.get("direction_hit_rate")
+    bootstrap_ci = metrics.get("direction_bootstrap_ci") or {}
     return {
         "direction_hit_rate_walk_forward": walk_forward,
         "regime_direction_hit_rates": metrics.get("regime_direction_hit_rates") or {},
         "eval_count": backtest.get("eval_count"),
         "mae_pct": metrics.get("mae_pct"),
+        "direction_bootstrap_ci": bootstrap_ci,
+        "insufficient_evidence": bool(bootstrap_ci.get("insufficient_evidence")),
+        "sign_magnitude_score_mean": metrics.get("sign_magnitude_score_mean"),
+        "eval_protocol": backtest.get("eval_protocol"),
     }
 
 
@@ -82,11 +87,7 @@ def calibrate_direction_confidence(
         cap = 0.5
 
     cap = float(np.clip(cap, 0.5, 0.85))
-    max_distance = max(0.02, cap - 0.5)
-    distance = abs(prob - 0.5)
-    scaled = min(distance, max_distance)
-    sign = 1.0 if prob >= 0.5 else -1.0
-    return float(np.clip(0.5 + sign * scaled, 0.15, 0.85))
+    return platt_scale_probability(prob, hit_rate=cap)
 
 
 def sync_artifact_direction_oos(artifact: Any, *, ticker: str = "NIFTY") -> float | None:
@@ -96,3 +97,15 @@ def sync_artifact_direction_oos(artifact: Any, *, ticker: str = "NIFTY") -> floa
     if rate is not None and hasattr(artifact, "direction_hit_rate_oos"):
         artifact.direction_hit_rate_oos = rate
     return rate
+
+
+def platt_scale_probability(raw_prob: float, *, hit_rate: float | None) -> float:
+    """Map raw logistic score toward OOS base rate (Platt-style shrinkage)."""
+    if hit_rate is None:
+        return raw_prob
+    base = float(np.clip(hit_rate, 0.5, 0.85))
+    distance = abs(raw_prob - 0.5)
+    max_distance = max(0.02, base - 0.5)
+    scaled = min(distance, max_distance)
+    sign = 1.0 if raw_prob >= 0.5 else -1.0
+    return float(np.clip(0.5 + sign * scaled, 0.15, 0.85))

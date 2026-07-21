@@ -172,11 +172,12 @@ def adjust_institutional_flow_expiry_settlement(frame: pd.DataFrame) -> pd.DataF
         if col not in out.columns:
             continue
         raw_col = f"{col}_raw"
+        col_vals = pd.to_numeric(out[col], errors="coerce")
         if raw_col in out.columns:
-            raw = pd.to_numeric(out[raw_col], errors="coerce")
+            raw = pd.to_numeric(out[raw_col], errors="coerce").combine_first(col_vals)
         else:
-            raw = pd.to_numeric(out[col], errors="coerce")
-            out[raw_col] = raw
+            raw = col_vals
+        out[raw_col] = raw
         # Prior-session median of last 5 non-expiry observations (settlement noise filter).
         baseline = raw.where(~out["is_fo_monthly_expiry"]).rolling(5, min_periods=2).median().shift(1)
         adjusted = raw.copy()

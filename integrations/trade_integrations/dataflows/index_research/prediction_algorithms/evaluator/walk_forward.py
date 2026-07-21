@@ -141,6 +141,10 @@ def run_track_walk_forward(
         build_index_scenarios,
         scenario_weighted_return_pct,
     )
+    from trade_integrations.dataflows.index_research.walk_forward_utils import (
+        purged_train_end_index,
+        sign_magnitude_score,
+    )
 
     max_i = len(frame) - horizon.days - 1
     indices = list(range(min_train_rows, max_i + 1, max(1, eval_step)))
@@ -150,7 +154,10 @@ def run_track_walk_forward(
     track_ids = list(walk_forward_track_ids(ticker=ticker))
 
     for i in indices:
-        train = frame.iloc[:i].copy()
+        train_end = purged_train_end_index(i, horizon_days=horizon.days, eval_step=eval_step)
+        if train_end < min_train_rows:
+            continue
+        train = frame.iloc[:train_end].copy()
         row = frame.iloc[i]
         actual = row.get("target")
         if pd.isna(actual):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -66,7 +67,9 @@ _FACTOR_LABELS: dict[str, str] = {
 
 _MIN_TRAIN_ROWS = 45
 _DEFAULT_EVAL_STEP = 5
+_DEFAULT_BACKTEST_DAYS = 500
 _MIN_HYBRID_CONSTITUENTS = 8
+_HYBRID_COVERAGE_AUTO_THRESHOLD = 45.0
 
 
 def _company_history_path(symbol: str, day: str) -> Path:
@@ -297,13 +300,32 @@ def audit_factor_correlations(
     return ranked[:15]
 
 
+def _resolve_include_bottom_up(
+    include_bottom_up: bool | str,
+    trading_dates: list[str],
+) -> tuple[bool, dict[str, Any]]:
+    """Auto-enable hybrid replay when constituent archive coverage is sufficient."""
+    from trade_integrations.dataflows.index_research.constituent_backtest import (
+        bottom_up_archive_coverage,
+    )
+
+    coverage = bottom_up_archive_coverage(trading_dates)
+    if include_bottom_up is True:
+        return True, coverage
+    if include_bottom_up is False:
+        return False, coverage
+    auto = float(coverage.get("coverage_pct") or 0.0) >= _HYBRID_COVERAGE_AUTO_THRESHOLD
+    return auto, coverage
+
+
 def run_walk_forward_backtest(
     *,
-    days: int = 180,
+    days: int = _DEFAULT_BACKTEST_DAYS,
     horizon_days: int | None = 14,
     min_train_rows: int = _MIN_TRAIN_ROWS,
     eval_step: int = _DEFAULT_EVAL_STEP,
-    include_bottom_up: bool = False,
+    include_bottom_up: bool | str = "auto",
+    eval_protocol: str = "purged_expanding",
 ) -> dict[str, Any]:
     """Expanding-window macro backtest on aligned Nifty + factor history."""
     horizon = resolve_horizon(horizon_days)
@@ -332,6 +354,15 @@ def run_walk_forward_backtest(
         and pd.api.types.is_numeric_dtype(frame[c])
     ]
 
+    from trade_integrations.dataflows.index_research.walk_forward_utils import (
+        bootstrap_direction_ci,
+        purged_train_end_index,
+        sign_magnitude_score,
+    )
+
+    trading_dates = frame["date"].astype(str).str[:10].tolist()
+    hybrid_enabled, bottom_up_coverage = _resolve_include_bottom_up(include_bottom_up, trading_dates)
+
     eval_rows: list[dict[str, Any]] = []
     errors: list[float] = []
     directions_hit = 0
@@ -344,7 +375,14 @@ def run_walk_forward_backtest(
 
     prev_factors: dict[str, float] = {}
     for i in indices:
-        train = frame.iloc[:i].copy()
+        train_end = purged_train_end_index(
+            i,
+            horizon_days=horizon.days,
+            eval_step=eval_step,
+        )
+        if train_end < min_train_rows:
+            continue
+        train = frame.iloc[:train_end].copy()
         row = frame.iloc[i]
         actual = row["target"]
         if pd.isna(actual):
@@ -396,7 +434,7 @@ def run_walk_forward_backtest(
         flow_bucket = flow_regime_bucket(factors_today, regime_label)
         bottom_up = None
         hybrid_predicted = None
-        if include_bottom_up:
+        if hybrid_enabled:
             bottom_up = _bottom_up_from_archives(day_str, horizon_days=horizon.days)
             if bottom_up is not None:
                 hybrid_predicted = bottom_up + macro
@@ -438,6 +476,9 @@ def run_walk_forward_backtest(
                 "hybrid_predicted_return_pct": round(hybrid_predicted, 3)
                 if hybrid_predicted is not None
                 else None,
+                "ridge_alpha": getattr(artifact, "ridge_alpha", None),
+                "poly_degree": getattr(artifact, "poly_degree", None),
+                "sign_magnitude_score": round(sign_magnitude_score(predicted, float(actual)), 4),
                 "factor_drivers": drivers,
                 "calendar_events": _calendar_events_for_date(
                     date.fromisoformat(day_str) if len(day_str) == 10 else date.today()
@@ -504,11 +545,17 @@ def run_walk_forward_backtest(
         except ImportError:
             pass
 
-    scope = "hybrid" if include_bottom_up and hybrid_total > 0 else "macro_only"
+    scope = "hybrid" if hybrid_enabled and hybrid_total > 0 else "macro_only"
+    direction_ci = bootstrap_direction_ci(eval_rows)
+    sign_mag_scores = [float(r.get("sign_magnitude_score") or 0.0) for r in eval_rows]
+    sign_mag_mean = float(np.mean(sign_mag_scores)) if sign_mag_scores else None
 
     report = {
         "status": "ok",
         "scope": scope,
+        "eval_protocol": eval_protocol,
+        "include_bottom_up": hybrid_enabled,
+        "bottom_up_coverage": bottom_up_coverage,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "ticker": "NIFTY",
         "horizon_days": horizon.days,
@@ -529,9 +576,11 @@ def run_walk_forward_backtest(
             "flow_regime_direction_hit_rates": flow_regime_buckets,
             "in_sample_mae_pct": in_sample_artifact.mae if in_sample_artifact else None,
             "in_sample_r2": in_sample_artifact.r2_walk_forward if in_sample_artifact else None,
-            "in_sample_direction_hit_rate": in_sample_artifact.direction_hit_rate_oos
+            "in_sample_direction_hit_rate": in_sample_artifact.direction_hit_rate_train_holdout
             if in_sample_artifact
             else None,
+            "direction_bootstrap_ci": direction_ci,
+            "sign_magnitude_score_mean": round(sign_mag_mean, 4) if sign_mag_mean is not None else None,
         },
         "factor_audit": audit_factor_coverage(frame),
         "factor_correlations": audit_factor_correlations(frame, horizon_days=horizon.days),

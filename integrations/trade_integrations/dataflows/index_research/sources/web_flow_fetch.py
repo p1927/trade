@@ -126,6 +126,45 @@ def list_niftyinvest_calendar_months() -> list[str]:
     return []
 
 
+_MONTH_ABBR = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+
+def _normalize_year_month(ym: str) -> tuple[int, int] | None:
+    """Parse NiftyInvest ``2026-Jul`` or ISO ``2026-07`` into ``(year, month)``."""
+    text = str(ym).strip()
+    if not text:
+        return None
+    if "-" not in text:
+        return None
+    year_part, month_part = text.split("-", 1)
+    try:
+        year = int(year_part)
+    except ValueError:
+        return None
+    if month_part.isdigit():
+        month = int(month_part)
+        if 1 <= month <= 12:
+            return year, month
+        return None
+    month = _MONTH_ABBR.get(month_part[:3].lower())
+    if month is None:
+        return None
+    return year, month
+
+
 def _months_for_range(
     months: list[str],
     *,
@@ -137,9 +176,21 @@ def _months_for_range(
         return []
     if not start and not end:
         return months
-    start_ym = (start or "1900-01")[:7]
-    end_ym = (end or "2999-12")[:7]
-    return [ym for ym in months if start_ym[:7] <= str(ym)[:7] <= end_ym[:7]]
+    start_norm = _normalize_year_month((start or "1900-01")[:7])
+    end_norm = _normalize_year_month((end or "2999-12")[:7])
+    if start_norm is None or end_norm is None:
+        return months
+    start_key = start_norm[0] * 12 + start_norm[1]
+    end_key = end_norm[0] * 12 + end_norm[1]
+    kept: list[str] = []
+    for ym in months:
+        norm = _normalize_year_month(str(ym))
+        if norm is None:
+            continue
+        month_key = norm[0] * 12 + norm[1]
+        if start_key <= month_key <= end_key:
+            kept.append(str(ym))
+    return kept
 
 
 def _month_keys_for_range(start: str, end: str) -> list[str]:

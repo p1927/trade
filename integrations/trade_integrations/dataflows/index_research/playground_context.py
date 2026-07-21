@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any
 
+from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.causal_attribution import (
     _NEWS_KEYWORDS,
     _FACTOR_CAUSE_COPY,
@@ -106,12 +109,57 @@ def _cascade_downstream_map() -> dict[str, list[dict[str, Any]]]:
     }
 
 
-def build_playground_context(
-    doc: Any,
-    *,
-    ticker: str = "NIFTY",
-) -> dict[str, Any]:
-    """Assemble workbench triggers from hub index research artifact."""
+def _playground_cache_path(ticker: str = "NIFTY") -> Path:
+    return get_hub_dir() / ticker.strip().upper() / "index_research" / "playground_context_latest.json"
+
+
+def doc_as_of_iso(doc: Any) -> str:
+    as_of = getattr(doc, "as_of", None)
+    if as_of is None and isinstance(doc, dict):
+        as_of = doc.get("as_of")
+    if hasattr(as_of, "isoformat"):
+        return str(as_of.isoformat())
+    return str(as_of or "")
+
+
+def save_playground_context(context: dict[str, Any], *, ticker: str = "NIFTY") -> Path:
+    path = _playground_cache_path(ticker)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(context, indent=2, default=str), encoding="utf-8")
+    return path
+
+
+def load_playground_context(ticker: str = "NIFTY") -> dict[str, Any] | None:
+    path = _playground_cache_path(ticker)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _news_impact_from_doc(doc: Any) -> dict[str, Any]:
+    news_impact = getattr(doc, "news_impact", None)
+    if news_impact is None and isinstance(doc, dict):
+        news_impact = doc.get("news_impact")
+    return news_impact if isinstance(news_impact, dict) else {}
+
+
+def _headlines_from_doc_news_impact(doc: Any, *, limit: int = 8) -> list[dict[str, Any]]:
+    headlines: list[dict[str, Any]] = []
+    for item in (_news_impact_from_doc(doc).get("items") or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        trigger = _headline_trigger_from_item(item, source_label="verified_news")
+        if trigger:
+            headlines.append(trigger)
+    return headlines
+
+
+def _headlines_from_live_fetch(ticker: str, *, limit: int = 8) -> list[dict[str, Any]]:
+    """Slow path — network/news hub lookups. Use only when ``live_fetch=True``."""
     from trade_integrations.dataflows.index_research.causal_attribution import _fetch_index_headlines
     from trade_integrations.monitor.news_watcher import check_material_news
 
@@ -121,20 +169,20 @@ def build_playground_context(
     try:
         from trade_integrations.dataflows import news_hub_bridge
 
-        news_impact = news_hub_bridge.resolve_news_impact(ticker=ticker, doc=doc, limit=8)
-        for item in (news_impact.get("items") or [])[:8]:
+        news_impact = news_hub_bridge.resolve_news_impact(ticker=ticker, limit=limit)
+        for item in (news_impact.get("items") or [])[:limit]:
             trigger = _headline_trigger_from_item(item, source_label="verified_news")
             if trigger:
                 headlines.append(trigger)
 
         if not headlines:
-            for item in news_hub_bridge.list_headlines_for_date(today, limit=8):
+            for item in news_hub_bridge.list_headlines_for_date(today, limit=limit):
                 trigger = _headline_trigger_from_item(item, source_label="verified_hub")
                 if trigger:
                     headlines.append(trigger)
 
         if not headlines:
-            for item in news_hub_bridge.list_recent_headlines(ticker=ticker, limit=8):
+            for item in news_hub_bridge.list_recent_headlines(ticker=ticker, limit=limit):
                 trigger = _headline_trigger_from_item(item, source_label="verified_hub")
                 if trigger:
                     headlines.append(trigger)
@@ -142,7 +190,7 @@ def build_playground_context(
         pass
 
     if not headlines:
-        headlines_raw = _fetch_index_headlines(today, limit=8)
+        headlines_raw = _fetch_index_headlines(today, limit=limit)
         for item in headlines_raw:
             title = str(item.get("title") or "").strip()
             if not title:
@@ -162,13 +210,7 @@ def build_playground_context(
             )
 
     try:
-        as_of = getattr(doc, "as_of", None)
-        if as_of is None and isinstance(doc, dict):
-            as_of = doc.get("as_of")
-        if isinstance(as_of, datetime):
-            news_since = as_of.replace(tzinfo=timezone.utc) if as_of.tzinfo is None else as_of
-        else:
-            news_since = datetime.now(timezone.utc)
+        news_since = datetime.now(timezone.utc)
         material = check_material_news(ticker, news_since)
         for item in material[:6]:
             title = getattr(item, "title", "") or ""
@@ -189,6 +231,20 @@ def build_playground_context(
             )
     except Exception:
         pass
+
+    return headlines[:limit]
+
+
+def build_playground_context(
+    doc: Any,
+    *,
+    ticker: str = "NIFTY",
+    live_fetch: bool = False,
+) -> dict[str, Any]:
+    """Assemble workbench triggers from hub index research artifact."""
+    headlines = _headlines_from_doc_news_impact(doc)
+    if not headlines and live_fetch:
+        headlines = _headlines_from_live_fetch(ticker)
 
     events: list[dict[str, Any]] = []
     for ev in doc.upcoming_events or []:
@@ -280,7 +336,7 @@ def build_playground_context(
 
     return {
         "ticker": ticker,
-        "as_of": doc.as_of.isoformat() if hasattr(doc.as_of, "isoformat") else str(doc.as_of),
+        "as_of": doc_as_of_iso(doc),
         "spot": doc.spot,
         "horizon_days": (doc.horizon or {}).get("days"),
         "headlines": headlines[:12],
@@ -293,3 +349,20 @@ def build_playground_context(
         "baseline_return_pct": (doc.prediction or {}).get("expected_return_pct"),
         "cascade_calibration": cascade_summary,
     }
+
+
+def resolve_playground_context(
+    doc: Any,
+    *,
+    ticker: str = "NIFTY",
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Return cached playground context when ``as_of`` matches, else rebuild and persist."""
+    doc_as_of = doc_as_of_iso(doc)[:19]
+    if not refresh:
+        cached = load_playground_context(ticker)
+        if cached and str(cached.get("as_of") or "")[:19] == doc_as_of:
+            return cached
+    ctx = build_playground_context(doc, ticker=ticker, live_fetch=bool(refresh))
+    save_playground_context(ctx, ticker=ticker)
+    return ctx

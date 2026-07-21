@@ -92,21 +92,15 @@ def _fetch_fred_series(series_id: str, start: str, end: str) -> pd.Series:
     return pd.Series(values)
 
 
-def backfill_macro_history(
+def _macro_frame_from_nifty(
+    nifty: pd.DataFrame,
     *,
-    start: str = "2006-01-01",
-    end: str | None = None,
-    dry_run: bool = False,
-) -> dict[str, object]:
-    """Fetch macro + NIFTY OHLCV and write cold-tier parquets."""
-    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    start: str,
+    end_day: str,
+) -> pd.DataFrame:
     end_exclusive = (
         datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)
     ).strftime("%Y-%m-%d")
-
-    nifty = _fetch_yfinance_ohlcv("^NSEI", start, end_exclusive)
-    if nifty.empty:
-        return {"status": "error", "reason": "no_nifty_history", "start": start, "end": end_day}
 
     macro = nifty[["date", "close"]].rename(columns={"close": "nifty_close"}).copy()
     for col in ("open", "high", "low", "volume"):
@@ -140,6 +134,47 @@ def backfill_macro_history(
     for col in technical.columns:
         if col not in {"date", "close"}:
             macro[col] = technical[col]
+    return macro
+
+
+def build_macro_daily_tail_frame(*, start: str, end: str) -> pd.DataFrame:
+    """Build macro columns for a date window using cold-tier Nifty OHLCV when available."""
+    from trade_integrations.dataflows.index_research.history_store import load_history_dataset
+
+    end_day = end[:10]
+    end_exclusive = (
+        datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+
+    nifty = load_history_dataset("nifty_ohlcv_daily")
+    if not nifty.empty:
+        nifty = nifty.copy()
+        nifty["date"] = nifty["date"].astype(str).str[:10]
+        nifty = nifty[(nifty["date"] >= start[:10]) & (nifty["date"] <= end_day)]
+    if nifty.empty or "close" not in nifty.columns:
+        nifty = _fetch_yfinance_ohlcv("^NSEI", start, end_exclusive)
+    if nifty.empty:
+        return pd.DataFrame()
+    return _macro_frame_from_nifty(nifty, start=start, end_day=end_day)
+
+
+def backfill_macro_history(
+    *,
+    start: str = "2006-01-01",
+    end: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Fetch macro + NIFTY OHLCV and write cold-tier parquets."""
+    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    end_exclusive = (
+        datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+
+    nifty = _fetch_yfinance_ohlcv("^NSEI", start, end_exclusive)
+    if nifty.empty:
+        return {"status": "error", "reason": "no_nifty_history", "start": start, "end": end_day}
+
+    macro = _macro_frame_from_nifty(nifty, start=start, end_day=end_day)
 
     coverage = {
         col: round(float(macro[col].notna().mean()) * 100.0, 1)

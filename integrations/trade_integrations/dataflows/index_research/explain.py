@@ -200,11 +200,129 @@ def _marginal_macro_impact(
     return bumped - base
 
 
+def _correlation_caveat_factors(artifact: ModelArtifact | None) -> set[str]:
+    if artifact is None:
+        return set()
+    caveat: set[str] = set()
+    for pair in artifact.correlated_pairs or []:
+        if abs(float(pair.get("correlation") or 0.0)) >= 0.7:
+            caveat.add(str(pair.get("factor_a") or ""))
+            caveat.add(str(pair.get("factor_b") or ""))
+    caveat.discard("")
+    return caveat
+
+
+def _aggregate_poly_shap_to_base(
+    poly_shap: dict[str, float],
+    feature_names: list[str],
+) -> dict[str, float]:
+    """Roll interaction terms into parent macro factors."""
+    base: dict[str, float] = {name: 0.0 for name in feature_names}
+    for term, value in poly_shap.items():
+        parent = term.split(" ")[0] if term else term
+        if parent in base:
+            base[parent] += float(value)
+        else:
+            for name in feature_names:
+                if term.startswith(name):
+                    base[name] += float(value)
+                    break
+    return {k: v for k, v in base.items() if abs(v) > 1e-9}
+
+
+def _try_linear_shap_contributions(
+    macro_factors: dict[str, Any],
+    artifact: ModelArtifact | None,
+    horizon: HorizonProfile,
+) -> dict[str, float] | None:
+    if artifact is None or not artifact.feature_names or not artifact.coefficients:
+        return None
+    try:
+        import numpy as np
+        import shap
+        from sklearn.linear_model import Ridge
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+
+        from trade_integrations.dataflows.index_research.ridge_pipeline import make_ridge_pipeline
+    except ImportError:
+        return None
+
+    names = list(artifact.feature_names)
+    values = np.array([_macro_factor_value(macro_factors, n) for n in names], dtype=float).reshape(1, -1)
+    pipe = make_ridge_pipeline(alpha=float(artifact.ridge_alpha or 50.0), poly_degree=artifact.poly_degree)
+    scaler = pipe.named_steps["scaler"]
+    if artifact.feature_means and artifact.feature_stds:
+        scaler.mean_ = np.asarray(artifact.feature_means, dtype=float)
+        scaler.scale_ = np.asarray(artifact.feature_stds, dtype=float)
+        scaler.var_ = scaler.scale_ ** 2
+        scaler.n_features_in_ = len(artifact.feature_means)
+    else:
+        scaler.fit(values)
+    poly = pipe.named_steps["poly"]
+    poly.fit(scaler.transform(values))
+    poly_names = [str(n) for n in poly.get_feature_names_out(names)]
+    ridge = Ridge(alpha=float(artifact.ridge_alpha or 50.0), solver="lsqr")
+    ridge.coef_ = np.array([artifact.coefficients.get(n, 0.0) for n in poly_names], dtype=float)
+    ridge.intercept_ = float(artifact.intercept)
+
+    try:
+        explainer = shap.LinearExplainer(ridge, scaler.transform(values), feature_perturbation="interventional")
+        shap_values = explainer.shap_values(scaler.transform(values))
+        if isinstance(shap_values, list):
+            shap_row = shap_values[0][0]
+        else:
+            shap_row = shap_values[0]
+        poly_map = {poly_names[i]: float(shap_row[i]) for i in range(len(poly_names))}
+        return _aggregate_poly_shap_to_base(poly_map, names)
+    except Exception as exc:
+        logger.debug("LinearExplainer failed: %s", exc)
+        return None
+
+
+def _grouped_marginal_impacts(
+    macro_factors: dict[str, Any],
+    artifact: ModelArtifact | None,
+    horizon: HorizonProfile,
+) -> dict[str, float]:
+    """Perturb correlation clusters together when SHAP unavailable."""
+    from trade_integrations.dataflows.index_research.factor_matrix import redundancy_audit
+
+    groups = redundancy_audit().get("redundancy_groups") or []
+    present = set(_iter_macro_factor_names(macro_factors, artifact))
+    raw: dict[str, float] = {}
+    perturbed_groups: set[str] = set()
+    for group in groups:
+        members = [g for g in group if g in present]
+        if len(members) < 2:
+            continue
+        base = _uncapped_macro_delta(macro_factors, horizon, artifact)
+        perturbed = copy.deepcopy(macro_factors)
+        for member in members:
+            val = _macro_factor_value(macro_factors, member)
+            perturbed[member] = val * 1.05 if member not in _ABSOLUTE_SHOCK_FACTORS else val + 0.05
+        bumped = _uncapped_macro_delta(perturbed, horizon, artifact)
+        share = (bumped - base) / len(members)
+        for member in members:
+            raw[member] = raw.get(member, 0.0) + share
+            perturbed_groups.add(member)
+
+    for factor in _iter_macro_factor_names(macro_factors, artifact):
+        if factor in perturbed_groups:
+            continue
+        if factor in macro_factors or (artifact and factor in artifact.feature_names):
+            raw[factor] = _marginal_macro_impact(macro_factors, factor, artifact, horizon)
+    return raw
+
+
 def _try_shap_macro_contributions(
     macro_factors: dict[str, Any],
     artifact: ModelArtifact | None,
     horizon: HorizonProfile,
 ) -> dict[str, float] | None:
+    linear = _try_linear_shap_contributions(macro_factors, artifact, horizon)
+    if linear:
+        return linear
     if artifact is None or not artifact.feature_names:
         return None
     try:
@@ -273,17 +391,13 @@ def explain_macro_factors(
     macro_delta = _capped_macro_delta(macro_factors, horizon, artifact)
 
     shap_raw = _try_shap_macro_contributions(macro_factors, artifact, horizon)
-    method = "shap" if shap_raw else "marginal"
+    method = "linear_shap" if shap_raw else "marginal"
+    caveat_factors = _correlation_caveat_factors(artifact)
 
     if shap_raw:
         raw = shap_raw
     else:
-        factors = _iter_macro_factor_names(macro_factors, artifact)
-        raw = {
-            f: _marginal_macro_impact(macro_factors, f, artifact, horizon)
-            for f in factors
-            if f in macro_factors or (artifact and f in artifact.feature_names)
-        }
+        raw = _grouped_marginal_impacts(macro_factors, artifact, horizon)
 
     contributors = _normalize_contributions(raw, macro_delta)
 
@@ -291,18 +405,35 @@ def explain_macro_factors(
     for row in contributors:
         row["contribution_index_pts"] = round(spot * row["contribution_pct"] / 100.0, 2)
         row["value"] = macro_factors.get(row["factor"])
+        row["correlation_caveat"] = row["factor"] in caveat_factors
         if total_return:
             row["share_of_total_equation"] = round(
                 row["contribution_pct"] / total_return,
                 4,
             )
 
+    channel_attribution: dict[str, float] | None = None
+    try:
+        from trade_integrations.dataflows.index_research.prediction_algorithms.causes.channel_attribution import (
+            channel_attribution_from_contributors,
+        )
+
+        channel_attribution = channel_attribution_from_contributors(contributors)
+    except Exception:
+        channel_attribution = None
+
     return {
         "method": method,
+        "attribution_disclaimer": (
+            "Attribution shows model sensitivity, not causal effect. "
+            "Correlated factors share credit."
+        ),
         "macro_delta_pct": round(macro_delta, 4),
         "bottom_up_return_pct": round(bottom_up_return_pct, 4),
         "total_return_pct": round(total_return, 4),
         "contributors": contributors,
+        "channel_attribution": channel_attribution,
+        "multicollinearity_warning": bool(artifact and artifact.multicollinearity_warning),
     }
 
 

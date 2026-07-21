@@ -17,6 +17,45 @@ from trade_integrations.nse_browser.parsers.historic_data import load_india_macr
 
 logger = logging.getLogger(__name__)
 
+_FLOW_CASH_BASE_COLUMNS = frozenset(
+    {
+        "date",
+        "source",
+        "fii_net",
+        "dii_net",
+        "fii_buy",
+        "fii_sell",
+        "dii_buy",
+        "dii_sell",
+        "granularity",
+        "variant",
+        "fii_net_raw",
+        "dii_net_raw",
+        "is_fo_monthly_expiry",
+        "fii_net_settlement_adj",
+        "dii_net_settlement_adj",
+    }
+)
+
+
+def _flow_derivative_column_names(columns) -> list[str]:
+    return [c for c in columns if c not in _FLOW_CASH_BASE_COLUMNS]
+
+
+def _sync_flow_derivatives_daily(overlay: pd.DataFrame) -> dict[str, Any]:
+    deriv_cols = _flow_derivative_column_names(overlay.columns)
+    if not deriv_cols:
+        return {"status": "skipped"}
+    deriv_frame = overlay[["date"] + [c for c in deriv_cols if c in overlay.columns]].copy()
+    if "source" not in deriv_frame.columns and "source" in overlay.columns:
+        deriv_frame["source"] = overlay["source"]
+    from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
+
+    existing_deriv = load_history_dataset("flow_derivatives_daily")
+    deriv = overlay_derivative_columns(existing_deriv, deriv_frame)
+    return save_history_dataset("flow_derivatives_daily", deriv)
+
+
 _SOURCE_RANK: dict[str, int] = {
     "nse_sector_csv": 100,
     "historic_data_figshare": 95,
@@ -266,36 +305,7 @@ def sync_repo_flows_to_cold_tier(*, start: str = "2006-01-01", end: str | None =
 
     cash_result = save_history_dataset("flow_cash_daily", cash)
 
-    deriv_cols = [
-        c
-        for c in cash.columns
-        if c
-        not in {
-            "date",
-            "source",
-            "fii_net",
-            "dii_net",
-            "fii_buy",
-            "fii_sell",
-            "dii_buy",
-            "dii_sell",
-            "granularity",
-            "variant",
-            "fii_net_raw",
-            "dii_net_raw",
-            "is_fo_monthly_expiry",
-        }
-    ]
-    deriv_result: dict[str, Any] = {"status": "skipped"}
-    if deriv_cols:
-        repo_deriv = cash[["date"] + deriv_cols].copy()
-        if "source" not in repo_deriv.columns and "source" in cash.columns:
-            repo_deriv["source"] = cash["source"]
-        existing_deriv = load_history_dataset("flow_derivatives_daily")
-        from trade_integrations.nse_browser.parsers.fii_dii import overlay_derivative_columns
-
-        deriv = overlay_derivative_columns(existing_deriv, repo_deriv)
-        deriv_result = save_history_dataset("flow_derivatives_daily", deriv)
+    deriv_result = _sync_flow_derivatives_daily(cash)
 
     return {"status": "ok", "cash": cash_result, "derivatives": deriv_result}
 
@@ -664,3 +674,187 @@ def run_history_incremental_sync(*, days: int = 30, explicit: bool = False) -> d
     except Exception as exc:
         results["hub"] = {"status": "error", "error": str(exc)}
     return {"status": "ok", "datasets": results}
+
+
+_OHLCV_FACTOR_MAP = (
+    ("open", "nifty_open"),
+    ("high", "nifty_high"),
+    ("low", "nifty_low"),
+    ("close", "nifty_close"),
+    ("volume", "nifty_volume"),
+)
+
+
+def upsert_ohlcv_daily_factors(trading_day: str) -> dict[str, Any]:
+    """Mirror cold-tier Nifty OHLCV for *trading_day* into the daily factor store."""
+    from trade_integrations.dataflows.index_research.factor_store import upsert_daily_factors
+
+    day = str(trading_day)[:10]
+    ohlcv = load_history_dataset("nifty_ohlcv_daily")
+    if ohlcv.empty or "date" not in ohlcv.columns:
+        return {"status": "skipped", "reason": "no_ohlcv", "day": day}
+    row_frame = ohlcv[ohlcv["date"].astype(str).str[:10] == day]
+    if row_frame.empty:
+        return {"status": "skipped", "reason": "no_row_for_day", "day": day}
+    bar = row_frame.iloc[-1]
+    rows: list[dict[str, Any]] = []
+    for col, factor in _OHLCV_FACTOR_MAP:
+        if col not in bar.index:
+            continue
+        val = bar[col]
+        if pd.isna(val):
+            continue
+        try:
+            rows.append(
+                {
+                    "factor": factor,
+                    "value": float(val),
+                    "source": str(bar.get("source") or "nifty_ohlcv_daily"),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    if not rows:
+        return {"status": "skipped", "reason": "no_ohlc_fields", "day": day}
+    upsert_daily_factors(day, rows)
+    return {"status": "ok", "day": day, "factors": [row["factor"] for row in rows]}
+
+
+def persist_daily_hub_market_data() -> dict[str, Any]:
+    """Refresh trailing Nifty OHLCV and mirror open/close into daily factor files."""
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
+    trading_day = india_trading_date_iso()[:10]
+    ohlcv_result = sync_nifty_ohlcv_tail(end=trading_day)
+
+    ohlcv = load_history_dataset("nifty_ohlcv_daily")
+    factor_days: list[str] = [trading_day]
+    if not ohlcv.empty and "date" in ohlcv.columns:
+        max_date = str(ohlcv["date"].astype(str).str[:10].max())
+        if max_date not in factor_days:
+            factor_days.append(max_date)
+
+    daily_factors = [upsert_ohlcv_daily_factors(day) for day in sorted(set(factor_days))]
+    return {
+        "status": "ok",
+        "trading_day": trading_day,
+        "ohlcv": ohlcv_result,
+        "daily_factors": daily_factors,
+    }
+
+
+def sync_flow_cache_to_cold_tier() -> dict[str, Any]:
+    """Promote merged flow cache rows into cold-tier flow parquets."""
+    from trade_integrations.dataflows.index_research.sources.nse_flow_derivatives_backfill import (
+        load_flow_cash_cache,
+    )
+    from trade_integrations.nse_browser.parsers.structural_adjustments import (
+        adjust_institutional_flow_expiry_settlement,
+    )
+
+    cache = load_flow_cash_cache()
+    if cache.empty or "date" not in cache.columns:
+        return {"status": "skipped", "reason": "empty_cache"}
+
+    cache = cache.copy()
+    cache["date"] = cache["date"].astype(str).str[:10]
+
+    existing_cash = load_history_dataset("flow_cash_daily")
+    cash = merge_with_priority([existing_cash, cache], on=["date"])
+    if cash.empty:
+        return {"status": "skipped", "reason": "empty_cash_merge"}
+
+    cash = adjust_institutional_flow_expiry_settlement(cash)
+    cash_result = save_history_dataset("flow_cash_daily", cash)
+
+    deriv_result = _sync_flow_derivatives_daily(cache)
+
+    return {"status": "ok", "cash": cash_result, "derivatives": deriv_result}
+
+
+def sync_macro_daily_tail(*, days: int = 14) -> dict[str, Any]:
+    """Fetch recent macro series and merge into ``macro_daily`` cold tier."""
+    from datetime import date, timedelta
+
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+    from trade_integrations.dataflows.index_research.sources.historical_macro import (
+        build_macro_daily_tail_frame,
+    )
+
+    end = india_trading_date_iso()[:10]
+    start = (date.fromisoformat(end) - timedelta(days=max(1, days))).isoformat()
+    tail = build_macro_daily_tail_frame(start=start, end=end)
+    if tail.empty:
+        return {"status": "skipped", "reason": "empty_macro_tail", "tail_start": start, "tail_end": end}
+
+    macro_out = tail.drop(
+        columns=[c for c in ("open", "high", "low", "volume") if c in tail.columns],
+        errors="ignore",
+    )
+    existing = load_history_dataset("macro_daily")
+    merged = merge_with_priority([existing, macro_out], on=["date"]) if not existing.empty else macro_out
+    result = save_history_dataset("macro_daily", merged)
+    return {"status": "ok", "tail_start": start, "tail_end": end, "dataset": result}
+
+
+def sync_india_vix_tail(*, days: int = 14) -> dict[str, Any]:
+    """Fetch recent India VIX and merge into ``india_vix_daily`` cold tier."""
+    from datetime import date, timedelta
+
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+    from trade_integrations.dataflows.index_research.sources.historical_flows import (
+        fetch_india_vix_history,
+    )
+
+    end = india_trading_date_iso()[:10]
+    start = (date.fromisoformat(end) - timedelta(days=max(1, days))).isoformat()
+    vix = fetch_india_vix_history(start=start, end=end)
+    if vix.empty:
+        return {"status": "skipped", "reason": "empty_vix", "start": start, "end": end}
+    existing = load_history_dataset("india_vix_daily")
+    merged = merge_with_priority([existing, vix], on=["date"]) if not existing.empty else vix
+    result = save_history_dataset("india_vix_daily", merged)
+    return {"status": "ok", "tail_start": start, "tail_end": end, "dataset": result}
+
+
+def finalize_daily_cold_tier(
+    *,
+    flow_lookback_days: int = 7,
+    macro_lookback_days: int = 14,
+    panel_tail_days: int = 14,
+) -> dict[str, Any]:
+    """After live fetches + enrich: promote all rows into cold tier and refresh panel."""
+    from datetime import date, timedelta
+
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+    from trade_integrations.dataflows.index_research.history_panel import refresh_panel_tail
+
+    trading_day = india_trading_date_iso()[:10]
+    flow_start = (
+        date.fromisoformat(trading_day) - timedelta(days=max(1, flow_lookback_days))
+    ).isoformat()
+
+    repo_flows = sync_repo_flows_to_cold_tier(start=flow_start, end=trading_day)
+    cache_flows = sync_flow_cache_to_cold_tier()
+    macro = sync_macro_daily_tail(days=macro_lookback_days)
+    vix = sync_india_vix_tail(days=macro_lookback_days)
+    panel = refresh_panel_tail(days=panel_tail_days)
+
+    steps = {
+        "repo_flows": repo_flows,
+        "cache_flows": cache_flows,
+        "macro_daily": macro,
+        "india_vix_daily": vix,
+        "panel": panel,
+    }
+    failed_steps = [
+        name
+        for name, step in steps.items()
+        if isinstance(step, dict) and step.get("status") not in {"ok", "skipped"}
+    ]
+    return {
+        "status": "partial" if failed_steps else "ok",
+        "failed_steps": failed_steps,
+        "trading_day": trading_day,
+        **steps,
+    }

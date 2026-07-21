@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
@@ -146,11 +147,13 @@ def predict_macro_delta_gated(
     coefs = np.array([artifact.coefficients.get(name, 0.0) for name in poly_names], dtype=float)
     trust = _macro_trust_weight(float(artifact.mae or 1.5)) * max(0.0, macro_trust_multiplier)
     raw_delta = float(artifact.intercept + np.dot(expanded.flatten(), coefs)) * trust
-    from trade_integrations.dataflows.index_research.flow_regime_buckets import (
-        apply_flow_regime_adjustment,
-    )
+    if os.getenv("INDEX_PREDICTION_FLOW_REGIME_ENABLED", "0").strip().lower() in {"1", "true", "yes"}:
+        from trade_integrations.dataflows.index_research.flow_regime_buckets import (
+            apply_flow_regime_adjustment,
+        )
 
-    return apply_flow_regime_adjustment(raw_delta, macro_factors, regime)
+        return apply_flow_regime_adjustment(raw_delta, macro_factors, regime)
+    return raw_delta
 
 
 def apply_regime_gates_to_contributions(

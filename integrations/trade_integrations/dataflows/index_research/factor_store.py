@@ -101,6 +101,7 @@ _LIGHT_ENRICHMENT_REQUIRED = frozenset({"repo_rate", "fii_net_5d", "dii_net_5d"}
 _FULL_ENRICHMENT_REQUIRED = _LIGHT_ENRICHMENT_REQUIRED | frozenset(
     {"nifty_pe", "institutional_net_5d", "nifty_pcr"}
 )
+_FLOW_DEPENDENT_ENRICHMENT = frozenset({"fii_net_5d", "dii_net_5d", "institutional_net_5d", "nifty_pcr"})
 
 
 def load_day_factor_keys(day: str) -> set[str]:
@@ -111,10 +112,49 @@ def load_day_factor_keys(day: str) -> set[str]:
     return {str(key) for key in existing["factor"].astype(str)}
 
 
-def day_enrichment_complete(day: str, *, light_mode: bool = False) -> bool:
+def flow_cash_tier_end_date() -> str | None:
+    """Return the latest date in cold-tier ``flow_cash_daily``, if known."""
+    manifest_path = get_hub_dir() / "_data/history/manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for entry in payload.get("files") or []:
+        if entry.get("dataset") != "flow_cash_daily":
+            continue
+        date_range = entry.get("date_range") or {}
+        end = date_range.get("end")
+        return str(end)[:10] if end else None
+    return None
+
+
+def flow_tier_stale(latest_trading_date: str) -> bool:
+    """Return True when institutional flow cold tier lags the latest Nifty session."""
+    flow_end = flow_cash_tier_end_date()
+    if not flow_end or not latest_trading_date:
+        return False
+    return flow_end[:10] < latest_trading_date[:10]
+
+
+def day_enrichment_complete(
+    day: str,
+    *,
+    light_mode: bool = False,
+    latest_trading_date: str | None = None,
+) -> bool:
     """Return whether a day already has the required enrichment factor keys."""
     required = _LIGHT_ENRICHMENT_REQUIRED if light_mode else _FULL_ENRICHMENT_REQUIRED
-    return required.issubset(load_day_factor_keys(day))
+    keys = load_day_factor_keys(day)
+    if not required.issubset(keys):
+        return False
+    if latest_trading_date and flow_tier_stale(latest_trading_date):
+        if day[:10] >= (flow_cash_tier_end_date() or "")[:10]:
+            flow_keys = _FLOW_DEPENDENT_ENRICHMENT if not light_mode else frozenset({"fii_net_5d", "dii_net_5d"})
+            if flow_keys & required:
+                return False
+    return True
 
 
 _MAX_ROLLING_LOOKBACK = 7
@@ -126,6 +166,7 @@ def select_enrichment_candidate_days(
     light_mode: bool = False,
     rolling_only: bool = False,
     max_lookback: int = _MAX_ROLLING_LOOKBACK,
+    latest_trading_date: str | None = None,
 ) -> list[str]:
     """Return calendar days that may need enrichment writes.
 
@@ -134,15 +175,34 @@ def select_enrichment_candidate_days(
     """
     if not trading_dates:
         return []
+    latest = latest_trading_date or trading_dates[-1]
     if rolling_only:
         candidates = trading_dates[-max(1, min(max_lookback, len(trading_dates))):]
-        return filter_days_needing_enrichment(candidates, light_mode=light_mode)
-    return filter_days_needing_enrichment(trading_dates, light_mode=light_mode)
+        return filter_days_needing_enrichment(
+            candidates,
+            light_mode=light_mode,
+            latest_trading_date=latest,
+        )
+    return filter_days_needing_enrichment(
+        trading_dates,
+        light_mode=light_mode,
+        latest_trading_date=latest,
+    )
 
 
-def filter_days_needing_enrichment(trading_dates: list[str], *, light_mode: bool = False) -> list[str]:
+def filter_days_needing_enrichment(
+    trading_dates: list[str],
+    *,
+    light_mode: bool = False,
+    latest_trading_date: str | None = None,
+) -> list[str]:
     """Return trading dates in *trading_dates* missing required enrichment factors."""
-    return [day for day in trading_dates if not day_enrichment_complete(day, light_mode=light_mode)]
+    latest = latest_trading_date or (trading_dates[-1] if trading_dates else None)
+    return [
+        day
+        for day in trading_dates
+        if not day_enrichment_complete(day, light_mode=light_mode, latest_trading_date=latest)
+    ]
 
 
 def load_factor_history(start: str, end: str) -> pd.DataFrame:

@@ -76,3 +76,27 @@ def compute_channel_attribution(
             buckets[key] = round(buckets[key], 4)
     buckets["_coverage"] = round(min(1.0, sum(abs(v) for k, v in buckets.items() if k != "unexplained_pct") / total), 3)
     return buckets
+
+
+def channel_attribution_from_contributors(contributors: list[dict[str, Any]]) -> dict[str, float]:
+    """Aggregate contributor rows into channel buckets for UI default display."""
+    buckets: dict[str, float] = {
+        "valuation_pct": 0.0,
+        "liquidity_spread_pct": 0.0,
+        "energy_pct": 0.0,
+        "fx_rates_pct": 0.0,
+        "global_risk_pct": 0.0,
+        "vol_pct": 0.0,
+        "flows_pct": 0.0,
+        "technical_pct": 0.0,
+        "sentiment_news_pct": 0.0,
+    }
+    for row in contributors:
+        factor = str(row.get("factor") or "")
+        channel = _CHANNEL_MAP.get(factor)
+        if not channel:
+            continue
+        buckets[channel] += float(row.get("contribution_pct") or 0.0)
+    for key in buckets:
+        buckets[key] = round(buckets[key], 4)
+    return buckets

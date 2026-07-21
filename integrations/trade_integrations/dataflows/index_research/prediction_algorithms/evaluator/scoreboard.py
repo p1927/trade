@@ -144,6 +144,18 @@ def summarize_track_metrics(
             for r in preds
             if _view_hit(float(r.get("predicted_pct") or 0.0), float(r.get("actual_pct") or 0.0))
         )
+    sign_mag = [float(r.get("sign_magnitude_score") or 0.0) for r in preds if r.get("sign_magnitude_score") is not None]
+    range_hits = sum(
+        1
+        for r in preds
+        if r.get("range_hit") is True
+        or (
+            r.get("range_hit") is None
+            and r.get("predicted_pct") is not None
+            and r.get("actual_pct") is not None
+            and abs(float(r["actual_pct"])) <= max(abs(float(r["predicted_pct"])), 0.01) * 1.5
+        )
+    )
     total = len(preds)
     misses = total - dir_hits
     return {
@@ -153,6 +165,8 @@ def summarize_track_metrics(
         "rmse_pct": round((sum(sq_errors) / total) ** 0.5, 4),
         "direction_hit_rate": round(dir_hits / total, 4) if total else None,
         "view_hit_rate": round(view_hits / total, 4) if total else None,
+        "range_hit_rate": round(range_hits / total, 4) if total else None,
+        "sign_magnitude_score_mean": round(sum(sign_mag) / len(sign_mag), 4) if sign_mag else None,
         "direction_hit_count": dir_hits,
         "direction_miss_count": misses,
     }

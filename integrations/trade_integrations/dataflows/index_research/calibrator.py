@@ -27,7 +27,7 @@ def artifact_needs_retrain(artifact: ModelArtifact | None, horizon) -> bool:
         return True
     if artifact.horizon_name and artifact.horizon_name != horizon.name:
         return True
-    history = load_aligned_factor_history(days=365)
+    history = load_aligned_factor_history(days=500)
     if history.empty:
         return False
     try:
@@ -84,7 +84,7 @@ def retrain(*, horizon_days: int | None = None) -> ModelArtifact | None:
     """Retrain macro Ridge model when aligned history is sufficient."""
     _ensure_news_features_backfilled()
     horizon = resolve_horizon(horizon_days)
-    history = load_aligned_factor_history(days=365)
+    history = load_aligned_factor_history(days=500)
     min_rows = max(_MIN_TRAINING_ROWS, horizon.feature_window + horizon.days + 5)
     if history.empty or len(history) < min_rows:
         logger.info(
@@ -100,5 +100,8 @@ def retrain(*, horizon_days: int | None = None) -> ModelArtifact | None:
         logger.warning("index calibrator: scikit-learn unavailable; skip retrain")
         return None
 
+    from trade_integrations.dataflows.index_research.direction_calibration import sync_artifact_direction_oos
+
+    sync_artifact_direction_oos(artifact)
     store_model_artifact(artifact)
     return artifact

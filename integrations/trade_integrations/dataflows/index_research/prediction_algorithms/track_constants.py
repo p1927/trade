@@ -15,6 +15,7 @@ CANONICAL_TRACK_IDS: tuple[str, ...] = (
     "naive_momentum",
     "debate_numeric",
     "headline_legacy",
+    "reconciled_hybrid",
 )
 
 # Walk-forward backtest runs these (debate skipped — no historical debate JSON).
@@ -88,6 +89,7 @@ TRACK_BACKTEST_ELIGIBLE: dict[str, bool] = {
     "naive_momentum": True,
     "debate_numeric": False,
     "headline_legacy": True,
+    "reconciled_hybrid": True,
     "lightgbm_macro": True,
     "xgboost_macro": True,
     "arimax_macro": True,
@@ -139,6 +141,7 @@ TRACK_IMPLEMENTATION_NOTES: dict[str, str] = {
     "darts_macro": "Darts SKLearnModel with past covariates",
     "automl_cached": "Offline PyCaret/AutoGluon artifact reader — no hot-path import",
     "headline_legacy": "predict → scenario reconcile → finalize → optional debate merge",
+    "reconciled_hybrid": "MinTrace reconciliation of bottom_up + macro_only_no_overlay",
 }
 
 INVERSE_MAE_WINDOWS: dict[str, int] = {

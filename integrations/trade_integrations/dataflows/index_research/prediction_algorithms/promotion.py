@@ -214,6 +214,21 @@ def evaluate_promotion(scoreboard: dict[str, Any], *, ticker: str = "NIFTY") -> 
     stable = _stable_from_history(scoreboard)
     daily = scoreboard.get("daily_evaluations") or []
     bootstrap_by_combiner: dict[str, Any] = {}
+    headline_bootstrap: dict[str, Any] = {}
+    if daily:
+        quant_rows = [
+            {
+                "direction_correct": r.get("direction_hit"),
+            }
+            for r in daily
+            if r.get("track_id") == "quant_ridge" and r.get("direction_hit") is not None
+        ]
+        if quant_rows:
+            from trade_integrations.dataflows.index_research.walk_forward_utils import bootstrap_direction_ci
+
+            headline_bootstrap = bootstrap_direction_ci(
+                [{"direction_correct": bool(r["direction_correct"])} for r in quant_rows]
+            )
     if not daily:
         stable_bootstrap = stable
     else:
@@ -234,10 +249,14 @@ def evaluate_promotion(scoreboard: dict[str, Any], *, ticker: str = "NIFTY") -> 
         "verdicts": verdicts,
         "promoted_combiners": stable_bootstrap,
         "raw_promoted_combiners": raw_promoted,
-        "auto_promote_allowed": bool(stable_bootstrap) and eval_count >= _MIN_EVAL_COUNT,
+        "auto_promote_allowed": bool(stable_bootstrap)
+        and eval_count >= _MIN_EVAL_COUNT
+        and not bool(headline_bootstrap.get("insufficient_evidence")),
         "min_eval_count_required": _MIN_EVAL_COUNT,
         "consecutive_runs_required": _CONSECUTIVE_RUNS_REQUIRED,
         "bootstrap_ci": bootstrap_by_combiner,
+        "headline_direction_bootstrap_ci": headline_bootstrap,
+        "headline_auto_promote_blocked": bool(headline_bootstrap.get("insufficient_evidence")),
         "bootstrap_min_pairs": _BOOTSTRAP_MIN_PAIRS,
         "debate_archive_eligible": debate_archive_ok,
         "debate_numeric_promotion_blocked": not debate_archive_ok,
