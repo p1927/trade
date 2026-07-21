@@ -223,8 +223,24 @@ def backfill_flow_history(
             cash["is_fo_monthly_expiry"] = (
                 pd.to_numeric(cash["is_fo_monthly_expiry"], errors="coerce").fillna(0).astype(bool)
             )
-        cash_result = save_history_dataset("flow_cash_daily", cash)
-        upsert_flow_cash_cache(cash.to_dict(orient="records"))
+        from trade_integrations.dataflows.index_research.history_ingest import (
+            _flow_cash_only_frame,
+            _persist_flow_cash_cold_tier,
+            _prepare_existing_flow_cash,
+        )
+        from trade_integrations.nse_browser.parsers.structural_adjustments import (
+            adjust_institutional_flow_expiry_settlement,
+        )
+
+        existing_cash = _prepare_existing_flow_cash(load_history_dataset("flow_cash_daily"))
+        cash = adjust_institutional_flow_expiry_settlement(cash)
+        if not existing_cash.empty:
+            from trade_integrations.dataflows.index_research.history_ingest import merge_with_priority
+
+            cash = merge_with_priority([existing_cash, cash], on=["date"])
+        persist = _persist_flow_cash_cold_tier(cash, overlay=cash)
+        cash_result = persist.get("cash") or {"status": "skipped"}
+        upsert_flow_cash_cache(_flow_cash_only_frame(cash).to_dict(orient="records"))
 
     deriv_result: dict[str, Any] = {"status": "skipped"}
     if not deriv.empty:

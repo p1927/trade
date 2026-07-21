@@ -49,7 +49,7 @@ def _fetch_yfinance_close_series(symbol: str, start: str, end_exclusive: str) ->
     frame = _fetch_yfinance_ohlcv(symbol, start, end_exclusive)
     if frame.empty or "close" not in frame.columns:
         return pd.Series(dtype=float)
-    return pd.Series(frame["close"].astype(float).values, index=frame["date"], name=symbol)
+    return frame.set_index("date")["close"]
 
 
 def _fetch_fred_series(series_id: str, start: str, end: str) -> pd.Series:
@@ -57,39 +57,16 @@ def _fetch_fred_series(series_id: str, start: str, end: str) -> pd.Series:
     if not api_key:
         return pd.Series(dtype=float)
     try:
-        from trade_integrations.http import get
+        import pandas_datareader.data as web
 
-        response = get(
-            "https://api.stlouisfed.org/fred/series/observations",
-            params={
-                "series_id": series_id,
-                "api_key": api_key,
-                "file_type": "json",
-                "observation_start": start,
-                "observation_end": end,
-                "sort_order": "asc",
-            },
-            timeout=45,
-        )
-        response.raise_for_status()
-        observations = response.json().get("observations", [])
+        raw = web.DataReader(series_id, "fred", start, end)
+        if raw.empty:
+            return pd.Series(dtype=float)
+        col = raw.columns[0]
+        return raw[col].dropna()
     except Exception as exc:
-        logger.debug("FRED %s fetch failed: %s", series_id, exc)
+        logger.debug("fred %s fetch failed: %s", series_id, exc)
         return pd.Series(dtype=float)
-
-    values: dict[str, float] = {}
-    for obs in observations:
-        raw = obs.get("value")
-        day = str(obs.get("date") or "")[:10]
-        if not day or raw in (".", None, ""):
-            continue
-        try:
-            values[day] = float(raw)
-        except (TypeError, ValueError):
-            continue
-    if not values:
-        return pd.Series(dtype=float)
-    return pd.Series(values)
 
 
 def _macro_frame_from_nifty(
@@ -137,8 +114,8 @@ def _macro_frame_from_nifty(
     return macro
 
 
-def build_macro_daily_tail_frame(*, start: str, end: str) -> pd.DataFrame:
-    """Build macro columns for a date window using cold-tier Nifty OHLCV when available."""
+def load_nifty_ohlcv_tail_frame(*, start: str, end: str) -> pd.DataFrame:
+    """Load Nifty OHLCV for a window; fill mid-window and tail gaps from yfinance."""
     from trade_integrations.dataflows.index_research.history_store import load_history_dataset
 
     end_day = end[:10]
@@ -146,13 +123,35 @@ def build_macro_daily_tail_frame(*, start: str, end: str) -> pd.DataFrame:
         datetime.strptime(end_day, "%Y-%m-%d") + timedelta(days=1)
     ).strftime("%Y-%m-%d")
 
-    nifty = load_history_dataset("nifty_ohlcv_daily")
-    if not nifty.empty:
-        nifty = nifty.copy()
-        nifty["date"] = nifty["date"].astype(str).str[:10]
-        nifty = nifty[(nifty["date"] >= start[:10]) & (nifty["date"] <= end_day)]
-    if nifty.empty or "close" not in nifty.columns:
-        nifty = _fetch_yfinance_ohlcv("^NSEI", start, end_exclusive)
+    cold = load_history_dataset("nifty_ohlcv_daily")
+    if not cold.empty:
+        cold = cold.copy()
+        cold["date"] = cold["date"].astype(str).str[:10]
+        cold = cold[(cold["date"] >= start[:10]) & (cold["date"] <= end_day)]
+
+    yf = _fetch_yfinance_ohlcv("^NSEI", start, end_exclusive)
+    if yf.empty:
+        return cold.reset_index(drop=True) if not cold.empty else pd.DataFrame()
+
+    yf["date"] = yf["date"].astype(str).str[:10]
+    if cold.empty or "close" not in cold.columns:
+        return yf.sort_values("date").reset_index(drop=True)
+
+    cold_dates = set(cold["date"].astype(str))
+    gap_rows = yf[~yf["date"].isin(cold_dates)]
+    merged = (
+        pd.concat([cold, gap_rows], ignore_index=True)
+        .sort_values("date")
+        .drop_duplicates("date", keep="first")
+        .reset_index(drop=True)
+    )
+    return merged
+
+
+def build_macro_daily_tail_frame(*, start: str, end: str) -> pd.DataFrame:
+    """Build macro columns for a date window using cold-tier Nifty OHLCV when available."""
+    end_day = end[:10]
+    nifty = load_nifty_ohlcv_tail_frame(start=start, end=end)
     if nifty.empty:
         return pd.DataFrame()
     return _macro_frame_from_nifty(nifty, start=start, end_day=end_day)

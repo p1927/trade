@@ -69,8 +69,6 @@ _LAGGED_MACRO_FFILL_COLUMNS = (
     "oil_brent",
     "oil_wti",
     "us_10y",
-    "india_vix",
-    "vix",
     "nifty_pe",
     "nifty_pb",
     "nifty_dividend_yield",
@@ -233,4 +231,5 @@ def load_aligned_panel_history(
         from trade_integrations.dataflows.index_research.panel_enrichment import enrich_prediction_panel
 
         frame = enrich_prediction_panel(frame, allow_live_fetch=False)
+        frame = enrich_history_features(frame)
     return frame.reset_index(drop=True)

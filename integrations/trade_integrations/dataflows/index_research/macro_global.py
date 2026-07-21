@@ -620,15 +620,33 @@ def _fetch_global_macro_snapshot_uncached(
             if row["factor"] not in factors:
                 factor_rows.append(_factor_row_from_payload(row))
                 factors[row["factor"]] = row["value"]
+    except Exception as exc:
+        logger.debug("fundamental/spread snapshot rows skipped: %s", exc)
 
-        # Velocities need short history window.
+    try:
+        from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+        from trade_integrations.dataflows.index_research.panel_live_parity import (
+            LIVE_PANEL_PARITY_KEYS,
+            merge_panel_parity_into_factors,
+            upsert_factor_rows_for_parity,
+        )
+
+        parity_day = str(_macro_fetch_ctx.get("trading_day") or india_trading_date_iso())[:10]
+        factors, parity_applied = merge_panel_parity_into_factors(factors, parity_day)
+        if parity_applied:
+            factor_rows = upsert_factor_rows_for_parity(factor_rows, factors, parity_applied)
+    except Exception as exc:
+        logger.debug("panel parity overlay skipped: %s", exc)
+
+    try:
         from datetime import date, timedelta
 
+        from trade_integrations.dataflows.company_research.market import india_trading_date_iso
         from trade_integrations.dataflows.index_research.factor_store import load_factor_history
         from trade_integrations.dataflows.index_research.spread_features import enrich_spread_columns
 
-        end_d = date.today().isoformat()
-        start_d = (date.today() - timedelta(days=20)).isoformat()
+        end_d = str(_macro_fetch_ctx.get("trading_day") or india_trading_date_iso())[:10]
+        start_d = (date.fromisoformat(end_d) - timedelta(days=20)).isoformat()
         hist = load_factor_history(start_d, end_d)
         if not hist.empty and "factor" in hist.columns:
             wide = hist.pivot_table(index="date", columns="factor", values="value", aggfunc="last")
@@ -644,6 +662,8 @@ def _fetch_global_macro_snapshot_uncached(
                     "us_10y_velocity_3d",
                     "fii_net_5d_momentum",
                 ):
+                    if key in factors:
+                        continue
                     val = last.get(key)
                     if val is not None and not pd.isna(val):
                         payload = {"factor": key, "value": float(val), "source": "spread_features_live"}
@@ -651,21 +671,6 @@ def _fetch_global_macro_snapshot_uncached(
                         factors[key] = float(val)
     except Exception as exc:
         logger.debug("phase I live derived skipped: %s", exc)
-
-    try:
-        from datetime import date
-
-        from trade_integrations.dataflows.index_research.panel_live_parity import (
-            merge_panel_parity_into_factors,
-            upsert_factor_rows_for_parity,
-        )
-
-        parity_day = str(_macro_fetch_ctx.get("trading_day") or date.today().isoformat())[:10]
-        factors, parity_applied = merge_panel_parity_into_factors(factors, parity_day)
-        if parity_applied:
-            factor_rows = upsert_factor_rows_for_parity(factor_rows, factors, parity_applied)
-    except Exception as exc:
-        logger.debug("panel parity overlay skipped: %s", exc)
 
     has_output = bool(factor_rows)
     status = stage_status_from_attempts(attempts, has_output=has_output)

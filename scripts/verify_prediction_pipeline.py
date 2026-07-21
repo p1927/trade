@@ -64,6 +64,8 @@ def main() -> int:
                     "tests/test_spread_features.py",
                     "tests/test_prediction_data_consistency.py",
                     "tests/test_history_panel.py",
+                    "tests/test_index_explain.py",
+                    "tests/test_prediction_review_fixes.py",
                     "tests/test_data_router_ohlcv.py",
                     "tests/test_data_router_worker.py",
                     "tests/test_prediction_algorithms_tracks.py",

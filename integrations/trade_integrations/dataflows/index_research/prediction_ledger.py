@@ -585,9 +585,9 @@ def list_forecast_history_bundle(
     daily = sorted(by_day.values(), key=lambda r: r["predicted_at"])
     unique_days = len(by_day)
 
-    from datetime import date
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
 
-    today = date.today().isoformat()
+    today = india_trading_date_iso()[:10]
     intraday_today = [r for r in intraday if str(r.get("predicted_at", ""))[:10] == today]
     if not intraday_today and unique_days == 1 and len(intraday) > 1:
         intraday_today = intraday

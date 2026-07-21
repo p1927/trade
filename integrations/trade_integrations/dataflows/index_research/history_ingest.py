@@ -13,9 +13,12 @@ from trade_integrations.dataflows.index_research.history_store import (
     load_history_dataset,
     save_history_dataset,
 )
+from trade_integrations.nse_browser.parsers.fii_dii import _DERIVATIVE_COLUMNS
 from trade_integrations.nse_browser.parsers.historic_data import load_india_macro_annual
 
 logger = logging.getLogger(__name__)
+
+_FLOW_DERIVATIVE_COLUMNS = frozenset(_DERIVATIVE_COLUMNS)
 
 _FLOW_CASH_BASE_COLUMNS = frozenset(
     {
@@ -39,7 +42,65 @@ _FLOW_CASH_BASE_COLUMNS = frozenset(
 
 
 def _flow_derivative_column_names(columns) -> list[str]:
-    return [c for c in columns if c not in _FLOW_CASH_BASE_COLUMNS]
+    return [c for c in columns if c in _FLOW_DERIVATIVE_COLUMNS]
+
+
+def _unknown_flow_cash_columns(columns) -> list[str]:
+    return [c for c in columns if c not in _FLOW_CASH_BASE_COLUMNS and c not in _FLOW_DERIVATIVE_COLUMNS]
+
+
+def _flow_cash_only_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    unknown = _unknown_flow_cash_columns(frame.columns)
+    if unknown:
+        logger.warning("dropping unknown flow_cash_daily columns: %s", unknown)
+    keep = [c for c in frame.columns if c in _FLOW_CASH_BASE_COLUMNS]
+    return frame[keep].copy()
+
+
+def _persist_flow_cash_cold_tier(cash: pd.DataFrame, *, overlay: pd.DataFrame) -> dict[str, Any]:
+    """Migrate deriv cols, guard against window-only wipe, save cash-only cold tier."""
+    existing = load_history_dataset("flow_cash_daily")
+    prior_rows = len(existing)
+    deriv_result = _sync_flow_derivatives_daily(cash)
+    stripped = _flow_cash_only_frame(cash)
+    if prior_rows > 0 and len(stripped) < max(1, int(prior_rows * 0.5)):
+        return {
+            "status": "error",
+            "reason": "flow_cash_shrink_guard",
+            "prior_rows": prior_rows,
+            "new_rows": len(stripped),
+            "derivatives": deriv_result,
+        }
+    cash_result = save_history_dataset("flow_cash_daily", stripped, merge=False)
+    return {
+        "status": _flow_cold_tier_save_status(overlay, deriv_result, cash_result),
+        "cash": cash_result,
+        "derivatives": deriv_result,
+    }
+
+
+def _prepare_existing_flow_cash(existing: pd.DataFrame) -> pd.DataFrame:
+    """Migrate legacy derivative columns off flow_cash_daily rows."""
+    if existing.empty or not _flow_derivative_column_names(existing.columns):
+        return existing
+    deriv_result = _sync_flow_derivatives_daily(existing)
+    if deriv_result.get("status") not in {"ok", "skipped"}:
+        return existing
+    return _flow_cash_only_frame(existing)
+
+
+def _flow_cold_tier_save_status(
+    overlay: pd.DataFrame,
+    deriv_result: dict[str, Any],
+    cash_result: dict[str, Any] | None = None,
+) -> str:
+    if cash_result and cash_result.get("status") == "error":
+        return "error"
+    if deriv_result.get("status") == "ok":
+        return "ok"
+    if _flow_derivative_column_names(overlay.columns):
+        return "partial"
+    return "ok"
 
 
 def _sync_flow_derivatives_daily(overlay: pd.DataFrame) -> dict[str, Any]:
@@ -276,8 +337,7 @@ def sync_sector_indices_to_cold_tier() -> dict[str, Any]:
 
 def sync_repo_flows_to_cold_tier(*, start: str = "2006-01-01", end: str | None = None) -> dict[str, Any]:
     """Merge repo FII/DII into flow_cash_daily cold tier."""
-    from datetime import datetime, timezone
-
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
     from trade_integrations.nse_browser.repository import load_nse_repository_fii_dii_frame
 
     def _daily_flow_only(frame: pd.DataFrame) -> pd.DataFrame:
@@ -289,9 +349,9 @@ def sync_repo_flows_to_cold_tier(*, start: str = "2006-01-01", end: str | None =
             out = out[out["granularity"].astype(str) != "monthly"]
         return out.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
 
-    end_day = (end or datetime.now(timezone.utc).date().isoformat())[:10]
+    end_day = (end or india_trading_date_iso())[:10]
     repo = _daily_flow_only(load_nse_repository_fii_dii_frame(start, end_day))
-    existing = _daily_flow_only(load_history_dataset("flow_cash_daily"))
+    existing = _prepare_existing_flow_cash(_daily_flow_only(load_history_dataset("flow_cash_daily")))
 
     cash = merge_with_priority([existing, repo], on=["date"])
     if cash.empty:
@@ -303,11 +363,7 @@ def sync_repo_flows_to_cold_tier(*, start: str = "2006-01-01", end: str | None =
 
     cash = adjust_institutional_flow_expiry_settlement(cash)
 
-    cash_result = save_history_dataset("flow_cash_daily", cash)
-
-    deriv_result = _sync_flow_derivatives_daily(cash)
-
-    return {"status": "ok", "cash": cash_result, "derivatives": deriv_result}
+    return _persist_flow_cash_cold_tier(cash, overlay=cash)
 
 
 def sync_global_india_macro_to_cold_tier(*, repo_root=None) -> dict[str, Any]:
@@ -644,11 +700,14 @@ def run_history_incremental_sync(*, days: int = 30, explicit: bool = False) -> d
     """Lightweight append: recent flows/derivatives/sector + hub mirror (no yfinance 2006 refetch)."""
     from datetime import date, timedelta
 
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
     if not history_incremental_sync_enabled():
         return {"status": "skipped", "reason": "HISTORY_INCREMENTAL_SYNC disabled"}
 
-    end = date.today().isoformat()
-    start = (date.today() - timedelta(days=max(1, days))).isoformat()
+    end_day = date.fromisoformat(india_trading_date_iso()[:10])
+    end = end_day.isoformat()
+    start = (end_day - timedelta(days=max(1, days))).isoformat()
     results: dict[str, Any] = {
         "start": start,
         "end": end,
@@ -735,8 +794,13 @@ def persist_daily_hub_market_data() -> dict[str, Any]:
             factor_days.append(max_date)
 
     daily_factors = [upsert_ohlcv_daily_factors(day) for day in sorted(set(factor_days))]
+    ohlcv_status = str((ohlcv_result or {}).get("status") or "ok")
+    factor_errors = [
+        item for item in daily_factors if isinstance(item, dict) and item.get("status") == "error"
+    ]
+    top_status = "error" if ohlcv_status == "error" or factor_errors else "ok"
     return {
-        "status": "ok",
+        "status": top_status,
         "trading_day": trading_day,
         "ohlcv": ohlcv_result,
         "daily_factors": daily_factors,
@@ -759,17 +823,13 @@ def sync_flow_cache_to_cold_tier() -> dict[str, Any]:
     cache = cache.copy()
     cache["date"] = cache["date"].astype(str).str[:10]
 
-    existing_cash = load_history_dataset("flow_cash_daily")
+    existing_cash = _prepare_existing_flow_cash(load_history_dataset("flow_cash_daily"))
     cash = merge_with_priority([existing_cash, cache], on=["date"])
     if cash.empty:
         return {"status": "skipped", "reason": "empty_cash_merge"}
 
     cash = adjust_institutional_flow_expiry_settlement(cash)
-    cash_result = save_history_dataset("flow_cash_daily", cash)
-
-    deriv_result = _sync_flow_derivatives_daily(cache)
-
-    return {"status": "ok", "cash": cash_result, "derivatives": deriv_result}
+    return _persist_flow_cash_cold_tier(cash, overlay=cash)
 
 
 def sync_macro_daily_tail(*, days: int = 14) -> dict[str, Any]:
@@ -779,10 +839,22 @@ def sync_macro_daily_tail(*, days: int = 14) -> dict[str, Any]:
     from trade_integrations.dataflows.company_research.market import india_trading_date_iso
     from trade_integrations.dataflows.index_research.sources.historical_macro import (
         build_macro_daily_tail_frame,
+        load_nifty_ohlcv_tail_frame,
     )
 
     end = india_trading_date_iso()[:10]
     start = (date.fromisoformat(end) - timedelta(days=max(1, days))).isoformat()
+
+    nifty_tail = load_nifty_ohlcv_tail_frame(start=start, end=end)
+    if not nifty_tail.empty:
+        existing_nifty = load_history_dataset("nifty_ohlcv_daily")
+        merged_nifty = (
+            merge_with_priority([existing_nifty, nifty_tail], on=["date"])
+            if not existing_nifty.empty
+            else nifty_tail
+        )
+        save_history_dataset("nifty_ohlcv_daily", merged_nifty)
+
     tail = build_macro_daily_tail_frame(start=start, end=end)
     if tail.empty:
         return {"status": "skipped", "reason": "empty_macro_tail", "tail_start": start, "tail_end": end}
@@ -815,6 +887,23 @@ def sync_india_vix_tail(*, days: int = 14) -> dict[str, Any]:
     merged = merge_with_priority([existing, vix], on=["date"]) if not existing.empty else vix
     result = save_history_dataset("india_vix_daily", merged)
     return {"status": "ok", "tail_start": start, "tail_end": end, "dataset": result}
+
+
+def _cold_tier_step_unhealthy(name: str, step: dict[str, Any], *, repo_flows: dict[str, Any]) -> bool:
+    status = step.get("status")
+    if status == "error" or status == "partial":
+        return True
+    if status != "skipped":
+        return False
+    if name == "panel":
+        return True
+    if name == "cache_flows":
+        return step.get("reason") == "empty_cache" and repo_flows.get("status") != "ok"
+    if name == "macro_daily":
+        return step.get("reason") == "empty_macro_tail"
+    if name == "india_vix_daily":
+        return step.get("reason") == "empty_vix"
+    return False
 
 
 def finalize_daily_cold_tier(
@@ -850,7 +939,7 @@ def finalize_daily_cold_tier(
     failed_steps = [
         name
         for name, step in steps.items()
-        if isinstance(step, dict) and step.get("status") not in {"ok", "skipped"}
+        if isinstance(step, dict) and _cold_tier_step_unhealthy(name, step, repo_flows=repo_flows)
     ]
     return {
         "status": "partial" if failed_steps else "ok",
