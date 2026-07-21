@@ -162,6 +162,36 @@ def test_should_retry_engine_search_only_for_transient_reasons():
 
 
 @pytest.mark.unit
+def test_search_json_records_failure_for_hard_unresponsive_engine(monkeypatch):
+    events: list[str] = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [],
+                "unresponsive_engines": [["bing", "CAPTCHA"]],
+            }
+
+    monkeypatch.setattr(searxng_client, "get", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(searxng_client, "_base_url", lambda: "http://searxng.test")
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.source_availability.record_failure",
+        lambda vendor, capability, exc: events.append(f"fail:{exc}"),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.source_availability.record_success",
+        lambda vendor, capability: events.append("success"),
+    )
+
+    payload = searxng_client.search_json("macro probe", categories="finance", engines="bing")
+    assert payload["results"] == []
+    assert events == ["fail:bing: CAPTCHA"]
+
+
+@pytest.mark.unit
 def test_search_json_propagates_http_errors(monkeypatch):
     def fake_get(*args, **kwargs):
         raise HTTPError("429 Too Many Requests")

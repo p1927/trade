@@ -266,8 +266,23 @@ def search_json(
         except RequestException as exc:
             source_availability.record_failure("searxng", "search", exc)
             raise
-        source_availability.record_success("searxng", "search")
-        return resp.json()
+        payload = resp.json()
+        requested = parse_engine_list(engines or "")
+        hard_failure = next(
+            (
+                (engine, reason)
+                for engine in requested
+                if (reason := engine_unresponsive_reason(payload, engine))
+                and not engine_unresponsive_transient(payload, engine)
+            ),
+            None,
+        )
+        if hard_failure:
+            engine, reason = hard_failure
+            source_availability.record_failure("searxng", "search", f"{engine}: {reason}")
+        else:
+            source_availability.record_success("searxng", "search")
+        return payload
 
 
 def searxng_queue_stats() -> dict[str, Any]:
