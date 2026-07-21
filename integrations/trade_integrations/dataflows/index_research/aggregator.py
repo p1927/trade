@@ -394,6 +394,27 @@ def run_index_research(
         )
 
     try:
+        from trade_integrations.dataflows.index_research.panel_live_parity import (
+            merge_panel_parity_into_factors,
+            upsert_factor_rows_for_parity,
+        )
+
+        macro_factors, parity_applied = merge_panel_parity_into_factors(macro_factors, trading_day)
+        if parity_applied:
+            global_factors = upsert_factor_rows_for_parity(
+                global_factors,
+                macro_factors,
+                parity_applied,
+            )
+            log.info(
+                "panel_parity",
+                f"Applied {len(parity_applied)} panel-derived macro factors",
+                keys=parity_applied[:10],
+            )
+    except Exception as exc:
+        logger.debug("panel parity overlay skipped: %s", exc)
+
+    try:
         from trade_integrations.dataflows.index_research.alpha_bridge.snapshot import (
             apply_alpha_zoo_to_macro,
         )

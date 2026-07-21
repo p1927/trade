@@ -452,6 +452,24 @@ def run_index_light_refresh(
             }
         )
 
+    try:
+        from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+        from trade_integrations.dataflows.index_research.panel_live_parity import (
+            merge_panel_parity_into_factors,
+            upsert_factor_rows_for_parity,
+        )
+
+        parity_day = india_trading_date_iso()[:10]
+        macro_factors, parity_applied = merge_panel_parity_into_factors(macro_factors, parity_day)
+        if parity_applied:
+            global_factors = upsert_factor_rows_for_parity(
+                global_factors,
+                macro_factors,
+                parity_applied,
+            )
+    except Exception as exc:
+        logger.debug("panel parity light_refresh skipped: %s", exc)
+
     log = PipelineLogger()
     log.info(
         "light_refresh",

@@ -652,6 +652,21 @@ def _fetch_global_macro_snapshot_uncached(
     except Exception as exc:
         logger.debug("phase I live derived skipped: %s", exc)
 
+    try:
+        from datetime import date
+
+        from trade_integrations.dataflows.index_research.panel_live_parity import (
+            merge_panel_parity_into_factors,
+            upsert_factor_rows_for_parity,
+        )
+
+        parity_day = str(_macro_fetch_ctx.get("trading_day") or date.today().isoformat())[:10]
+        factors, parity_applied = merge_panel_parity_into_factors(factors, parity_day)
+        if parity_applied:
+            factor_rows = upsert_factor_rows_for_parity(factor_rows, factors, parity_applied)
+    except Exception as exc:
+        logger.debug("panel parity overlay skipped: %s", exc)
+
     has_output = bool(factor_rows)
     status = stage_status_from_attempts(attempts, has_output=has_output)
 

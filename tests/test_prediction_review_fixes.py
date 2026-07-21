@@ -125,6 +125,73 @@ def test_has_upcoming_rbi_ignores_null_event_dates():
 
 
 @pytest.mark.unit
+def test_post_debate_reconcile_restores_sum_identity():
+    from trade_integrations.dataflows.index_research.scenarios import reconcile_prediction_with_scenarios
+    from trade_integrations.research.debate_synthesis import merge_index_prediction
+
+    scenarios = [
+        {
+            "event": "earnings_cluster",
+            "outcome": "positive_surprises",
+            "index_range": [24000.0, 25000.0],
+            "probability": 1.0,
+        },
+    ]
+    base = {
+        "expected_return_pct": 2.0,
+        "bottom_up_return_pct": 0.1,
+        "macro_delta_pct": 1.9,
+        "raw_macro_delta_pct": 1.9,
+        "view": "bullish",
+    }
+    debate = {
+        "view": "bullish",
+        "direction_confidence": 0.8,
+        "expected_return_pct": 8.57,
+    }
+    merged = merge_index_prediction(debate, base)
+    assert merged.get("debate_merged") is True
+    reconciled = reconcile_prediction_with_scenarios(
+        merged,
+        scenarios,
+        spot=24500.0,
+        mae_pct=1.5,
+        divergence_threshold_pct=0.5,
+    )
+    assert reconciled.get("reconciled_with_scenarios") is True
+    bu = float(reconciled["bottom_up_return_pct"])
+    md = float(reconciled["macro_delta_pct"])
+    exp = float(reconciled["expected_return_pct"])
+    assert exp == pytest.approx(bu + md, abs=1e-3)
+
+
+@pytest.mark.unit
+def test_panel_parity_overlays_panel_row(monkeypatch):
+    import pandas as pd
+
+    from trade_integrations.dataflows.index_research.panel_live_parity import merge_panel_parity_into_factors
+
+    panel = pd.DataFrame(
+        {
+            "date": ["2026-07-19", "2026-07-21"],
+            "index_sentiment": [0.1, 0.25],
+            "india_vix_velocity_3d": [1.0, 2.5],
+            "constituent_momentum_7d": [0.5, 1.2],
+        }
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.history_store.load_panel",
+        lambda _name: panel,
+    )
+    live = {"index_sentiment": 0.9, "india_vix": 15.0}
+    merged, applied = merge_panel_parity_into_factors(live, "2026-07-21")
+    assert "index_sentiment" in applied
+    assert merged["index_sentiment"] == pytest.approx(0.25)
+    assert merged["india_vix_velocity_3d"] == pytest.approx(2.5)
+    assert merged["india_vix"] == pytest.approx(15.0)
+
+
+@pytest.mark.unit
 def test_build_prediction_metadata_maps_scenario_fields():
     meta = build_prediction_metadata(
         ticker="NIFTY",
