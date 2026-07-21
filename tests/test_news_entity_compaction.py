@@ -78,6 +78,25 @@ def test_remove_events_and_distillation_log(hub_tmp):
     assert "evt:drop" in log_path.read_text(encoding="utf-8")
 
 
+def test_distill_event_uses_canonical_id_on_create(monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_RULE_FALLBACK_DISTILL", "1")
+    monkeypatch.setenv("MINIMAX_API_KEY", "")
+    from trade_integrations.dataflows.index_research.news_distillation import distill_event
+
+    refs = [
+        {
+            "title": "FII selling drags Nifty",
+            "summary": "Foreign investors sold heavily.",
+            "url": "https://news.example.com/fii",
+            "source": "rss",
+            "published_at": "2026-04-28T10:00:00+00:00",
+        }
+    ]
+    out = distill_event(refs=refs, previous=None, canonical_event_id="url:news.example.com/fii")
+    em = (out.get("structured_summary") or {}).get("event_meta") or {}
+    assert em.get("event_id") == "url:news.example.com/fii"
+
+
 def test_build_duplicate_group_uses_star_topology_not_transitive():
     from trade_integrations.dataflows.index_research.news_entity_worker import _build_duplicate_group
 
@@ -110,7 +129,7 @@ def test_build_duplicate_group_uses_star_topology_not_transitive():
     assert "evt:c" not in ids
 
 
-def test_run_hub_news_entity_job_drain_mode_skips_maintenance(monkeypatch):
+def test_run_hub_news_entity_job_drain_mode_runs_light_compact(monkeypatch):
     from trade_integrations.dataflows.index_research import news_entity_worker as worker
 
     monkeypatch.setattr(
@@ -126,18 +145,27 @@ def test_run_hub_news_entity_job_drain_mode_skips_maintenance(monkeypatch):
         "trade_integrations.hub_storage.news_migrations.ensure_hub_news_migrations",
         lambda **_: {"status": "ok"},
     )
+    monkeypatch.setattr(worker, "_tickers_with_pending_staging", lambda: [])
+
+    compact_calls: list[dict] = []
+
+    def _compact(**kwargs):
+        compact_calls.append(kwargs)
+        return {"groups_merged": 0, "rows_removed": 0}
+
+    monkeypatch.setattr(worker, "compact_distilled_events", _compact)
 
     def _should_not_run(*_a, **_k):
-        raise AssertionError("maintenance stages must not run in drain mode")
+        raise AssertionError("full maintenance stages must not run in drain mode")
 
     monkeypatch.setattr(worker, "repair_leaked_distilled_summaries", _should_not_run)
     monkeypatch.setattr(worker, "backfill_distilled_event_metadata", _should_not_run)
-    monkeypatch.setattr(worker, "compact_distilled_events", _should_not_run)
 
     result = worker.run_hub_news_entity_job({"ticker": "NIFTY", "mode": "drain"})
     assert result.get("mode") == "drain"
     assert result.get("repair", {}).get("skipped") is True
     assert result.get("staging", {}).get("processed") == 2
+    assert compact_calls and compact_calls[0].get("lookback_days") == 7
 
 
 def test_run_hub_news_entity_job_skips_repair_when_pipeline_paused(monkeypatch):
@@ -219,3 +247,243 @@ def test_run_hub_news_entity_job_uses_adaptive_batch(monkeypatch):
         {"ticker": "NIFTY", "mode": "drain", "batch_size": "adaptive", "adaptive_batch": True}
     )
     assert captured["limit"] == 250
+
+
+def test_build_source_event_index_reads_sidecar(hub_tmp, monkeypatch):
+    import json
+
+    from trade_integrations.dataflows.hub_wiki import ensure_llm_wiki_project
+    from trade_integrations.dataflows.hub_wiki.search_dedup import (
+        build_source_event_index,
+        resolve_hit_to_event_id,
+    )
+
+    ensure_llm_wiki_project()
+    news_dir = hub_tmp / "llm-wiki" / "raw" / "sources" / "news"
+    news_dir.mkdir(parents=True, exist_ok=True)
+    sidecar = {
+        "event_id": "evt:canonical",
+        "title": "FII selling drags Nifty lower",
+        "publish_day": "2026-07-20",
+        "references": [{"url": "https://example.com/a", "publisher": "Mint", "raw_title": "A"}],
+        "timeline": [],
+    }
+    (news_dir / "fii-sell.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    index = build_source_event_index(news_dir=news_dir)
+    assert "evt:canonical" in index["by_event_id"]
+    hit = {"path": "raw/sources/news/fii-sell.md", "score": 0.9}
+    assert resolve_hit_to_event_id(hit, index) == "evt:canonical"
+
+
+def test_compact_distilled_events_wiki_pass_dry_run(hub_tmp, monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_DEDUP_SUMMARY_THRESHOLD", "0.72")
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(worker, "require_minimax_for_distillation", lambda: None)
+
+    day = (date.today() - timedelta(days=1)).isoformat()
+    canonical = _similar_event("evt:canonical", publish_day=day)
+    canonical.sources = [{"vendor": "rss", "url": "https://example.com/1", "publisher": "Mint"}]
+    orphan = _similar_event("evt:orphan", title_suffix=" duplicate", publish_day=day)
+    events_store.upsert_event(canonical)
+    events_store.upsert_event(orphan)
+
+    wiki_group = [
+        events_store.distilled_event_to_headline_dict(events_store.get_event("evt:canonical")),
+        events_store.distilled_event_to_headline_dict(events_store.get_event("evt:orphan")),
+    ]
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.search_dedup.wiki_search_available",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.search_dedup.build_duplicate_groups_wiki",
+        lambda *a, **k: ([(wiki_group, "evt:canonical")], {"wiki_search_queries": 1, "wiki_hits": 1}),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_entity_semantic_dedup.build_duplicate_groups_semantic",
+        lambda *a, **k: [],
+    )
+
+    result = worker.compact_distilled_events(ticker="NIFTY", lookback_days=30, dry_run=True)
+    assert result["wiki_groups_merged"] == 1
+    assert result["wiki_search_queries"] == 1
+    assert result["groups_merged"] >= 1
+    assert events_store.count_events(ticker="NIFTY") == 2
+
+
+def test_compact_distilled_events_wiki_merge_removes_wiki_files(hub_tmp, monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_RULE_FALLBACK_DISTILL", "1")
+    monkeypatch.setenv("MINIMAX_API_KEY", "")
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(worker, "require_minimax_for_distillation", lambda: None)
+
+    day = (date.today() - timedelta(days=1)).isoformat()
+    canonical = _similar_event("evt:canonical", publish_day=day)
+    canonical.sources = [{"vendor": "rss", "url": "https://example.com/1", "publisher": "Mint"}]
+    orphan = _similar_event("evt:orphan", title_suffix=" duplicate", publish_day=day)
+    events_store.upsert_event(canonical)
+    events_store.upsert_event(orphan)
+
+    removed_calls: list[str] = []
+
+    def _fake_remove(event, *, rescan=False):
+        removed_calls.append(str(event.get("event_id") or ""))
+        return {"ok": True, "removed": ["fake.md"]}
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.compile.remove_event_wiki_files",
+        _fake_remove,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.compile.compile_event_to_wiki",
+        lambda *a, **k: {"ok": True},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.compile.wiki_compile_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.search_dedup.wiki_search_available",
+        lambda *a, **k: True,
+    )
+
+    canon_dict = events_store.distilled_event_to_headline_dict(events_store.get_event("evt:canonical"))
+    orphan_dict = events_store.distilled_event_to_headline_dict(events_store.get_event("evt:orphan"))
+    wiki_group = [canon_dict, orphan_dict]
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.search_dedup.build_duplicate_groups_wiki",
+        lambda *a, **k: ([(wiki_group, "evt:canonical")], {"wiki_search_queries": 1, "wiki_hits": 1}),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_entity_semantic_dedup.build_duplicate_groups_semantic",
+        lambda *a, **k: [],
+    )
+
+    result = worker.compact_distilled_events(ticker="NIFTY", lookback_days=30, dry_run=False, max_passes=1)
+    assert result["wiki_groups_merged"] == 1
+    assert events_store.count_events(ticker="NIFTY") == 1
+    assert "evt:orphan" in removed_calls
+
+
+def test_hit_score_defaults_to_zero_without_api_score():
+    from trade_integrations.dataflows.hub_wiki.search_dedup import _hit_score, score_wiki_match
+
+    assert _hit_score({}) == 0.0
+    day = (date.today() - timedelta(days=1)).isoformat()
+    record = {"title": "FII selling drags Nifty lower", "published_at": f"{day}T10:00:00+00:00", "tags": {}}
+    resolved = {
+        "title": "FII selling drags Nifty lower",
+        "publish_day": day,
+        "headline": record,
+    }
+    assert score_wiki_match(record, {}, resolved, min_score=0.75) == 0.0
+
+
+def test_resolve_hit_event_id_from_parquet_without_sidecar(hub_tmp):
+    from trade_integrations.dataflows.hub_wiki.search_dedup import (
+        build_source_event_index,
+        resolve_hit_to_event_id,
+    )
+
+    day = (date.today() - timedelta(days=1)).isoformat()
+    events_store.upsert_event(_similar_event("evt:parquet-only", publish_day=day))
+    news_dir = hub_tmp / "llm-wiki" / "raw" / "sources" / "news"
+    news_dir.mkdir(parents=True, exist_ok=True)
+    index = build_source_event_index(news_dir=news_dir)
+    hit = {"event_id": "evt:parquet-only", "score": 0.9}
+    assert resolve_hit_to_event_id(hit, index) == "evt:parquet-only"
+
+
+def test_build_duplicate_groups_wiki_includes_canonical_outside_lookback(hub_tmp, monkeypatch):
+    from trade_integrations.dataflows.hub_wiki.search_dedup import build_duplicate_groups_wiki
+
+    old_day = (date.today() - timedelta(days=120)).isoformat()
+    recent_day = (date.today() - timedelta(days=1)).isoformat()
+    canonical = _similar_event("evt:old-canonical", publish_day=recent_day)
+    canonical.sources = [{"vendor": "rss", "url": "https://example.com/old", "publisher": "Mint"}]
+    orphan = _similar_event("evt:recent-orphan", title_suffix=" dup", publish_day=recent_day)
+    events_store.upsert_event(canonical)
+    events_store.upsert_event(orphan)
+
+    window = [events_store.distilled_event_to_headline_dict(events_store.get_event("evt:recent-orphan"))]
+
+    def _fake_find(record, **kwargs):
+        rid = str(record.get("canonical_story_id") or record.get("event_id") or "")
+        if rid == "evt:recent-orphan":
+            return {"event_id": "evt:old-canonical", "score": 0.9, "enrichment": {"references": []}}
+        return None
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.search_dedup.find_wiki_match_for_record",
+        _fake_find,
+    )
+
+    groups, stats = build_duplicate_groups_wiki(
+        window,
+        ticker="NIFTY",
+        wiki_available=True,
+    )
+    assert stats["wiki_hits"] == 1
+    assert len(groups) == 1
+    members, target_id = groups[0]
+    ids = {str(r.get("event_id") or r.get("canonical_story_id") or "") for r in members}
+    assert ids == {"evt:old-canonical", "evt:recent-orphan"}
+    assert target_id == "evt:old-canonical"
+
+
+def test_wiki_merge_prefers_wiki_target_over_richer_orphan(hub_tmp, monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_RULE_FALLBACK_DISTILL", "1")
+    monkeypatch.setenv("MINIMAX_API_KEY", "")
+    monkeypatch.setenv("HUB_NEWS_DEDUP_SUMMARY_THRESHOLD", "0.72")
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(worker, "require_minimax_for_distillation", lambda: None)
+
+    day = (date.today() - timedelta(days=1)).isoformat()
+    canonical = _similar_event("evt:wiki-target", publish_day=day)
+    orphan = _similar_event("evt:rich-orphan", title_suffix=" dup", publish_day=day)
+    orphan.sources = [
+        {"vendor": "rss", "url": "https://example.com/a", "publisher": "A"},
+        {"vendor": "rss", "url": "https://example.com/b", "publisher": "B"},
+        {"vendor": "rss", "url": "https://example.com/c", "publisher": "C"},
+    ]
+    events_store.upsert_event(canonical)
+    events_store.upsert_event(orphan)
+
+    wiki_group = [
+        events_store.distilled_event_to_headline_dict(events_store.get_event("evt:wiki-target")),
+        events_store.distilled_event_to_headline_dict(events_store.get_event("evt:rich-orphan")),
+    ]
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.search_dedup.wiki_search_available",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.search_dedup.build_duplicate_groups_wiki",
+        lambda *a, **k: ([(wiki_group, "evt:wiki-target")], {"wiki_search_queries": 1, "wiki_hits": 1}),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_entity_semantic_dedup.build_duplicate_groups_semantic",
+        lambda *a, **k: [],
+    )
+
+    worker.compact_distilled_events(ticker="NIFTY", lookback_days=30, dry_run=False, max_passes=1)
+    assert events_store.count_events(ticker="NIFTY") == 1
+    assert events_store.get_event("evt:wiki-target") is not None
+    assert events_store.get_event("evt:rich-orphan") is None
+
+
+def test_score_wiki_match_rejects_cross_day(hub_tmp):
+    from trade_integrations.dataflows.hub_wiki.search_dedup import score_wiki_match
+
+    day_a = (date.today() - timedelta(days=1)).isoformat()
+    day_b = (date.today() - timedelta(days=2)).isoformat()
+    record = {"title": "FII selling drags Nifty lower", "published_at": f"{day_a}T10:00:00+00:00", "tags": {}}
+    resolved = {"title": "FII selling drags Nifty lower", "publish_day": day_b}
+    assert score_wiki_match(record, {"score": 0.95}, resolved) == 0.0

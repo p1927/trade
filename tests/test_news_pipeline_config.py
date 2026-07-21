@@ -87,3 +87,18 @@ def test_run_hub_news_ingest_light_mode_sources(hub_tmp, monkeypatch):
     assert "rss" in result["sources_requested"]
     assert "watcher" not in result["sources_requested"]
     assert called.get("rss") == "NIFTY"
+
+
+def test_wiki_search_config_defaults(hub_tmp, monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_WIKI_SEARCH_ENABLED", "1")
+    monkeypatch.setenv("HUB_NEWS_WIKI_SEARCH_TOP_K", "7")
+    monkeypatch.setenv("HUB_NEWS_WIKI_SEARCH_MAX_PER_PASS", "99")
+    monkeypatch.setenv("HUB_NEWS_WIKI_SEARCH_MIN_SCORE", "0.8")
+
+    from trade_integrations.hub_storage.news_pipeline_config import env_defaults
+
+    cfg = env_defaults()
+    assert cfg.wiki_search_enabled is True
+    assert cfg.wiki_search_top_k == 7
+    assert cfg.wiki_search_max_per_pass == 99
+    assert cfg.wiki_search_min_score == 0.8
