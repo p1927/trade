@@ -47,6 +47,29 @@ logger = logging.getLogger(__name__)
 
 _PANEL_BACKGROUND_DAYS = 365
 _MIN_PANEL_BACKGROUND_ROWS = 30
+_REGIME_CLASSIFIER_KEYS: tuple[str, ...] = ("india_vix", "nifty_return_14d", "trend_20d_pct")
+
+
+def _regime_factor_snapshot(
+    *,
+    feature_names: list[str],
+    model_values: Any,
+    panel_frame: Any | None,
+    row_idx: int,
+) -> dict[str, float]:
+    """Merge model feature values with regime classifier columns from the panel row."""
+    import numpy as np
+
+    snapshot: dict[str, float] = {}
+    for col_idx, name in enumerate(feature_names):
+        snapshot[name] = float(np.asarray(model_values)[col_idx])
+    if panel_frame is not None and row_idx < len(panel_frame):
+        row = panel_frame.iloc[row_idx]
+        for key in _REGIME_CLASSIFIER_KEYS:
+            if key in snapshot or key not in row.index:
+                continue
+            snapshot[key] = _macro_factor_value({key: row[key]}, key)
+    return snapshot
 
 
 def _load_panel_background_matrix(
@@ -159,17 +182,28 @@ def _prepare_linear_shap_context(
         x_poly = x_poly.reshape(1, -1)
 
     background_poly = None
+    panel_frame = None
     if panel_for_background is not None and len(panel_for_background) >= _MIN_PANEL_BACKGROUND_ROWS:
+        try:
+            from trade_integrations.dataflows.index_research.history_panel import load_aligned_panel_history
+
+            panel_frame = load_aligned_panel_history(days=_PANEL_BACKGROUND_DAYS)
+            if panel_frame.empty or len(panel_frame) < _MIN_PANEL_BACKGROUND_ROWS:
+                panel_frame = None
+        except Exception:
+            panel_frame = None
         if len(means) and len(stds):
             scaled_background = _scale_features(panel_for_background, means, stds)
         else:
             scaled_background = np.nan_to_num(panel_for_background, nan=0.0, posinf=0.0, neginf=0.0)
         gated_rows: list[Any] = []
         for row_idx, row in enumerate(scaled_background):
-            row_factors = {
-                names[col_idx]: float(panel_for_background[row_idx, col_idx])
-                for col_idx in range(len(names))
-            }
+            row_factors = _regime_factor_snapshot(
+                feature_names=names,
+                model_values=panel_for_background[row_idx],
+                panel_frame=panel_frame,
+                row_idx=row_idx,
+            )
             row_regime = resolve_regime_label(row_factors)
             row_gates = np.array([factor_gate_weight(n, row_regime) for n in names], dtype=float)
             gated_rows.append(row * row_gates)
@@ -615,6 +649,43 @@ def _normalize_contributions(
     return contributors
 
 
+def _append_macro_reconciliation_contributor(
+    contributors: list[dict[str, Any]],
+    *,
+    macro_delta: float,
+    normalization_target: float,
+    flow_breakdown: dict[str, Any],
+    spot: float,
+    total_return: float,
+) -> list[dict[str, Any]]:
+    """Ensure factor rows + overlay/cap residual sum to capped live macro delta."""
+    factor_sum = sum(float(row.get("contribution_pct") or 0.0) for row in contributors)
+    residual = round(macro_delta - factor_sum, 4)
+    if abs(residual) < 1e-4:
+        return contributors
+
+    flow_offset = float(flow_breakdown.get("flow_regime_offset_pct") or 0.0)
+    if flow_breakdown.get("flow_regime_enabled") and abs(flow_offset) > 1e-4:
+        factor = "flow_regime_overlay"
+        label = "Flow regime overlay"
+    else:
+        factor = "macro_cap_residual"
+        label = "Macro cap residual"
+
+    row = {
+        "factor": factor,
+        "label": label,
+        "marginal_impact_pct": residual,
+        "contribution_pct": residual,
+        "share_of_macro": round(residual / normalization_target, 4) if normalization_target else 0.0,
+        "contribution_index_pts": round(spot * residual / 100.0, 2),
+        "reconciliation": True,
+    }
+    if total_return:
+        row["share_of_total_equation"] = round(residual / total_return, 4)
+    return contributors + [row]
+
+
 def explain_macro_factors(
     macro_factors: dict[str, Any],
     *,
@@ -625,7 +696,11 @@ def explain_macro_factors(
 ) -> dict[str, Any]:
     """Attribute macro portion of the prediction to each factor."""
     artifact = artifact or load_stored_model_artifact()
+    from trade_integrations.dataflows.index_research.regime_gates import flow_regime_breakdown
+
+    flow_breakdown = flow_regime_breakdown(macro_factors, artifact)
     macro_delta = _capped_macro_delta(macro_factors, horizon, artifact)
+    pre_flow_target = float(flow_breakdown.get("pre_flow_macro_delta_pct") or macro_delta)
     caveat_factors = _correlation_caveat_factors(artifact)
     use_grouped = bool(artifact and artifact.multicollinearity_warning)
 
@@ -658,9 +733,22 @@ def explain_macro_factors(
             "Correlated factors share credit."
         )
 
-    contributors = _normalize_contributions(raw, macro_delta)
+    if flow_breakdown.get("flow_regime_enabled"):
+        attribution_disclaimer += (
+            " Flow-regime overlay is shown as a separate contributor when active."
+        )
 
+    contributors = _normalize_contributions(raw, pre_flow_target)
     total_return = bottom_up_return_pct + macro_delta
+    contributors = _append_macro_reconciliation_contributor(
+        contributors,
+        macro_delta=macro_delta,
+        normalization_target=pre_flow_target,
+        flow_breakdown=flow_breakdown,
+        spot=spot,
+        total_return=total_return,
+    )
+
     for row in contributors:
         row["contribution_index_pts"] = round(spot * row["contribution_pct"] / 100.0, 2)
         row["value"] = macro_factors.get(row["factor"])
@@ -685,6 +773,11 @@ def explain_macro_factors(
         "method": method,
         "attribution_disclaimer": attribution_disclaimer,
         "macro_delta_pct": round(macro_delta, 4),
+        "pre_flow_macro_delta_pct": flow_breakdown.get("pre_flow_macro_delta_pct"),
+        "flow_regime_offset_pct": flow_breakdown.get("flow_regime_offset_pct"),
+        "flow_regime_bucket": flow_breakdown.get("flow_regime_bucket"),
+        "flow_regime_enabled": bool(flow_breakdown.get("flow_regime_enabled")),
+        "regime_label": flow_breakdown.get("regime_label"),
         "bottom_up_return_pct": round(bottom_up_return_pct, 4),
         "total_return_pct": round(total_return, 4),
         "contributors": contributors,
