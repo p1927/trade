@@ -411,7 +411,17 @@ def run_walk_forward_backtest(
         day_str = str(row["date"])[:10]
         scenario_anchor = None
         try:
-            scenarios = build_index_scenarios([], factors_today, spot=close, horizon_days=horizon.days)
+            from trade_integrations.dataflows.index_research.constituent_backtest import (
+                load_constituent_signals_for_day,
+            )
+
+            constituent_signals = load_constituent_signals_for_day(day_str, macro_factors=factors_today)
+            scenarios = build_index_scenarios(
+                constituent_signals,
+                factors_today,
+                spot=close,
+                horizon_days=horizon.days,
+            )
             scenario_anchor = scenario_weighted_return_pct(scenarios, spot=close)
         except Exception:
             scenario_anchor = None
@@ -528,6 +538,7 @@ def run_walk_forward_backtest(
             horizon_feature_cols,
             horizon_days=horizon.days,
             trading_dates=trading_dates,
+            include_headlines=False,
         )
         for row in eval_rows
     ]

@@ -16,8 +16,7 @@ def purged_train_end_index(
     eval_step: int,
 ) -> int:
     """Last train row index (exclusive) excluding overlapping forward-return labels."""
-    if eval_step >= horizon_days:
-        return eval_index
+    del eval_step  # purge depends on label horizon, not eval stride
     # Drop train rows whose H-day forward return window overlaps the test label at eval_index.
     return max(0, eval_index - horizon_days)
 
