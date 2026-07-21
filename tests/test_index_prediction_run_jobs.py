@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -206,3 +207,50 @@ def test_pipeline_cancel_scoped_to_job(tmp_path, monkeypatch):
     pc.check_pipeline_cancel()
     pc.set_pipeline_job_id(None)
     pc.clear_pipeline_cancel(job_id="job123")
+
+
+@pytest.mark.unit
+def test_concurrent_append_log_preserves_all_entries(tmp_path, monkeypatch):
+    """Cross-process-safe append_log must not lose entries under parallel writers."""
+    from src.trade import index_prediction_run_jobs as jobs
+
+    monkeypatch.setattr(jobs, "_jobs_root", lambda: tmp_path / "jobs")
+    jobs.INDEX_PREDICTION_RUN_JOBS.clear()
+    jobs._ACTIVE_BY_TICKER.clear()
+
+    job_id, _ = jobs.start_job(
+        ticker="NIFTY",
+        horizon_days=14,
+        refresh_constituents=False,
+        run_forecast_lab=False,
+    )
+    jobs.INDEX_PREDICTION_RUN_JOBS.clear()
+    jobs._ACTIVE_BY_TICKER.clear()
+
+    per_thread = 25
+    thread_count = 4
+
+    def writer(thread_idx: int) -> None:
+        for i in range(per_thread):
+            jobs.append_log(
+                job_id,
+                {
+                    "stage": "test",
+                    "message": f"t{thread_idx}-e{i}",
+                    "level": "info",
+                    "at": f"2026-07-21T12:{thread_idx:02d}:{i:02d}+00:00",
+                },
+            )
+
+    threads = [threading.Thread(target=writer, args=(t,)) for t in range(thread_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    jobs.INDEX_PREDICTION_RUN_JOBS.clear()
+    loaded = jobs.get_job(job_id)
+    assert loaded is not None
+    assert len(loaded["logs"]) == per_thread * thread_count
+    messages = {entry["message"] for entry in loaded["logs"]}
+    assert len(messages) == per_thread * thread_count
