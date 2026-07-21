@@ -7,7 +7,9 @@ alwaysApply: true
 
 When performing **any review** (code review, audit, deep study, issue register, premortem, bug report, subagent synthesis), complete **all three pillars** before presenting conclusions. Subagent or prior-session output is **discovery only** — not proof.
 
-Works with `test-before-report` (implementation) and `change-verification-and-commits` (diff review).
+Works with `test-before-report` (implementation), `change-verification-and-commits` (diff review), and **`fix-review-before-stack`** (convergence loop after fixes).
+
+**Reviews are not one-shot.** After implementing fixes, run the convergence loop in `fix-review-before-stack` (Pass 2 author audit → Pass 3 adversarial review → Pass 4 fix → repeat until no new CONFIRMED issues on the latest diff).
 
 ---
 
@@ -73,6 +75,8 @@ If stack is down: run `trade heal` or `trade up`, then retry once. Only skip Pil
 - Full verification suite was skipped without documented blocker
 - Pipeline/UI claims were made with no live artifact or runtime check when one was feasible
 - Subagent output was pasted as fact without independent verification
+- **Only one review pass** before claiming complete — see `fix-review-before-stack` convergence loop
+- **Review fixes shipped without Pass 3** on the fix diff (Bugbot or mistake-pattern checklist)
 
 ---
 
@@ -82,3 +86,4 @@ If stack is down: run `trade heal` or `trade up`, then retry once. Only skip Pil
 2. Verification commands run this session with exit codes cited
 3. Live artifact diff summarized (or explicit skip reason)
 4. Separate **facts** (evidence) from **recommendations** (fixes)
+5. **Convergence status:** which pass round completed; zero new CONFIRMED on latest diff, or list open CONFIRMED rows blocking "done"

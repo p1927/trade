@@ -1,77 +1,139 @@
 ---
-description: After review findings — propose fixes for approval, implement carefully, pre-commit diff audit so bugs shrink per commit
+description: Mistake-convergence loop — research, propose, implement, adversarial re-review, fix again until CONFIRMED issues stop recurring
 alwaysApply: true
 ---
 
-# Fix Review Before Stack — Avoid Mistake Accumulation
+# Fix Review Before Stack — Mistake Convergence Loop
 
 Works with `review-evidence-discipline`, `targeted-bug-fix-discipline`, `change-verification-and-commits`, and `test-before-report`.
 
-**Goal:** Each commit leaves the branch **fewer bugs**, not more. Never stack unverified fixes on top of sloppy implementation.
+**Goal:** Each batch of work leaves the branch **fewer bugs**, not more. One-pass review + one-pass fix is **not sufficient** — mistakes recur when we skip re-review of our own fix diffs.
 
 ---
 
-## When you find issues (review, audit, self-check, or user report)
+## The convergence loop (mandatory)
+
+Use for: review findings, user-reported bugs, any non-trivial implementation batch (>1 file or behavior change), and **always after fixing review findings**.
+
+```
+Pass 0 — Research + label (CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN)
+Pass 1 — Implement smallest fix(es); grep same bug class elsewhere
+Pass 2 — Author audit (diff line-by-line + verification commands)
+Pass 3 — Adversarial review (Bugbot subagent OR manual mistake checklist below)
+Pass 4 — Fix only CONFIRMED / user-approved Pass 3 items → go to Pass 2 on the NEW diff
+```
+
+### Stop condition (when you may say "done")
+
+Stop only when **both** are true:
+
+1. **Pass 2 + Pass 3 completed on the latest diff** with zero new **CONFIRMED** issues in code you touched this batch.
+2. Verification commands cited from **this session** (exit codes), not earlier turns.
+
+If Pass 3 still finds CONFIRMED issues: **go to Pass 4** — do not report "fixed" or move to the next phase.
+
+If only **HYPOTHESIS** remains: document explicitly; user may accept or ask to investigate.
+
+**Max rounds:** If CONFIRMED issues keep appearing after **3 full loops**, stop implementation, list open CONFIRMED rows, and ask user before another guess.
+
+---
+
+## When you find issues (review, audit, self-check, user report)
 
 ### 1. Stop and research first
 
-- Re-read primary sources; trace callers; label each finding **CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN** (see `review-evidence-discipline`).
-- Do **not** patch immediately unless the user already approved fixing this specific finding in the same message.
+- Re-read primary sources; trace callers upstream **and downstream**.
+- Label every finding (see `review-evidence-discipline`). Subagent/Bugbot output is **discovery only** until you re-read sources and run proof yourself.
 
 ### 2. Propose before implementing (default)
-
-Present a short **fix plan** to the user before writing code:
 
 | Field | Content |
 |-------|---------|
 | Issue ID | Register row or file:line |
 | Root cause | One sentence, ≥80% confidence |
-| Proposed fix | Smallest correct change; files touched |
-| Alternatives considered | Why not the other approach |
-| Verification | Exact commands that will prove the fix |
+| Proposed fix | Smallest change; files touched |
+| Symmetry | Other code paths that must get the same fix |
+| Verification | Exact commands + failure-mode test |
 | Risk | What this fix does *not* cover |
 
-Wait for user approval when:
+Wait for approval when: user-visible behavior changes, confidence <80%, or multiple valid approaches.
 
-- Fix changes behavior users see (headline forecast, UI labels, gates)
-- Confidence is below 80%
-- Multiple valid approaches exist
-
-Proceed without waiting only when the user explicitly said **fix it**, **commit**, or scoped the finding in the same turn.
+Proceed without waiting when user said **fix it**, **fix all**, **commit**, or scoped the finding in the same message.
 
 ### 3. Implement one root cause at a time
 
 - One targeted diff per issue; no drive-by refactors.
-- Grep for the same bug class elsewhere (e.g. null-date skip in both `scenarios.py` and `attribution.py`).
-- Update the issue register: open → **FIXED** with proof command, or **pending** with reason.
+- **Symmetry grep:** if you fix path A, search for parallel path B (e.g. `sync_repo` vs `sync_cache`, `backfill` vs `finalize`, API vs batch job).
+- **Regression test:** when a bug could recur, add a test for the **failure mode**, not only the happy path — especially for review fixes.
+
+---
+
+## Pass 2 — Author audit checklist (before Pass 3)
+
+1. **`git diff` line-by-line** — every hunk matches approved scope; no accidental edits.
+2. **Caller/callee trace** — grep all call sites for changed signatures or return shapes.
+3. **Verification suite** — full scope per `review-evidence-discipline` Pillar 2, not a partial pytest slice.
+4. **Failure-mode proof** — reproduce the original bug class; confirm it fails before fix / passes after (or equivalent test).
+
+---
+
+## Pass 3 — Adversarial review (pick one; prefer both for persistence/data work)
+
+### A. Bugbot subagent
+
+Dispatch `bugbot` on **uncommitted changes** after Pass 2. Re-read every CONFIRMED finding in primary sources; downgrade anything without proof.
+
+### B. Recurring mistake patterns (manual — check each that applies)
+
+**Data / persistence / pipelines**
+
+| Pattern | Ask |
+|---------|-----|
+| Date boundary | UTC `date.today()` vs `india_trading_date_iso()` — same end date everywhere in the flow? |
+| Parallel paths | Repo sync vs cache sync vs backfill — same variable for deriv/status/save? |
+| Save merge | Does `save_history_dataset(merge=True)` re-introduce columns we stripped in memory? |
+| Silent success | Does `"skipped"` or nested `"partial"` still yield top-level `"ok"` / no `had_errors`? |
+| Pipeline order | Enrich before finalize? OHLCV before macro tail? |
+| Column ownership | Derivative metrics only on `flow_derivatives_daily`, not `flow_cash_daily`? |
+| Status rollup | Does parent return `ok` when a required child step did nothing? |
+
+**General**
+
+| Pattern | Ask |
+|---------|-----|
+| Fix in one writer | Did grep find other writers with the old bug? |
+| Asymmetric overlay | Sync/status computed from frame A but save uses frame B? |
+| Happy-path-only test | Does test assert the failure scenario we fixed? |
+| Stale API/process | Does runtime need `trade reload app` before claiming API fixed? |
 
 ---
 
 ## Pre-commit gate (mandatory before every commit)
 
-Do **not** commit until all steps pass:
+1. Convergence loop completed (Pass 2 + Pass 3 clean on latest diff).
+2. **`git diff` audit** on staged hunks only.
+3. Verification cited with exit codes from this session.
+4. Issue register / summary separates **CONFIRMED fixed** vs **HYPOTHESIS deferred**.
 
-1. **`git diff` audit** — read every changed hunk line by line; confirm it matches the approved fix plan and nothing unrelated slipped in.
-2. **Cross-caller check** — for API/signature changes, grep all call sites; fix orphans in the same commit or a dependency-ordered prior commit.
-3. **Verification suite** — run tests/checks for the touched scope; cite exit codes in your summary.
-4. **Regression scan** — ask: “Could this fix introduce a new bug?” If yes, add a guard or test before commit.
-5. **Issue register** — convert fixed rows; do not leave “FIXED” claims without proof from this session.
-
-If pre-commit audit finds new problems: **fix them in the same session** before pushing — do not push and stack more issues.
-
----
-
-## Commit discipline (with `change-verification-and-commits`)
-
-- Split commits by logical unit (one bugfix ≠ one giant misc commit).
-- Commit order: shared utils → core logic → wiring → UI → tests/docs for that slice.
-- Push only after pre-commit gate passes on **all** commits being pushed.
+If audit finds new CONFIRMED problems: **fix in same session** — do not commit and stack more issues.
 
 ---
 
 ## Forbidden
 
-- Committing review findings marked FIXED without re-reading the diff and running verification this session
-- Shipping a fix that duplicates the same bug pattern in an adjacent file you did not grep
-- Pushing while known failing tests or unreviewed hunks remain in the commit
-- Treating “user asked to commit” as permission to skip the diff audit
+- Reporting "review complete" or "all fixed" after a **single** review pass
+- Shipping review fixes without **Pass 3 on the fix diff**
+- CONFIRMED findings from Bugbot without primary-source re-read
+- Tests that only cover happy path when the bug was a silent failure / wrong frame / skipped status
+- Committing while Pass 3 still has unfixed CONFIRMED items in touched files
+- Moving to the next phase while CONFIRMED issues remain open in the current scope
+
+---
+
+## User triggers
+
+When the user says **code review**, **mistakes rule**, **find mistakes**, or **fix review**:
+
+1. Run the **full convergence loop** (not a narrative summary alone).
+2. Output: issue table with labels + proof commands + loop count ("Pass 3 round 2: 0 new CONFIRMED").
+3. Fix CONFIRMED items before suggesting next phase.

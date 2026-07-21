@@ -51,3 +51,7 @@ Never imply success. Never say "should work", "probably fixed", or "done" withou
 ```
 
 Verification is mandatory after each logical chunk of work, not only at session end.
+
+## Non-trivial changes
+
+For multi-file or behavior-changing work, **one test run is necessary but not sufficient**. Complete the convergence loop in `fix-review-before-stack` before telling the user the work is done.

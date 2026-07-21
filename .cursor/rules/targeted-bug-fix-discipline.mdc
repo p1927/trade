@@ -24,7 +24,11 @@ When you encounter a bug, error, test failure, linter issue, or broken behavior 
 
 1. **Run targeted verification** — linter/tests/build for touched paths; reproduce the original failure and confirm it is resolved.
 2. **Check adjacent behavior** — callers, edge cases, and related tests still pass; read the actual diff line by line.
-3. **Add a regression test only when** the bug could recur and a focused test fits existing project patterns; do not add tests the user did not ask for when the fix is trivial or already covered.
+3. **Add a regression test when** the bug could recur and a focused test fits existing project patterns — **required** when the bug was a silent failure, wrong code path, or status rollup issue (see `fix-review-before-stack` mistake patterns). Skip only when fix is trivial and already covered.
+
+## After implementing — convergence (mandatory for review fixes)
+
+Do not mark a review fix complete after tests pass once. Run **Pass 2 → Pass 3 → Pass 4** from `fix-review-before-stack` on the fix diff before reporting done or committing.
 
 ## When not to fix inline
 
