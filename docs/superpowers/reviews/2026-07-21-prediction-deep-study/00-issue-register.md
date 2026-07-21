@@ -14,7 +14,7 @@ Severity: **critical** | **high** | **medium** | **low**
 | C1 | **Confirmed** | Backtest walk-forward is macro-only; live headline adds bottom-up. `hybrid_eval_count` tracks real constituent archives. |
 | C2 | **Confirmed** | `debate_numeric` / debate merge is live-only; not backtest-eligible. |
 | C3 | **FIXED (gate)** | Ridge may train on panel `news_*` columns; live also adds calibrated event overlay — double-count risk. Overlay now requires `news_event_overlay=accepted` (not pending). |
-| C4 | **FIXED (Tier 1)** | Group attribution when `multicollinearity_warning`: `grouped_marginal` primary, channel-first UI, correlated-pair banner. |
+| C4 | **FIXED (Tier 1+2)** | Group + covariance-aware SHAP when correlated; channel-first UI. |
 | C5 | **FIXED** | `simulate.py` baseline now uses reconciled/debate headline when no overrides (`headline_return_pct`). |
 | C6 | **Confirmed** | Cached constituents default; first run requires refresh or existing hub snapshot. |
 | C7 | **Confirmed** | `MACRO_MODEL_KEYS` (24) ⊂ `MACRO_FACTOR_KEYS` (52) — UI audit under-counts Phase I / TA inputs. |
@@ -74,42 +74,44 @@ Severity: **critical** | **high** | **medium** | **low**
 
 ## C4 — Group attribution under correlation (2026-07-21)
 
-**Status:** **FIXED (Tier 1)** — grouped marginal primary when `multicollinearity_warning`; channel-first UI.
+**Status:** **FIXED (Tier 1+2)** — covariance-aware SHAP when panel+shap available; grouped marginal fallback; channel-first UI.
 
-### Implementation (2026-07-21)
+### Implementation (Tier 1)
 
 | Change | Location |
 |--------|----------|
 | Union-find perturbation groups from `_REDUNDANCY_GROUPS` + `correlated_pairs` | `explain.py` `_build_perturbation_groups` |
-| Route to `grouped_marginal` when warning; skip interventional SHAP | `explain.py` `explain_macro_factors` |
+| Route to grouped marginal when warning and Tier 2 unavailable | `explain.py` `explain_macro_factors` |
 | `correlation_caveat` on contributors in correlated clusters | `explain.py` |
 | Channel bars default; multicollinearity banner; correlated pairs | `FactorImpactWorkbench.tsx` |
 | Types for new payload fields | `api.ts` |
 
-### Verification (Tier 1)
+### Implementation (Tier 2)
+
+| Change | Location |
+|--------|----------|
+| Panel background matrix (365d, min 30 rows) | `explain.py` `_load_panel_background_matrix` |
+| Shared Ridge/poly context for SHAP | `explain.py` `_prepare_linear_shap_context` |
+| `correlation_dependent` LinearExplainer when warning + panel + shap | `explain.py` `_try_correlation_dependent_shap_contributions` |
+| UI banner for covariance-aware method | `FactorImpactWorkbench.tsx` |
+
+### Verification (2026-07-21, Tier 1+2)
 
 | Check | Result |
 |-------|--------|
-| `pytest tests/test_index_explain.py` | 9 passed |
-| `test_explain_uses_grouped_marginal_when_multicollinearity_warning` | method=`grouped_marginal`, channels present, sum identity |
-| `test_build_perturbation_groups_merges_correlated_pairs` | sp500+ERP clustered |
-
-### Tier 2 (optional follow-up)
-
-- `LinearExplainer(..., feature_perturbation="correlation_dependent")` with panel background matrix (365d × `feature_names`) when shap installed — compare vs grouped marginal in tests.
+| `pytest tests/test_index_explain.py` | 12 passed (with shap installed) |
+| `test_explain_uses_correlation_dependent_shap_with_panel` | method=`correlation_dependent_shap`, sum identity |
+| `test_explain_falls_back_to_grouped_marginal_when_tier2_unavailable` | deterministic fallback |
+| `test_load_panel_background_matrix_requires_min_rows` | min 30 rows gate |
+| Live (when panel materialized) | hub `factor_explanation.method` ∈ {`correlation_dependent_shap`, `grouped_marginal`} |
 
 ### Tier 3 (defer)
 
 - Owen values / full causal DAG — out of scope for Prediction tab.
-
-### Verification (when implemented)
-
-- Unit: correlated synthetic pair → grouped marginal splits credit; interventional not used when warning set.
-- Live: hub `factor_explanation.method == "grouped_marginal"` when warning; contributors sum to macro_delta; channels non-empty.
+- Optional: compare grouped marginal vs correlation_dependent credit split on synthetic correlated pairs in regression tests.
 
 ---
 
 ## Recommended fix priority (remaining)
 
 1. C1/C2/C9/C10 — documented limitations (backtest≠live, debate not backtest-eligible, combiner headline, small n OOS)
-2. C4 Tier 2 — correlation_dependent SHAP with panel background (optional)

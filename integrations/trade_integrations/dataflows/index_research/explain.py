@@ -46,6 +46,112 @@ def _iter_macro_factor_names(
 
 logger = logging.getLogger(__name__)
 
+_PANEL_BACKGROUND_DAYS = 365
+_MIN_PANEL_BACKGROUND_ROWS = 30
+
+
+def _load_panel_background_matrix(
+    artifact: ModelArtifact,
+    *,
+    days: int = _PANEL_BACKGROUND_DAYS,
+) -> Any | None:
+    """Last N trading days of panel rows aligned to artifact.feature_names."""
+    if not artifact.feature_names:
+        return None
+    try:
+        import numpy as np
+        import pandas as pd
+        from trade_integrations.dataflows.index_research.history_panel import load_aligned_panel_history
+    except ImportError:
+        return None
+
+    try:
+        frame = load_aligned_panel_history(days=days)
+    except Exception as exc:
+        logger.debug("Panel background load failed: %s", exc)
+        return None
+    if frame.empty or len(frame) < _MIN_PANEL_BACKGROUND_ROWS:
+        return None
+
+    names = list(artifact.feature_names)
+    columns: list[Any] = []
+    for name in names:
+        if name in frame.columns:
+            columns.append(pd.to_numeric(frame[name], errors="coerce").to_numpy(dtype=float))
+        else:
+            columns.append(np.zeros(len(frame), dtype=float))
+    matrix = np.column_stack(columns)
+    col_means = np.nanmean(matrix, axis=0)
+    col_means = np.where(np.isfinite(col_means), col_means, 0.0)
+    nan_mask = ~np.isfinite(matrix)
+    if nan_mask.any():
+        matrix = matrix.copy()
+        matrix[nan_mask] = np.take(col_means, np.where(nan_mask)[1])
+    return matrix
+
+
+def _prepare_linear_shap_context(
+    macro_factors: dict[str, Any],
+    artifact: ModelArtifact,
+    *,
+    panel_background: Any | None = None,
+) -> dict[str, Any] | None:
+    """Fit scaler/poly from artifact + optional panel background; return Ridge SHAP inputs."""
+    if not artifact.feature_names or not artifact.coefficients:
+        return None
+    try:
+        import numpy as np
+        from sklearn.linear_model import Ridge
+
+        from trade_integrations.dataflows.index_research.ridge_pipeline import make_ridge_pipeline
+    except ImportError:
+        return None
+
+    names = list(artifact.feature_names)
+    values = np.array([_macro_factor_value(macro_factors, n) for n in names], dtype=float).reshape(1, -1)
+    pipe = make_ridge_pipeline(alpha=float(artifact.ridge_alpha or 50.0), poly_degree=artifact.poly_degree)
+    scaler = pipe.named_steps["scaler"]
+    panel_for_fit = panel_background
+    if artifact.feature_means and artifact.feature_stds:
+        scaler.mean_ = np.asarray(artifact.feature_means, dtype=float)
+        scaler.scale_ = np.asarray(artifact.feature_stds, dtype=float)
+        scaler.var_ = scaler.scale_ ** 2
+        scaler.n_features_in_ = len(artifact.feature_means)
+    else:
+        if panel_for_fit is None:
+            panel_for_fit = _load_panel_background_matrix(artifact)
+        if panel_for_fit is not None and len(panel_for_fit) >= _MIN_PANEL_BACKGROUND_ROWS:
+            scaler.fit(panel_for_fit)
+        else:
+            scaler.mean_ = np.zeros(len(names), dtype=float)
+            scaler.scale_ = np.ones(len(names), dtype=float)
+            scaler.var_ = scaler.scale_ ** 2
+            scaler.n_features_in_ = len(names)
+
+    scaled_current = scaler.transform(values)
+    poly = pipe.named_steps["poly"]
+    background_poly = None
+    fit_background = panel_for_fit if panel_for_fit is not None and len(panel_for_fit) >= _MIN_PANEL_BACKGROUND_ROWS else None
+    if fit_background is not None:
+        scaled_background = scaler.transform(fit_background)
+        poly.fit(scaled_background)
+        background_poly = poly.transform(scaled_background)
+    else:
+        poly.fit(scaled_current)
+
+    poly_names = [str(n) for n in poly.get_feature_names_out(names)]
+    x_poly = poly.transform(scaled_current)
+    ridge = Ridge(alpha=float(artifact.ridge_alpha or 50.0), solver="lsqr")
+    ridge.coef_ = np.array([artifact.coefficients.get(n, 0.0) for n in poly_names], dtype=float)
+    ridge.intercept_ = float(artifact.intercept)
+    return {
+        "ridge": ridge,
+        "poly_names": poly_names,
+        "names": names,
+        "x_poly": x_poly,
+        "background_poly": background_poly,
+    }
+
 
 def _uncapped_macro_delta(
     macro_factors: dict[str, Any],
@@ -295,48 +401,78 @@ def _try_linear_shap_contributions(
     artifact: ModelArtifact | None,
     horizon: HorizonProfile,
 ) -> dict[str, float] | None:
-    if artifact is None or not artifact.feature_names or not artifact.coefficients:
+    if artifact is None:
+        return None
+    ctx = _prepare_linear_shap_context(macro_factors, artifact)
+    if ctx is None:
         return None
     try:
-        import numpy as np
         import shap
-        from sklearn.linear_model import Ridge
-        from sklearn.pipeline import Pipeline
-        from sklearn.preprocessing import PolynomialFeatures, StandardScaler
-
-        from trade_integrations.dataflows.index_research.ridge_pipeline import make_ridge_pipeline
     except ImportError:
         return None
 
-    names = list(artifact.feature_names)
-    values = np.array([_macro_factor_value(macro_factors, n) for n in names], dtype=float).reshape(1, -1)
-    pipe = make_ridge_pipeline(alpha=float(artifact.ridge_alpha or 50.0), poly_degree=artifact.poly_degree)
-    scaler = pipe.named_steps["scaler"]
-    if artifact.feature_means and artifact.feature_stds:
-        scaler.mean_ = np.asarray(artifact.feature_means, dtype=float)
-        scaler.scale_ = np.asarray(artifact.feature_stds, dtype=float)
-        scaler.var_ = scaler.scale_ ** 2
-        scaler.n_features_in_ = len(artifact.feature_means)
-    else:
-        scaler.fit(values)
-    poly = pipe.named_steps["poly"]
-    poly.fit(scaler.transform(values))
-    poly_names = [str(n) for n in poly.get_feature_names_out(names)]
-    ridge = Ridge(alpha=float(artifact.ridge_alpha or 50.0), solver="lsqr")
-    ridge.coef_ = np.array([artifact.coefficients.get(n, 0.0) for n in poly_names], dtype=float)
-    ridge.intercept_ = float(artifact.intercept)
-
     try:
-        explainer = shap.LinearExplainer(ridge, scaler.transform(values), feature_perturbation="interventional")
-        shap_values = explainer.shap_values(scaler.transform(values))
+        background = ctx.get("background_poly")
+        if background is None or len(background) < 2:
+            return None
+        explainer = shap.LinearExplainer(
+            ctx["ridge"],
+            background,
+            feature_perturbation="interventional",
+        )
+        shap_values = explainer.shap_values(ctx["x_poly"])
         if isinstance(shap_values, list):
             shap_row = shap_values[0][0]
         else:
             shap_row = shap_values[0]
-        poly_map = {poly_names[i]: float(shap_row[i]) for i in range(len(poly_names))}
-        return _aggregate_poly_shap_to_base(poly_map, names)
+        poly_map = {ctx["poly_names"][i]: float(shap_row[i]) for i in range(len(ctx["poly_names"]))}
+        aggregated = _aggregate_poly_shap_to_base(poly_map, ctx["names"])
+        return aggregated or None
     except Exception as exc:
         logger.debug("LinearExplainer failed: %s", exc)
+        return None
+
+
+def _try_correlation_dependent_shap_contributions(
+    macro_factors: dict[str, Any],
+    artifact: ModelArtifact | None,
+    horizon: HorizonProfile,
+) -> dict[str, float] | None:
+    """Covariance-aware SHAP using panel history as background (Tier 2)."""
+    if artifact is None:
+        return None
+    panel_background = _load_panel_background_matrix(artifact)
+    ctx = _prepare_linear_shap_context(
+        macro_factors,
+        artifact,
+        panel_background=panel_background,
+    )
+    if ctx is None or ctx.get("background_poly") is None:
+        return None
+    try:
+        import shap
+    except ImportError:
+        return None
+
+    background_poly = ctx["background_poly"]
+    if len(background_poly) < _MIN_PANEL_BACKGROUND_ROWS:
+        return None
+
+    try:
+        explainer = shap.LinearExplainer(
+            ctx["ridge"],
+            background_poly,
+            feature_perturbation="correlation_dependent",
+        )
+        shap_values = explainer.shap_values(ctx["x_poly"])
+        if isinstance(shap_values, list):
+            shap_row = shap_values[0][0]
+        else:
+            shap_row = shap_values[0]
+        poly_map = {ctx["poly_names"][i]: float(shap_row[i]) for i in range(len(ctx["poly_names"]))}
+        return _aggregate_poly_shap_to_base(poly_map, ctx["names"])
+    except Exception as exc:
+        logger.debug("Correlation-dependent LinearExplainer failed: %s", exc)
         return None
 
 
@@ -406,7 +542,10 @@ def _try_shap_macro_contributions(
         explainer = shap.Explainer(predict_fn, baseline.reshape(1, -1))
         values = explainer(baseline.reshape(1, -1))
         shap_row = values.values[0]
-        return {names[i]: float(shap_row[i]) for i in range(len(names))}
+        raw = {names[i]: float(shap_row[i]) for i in range(len(names))}
+        if not any(abs(v) > 1e-9 for v in raw.values()):
+            return None
+        return raw
     except Exception as exc:
         logger.debug("SHAP explain failed, using marginal attribution: %s", exc)
         return None
@@ -454,12 +593,21 @@ def explain_macro_factors(
     use_grouped = bool(artifact and artifact.multicollinearity_warning)
 
     if use_grouped:
-        raw = _grouped_marginal_impacts(macro_factors, artifact, horizon)
-        method = "grouped_marginal"
-        attribution_disclaimer = (
-            "Group attribution perturbs correlated macro blocks together; "
-            "per-factor splits are approximate. Not causal — model sensitivity only."
-        )
+        cd_raw = _try_correlation_dependent_shap_contributions(macro_factors, artifact, horizon)
+        if cd_raw:
+            raw = cd_raw
+            method = "correlation_dependent_shap"
+            attribution_disclaimer = (
+                "Covariance-aware SHAP uses panel history (365d) to share credit among "
+                "correlated macro factors. Not causal — model sensitivity only."
+            )
+        else:
+            raw = _grouped_marginal_impacts(macro_factors, artifact, horizon)
+            method = "grouped_marginal"
+            attribution_disclaimer = (
+                "Group attribution perturbs correlated macro blocks together; "
+                "per-factor splits are approximate. Not causal — model sensitivity only."
+            )
     else:
         shap_raw = _try_shap_macro_contributions(macro_factors, artifact, horizon)
         if shap_raw:

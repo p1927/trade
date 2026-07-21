@@ -40,7 +40,7 @@ def test_explain_macro_factors_marginal_contributions():
         artifact=_artifact(),
     )
 
-    assert result["method"] in {"marginal", "shap"}
+    assert result["method"] in {"marginal", "linear_shap", "grouped_marginal", "correlation_dependent_shap"}
     assert result["contributors"]
     total_contrib = sum(row["contribution_pct"] for row in result["contributors"])
     assert total_contrib == pytest.approx(result["macro_delta_pct"], abs=0.01)
@@ -202,7 +202,7 @@ def test_explanation_bundle_rescales_after_reconciled_headline():
 
 
 @pytest.mark.unit
-def test_explain_uses_grouped_marginal_when_multicollinearity_warning():
+def test_explain_uses_grouped_marginal_when_multicollinearity_warning(monkeypatch):
     horizon = resolve_horizon(14)
     artifact = ModelArtifact(
         coefficients={"usd_inr": 0.05, "oil_brent": -0.03, "sp500": 0.02},
@@ -216,6 +216,15 @@ def test_explain_uses_grouped_marginal_when_multicollinearity_warning():
             {"factor_a": "oil_brent", "factor_b": "sp500", "correlation": 0.82},
         ],
     )
+
+    def _no_panel(_artifact, *, days=365):
+        return None
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.explain._load_panel_background_matrix",
+        _no_panel,
+    )
+
     result = explain_macro_factors(
         {"usd_inr": 83.2, "oil_brent": 82.0, "sp500": 5200.0},
         horizon=horizon,
@@ -230,6 +239,129 @@ def test_explain_uses_grouped_marginal_when_multicollinearity_warning():
     assert total_contrib == pytest.approx(result["macro_delta_pct"], abs=0.05)
     assert result.get("channel_attribution")
 
+
+@pytest.mark.unit
+def test_explain_falls_back_to_grouped_marginal_when_tier2_unavailable(monkeypatch):
+    """Tier 2 unavailable (no panel) must not block Tier 1 grouped marginal."""
+    horizon = resolve_horizon(14)
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 0.05, "sp500": 0.02},
+        intercept=0.1,
+        mae=1.2,
+        feature_names=["usd_inr", "sp500"],
+        poly_degree=1,
+        horizon_name="B",
+        multicollinearity_warning=True,
+        correlated_pairs=[
+            {"factor_a": "usd_inr", "factor_b": "sp500", "correlation": 0.85},
+        ],
+    )
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.explain._load_panel_background_matrix",
+        lambda _artifact, *, days=365: None,
+    )
+
+    result = explain_macro_factors(
+        {"usd_inr": 83.2, "sp500": 5200.0},
+        horizon=horizon,
+        spot=24500.0,
+        bottom_up_return_pct=0.5,
+        artifact=artifact,
+    )
+    assert result["method"] == "grouped_marginal"
+    assert result["contributors"]
+
+@pytest.mark.unit
+def test_explain_uses_correlation_dependent_shap_with_panel(monkeypatch):
+    """Tier 2: panel-backed covariance SHAP when shap installed."""
+    pytest.importorskip("shap")
+    import numpy as np
+
+    rng = np.random.default_rng(42)
+    n = 120
+    usd = rng.normal(83.0, 0.4, size=n)
+    sp = usd * 15.0 + rng.normal(5200.0, 80.0, size=n)
+
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 0.04, "sp500": 0.03},
+        intercept=0.05,
+        mae=1.0,
+        feature_names=["usd_inr", "sp500"],
+        poly_degree=1,
+        horizon_name="B",
+        multicollinearity_warning=True,
+        correlated_pairs=[
+            {"factor_a": "usd_inr", "factor_b": "sp500", "correlation": 0.88},
+        ],
+        feature_means=[float(usd.mean()), float(sp.mean())],
+        feature_stds=[float(usd.std()), float(sp.std())],
+    )
+
+    def _fake_panel(_artifact, *, days=365):
+        return np.column_stack([usd, sp])
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.explain._load_panel_background_matrix",
+        _fake_panel,
+    )
+
+    horizon = resolve_horizon(14)
+    result = explain_macro_factors(
+        {"usd_inr": 83.2, "sp500": 5200.0},
+        horizon=horizon,
+        spot=24500.0,
+        bottom_up_return_pct=0.5,
+        artifact=artifact,
+    )
+    assert result["method"] == "correlation_dependent_shap"
+    assert result["contributors"]
+    total_contrib = sum(row["contribution_pct"] for row in result["contributors"])
+    assert total_contrib == pytest.approx(result["macro_delta_pct"], abs=0.05)
+
+
+@pytest.mark.unit
+def test_load_panel_background_matrix_requires_min_rows(monkeypatch):
+    import numpy as np
+    import pandas as pd
+
+    from trade_integrations.dataflows.index_research.explain import _load_panel_background_matrix
+
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 0.05},
+        intercept=0.0,
+        mae=1.0,
+        feature_names=["usd_inr", "oil_brent"],
+        poly_degree=1,
+        horizon_name="B",
+    )
+
+    def _tiny_panel(*, days=365, start=None, panel_name="NIFTY_2006_present"):
+        return pd.DataFrame({"date": ["2026-01-01"], "usd_inr": [83.0], "oil_brent": [82.0]})
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.history_panel.load_aligned_panel_history",
+        _tiny_panel,
+    )
+    assert _load_panel_background_matrix(artifact) is None
+
+    rows = 40
+    def _enough_panel(*, days=365, start=None, panel_name="NIFTY_2006_present"):
+        return pd.DataFrame(
+            {
+                "date": [f"2026-01-{i:02d}" for i in range(1, rows + 1)],
+                "usd_inr": np.linspace(82.0, 84.0, rows),
+                "oil_brent": np.linspace(80.0, 85.0, rows),
+            }
+        )
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.history_panel.load_aligned_panel_history",
+        _enough_panel,
+    )
+    matrix = _load_panel_background_matrix(artifact)
+    assert matrix is not None
+    assert matrix.shape == (rows, 2)
 
 @pytest.mark.unit
 def test_build_perturbation_groups_merges_correlated_pairs():
