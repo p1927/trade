@@ -483,7 +483,7 @@ def event_from_verified_record(record: dict[str, Any]) -> DistilledNewsEvent:
     story_id = str(record.get("canonical_story_id") or record.get("event_id") or "")
     structured = record.get("structured_summary") or {}
     event_meta = (structured.get("event_meta") if isinstance(structured, dict) else {}) or {}
-    event_id = str(event_meta.get("event_id") or story_id)
+    event_id = story_id or str(event_meta.get("event_id") or "")
     refs_raw = event_meta.get("references") or []
     references = [NewsReference.from_dict(r) for r in refs_raw if isinstance(r, dict)]
     if not references:

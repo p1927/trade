@@ -356,6 +356,7 @@ def distill_event(
     previous: dict[str, Any] | None = None,
     market_context: dict[str, Any] | None = None,
     adjudication_summary: dict[str, Any] | None = None,
+    canonical_event_id: str | None = None,
 ) -> dict[str, Any]:
     """Build distilled title, content, timeline entry, and references list."""
     from trade_integrations.hub_storage.news_staging_store import minimax_configured, rule_fallback_distillation_enabled
@@ -452,7 +453,18 @@ def distill_event(
 
     structured = build_structured_summary(title, content)
     prior_meta = ((previous.get("structured_summary") or {}).get("event_meta") or {}) if previous else {}
-    event_id = str(prior_meta.get("event_id") or "").strip() or str(uuid.uuid4())
+    story_key = str(canonical_event_id or "").strip()
+    prior_id = str(prior_meta.get("event_id") or "").strip()
+    if previous:
+        event_id = (
+            prior_id
+            or story_key
+            or str(previous.get("canonical_story_id") or previous.get("event_id") or "")
+        ).strip()
+    else:
+        event_id = story_key or prior_id
+    if not event_id:
+        event_id = str(uuid.uuid4())
     event_meta = {
         "event_id": event_id,
         "distilled": True,
