@@ -202,6 +202,56 @@ def test_explanation_bundle_rescales_after_reconciled_headline():
 
 
 @pytest.mark.unit
+def test_explain_uses_grouped_marginal_when_multicollinearity_warning():
+    horizon = resolve_horizon(14)
+    artifact = ModelArtifact(
+        coefficients={"usd_inr": 0.05, "oil_brent": -0.03, "sp500": 0.02},
+        intercept=0.1,
+        mae=1.2,
+        feature_names=["usd_inr", "oil_brent", "sp500"],
+        poly_degree=1,
+        horizon_name="B",
+        multicollinearity_warning=True,
+        correlated_pairs=[
+            {"factor_a": "oil_brent", "factor_b": "sp500", "correlation": 0.82},
+        ],
+    )
+    result = explain_macro_factors(
+        {"usd_inr": 83.2, "oil_brent": 82.0, "sp500": 5200.0},
+        horizon=horizon,
+        spot=24500.0,
+        bottom_up_return_pct=0.5,
+        artifact=artifact,
+    )
+    assert result["method"] == "grouped_marginal"
+    assert result["multicollinearity_warning"] is True
+    assert result.get("correlated_pairs")
+    total_contrib = sum(row["contribution_pct"] for row in result["contributors"])
+    assert total_contrib == pytest.approx(result["macro_delta_pct"], abs=0.05)
+    assert result.get("channel_attribution")
+
+
+@pytest.mark.unit
+def test_build_perturbation_groups_merges_correlated_pairs():
+    from trade_integrations.dataflows.index_research.explain import _build_perturbation_groups
+
+    artifact = ModelArtifact(
+        coefficients={},
+        intercept=0.0,
+        mae=1.0,
+        feature_names=["sp500", "equity_risk_premium", "india_vix"],
+        correlated_pairs=[
+            {"factor_a": "sp500", "factor_b": "equity_risk_premium", "correlation": 0.81},
+            {"factor_a": "india_vix", "factor_b": "nifty_bb_width_pct", "correlation": 0.79},
+        ],
+    )
+    groups = _build_perturbation_groups(artifact)
+    flat = {member for group in groups for member in group}
+    assert "sp500" in flat and "equity_risk_premium" in flat
+    assert any("sp500" in group and "equity_risk_premium" in group for group in groups)
+
+
+@pytest.mark.unit
 def test_explanation_bundle_structure():
     horizon = resolve_horizon(14)
     bundle = build_factor_explanation_bundle(

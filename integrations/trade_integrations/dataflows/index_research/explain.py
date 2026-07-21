@@ -212,6 +212,66 @@ def _correlation_caveat_factors(artifact: ModelArtifact | None) -> set[str]:
     return caveat
 
 
+def _union_find_clusters(
+    pairs: list[tuple[str, str]],
+    seed_groups: list[list[str]],
+) -> list[list[str]]:
+    """Merge redundancy seeds and high-|r| pairs into perturbation clusters."""
+    parent: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        parent.setdefault(node, node)
+        if parent[node] != node:
+            parent[node] = find(parent[node])
+        return parent[node]
+
+    def union(left: str, right: str) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left != root_right:
+            parent[root_right] = root_left
+
+    for group in seed_groups:
+        if len(group) < 2:
+            continue
+        head = str(group[0])
+        for member in group[1:]:
+            union(head, str(member))
+
+    for left, right in pairs:
+        if left and right:
+            union(left, right)
+
+    clusters: dict[str, list[str]] = {}
+    for node in parent:
+        root = find(node)
+        clusters.setdefault(root, []).append(node)
+
+    return [sorted(members) for members in clusters.values() if len(members) >= 2]
+
+
+def _build_perturbation_groups(artifact: ModelArtifact | None) -> list[list[str]]:
+    """Domain redundancy groups plus live artifact correlated pairs (|r| ≥ 0.7)."""
+    from trade_integrations.dataflows.index_research.factor_matrix import redundancy_audit
+
+    audit = redundancy_audit()
+    seed_groups = [list(group) for group in audit.get("redundancy_groups") or []]
+    pairs: list[tuple[str, str]] = []
+    for pair in audit.get("redundancy_pairs") or []:
+        if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+            pairs.append((str(pair[0]), str(pair[1])))
+
+    if artifact:
+        for row in artifact.correlated_pairs or []:
+            if abs(float(row.get("correlation") or 0.0)) >= 0.7:
+                factor_a = str(row.get("factor_a") or "")
+                factor_b = str(row.get("factor_b") or "")
+                if factor_a and factor_b:
+                    pairs.append((factor_a, factor_b))
+
+    return _union_find_clusters(pairs, seed_groups)
+
+
 def _aggregate_poly_shap_to_base(
     poly_shap: dict[str, float],
     feature_names: list[str],
@@ -284,16 +344,17 @@ def _grouped_marginal_impacts(
     macro_factors: dict[str, Any],
     artifact: ModelArtifact | None,
     horizon: HorizonProfile,
+    *,
+    groups: list[list[str]] | None = None,
 ) -> dict[str, float]:
-    """Perturb correlation clusters together when SHAP unavailable."""
-    from trade_integrations.dataflows.index_research.factor_matrix import redundancy_audit
-
-    groups = redundancy_audit().get("redundancy_groups") or []
+    """Perturb correlation clusters together (group Shapley-style marginal attribution)."""
+    perturb_groups = groups if groups is not None else _build_perturbation_groups(artifact)
     present = set(_iter_macro_factor_names(macro_factors, artifact))
     raw: dict[str, float] = {}
-    perturbed_groups: set[str] = set()
-    for group in groups:
-        members = [g for g in group if g in present]
+    perturbed_members: set[str] = set()
+
+    for group in perturb_groups:
+        members = [member for member in group if member in present]
         if len(members) < 2:
             continue
         base = _uncapped_macro_delta(macro_factors, horizon, artifact)
@@ -305,10 +366,10 @@ def _grouped_marginal_impacts(
         share = (bumped - base) / len(members)
         for member in members:
             raw[member] = raw.get(member, 0.0) + share
-            perturbed_groups.add(member)
+            perturbed_members.add(member)
 
     for factor in _iter_macro_factor_names(macro_factors, artifact):
-        if factor in perturbed_groups:
+        if factor in perturbed_members:
             continue
         if factor in macro_factors or (artifact and factor in artifact.feature_names):
             raw[factor] = _marginal_macro_impact(macro_factors, factor, artifact, horizon)
@@ -389,15 +450,28 @@ def explain_macro_factors(
     """Attribute macro portion of the prediction to each factor."""
     artifact = artifact or load_stored_model_artifact()
     macro_delta = _capped_macro_delta(macro_factors, horizon, artifact)
-
-    shap_raw = _try_shap_macro_contributions(macro_factors, artifact, horizon)
-    method = "linear_shap" if shap_raw else "marginal"
     caveat_factors = _correlation_caveat_factors(artifact)
+    use_grouped = bool(artifact and artifact.multicollinearity_warning)
 
-    if shap_raw:
-        raw = shap_raw
-    else:
+    if use_grouped:
         raw = _grouped_marginal_impacts(macro_factors, artifact, horizon)
+        method = "grouped_marginal"
+        attribution_disclaimer = (
+            "Group attribution perturbs correlated macro blocks together; "
+            "per-factor splits are approximate. Not causal — model sensitivity only."
+        )
+    else:
+        shap_raw = _try_shap_macro_contributions(macro_factors, artifact, horizon)
+        if shap_raw:
+            raw = shap_raw
+            method = "linear_shap"
+        else:
+            raw = _grouped_marginal_impacts(macro_factors, artifact, horizon)
+            method = "marginal"
+        attribution_disclaimer = (
+            "Attribution shows model sensitivity, not causal effect. "
+            "Correlated factors share credit."
+        )
 
     contributors = _normalize_contributions(raw, macro_delta)
 
@@ -424,16 +498,14 @@ def explain_macro_factors(
 
     return {
         "method": method,
-        "attribution_disclaimer": (
-            "Attribution shows model sensitivity, not causal effect. "
-            "Correlated factors share credit."
-        ),
+        "attribution_disclaimer": attribution_disclaimer,
         "macro_delta_pct": round(macro_delta, 4),
         "bottom_up_return_pct": round(bottom_up_return_pct, 4),
         "total_return_pct": round(total_return, 4),
         "contributors": contributors,
         "channel_attribution": channel_attribution,
         "multicollinearity_warning": bool(artifact and artifact.multicollinearity_warning),
+        "correlated_pairs": list(artifact.correlated_pairs or [])[:5] if artifact else [],
     }
 
 
