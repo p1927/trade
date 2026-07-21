@@ -102,3 +102,31 @@ def test_wiki_search_config_defaults(hub_tmp, monkeypatch):
     assert cfg.wiki_search_top_k == 7
     assert cfg.wiki_search_max_per_pass == 99
     assert cfg.wiki_search_min_score == 0.8
+
+
+def test_wiki_search_config_persist_and_api(hub_tmp):
+    from trade_integrations.hub_storage.news_pipeline_config import (
+        config_for_api,
+        load_news_pipeline_config,
+        update_news_pipeline_config,
+    )
+
+    update_news_pipeline_config(
+        {
+            "wiki_search_enabled": False,
+            "wiki_search_top_k": 3,
+            "wiki_search_max_per_pass": 40,
+            "wiki_search_min_score": 0.82,
+        }
+    )
+    cfg = load_news_pipeline_config()
+    assert cfg.wiki_search_enabled is False
+    assert cfg.wiki_search_top_k == 3
+    assert cfg.wiki_search_max_per_pass == 40
+    assert cfg.wiki_search_min_score == 0.82
+
+    payload = config_for_api()
+    assert payload["wiki_search_enabled"] is False
+    assert payload["wiki_search_top_k"] == 3
+    assert payload["wiki_search_max_per_pass"] == 40
+    assert payload["wiki_search_min_score"] == 0.82
