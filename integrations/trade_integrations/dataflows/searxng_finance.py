@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 from trade_integrations.http import RequestException
 
 from trade_integrations.dataflows.searxng_client import (
+    engine_unresponsive_reason,
     parse_engine_list,
     search_json,
     searxng_finance_engines,
+    should_retry_engine_search,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,33 +96,48 @@ def search_finance(
 
     for cat in category_attempts:
         for engine in engine_attempts:
-            try:
-                payload = search_json(
-                    query,
-                    categories=cat,
-                    engines=engine,
-                    timeout=REQUEST_TIMEOUT,
-                )
-            except RequestException as exc:
-                logger.debug(
-                    "SearXNG search failed (%s/%s) for %r: %s", cat or "all", engine, query, exc
-                )
-                continue
-            except ValueError as exc:
-                logger.debug(
-                    "SearXNG invalid JSON (%s/%s) for %r: %s", cat or "all", engine, query, exc
-                )
-                continue
+            for attempt in range(2):
+                try:
+                    payload = search_json(
+                        query,
+                        categories=cat,
+                        engines=engine,
+                        timeout=REQUEST_TIMEOUT,
+                    )
+                except RequestException as exc:
+                    logger.debug(
+                        "SearXNG search failed (%s/%s) for %r: %s", cat or "all", engine, query, exc
+                    )
+                    break
+                except ValueError as exc:
+                    logger.debug(
+                        "SearXNG invalid JSON (%s/%s) for %r: %s", cat or "all", engine, query, exc
+                    )
+                    break
 
-            for row in payload.get("results") or []:
-                link = str(row.get("url") or "")
-                if not link or link in seen_urls:
-                    continue
-                seen_urls.add(link)
-                if _trusted_result(row):
-                    collected.append(row)
-                if len(collected) >= limit:
-                    return collected[:limit]
+                for row in payload.get("results") or []:
+                    link = str(row.get("url") or "")
+                    if not link or link in seen_urls:
+                        continue
+                    seen_urls.add(link)
+                    if _trusted_result(row):
+                        collected.append(row)
+                    if len(collected) >= limit:
+                        return collected[:limit]
+
+                reason = engine_unresponsive_reason(payload, engine)
+                if reason:
+                    if should_retry_engine_search(payload, engine, attempt=attempt):
+                        time.sleep(2.0)
+                        continue
+                    logger.warning(
+                        "SearXNG engine unresponsive (%s/%s): %s for %r",
+                        cat,
+                        engine,
+                        reason,
+                        query,
+                    )
+                break
 
     return collected[:limit]
 

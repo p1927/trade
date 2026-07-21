@@ -66,6 +66,71 @@ def test_fetch_rbi_macro_via_searxng(monkeypatch):
     assert payload["source"] == "searxng_finance"
 
 
+def test_search_finance_retries_transient_unresponsive(monkeypatch):
+    from trade_integrations.dataflows import searxng_finance
+
+    calls = {"n": 0}
+
+    def fake_search_json(query, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {
+                "results": [],
+                "unresponsive_engines": [["bing", "timeout"]],
+            }
+        return {
+            "results": [
+                {
+                    "title": "RBI keeps repo rate unchanged at 6.5 per cent",
+                    "content": "",
+                    "url": "https://www.moneycontrol.com/news/economy/policy/",
+                }
+            ],
+            "unresponsive_engines": [],
+        }
+
+    monkeypatch.setattr(searxng_finance, "search_json", fake_search_json)
+    monkeypatch.setattr(searxng_finance, "searxng_finance_engines", lambda: "bing")
+    monkeypatch.setattr(searxng_finance.time, "sleep", lambda _s: None)
+
+    rows = searxng_finance.search_finance("RBI repo rate India", limit=1)
+    assert calls["n"] == 2
+    assert len(rows) == 1
+
+
+def test_search_finance_skips_hard_unresponsive_engine(monkeypatch):
+    from trade_integrations.dataflows import searxng_finance
+
+    calls: list[str | None] = []
+
+    def fake_search_json(query, **kwargs):
+        engine = kwargs.get("engines")
+        calls.append(engine)
+        if engine == "bing":
+            return {
+                "results": [],
+                "unresponsive_engines": [["bing", "CAPTCHA"]],
+            }
+        return {
+            "results": [
+                {
+                    "title": "Nifty 50 PE ratio at 22.1",
+                    "content": "",
+                    "url": "https://www.moneycontrol.com/news/business/markets/",
+                }
+            ],
+            "unresponsive_engines": [],
+        }
+
+    monkeypatch.setattr(searxng_finance, "search_json", fake_search_json)
+    monkeypatch.setattr(searxng_finance, "searxng_finance_engines", lambda: "bing,backup")
+    monkeypatch.setattr(searxng_finance.time, "sleep", lambda _s: None)
+
+    rows = searxng_finance.search_finance("Nifty 50 PE ratio", limit=1)
+    assert calls[:2] == ["bing", "backup"]
+    assert len(rows) == 1
+
+
 def test_resolve_nifty_trailing_pe_prefers_yfinance(monkeypatch):
     from trade_integrations.dataflows.index_research.sources import nifty_pe_fetch
 

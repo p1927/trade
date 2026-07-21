@@ -16,6 +16,8 @@ from trade_integrations.dataflows.searxng_client import (
     search_json,
     searxng_news_engines,
     searxng_web_engines,
+    should_retry_engine_search,
+    engine_unresponsive_reason,
 )
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.yfinance_news import _in_news_window
@@ -85,16 +87,18 @@ def _search(query: str, limit: int) -> list[dict]:
                 if results:
                     return results[:limit]
 
-                unresponsive = payload.get("unresponsive_engines") or []
-                transient = any(
-                    str(entry[0]).lower() == engine.lower()
-                    and str(entry[1] if len(entry) > 1 else "").lower()
-                    in {"parsing error", "timeout", "unexpected crash"}
-                    for entry in unresponsive
-                )
-                if transient and attempt == 0:
-                    time.sleep(2.0)
-                    continue
+                reason = engine_unresponsive_reason(payload, engine)
+                if reason:
+                    if should_retry_engine_search(payload, engine, attempt=attempt):
+                        time.sleep(2.0)
+                        continue
+                    logger.warning(
+                        "SearXNG engine unresponsive (%s/%s): %s for %r",
+                        cat,
+                        engine,
+                        reason,
+                        query,
+                    )
                 break
 
     logger.warning("SearXNG search returned no results for %r", query)

@@ -141,6 +141,27 @@ def test_cross_process_drain_lock_blocks(tmp_path):
 
 
 @pytest.mark.unit
+def test_engine_unresponsive_reason_ignores_other_engines():
+    payload = {
+        "unresponsive_engines": [["mojeek", "403"], ["bing", "CAPTCHA"]],
+        "results": [],
+    }
+    assert searxng_client.engine_unresponsive_reason(payload, "bing") == "CAPTCHA"
+    assert searxng_client.engine_unresponsive_reason(payload, "mojeek") == "403"
+    assert searxng_client.engine_unresponsive_reason(payload, "qwant") is None
+
+
+@pytest.mark.unit
+def test_should_retry_engine_search_only_for_transient_reasons():
+    transient = {"unresponsive_engines": [["bing", "timeout"]], "results": []}
+    blocked = {"unresponsive_engines": [["bing", "CAPTCHA"]], "results": []}
+
+    assert searxng_client.should_retry_engine_search(transient, "bing", attempt=0) is True
+    assert searxng_client.should_retry_engine_search(transient, "bing", attempt=1) is False
+    assert searxng_client.should_retry_engine_search(blocked, "bing", attempt=0) is False
+
+
+@pytest.mark.unit
 def test_search_json_propagates_http_errors(monkeypatch):
     def fake_get(*args, **kwargs):
         raise HTTPError("429 Too Many Requests")
