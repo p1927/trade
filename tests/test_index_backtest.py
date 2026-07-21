@@ -43,7 +43,7 @@ def test_audit_factor_coverage_reports_columns():
 @pytest.mark.unit
 def test_walk_forward_backtest_produces_eval_rows(monkeypatch):
     pytest.importorskip("sklearn")
-    history = _synthetic_aligned(70)
+    history = _synthetic_aligned(100)
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.backtest_runner.load_aligned_factor_history",
         lambda days=180: history,
@@ -52,12 +52,14 @@ def test_walk_forward_backtest_produces_eval_rows(monkeypatch):
     report = run_walk_forward_backtest(
         days=180,
         horizon_days=14,
-        min_train_rows=40,
+        min_train_rows=30,
         eval_step=3,
+        eval_protocol="purged_expanding",
     )
 
     assert report["status"] == "ok"
-    assert report["eval_count"] >= 5
+    assert report["eval_protocol"] == "purged_expanding"
+    assert report["eval_count"] >= 3
     assert report["metrics"]["mae_pct"] is not None
     assert report["daily_evaluations"]
     row = report["daily_evaluations"][0]
