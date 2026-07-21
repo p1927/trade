@@ -48,6 +48,20 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def enhanced_summary_similarity(a: str, b: str) -> float:
+    """Text similarity boosted by embedding cosine when available."""
+    base = summary_similarity(a, b)
+    cut = match_threshold()
+    if base >= cut:
+        return base
+    try:
+        from trade_integrations.dataflows.index_research.news_embedding_cluster import _similarity
+
+        return max(base, float(_similarity(a, b)))
+    except Exception:
+        return base
+
+
 def summary_similarity(a: str, b: str) -> float:
     """Compare two summaries; stdlib only."""
     na = _normalize_text(a)
@@ -204,7 +218,7 @@ def find_matching_event(
             )
             if part
         )
-        sim = summary_similarity(ref_text, event_text)
+        sim = enhanced_summary_similarity(ref_text, event_text)
         title_sim = title_similarity(ref_title, event_title)
         event_row = {
             "title": event.get("title"),
