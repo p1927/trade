@@ -25,7 +25,11 @@ def run_bottom_up(ctx: TrackContext) -> ForecastTrack:
             },
         )
 
-    attributed = attribute_constituents(signals, horizon_days=ctx.horizon.days)
+    attributed = attribute_constituents(
+        signals,
+        horizon_days=ctx.horizon.days,
+        as_of_day=ctx.as_of_day,
+    )
     rollup = rollup_attribution(attributed)
     value = float(rollup.get("total_contribution_pct") or 0.0)
     return ForecastTrack(

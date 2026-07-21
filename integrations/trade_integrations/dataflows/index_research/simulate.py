@@ -173,7 +173,10 @@ def simulate_index_prediction(
         merged[key] = value
 
     baseline_macro_delta = cap_macro_delta(_predict_macro_delta(macro_factors, horizon, artifact))
-    baseline_return = bottom_up_return_pct + baseline_macro_delta
+    if headline_return_pct is not None and not resolved_overrides:
+        baseline_return = float(headline_return_pct)
+    else:
+        baseline_return = bottom_up_return_pct + baseline_macro_delta
 
     macro_delta = cap_macro_delta(_predict_macro_delta(merged, horizon, artifact))
     total_return = bottom_up_return_pct + macro_delta

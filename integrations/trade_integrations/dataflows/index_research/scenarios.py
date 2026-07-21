@@ -30,7 +30,9 @@ def _count_earnings_within_horizon(
             if not _is_earnings_event(event):
                 continue
             event_date = _parse_event_date(event.get("date"))
-            if event_date is None or as_of <= event_date <= deadline:
+            if event_date is None:
+                continue
+            if as_of <= event_date <= deadline:
                 count += 1
     return count
 
@@ -144,7 +146,7 @@ def _has_upcoming_rbi(macro_factors: dict, *, horizon_days: int) -> bool:
             continue
         event_date = event.get("date")
         if event_date is None:
-            return True
+            continue
         if isinstance(event_date, datetime):
             parsed = event_date.date()
         else:

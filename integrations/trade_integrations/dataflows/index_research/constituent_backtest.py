@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.dataflows.index_research.attribution import (
@@ -74,6 +75,27 @@ def load_constituent_signals_for_day(day: str, macro_factors: dict | None = None
     return signals
 
 
+def bottom_up_archive_coverage(
+    trading_dates: list[str],
+    *,
+    min_constituents: int = MIN_HYBRID_CONSTITUENTS,
+) -> dict[str, Any]:
+    """Share of dates with enough archived constituent history for hybrid replay."""
+    if not trading_dates:
+        return {"coverage_pct": 0.0, "eligible_days": 0, "total_days": 0}
+    eligible = 0
+    for day in trading_dates:
+        signals = load_constituent_signals_for_day(day)
+        if len(signals) >= min_constituents:
+            eligible += 1
+    total = len(trading_dates)
+    return {
+        "coverage_pct": round(100.0 * eligible / total, 1) if total else 0.0,
+        "eligible_days": eligible,
+        "total_days": total,
+    }
+
+
 def bottom_up_return_from_archives(day: str, *, horizon_days: int) -> float | None:
     """Replay bottom-up attribution when archived company_research/history exists."""
     signals = load_constituent_signals_for_day(day)
@@ -82,6 +104,7 @@ def bottom_up_return_from_archives(day: str, *, horizon_days: int) -> float | No
     attributed = attribute_constituents(
         signals,
         horizon_days=horizon_days,
+        as_of_day=day,
         use_calibration=False,
     )
     rollup = rollup_attribution(attributed)

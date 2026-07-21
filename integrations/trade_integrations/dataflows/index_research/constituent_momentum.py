@@ -155,10 +155,6 @@ def resolve_constituent_momentum_rollup(
     if rollup is not None:
         return rollup, "constituent_momentum"
 
-    stats = momentum_coverage_stats(signals)
-    if stats.get("coverage_pct", 0) >= 30.0 and rollup is not None:
-        return rollup, "constituent_momentum_partial"
-
     if fallback_factors:
         index_ret = fallback_factors.get("nifty_return_7d")
         if index_ret is not None:

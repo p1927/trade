@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
@@ -61,6 +62,35 @@ def _join_annual_macro_by_year(frame: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=["_year"], errors="ignore")
 
 
+_LAGGED_MACRO_FFILL_COLUMNS = (
+    "usd_inr",
+    "sp500",
+    "gold",
+    "oil_brent",
+    "oil_wti",
+    "us_10y",
+    "india_vix",
+    "vix",
+    "nifty_pe",
+    "nifty_pb",
+    "nifty_dividend_yield",
+)
+
+
+def _ffill_lagged_macro_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Forward-fill vendor-lagged macro columns when OHLCV exists for a trading day."""
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    has_ohlcv = out["close"].notna() if "close" in out.columns else pd.Series(True, index=out.index)
+    for col in _LAGGED_MACRO_FFILL_COLUMNS:
+        if col not in out.columns:
+            continue
+        filled = out[col].ffill()
+        out[col] = out[col].where(~has_ohlcv | out[col].notna(), filled)
+    return out
+
+
 def _merge_on_date(frames: list[pd.DataFrame]) -> pd.DataFrame:
     out: pd.DataFrame | None = None
     for frame in frames:
@@ -115,6 +145,7 @@ def build_history_panel(
         return merged
 
     merged = _join_annual_macro_by_year(merged)
+    merged = _ffill_lagged_macro_columns(merged)
 
     from trade_integrations.dataflows.index_research.panel_enrichment import enrich_prediction_panel
 
@@ -151,6 +182,35 @@ def materialize_panel(
     return {"status": "ok", **result}
 
 
+def refresh_panel_tail(
+    *,
+    days: int = 14,
+    panel_name: str = "NIFTY_2006_present",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Rebuild and merge the last *days* of panel rows into the production panel."""
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
+    window = max(1, days)
+    end_day = date.fromisoformat(india_trading_date_iso()[:10])
+    end = end_day.isoformat()
+    start = (end_day - timedelta(days=window)).isoformat()
+    existing = load_panel(panel_name)
+    tail = build_history_panel(start=start, end=end, panel_name=panel_name)
+    if tail.empty:
+        return {"status": "error", "reason": "empty_tail", "panel": panel_name}
+    if existing.empty:
+        return materialize_panel(start="2006-01-01", end=end, panel_name=panel_name, force=force)
+
+    cutoff = start[:10]
+    kept = existing[existing["date"].astype(str).str[:10] < cutoff].copy()
+    merged = pd.concat([kept, tail], ignore_index=True)
+    merged["date"] = merged["date"].astype(str).str[:10]
+    merged = merged.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+    result = save_panel(merged, name=panel_name, force=force)
+    return {"status": "ok", "mode": "tail_refresh", "window_days": window, **result}
+
+
 def load_aligned_panel_history(
     *,
     days: int = 365,
@@ -159,6 +219,7 @@ def load_aligned_panel_history(
 ) -> pd.DataFrame:
     """Load materialized panel when available; otherwise build on the fly."""
     frame = load_panel(panel_name)
+    from_materialized = not frame.empty
     if frame.empty:
         frame = build_history_panel(start=start or "2006-01-01")
     if frame.empty:
@@ -167,7 +228,8 @@ def load_aligned_panel_history(
         frame = frame[frame["date"] >= start[:10]]
     if days > 0:
         frame = frame.tail(max(1, days))
-    if not frame.empty:
+    # Materialized panels are enriched at save time; re-running enrichment drifts invariants.
+    if not frame.empty and not from_materialized:
         from trade_integrations.dataflows.index_research.panel_enrichment import enrich_prediction_panel
 
         frame = enrich_prediction_panel(frame, allow_live_fetch=False)

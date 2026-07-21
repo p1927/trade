@@ -56,7 +56,7 @@ def _has_earnings_within_horizon(
             continue
         event_date = _parse_event_date(event.get("date"))
         if event_date is None:
-            return True
+            continue
         if as_of <= event_date <= deadline:
             return True
     return False
@@ -66,6 +66,7 @@ def _expected_return_pct(
     signal: ConstituentSignal,
     *,
     horizon_days: int,
+    as_of: date | None = None,
     sentiment_beta: float = _SENTIMENT_BETA,
     momentum_scale: float = _MOMENTUM_SCALE,
     sentiment_blend: float = _SENTIMENT_BLEND,
@@ -79,7 +80,8 @@ def _expected_return_pct(
     else:
         raw = sentiment_move
     capped = max(-_EXPECTED_RETURN_CAP_PCT, min(_EXPECTED_RETURN_CAP_PCT, raw))
-    if _has_earnings_within_horizon(signal, horizon_days=horizon_days, as_of=_today()):
+    as_of_day = as_of or _today()
+    if _has_earnings_within_horizon(signal, horizon_days=horizon_days, as_of=as_of_day):
         capped += _EARNINGS_BUMP_PCT
     return capped
 
@@ -88,15 +90,23 @@ def attribute_constituent(
     signal: ConstituentSignal,
     *,
     horizon_days: int = 14,
+    as_of_day: str | None = None,
     sentiment_beta: float = _SENTIMENT_BETA,
     momentum_scale: float = _MOMENTUM_SCALE,
     sentiment_blend: float = _SENTIMENT_BLEND,
     momentum_blend: float = _MOMENTUM_BLEND,
 ) -> ConstituentSignal:
     """Attribute a single constituent's expected move to index contribution."""
+    as_of = None
+    if as_of_day:
+        try:
+            as_of = date.fromisoformat(str(as_of_day)[:10])
+        except ValueError:
+            as_of = None
     expected = _expected_return_pct(
         signal,
         horizon_days=horizon_days,
+        as_of=as_of,
         sentiment_beta=sentiment_beta,
         momentum_scale=momentum_scale,
         sentiment_blend=sentiment_blend,
@@ -110,6 +120,7 @@ def attribute_constituents(
     signals: list[ConstituentSignal],
     *,
     horizon_days: int = 14,
+    as_of_day: str | None = None,
     use_calibration: bool = True,
     pipeline: PipelineLogger | None = None,
 ) -> list[ConstituentSignal]:
@@ -151,6 +162,7 @@ def attribute_constituents(
         attribute_constituent(
             signal,
             horizon_days=horizon_days,
+            as_of_day=as_of_day,
             sentiment_beta=sentiment_beta,
             momentum_scale=momentum_scale,
             sentiment_blend=sentiment_blend,

@@ -77,8 +77,9 @@ def is_news_ridge_enabled(ticker: str = "NIFTY") -> bool:
 
 
 def is_news_overlay_enabled(ticker: str = "NIFTY") -> bool:
+    """Overlay applies only after shock calibration passes promotion gates."""
     status = str(load_news_model_config(ticker).get("news_event_overlay") or "pending")
-    return status in {"pending", "accepted"}
+    return status == "accepted"
 
 
 def _parse_day(raw: str) -> date | None:

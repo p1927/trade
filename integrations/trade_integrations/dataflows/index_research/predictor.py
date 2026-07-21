@@ -81,8 +81,13 @@ class ModelArtifact:
     direction_coefficients: dict[str, float] = field(default_factory=dict)
     direction_intercept: float = 0.0
     direction_hit_rate_oos: float | None = None
+    direction_hit_rate_train_holdout: float | None = None
+    ridge_alpha: float = _RIDGE_ALPHA
     feature_means: list[float] = field(default_factory=list)
     feature_stds: list[float] = field(default_factory=list)
+    multicollinearity_warning: bool = False
+    correlated_pairs: list[dict[str, Any]] = field(default_factory=list)
+    vif_scores: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,8 +118,17 @@ class ModelArtifact:
                 if payload.get("direction_hit_rate_oos") is not None
                 else None
             ),
+            direction_hit_rate_train_holdout=(
+                float(payload["direction_hit_rate_train_holdout"])
+                if payload.get("direction_hit_rate_train_holdout") is not None
+                else None
+            ),
+            ridge_alpha=float(payload.get("ridge_alpha") or _RIDGE_ALPHA),
             feature_means=[float(v) for v in (payload.get("feature_means") or [])],
             feature_stds=[float(v) for v in (payload.get("feature_stds") or [])],
+            multicollinearity_warning=bool(payload.get("multicollinearity_warning")),
+            correlated_pairs=list(payload.get("correlated_pairs") or []),
+            vif_scores=list(payload.get("vif_scores") or []),
         )
 
 
@@ -428,7 +442,7 @@ def train_macro_ridge(
     force_include_keys: tuple[str, ...] | None = None,
 ) -> ModelArtifact:
     """Train Ridge on polynomial macro features; return artifact for inference."""
-    Ridge, _, mean_absolute_error, r2_score, PolynomialFeatures, _ = _require_sklearn()
+    from trade_integrations.dataflows.index_research.ridge_pipeline import fit_ridge_artifact_components
 
     X, y, feature_names = build_factor_matrix(
         history_df,
@@ -443,44 +457,26 @@ def train_macro_ridge(
             horizon_name=horizon.name,
         )
 
-    feature_means, feature_stds = _fit_feature_scaler(X)
-    X_scaled = _scale_features(X, feature_means, feature_stds)
-    poly = PolynomialFeatures(
-        degree=horizon.poly_degree,
-        interaction_only=True,
-        include_bias=False,
-    )
-    X_poly = poly.fit_transform(X_scaled)
-    model = _make_ridge_regressor()
-    model.fit(X_poly, y)
-
-    oos_mae, oos_r2 = _walk_forward_metrics(X, y, poly_degree=horizon.poly_degree)
-    direction_hit = _walk_forward_direction_hit_rate(X, y, poly_degree=horizon.poly_degree)
-    mae = oos_mae if oos_mae is not None else float(mean_absolute_error(y, model.predict(X_poly)))
-    r2 = oos_r2 if oos_r2 is not None else (float(r2_score(y, model.predict(X_poly))) if len(y) > 1 else None)
-
-    poly_names = [str(name) for name in poly.get_feature_names_out(feature_names)]
-    coefficients = {
-        str(name): float(coef)
-        for name, coef in zip(poly_names, model.coef_, strict=False)
-        if abs(coef) > 1e-9
-    }
-    direction_coefficients, direction_intercept = _train_direction_head(X_poly, y, poly_names)
+    components = fit_ridge_artifact_components(X, y, feature_names, horizon)
 
     return ModelArtifact(
-        coefficients=coefficients,
-        intercept=float(model.intercept_),
-        mae=mae,
-        r2_walk_forward=r2,
-        poly_degree=horizon.poly_degree,
+        coefficients=components["coefficients"],
+        intercept=components["intercept"],
+        mae=components["mae"],
+        r2_walk_forward=components["r2_walk_forward"],
+        poly_degree=int(components["poly_degree"]),
+        ridge_alpha=float(components["ridge_alpha"]),
         feature_names=feature_names,
         trained_at=datetime.now(timezone.utc).isoformat(),
         horizon_name=horizon.name,
-        direction_coefficients=direction_coefficients,
-        direction_intercept=direction_intercept,
-        direction_hit_rate_oos=direction_hit,
-        feature_means=[float(v) for v in feature_means],
-        feature_stds=[float(v) for v in feature_stds],
+        direction_coefficients=components["direction_coefficients"],
+        direction_intercept=components["direction_intercept"],
+        direction_hit_rate_train_holdout=components.get("direction_hit_rate_train_holdout"),
+        feature_means=components["feature_means"],
+        feature_stds=components["feature_stds"],
+        multicollinearity_warning=bool(components.get("multicollinearity_warning")),
+        correlated_pairs=list(components.get("correlated_pairs") or []),
+        vif_scores=list(components.get("vif_scores") or []),
     )
 
 
@@ -624,6 +620,7 @@ def predict_nifty(
     attributed = attribute_constituents(
         signals,
         horizon_days=horizon.days,
+        as_of_day=as_of,
         pipeline=pipeline,
     )
     rollup = rollup_attribution(attributed)
@@ -635,12 +632,6 @@ def predict_nifty(
     )
 
     _predict_log(pipeline, "Computing macro Ridge delta…")
-    raw_macro = _predict_macro_delta(
-        macro_factors,
-        horizon,
-        artifact,
-        macro_trust_multiplier=macro_trust_multiplier,
-    )
     from trade_integrations.dataflows.index_research.regime_gates import predict_macro_delta_gated
 
     gated_raw = predict_macro_delta_gated(
@@ -649,8 +640,7 @@ def predict_nifty(
         artifact,
         macro_trust_multiplier=macro_trust_multiplier,
     )
-    if abs(gated_raw) > 1e-9:
-        raw_macro = gated_raw
+    raw_macro = gated_raw
     _predict_log(
         pipeline,
         f"Macro delta (post regime gates): {raw_macro:+.2f}%",
@@ -707,6 +697,7 @@ def predict_nifty(
         else None
     )
     walk_forward_hit = wf_metrics.get("direction_hit_rate_walk_forward")
+    bootstrap_ci = wf_metrics.get("direction_bootstrap_ci") or {}
     direction_view = None
     if direction_prob is not None:
         if direction_prob >= _DIRECTION_PROB_BULL:
@@ -719,7 +710,7 @@ def predict_nifty(
     direction_view, direction_prob, sign_conflict = apply_sign_conflict_gate(
         direction_view=direction_view,
         direction_confidence=direction_prob,
-        raw_macro=raw_macro,
+        raw_macro=macro_for_shrink,
         scenario_anchor_return_pct=scenario_anchor_return_pct,
         regime_label=regime_label,
         wf_metrics=wf_metrics,
@@ -741,6 +732,9 @@ def predict_nifty(
         "direction_hit_rate_oos": walk_forward_hit,
         "direction_hit_rate_walk_forward": walk_forward_hit,
         "direction_eval_count": wf_metrics.get("eval_count"),
+        "direction_bootstrap_ci": bootstrap_ci,
+        "direction_insufficient_evidence": bool(wf_metrics.get("insufficient_evidence")),
+        "eval_protocol": wf_metrics.get("eval_protocol"),
         "range": {
             "low": range_low,
             "high": range_high,
@@ -751,9 +745,16 @@ def predict_nifty(
             "coefficients": coefficients,
             "intercept": intercept,
             "r2_walk_forward": r2,
+            "ridge_alpha": artifact.ridge_alpha if artifact else _RIDGE_ALPHA,
+            "poly_degree": artifact.poly_degree if artifact else horizon.poly_degree,
+            "multicollinearity_warning": artifact.multicollinearity_warning if artifact else False,
+            "correlated_pairs": artifact.correlated_pairs if artifact else [],
             "direction_coefficients": artifact.direction_coefficients if artifact else {},
             "direction_intercept": artifact.direction_intercept if artifact else 0.0,
             "direction_hit_rate_oos": walk_forward_hit,
+            "direction_hit_rate_train_holdout": (
+                artifact.direction_hit_rate_train_holdout if artifact else None
+            ),
         },
         "horizon": {"name": horizon.name, "days": horizon.days},
     }

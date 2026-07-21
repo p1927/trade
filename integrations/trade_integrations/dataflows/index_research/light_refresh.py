@@ -550,7 +550,12 @@ def run_index_light_refresh(
             view=prediction.get("view"),
             expected_return_pct=ret,
         )
-    attributed = attribute_constituents(signals, horizon_days=horizon.days)
+    as_of_day = _stage_now().date().isoformat()
+    attributed = attribute_constituents(
+        signals,
+        horizon_days=horizon.days,
+        as_of_day=as_of_day,
+    )
     rollup = rollup_attribution(attributed)
     if prediction:
         prediction["top_drivers"] = rollup.get("top_drivers", [])[:5]

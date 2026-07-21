@@ -27,6 +27,23 @@ _MISS_ANALYSIS_FILENAME = "miss_analysis.parquet"
 _NEUTRAL_RETURN_THRESHOLD_PCT = 0.15
 
 
+def _scenario_ledger_row(scenario: dict[str, Any]) -> dict[str, Any]:
+    """Map live scenario dict fields to compact ledger RCA shape."""
+    event = str(scenario.get("event") or "").strip()
+    outcome = str(scenario.get("outcome") or "").strip()
+    name = scenario.get("name") or scenario.get("label")
+    if not name and event:
+        name = f"{event}: {outcome}" if outcome else event
+    expected = scenario.get("expected_return_pct")
+    if expected is None:
+        expected = scenario.get("midpoint_return_pct")
+    return {
+        "name": name,
+        "probability": scenario.get("probability"),
+        "expected_return_pct": expected,
+    }
+
+
 def build_prediction_metadata(
     *,
     ticker: str,
@@ -74,11 +91,7 @@ def build_prediction_metadata(
         }
     if scenarios:
         meta["scenarios"] = [
-            {
-                "name": s.get("name"),
-                "probability": s.get("probability"),
-                "expected_return_pct": s.get("expected_return_pct"),
-            }
+            _scenario_ledger_row(s)
             for s in scenarios[:6]
             if isinstance(s, dict)
         ]
@@ -352,12 +365,13 @@ def list_factor_history_series(
     include_nifty_close: bool = True,
 ) -> dict[str, Any]:
     """Return wide-format daily factor + optional Nifty close series for charting."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
     from trade_integrations.dataflows.index_research.history_panel import load_aligned_panel_history
     from trade_integrations.dataflows.index_research.sources.history_loader import load_nifty_history
 
-    end = datetime.now(timezone.utc).date()
+    end = date.fromisoformat(india_trading_date_iso()[:10])
     max_days = 5000
     window_days = max(1, min(days, max_days))
     if start:

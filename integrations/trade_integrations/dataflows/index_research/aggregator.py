@@ -54,9 +54,13 @@ from trade_integrations.dataflows.index_research.upcoming_events import build_up
 logger = logging.getLogger(__name__)
 
 
-def _pipeline_checkpoint() -> None:
-    """Raise when API shutdown/reload requested cooperative cancel."""
+def _pipeline_checkpoint(stage: str | None = None) -> None:
+    """Raise when API shutdown/reload requested or stage budget exceeded."""
     check_pipeline_cancel()
+    if stage:
+        from trade_integrations.dataflows.index_research.stage_budget import check_stage_budget
+
+        check_stage_budget(stage)
 
 
 def _stage_now() -> datetime:
@@ -154,7 +158,15 @@ def run_index_research(
     try:
         from trade_integrations.dataflows.index_research.history_ingest import sync_nifty_ohlcv_tail
 
-        tail_result = sync_nifty_ohlcv_tail()
+        with log.stage_timer("history", "Nifty OHLCV tail sync"):
+            tail_result = sync_nifty_ohlcv_tail()
+        try:
+            from trade_integrations.dataflows.index_research.history_ingest import upsert_ohlcv_daily_factors
+
+            ohlcv_factors = upsert_ohlcv_daily_factors(trading_day)
+            tail_result = {**tail_result, "daily_ohlcv_factors": ohlcv_factors}
+        except Exception as factor_exc:
+            logger.debug("nifty ohlcv daily factor upsert skipped: %s", factor_exc)
         log.info(
             "history",
             f"Nifty OHLCV tail: {tail_result.get('reason', tail_result.get('status', 'ok'))}",
@@ -198,71 +210,76 @@ def run_index_research(
     )
 
     constituent_mode = "full_refresh" if refresh_constituents else "cached_snapshot"
-    if refresh_constituents:
-        log.info(
-            "constituents",
-            "Loading NIFTY 50 constituent research (news, sentiment, calendar, filings)…",
-            mode=constituent_mode,
-        )
-
-        def _constituent_progress(symbol: str, done: int, total: int) -> None:
+    with log.stage_timer(
+        "constituents",
+        "Loading NIFTY 50 constituent signals",
+        mode=constituent_mode,
+    ):
+        if refresh_constituents:
             log.info(
                 "constituents",
-                f"Researched {symbol} ({done}/{total})",
-                symbol=symbol,
-                progress=done,
-                total=total,
+                "Loading NIFTY 50 constituent research (news, sentiment, calendar, filings)…",
+                mode=constituent_mode,
             )
-            if done % 5 == 0:
-                _pipeline_checkpoint()
 
-        _pipeline_checkpoint()
-        signals = batch_constituent_research(
-            lookahead_days=horizon.days,
-            refresh=True,
-            on_progress=_constituent_progress,
-        )
-        _pipeline_checkpoint()
-        try:
-            from trade_integrations.hub_capture.channel import record_news_headlines
+            def _constituent_progress(symbol: str, done: int, total: int) -> None:
+                log.info(
+                    "constituents",
+                    f"Researched {symbol} ({done}/{total})",
+                    symbol=symbol,
+                    progress=done,
+                    total=total,
+                )
+                if done % 5 == 0:
+                    _pipeline_checkpoint("constituents")
 
-            index_headlines: list[dict[str, Any]] = []
-            for signal in signals:
-                for factor in signal.factors or []:
-                    if factor.get("type") != "news":
-                        continue
-                    title = str(factor.get("title") or "").strip()
-                    if title:
-                        index_headlines.append(
-                            {
-                                "title": title,
-                                "summary": factor.get("note"),
-                                "source": factor.get("source"),
-                            }
-                        )
-            if index_headlines:
-                record_news_headlines("NIFTY", index_headlines[:50], source="index_constituents")
-        except Exception:
-            pass
-    else:
-        cached_doc = load_index_research_json(sym)
-        if cached_doc is None:
-            raise RuntimeError(
-                f"No index research snapshot for {sym}; run full analysis with "
-                "'Refresh all 50 constituents' checked first"
+            _pipeline_checkpoint()
+            signals = batch_constituent_research(
+                lookahead_days=horizon.days,
+                refresh=True,
+                on_progress=_constituent_progress,
             )
-        signals = signals_from_cached_doc(cached_doc)
-        if not signals:
-            raise RuntimeError(
-                f"Cached index snapshot for {sym} has no constituent signals; "
-                "run full analysis with 'Refresh all 50 constituents' checked"
+            _pipeline_checkpoint()
+            try:
+                from trade_integrations.hub_capture.channel import record_news_headlines
+
+                index_headlines: list[dict[str, Any]] = []
+                for signal in signals:
+                    for factor in signal.factors or []:
+                        if factor.get("type") != "news":
+                            continue
+                        title = str(factor.get("title") or "").strip()
+                        if title:
+                            index_headlines.append(
+                                {
+                                    "title": title,
+                                    "summary": factor.get("note"),
+                                    "source": factor.get("source"),
+                                }
+                            )
+                if index_headlines:
+                    record_news_headlines("NIFTY", index_headlines[:50], source="index_constituents")
+            except Exception:
+                pass
+        else:
+            cached_doc = load_index_research_json(sym)
+            if cached_doc is None:
+                raise RuntimeError(
+                    f"No index research snapshot for {sym}; run full analysis with "
+                    "'Refresh all 50 constituents' checked first"
+                )
+            signals = signals_from_cached_doc(cached_doc)
+            if not signals:
+                raise RuntimeError(
+                    f"Cached index snapshot for {sym} has no constituent signals; "
+                    "run full analysis with 'Refresh all 50 constituents' checked"
+                )
+            log.info(
+                "constituents",
+                f"Using cached constituent snapshot ({len(signals)} stocks) — skipping per-stock research",
+                mode=constituent_mode,
+                count=len(signals),
             )
-        log.info(
-            "constituents",
-            f"Using cached constituent snapshot ({len(signals)} stocks) — skipping per-stock research",
-            mode=constituent_mode,
-            count=len(signals),
-        )
     with_news = sum(
         1 for s in signals if any(f.get("type") == "news" for f in (s.factors or []))
     )
@@ -279,11 +296,12 @@ def run_index_research(
         from trade_integrations.hub_capture.ohlcv_cache import prefetch_symbols
 
         prefetch_symbols_list = [sym] + [s.symbol for s in signals]
-        ohlcv_stats = prefetch_symbols(
-            prefetch_symbols_list,
-            days=14,
-            force=refresh_constituents,
-        )
+        with log.stage_timer("ohlcv_cache", "OHLCV cache warm"):
+            ohlcv_stats = prefetch_symbols(
+                prefetch_symbols_list,
+                days=14,
+                force=refresh_constituents,
+            )
         log.info(
             "ohlcv_cache",
             f"OHLCV cache warm — loaded {ohlcv_stats.get('loaded', 0)}/{ohlcv_stats.get('symbols', 0)} "
@@ -293,14 +311,15 @@ def run_index_research(
     except Exception as exc:
         logger.debug("ohlcv prefetch skipped: %s", exc)
 
-    log.info("momentum", "Fetching 7-day price momentum per constituent…")
-    signals = attach_constituent_momentum(signals, force_refresh=refresh_constituents)
-    momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
-    log.info(
-        "momentum",
-        f"Momentum attached for {momentum_count}/{len(signals)} stocks",
-        with_momentum=momentum_count,
-    )
+    with log.stage_timer("momentum", "Constituent 7-day momentum"):
+        log.info("momentum", "Fetching 7-day price momentum per constituent…")
+        signals = attach_constituent_momentum(signals, force_refresh=refresh_constituents)
+        momentum_count = sum(1 for s in signals if s.momentum_7d_pct is not None)
+        log.info(
+            "momentum",
+            f"Momentum attached for {momentum_count}/{len(signals)} stocks",
+            with_momentum=momentum_count,
+        )
     stages.append(
         StageResult(
             stage="constituents",
@@ -379,12 +398,14 @@ def run_index_research(
             apply_alpha_zoo_to_macro,
         )
 
-        macro_factors, global_factors = apply_alpha_zoo_to_macro(macro_factors, global_factors)
+        with log.stage_timer("alpha_zoo", "Alpha zoo panel overlay"):
+            macro_factors, global_factors = apply_alpha_zoo_to_macro(macro_factors, global_factors)
     except Exception as exc:
         logger.debug("alpha_zoo bridge skipped: %s", exc)
 
-    log.info("spot", "Fetching live NIFTY spot via OpenAlgo (INDmoney)…")
-    spot_result = _fetch_spot_result(sym)
+    with log.stage_timer("spot", "Live NIFTY spot fetch"):
+        log.info("spot", "Fetching live NIFTY spot via OpenAlgo (INDmoney)…")
+        spot_result = _fetch_spot_result(sym)
     spot = spot_result.spot
     spot_source = spot_result.source
     spot_error = spot_result.error
@@ -419,20 +440,22 @@ def run_index_research(
         scenario_weighted_return_pct(scenarios, spot=spot) if spot > 0 and scenarios else None
     )
 
-    log.info("predict", "Ensuring Ridge model artifact matches current factor universe…")
-    model_artifact = ensure_ridge_model_artifact(horizon_days=horizon.days)
-    log.info("predict", "Running hybrid predictor (bottom-up + macro Ridge + direction head)…")
-    prediction = predict_nifty(
-        spot=spot,
-        signals=signals,
-        macro_factors=macro_factors,
-        horizon=horizon,
-        as_of_day=trading_day,
-        scenario_anchor_return_pct=scenario_anchor,
-        macro_trust_multiplier=macro_trust_multiplier,
-        pipeline=log,
-        model_artifact=model_artifact,
-    ) if spot > 0 else {}
+    with log.stage_timer("predict", "Ridge model artifact ensure"):
+        log.info("predict", "Ensuring Ridge model artifact matches current factor universe…")
+        model_artifact = ensure_ridge_model_artifact(horizon_days=horizon.days)
+    with log.stage_timer("predict", "Hybrid predictor (bottom-up + macro Ridge + direction head)"):
+        log.info("predict", "Running hybrid predictor (bottom-up + macro Ridge + direction head)…")
+        prediction = predict_nifty(
+            spot=spot,
+            signals=signals,
+            macro_factors=macro_factors,
+            horizon=horizon,
+            as_of_day=trading_day,
+            scenario_anchor_return_pct=scenario_anchor,
+            macro_trust_multiplier=macro_trust_multiplier,
+            pipeline=log,
+            model_artifact=model_artifact,
+        ) if spot > 0 else {}
     if prediction and not completeness.get("passes_gate"):
         after = completeness.get("after") or {}
         prediction["data_quality_warning"] = {
@@ -446,6 +469,36 @@ def run_index_research(
             "passes_gate": completeness.get("passes_gate"),
             "min_pct": after.get("min_pct"),
         }
+    if prediction:
+        try:
+            from trade_integrations.dataflows.index_research.prediction_algorithms.causes.cause_stress_index import (
+                compute_cause_stress_index,
+            )
+
+            stress = compute_cause_stress_index(macro_factors)
+            stress_val = float(stress.get("cause_stress_index") or 0.0)
+            artifact_age_hours = None
+            if model_artifact and model_artifact.trained_at:
+                from datetime import datetime, timezone
+
+                try:
+                    trained = datetime.fromisoformat(model_artifact.trained_at.replace("Z", "+00:00"))
+                    artifact_age_hours = (datetime.now(timezone.utc) - trained).total_seconds() / 3600.0
+                except ValueError:
+                    artifact_age_hours = None
+            if stress_val >= 60 and artifact_age_hours is not None and artifact_age_hours > 24:
+                prediction["stale_high_stress_warning"] = {
+                    "cause_stress_index": round(stress_val, 1),
+                    "artifact_age_hours": round(artifact_age_hours, 1),
+                    "message": "High news stress with stale model/data — treat confidence as informational only",
+                }
+                if prediction.get("direction_confidence") is not None:
+                    prediction["direction_confidence"] = min(
+                        float(prediction["direction_confidence"]),
+                        0.52,
+                    )
+        except Exception as exc:
+            logger.debug("stale_high_stress_warning skipped: %s", exc)
     if prediction:
         prediction["momentum_coverage"] = momentum_coverage_stats(signals)
         try:
@@ -482,9 +535,14 @@ def run_index_research(
 
         pre_reconcile_snapshot = snapshot_pre_reconcile_prediction(prediction)
 
-    log.info("attribution", "Attributing constituent contributions to index…")
-    attributed = attribute_constituents(signals, horizon_days=horizon.days)
-    rollup = rollup_attribution(attributed)
+    with log.stage_timer("attribution", "Constituent attribution rollup"):
+        log.info("attribution", "Attributing constituent contributions to index…")
+        attributed = attribute_constituents(
+            signals,
+            horizon_days=horizon.days,
+            as_of_day=trading_day,
+        )
+        rollup = rollup_attribution(attributed)
     if spot > 0 and prediction:
         prediction["top_drivers"] = rollup.get("top_drivers", [])[:5]
         if rollup.get("top_drivers"):
@@ -533,6 +591,23 @@ def run_index_research(
         prediction = merge_index_prediction(debate_struct, prediction)
         artifact = load_stored_model_artifact()
         mae_pct = float(artifact.mae if artifact else 1.5)
+        if scenarios:
+            before_debate_reconcile = float(prediction.get("expected_return_pct") or 0.0)
+            prediction = reconcile_prediction_with_scenarios(
+                prediction,
+                scenarios,
+                spot=spot,
+                mae_pct=mae_pct,
+            )
+            after_debate_reconcile = float(prediction.get("expected_return_pct") or 0.0)
+            if prediction.get("reconciled_with_scenarios"):
+                log.info(
+                    "reconcile",
+                    f"Post-debate reconcile {before_debate_reconcile:+.2f}% → "
+                    f"{after_debate_reconcile:+.2f}% toward scenarios",
+                    before=before_debate_reconcile,
+                    after=after_debate_reconcile,
+                )
         prediction = finalize_index_prediction(
             prediction,
             spot=spot,
@@ -567,46 +642,48 @@ def run_index_research(
         )
 
     if spot > 0 and prediction and run_forecast_lab:
-        _pipeline_checkpoint()
-        log.info("forecast_lab", "Running forecast lab tracks (quant_ridge, debate, combiner)…")
-        from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
-            attach_forecast_lab,
-        )
+        _pipeline_checkpoint("forecast_lab")
+        with log.stage_timer("forecast_lab", "Forecast lab tracks (quant_ridge, debate, combiner)"):
+            log.info("forecast_lab", "Running forecast lab tracks (quant_ridge, debate, combiner)…")
+            from trade_integrations.dataflows.index_research.prediction_algorithms.pipeline_lab import (
+                attach_forecast_lab,
+            )
 
-        prediction = attach_forecast_lab(
-            prediction,
-            ticker=sym,
-            spot=spot,
-            horizon_days=horizon.days,
-            macro_factors=macro_factors,
-            signals=signals,
-            scenarios=scenarios,
-            scenario_anchor=scenario_anchor,
-            as_of_day=trading_day,
-            macro_trust_multiplier=macro_trust_multiplier,
-            debate_payload=debate_raw if debate_struct else None,
-            pre_reconcile_snapshot=pre_reconcile_snapshot,
-            legacy_prediction=legacy_prediction,
-            pipeline=log,
-        )
-        log.info("forecast_lab", "Forecast lab tracks attached")
+            prediction = attach_forecast_lab(
+                prediction,
+                ticker=sym,
+                spot=spot,
+                horizon_days=horizon.days,
+                macro_factors=macro_factors,
+                signals=signals,
+                scenarios=scenarios,
+                scenario_anchor=scenario_anchor,
+                as_of_day=trading_day,
+                macro_trust_multiplier=macro_trust_multiplier,
+                debate_payload=debate_raw if debate_struct else None,
+                pre_reconcile_snapshot=pre_reconcile_snapshot,
+                legacy_prediction=legacy_prediction,
+                pipeline=log,
+            )
+            log.info("forecast_lab", "Forecast lab tracks attached")
 
     factor_bundle: dict[str, Any] = {}
     if spot > 0 and prediction:
-        log.info("explain", "Building factor explanation and sensitivity…")
-        factor_bundle = build_factor_explanation_bundle(
-            macro_factors,
-            scenarios,
-            horizon=horizon,
-            spot=spot,
-            bottom_up_return_pct=float(prediction.get("bottom_up_return_pct") or 0.0),
-            headline_return_pct=float(prediction.get("expected_return_pct") or 0.0),
-        )
-        prediction["factor_contributors"] = factor_bundle.get("factor_explanation", {}).get(
-            "contributors", []
-        )
-        contributors = prediction.get("factor_contributors") or []
-        log.info("explain", f"{len(contributors)} factor contributors ranked")
+        with log.stage_timer("explain", "Factor explanation and sensitivity"):
+            log.info("explain", "Building factor explanation and sensitivity…")
+            factor_bundle = build_factor_explanation_bundle(
+                macro_factors,
+                scenarios,
+                horizon=horizon,
+                spot=spot,
+                bottom_up_return_pct=float(prediction.get("bottom_up_return_pct") or 0.0),
+                headline_return_pct=float(prediction.get("expected_return_pct") or 0.0),
+            )
+            prediction["factor_contributors"] = factor_bundle.get("factor_explanation", {}).get(
+                "contributors", []
+            )
+            contributors = prediction.get("factor_contributors") or []
+            log.info("explain", f"{len(contributors)} factor contributors ranked")
 
     log.info("accuracy", "Computing prediction ledger accuracy metrics…")
     accuracy = compute_accuracy_metrics()
@@ -619,28 +696,29 @@ def run_index_research(
         )
 
     if spot > 0 and prediction:
-        expected = float(prediction.get("expected_return_pct") or 0.0)
-        range_block = prediction.get("range") or {}
-        append_prediction(
-            PredictionRecord(
-                predicted_at=now,
-                horizon_days=horizon.days,
-                spot_at_prediction=spot,
-                expected_return_pct=expected,
-                range_low=float(range_block.get("low") or spot),
-                range_high=float(range_block.get("high") or spot),
-                metadata=build_prediction_metadata(
-                    ticker=sym,
-                    horizon_name=horizon.name,
-                    refresh="full",
-                    prediction=prediction,
-                    global_factors=global_factors,
-                    regime=regime,
-                    scenarios=scenarios,
-                ),
+        with log.stage_timer("ledger", "Append forecast to prediction ledger"):
+            expected = float(prediction.get("expected_return_pct") or 0.0)
+            range_block = prediction.get("range") or {}
+            append_prediction(
+                PredictionRecord(
+                    predicted_at=now,
+                    horizon_days=horizon.days,
+                    spot_at_prediction=spot,
+                    expected_return_pct=expected,
+                    range_low=float(range_block.get("low") or spot),
+                    range_high=float(range_block.get("high") or spot),
+                    metadata=build_prediction_metadata(
+                        ticker=sym,
+                        horizon_name=horizon.name,
+                        refresh="full",
+                        prediction=prediction,
+                        global_factors=global_factors,
+                        regime=regime,
+                        scenarios=scenarios,
+                    ),
+                )
             )
-        )
-        log.info("ledger", "Appended forecast to prediction ledger")
+            log.info("ledger", "Appended forecast to prediction ledger")
 
     log.info("done", "Pipeline complete — saving hub artifact")
     _pipeline_checkpoint()
@@ -666,37 +744,38 @@ def run_index_research(
             for r in global_factors
             if r.get("factor") is not None and r.get("value") is not None
         }
-        if refresh_constituents:
-            news_impact = news_hub_bridge.refresh_news_impact(
-                ticker=sym,
-                horizon_days=horizon.days,
-                spot=float(spot or 0),
-                macro_factors=macro_map,
-                refresh_ingest=True,
+        with log.stage_timer("news_impact", "Verified news impact"):
+            if refresh_constituents:
+                news_impact = news_hub_bridge.refresh_news_impact(
+                    ticker=sym,
+                    horizon_days=horizon.days,
+                    spot=float(spot or 0),
+                    macro_factors=macro_map,
+                    refresh_ingest=True,
+                )
+            else:
+                news_impact = news_hub_bridge.resolve_news_impact(
+                    ticker=sym,
+                    limit=12,
+                    hydrate_from_hub=True,
+                )
+            stages.append(
+                StageResult(
+                    stage="news_impact",
+                    status="ok",
+                    vendor="news_verification",
+                    fetched_at=now,
+                    data={
+                        "approved": (news_impact.get("summary") or {}).get("approved_count"),
+                        "items": len(news_impact.get("items") or []),
+                    },
+                )
             )
-        else:
-            news_impact = news_hub_bridge.resolve_news_impact(
-                ticker=sym,
-                limit=12,
-                hydrate_from_hub=True,
+            log.info(
+                "news_impact",
+                f"{len(news_impact.get('items') or [])} verified headlines",
+                skipped=(news_impact.get("summary") or {}).get("rejected_skipped"),
             )
-        stages.append(
-            StageResult(
-                stage="news_impact",
-                status="ok",
-                vendor="news_verification",
-                fetched_at=now,
-                data={
-                    "approved": (news_impact.get("summary") or {}).get("approved_count"),
-                    "items": len(news_impact.get("items") or []),
-                },
-            )
-        )
-        log.info(
-            "news_impact",
-            f"{len(news_impact.get('items') or [])} verified headlines",
-            skipped=(news_impact.get("summary") or {}).get("rejected_skipped"),
-        )
     except Exception as exc:
         log.info("news_impact", f"skipped: {exc}")
 
