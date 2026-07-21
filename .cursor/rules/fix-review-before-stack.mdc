@@ -30,6 +30,10 @@ Stop only when **both** are true:
 1. **Pass 2 + Pass 3 completed on the latest diff** with zero new **CONFIRMED** issues in code you touched this batch.
 2. Verification commands cited from **this session** (exit codes), not earlier turns.
 
+**Minimum rounds:** Run at least **two full cycles** (Pass 2 → Pass 3 → Pass 4 if needed → Pass 2 → Pass 3) before reporting review complete. A single Pass 3 is never sufficient.
+
+**Report format:** State explicit loop counts in the summary, e.g. `Convergence round 1: 2 CONFIRMED → fixed` / `Convergence round 2: Pass 3 — 0 new CONFIRMED`.
+
 If Pass 3 still finds CONFIRMED issues: **go to Pass 4** — do not report "fixed" or move to the next phase.
 
 If only **HYPOTHESIS** remains: document explicitly; user may accept or ask to investigate.
