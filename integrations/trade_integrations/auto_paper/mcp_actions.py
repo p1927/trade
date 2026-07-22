@@ -23,7 +23,7 @@ from trade_integrations.auto_paper.mandate_enforcer import (
     product_for_session,
     validate_decision,
 )
-from trade_integrations.auto_paper.lifecycle import default_lifecycle, on_basket_executed, on_decision
+from trade_integrations.auto_paper.lifecycle import default_lifecycle, load_lifecycle, on_basket_executed, on_decision
 from trade_integrations.auto_paper.outcome_ledger import append_outcome
 from trade_integrations.auto_paper.session_store import load_session, save_session, set_vibe_session_id, start_session, stop_session
 from trade_integrations.monitor.execution_ledger import list_open_entries, list_open_entries_live, record_execution_from_widget
@@ -445,8 +445,9 @@ def record_decision(
     confidence: int | None = None,
     direction: str | None = None,
     strategy: str | None = None,
+    autonomous_agent_id: str | None = None,
 ) -> dict[str, Any]:
-    session = load_session()
+    session = load_session(autonomous_agent_id=autonomous_agent_id)
     raw_decision = decision.strip().upper()
     validated, warnings = validate_decision(raw_decision, session)
     entry = {
@@ -475,15 +476,20 @@ def record_decision(
     on_decision(session, decision=entry["decision"], rationale=entry["rationale"], ticker=entry.get("ticker"))
     if entry["decision"] == "EXIT":
         mc = mandate_config_from_session(session)
+        lifecycle = load_lifecycle(session)
+        exit_strategy = strategy or entry.get("strategy")
+        if not exit_strategy:
+            tried = list(lifecycle.get("tried_strategies") or [])
+            exit_strategy = tried[-1] if tried else lifecycle.get("active_strategy")
         append_outcome(
             symbol=str(entry.get("ticker") or session.get("primary_ticker") or "NIFTY"),
-            strategy=(session.get("lifecycle") or {}).get("active_strategy"),
+            strategy=exit_strategy,
             action="EXIT",
             intent_source="vibe_decision",
-            agent_id=session.get("autonomous_agent_id"),
+            agent_id=autonomous_agent_id or session.get("autonomous_agent_id"),
             mandate_snapshot=mc.to_dict(),
         )
-    save_session(session)
+    save_session(session, autonomous_agent_id=autonomous_agent_id)
 
     audit = write_paper_action("decision_recorded", detail=entry)
     return {"status": "recorded", "decision": entry, "audit": _audit_payload(audit)}
