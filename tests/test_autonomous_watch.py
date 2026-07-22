@@ -115,6 +115,10 @@ async def test_market_closed_watch_does_not_post_chat(hub_tmp: Path, monkeypatch
         "nautilus_openalgo_bridge.market_hours.is_market_open_for_market",
         lambda _market, **_: False,
     )
+    monkeypatch.setattr(
+        "trade_integrations.stock_simulator.integration.sim_market_session_open",
+        lambda **_: False,
+    )
 
     result = await run_watch_tick("aa_watch")
     assert result["reason"] == "outside_market_hours"
