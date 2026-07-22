@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -13,12 +14,33 @@ from trade_integrations.stock_simulator.hf_paths import hf_replay_root, index_sl
 
 IST = ZoneInfo("Asia/Kolkata")
 
+_OPENALGO_EXPIRY_RE = re.compile(
+    r"^(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})$",
+    re.IGNORECASE,
+)
+
 
 def _parse_expiry(stem: str) -> date | None:
     try:
         return date.fromisoformat(stem[:10])
     except ValueError:
         return None
+
+
+def _expiry_to_file_stem(expiry_date: str) -> str | None:
+    """Map OpenAlgo DDMMMYY / ISO expiry to parquet filename stem (YYYY-MM-DD)."""
+    raw = expiry_date.strip().upper().replace("-", "")
+    try:
+        return date.fromisoformat(expiry_date[:10]).isoformat()
+    except ValueError:
+        pass
+    match = _OPENALGO_EXPIRY_RE.match(raw)
+    if not match:
+        return None
+    day, month, yy = match.groups()
+    month_num = "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC".index(month.upper()[:3]) // 3 + 1
+    year = 2000 + int(yy)
+    return date(year, month_num, int(day)).isoformat()
 
 
 class OptionsReplayStore:
@@ -129,6 +151,53 @@ class OptionsReplayStore:
             "replay_expiry_file": path.name,
         }
 
+    def quote_at(self, openalgo_symbol: str, exchange: str, sim_ts: datetime) -> dict[str, float | int] | None:
+        """LTP/OI for an OpenAlgo-format option symbol at sim_ts."""
+        from trade_integrations.stock_simulator.master_contract import parse_openalgo_option_symbol
+
+        parsed = parse_openalgo_option_symbol(openalgo_symbol)
+        if parsed is None:
+            return None
+        slug = parsed["base"]
+        index_exchange = "BSE_INDEX" if slug == "SENSEX" else "NSE_INDEX"
+        if not self.has_underlying(slug, index_exchange):
+            return None
+
+        opt_dir = options_dir(self.data_root, slug)
+        expiry_iso = parsed["expiry"].isoformat()
+        path = opt_dir / f"{expiry_iso}.parquet"
+        if not path.is_file():
+            return None
+
+        frame = self._load_expiry(path)
+        if frame.empty:
+            return None
+
+        sim_ist = sim_ts.astimezone(IST)
+        day = sim_ist.date().isoformat()
+        cutoff = pd.Timestamp(sim_ist)
+        day_frame = frame[
+            (frame["trading_day"] == day)
+            & (frame["timestamp"] <= cutoff)
+            & (frame["strike"] == parsed["strike"])
+            & (frame["option_type"] == parsed["option_type"])
+        ]
+        if day_frame.empty:
+            return None
+        hit = day_frame.sort_values("timestamp").iloc[-1]
+        ltp = float(hit["close"])
+        return {
+            "open": float(hit["open"]),
+            "high": float(hit["high"]),
+            "low": float(hit["low"]),
+            "close": ltp,
+            "ltp": ltp,
+            "volume": int(hit.get("volume") or 0),
+            "oi": int(hit.get("open_interest") or 0),
+            "prev_close": ltp,
+            "bar_ts": pd.Timestamp(hit["timestamp"]).isoformat(),
+        }
+
     def _pick_expiry_file(
         self,
         slug: str,
@@ -142,13 +211,15 @@ class OptionsReplayStore:
         if not files:
             return None
         if expiry_date:
-            target = expiry_date[:10]
+            target = _expiry_to_file_stem(expiry_date) or expiry_date[:10]
             for path in files:
                 if path.stem == target:
                     return path
             return None
         sim_day = sim_ts.astimezone(IST).date()
-        candidates = [p for p in files if (_parse_expiry(p.stem) or sim_day) >= sim_day]
+        candidates = [
+            p for p in files if (exp := _parse_expiry(p.stem)) is not None and exp >= sim_day
+        ]
         if not candidates:
             return files[-1]
         return candidates[0]

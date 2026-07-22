@@ -89,6 +89,7 @@ class ReplayCatalog:
             "volume": int(hit.get("volume") or 0),
             "prev_close": prev_close,
             "bar_ts": hit["ts_ist"].isoformat(),
+            "bar_minutes": minutes,
         }
 
     def _load_symbol(self, symbol: str, exchange: str) -> pd.DataFrame:

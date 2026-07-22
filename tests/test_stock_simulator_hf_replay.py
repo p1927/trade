@@ -78,6 +78,13 @@ def test_replay_service_banknifty_option_chain_uses_hf():
     assert chain["simulated"] is True
 
 
+def test_expiry_to_file_stem_accepts_openalgo_format():
+    from trade_integrations.stock_simulator.options.replay_store import _expiry_to_file_stem
+
+    assert _expiry_to_file_stem("25APR24") == "2024-04-25"
+    assert _expiry_to_file_stem("2024-04-25") == "2024-04-25"
+
+
 def test_replay_service_multiquotes_banknifty():
     from trade_integrations.stock_simulator.replay import get_replay_service
 

@@ -73,10 +73,17 @@ class ReplayService:
 
     def get_quote(self, symbol: str, exchange: str) -> dict[str, Any]:
         now = self.sim_now()
-        bar = self.catalog.bar_at(symbol, exchange, now)
+        bar = self._quote_bar(symbol, exchange, now)
         if bar is None:
             raise ValueError(f"No replay bar for {symbol}/{exchange} at {now.isoformat()}")
-        return to_openalgo_quote(symbol=symbol, exchange=exchange, bar=bar, sim_ts=now)
+        return to_openalgo_quote(
+            symbol=symbol,
+            exchange=exchange,
+            bar=bar,
+            sim_ts=now,
+            bar_minutes=int(bar.get("bar_minutes") or 1),
+            oi=int(bar.get("oi") or 0),
+        )
 
     def get_multiquotes(self, symbols: list[dict[str, str]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -85,7 +92,7 @@ class ReplayService:
             symbol = str(item.get("symbol") or "").upper()
             exchange = str(item.get("exchange") or "").upper()
             try:
-                bar = self.catalog.bar_at(symbol, exchange, now)
+                bar = self._quote_bar(symbol, exchange, now)
                 if bar is None:
                     out.append({"symbol": symbol, "exchange": exchange, "error": "no replay bar"})
                     continue
@@ -94,13 +101,33 @@ class ReplayService:
                         "symbol": symbol,
                         "exchange": exchange,
                         "data": to_openalgo_quote(
-                            symbol=symbol, exchange=exchange, bar=bar, sim_ts=now
+                            symbol=symbol,
+                            exchange=exchange,
+                            bar=bar,
+                            sim_ts=now,
+                            bar_minutes=int(bar.get("bar_minutes") or 1),
+                            oi=int(bar.get("oi") or 0),
                         ),
                     }
                 )
             except Exception as exc:
                 out.append({"symbol": symbol, "exchange": exchange, "error": str(exc)})
         return out
+
+    def _quote_bar(self, symbol: str, exchange: str, now: datetime) -> dict[str, Any] | None:
+        ex = exchange.upper()
+        if ex in {"NFO", "BFO"}:
+            if self._options_store is None:
+                from trade_integrations.stock_simulator.options.replay_store import OptionsReplayStore
+
+                self._options_store = OptionsReplayStore(self.config.data_root)
+            opt = self._options_store.quote_at(symbol, ex, now)
+            if opt is not None:
+                return {**opt, "bar_minutes": 1}
+        bar = self.catalog.bar_at(symbol, exchange, now)
+        if bar is None:
+            return None
+        return dict(bar)
 
     def get_option_chain(
         self,
@@ -114,7 +141,15 @@ class ReplayService:
         spot_bar = self.catalog.bar_at(symbol, exchange, now)
         if spot_bar is None:
             raise ValueError(f"No spot bar for option chain: {symbol}/{exchange}")
-        spot = float(spot_bar.get("ltp") or spot_bar.get("close") or 0)
+        spot = float(
+            to_openalgo_quote(
+                symbol=symbol,
+                exchange=exchange,
+                bar=spot_bar,
+                sim_ts=now,
+                bar_minutes=int(spot_bar.get("bar_minutes") or 1),
+            )["ltp"]
+        )
 
         if self._options_store is None:
             from trade_integrations.stock_simulator.options.replay_store import OptionsReplayStore
