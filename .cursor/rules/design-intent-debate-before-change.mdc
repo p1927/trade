@@ -1,0 +1,84 @@
+---
+description: Triple debate on design intent before proposing code changes — defend existing implementation unless new design is clearly superior
+alwaysApply: true
+---
+
+# Design Intent Debate Before Change
+
+Works with `fix-review-before-stack`, `review-evidence-discipline`, and `targeted-bug-fix-discipline`.
+
+**Goal:** Do not "fix" intentional design. Before any change proposal, run **three debate rounds** that argue *for* the existing code. Only escalate to a fix when evidence beats all three defenses — or the user explicitly requests a different design.
+
+---
+
+## When this applies
+
+- Code review, feature audit, refactor suggestions, "this looks wrong" moments
+- Any finding labeled HYPOTHESIS or "could be better" before it becomes a fix
+- Pass 0 in `fix-review-before-stack` — extend research with design-intent debate
+
+---
+
+## Triple debate (mandatory before proposing a change)
+
+For each suspected issue, complete **three rounds**. Each round must answer all four questions in writing (brief bullets are fine):
+
+| Question | Purpose |
+|----------|---------|
+| **Why was this written?** | Read specs/plans in `docs/superpowers/`, commit messages, comments, callers, and north-star rules |
+| **What problem does it solve?** | Edge case, symmetry, rollout flag, India hours, paper-first, OpenAlgo authority, etc. |
+| **Pros of keeping it** | Correctness, safety, test coverage, operational contract, fewer moving parts |
+| **Cons of the alternative** | What breaks if we "simplify" — silent failures, race, wrong frame, status rollup |
+
+### Round outcomes
+
+| Round | Action |
+|-------|--------|
+| **1 — First impression** | State the complaint; list strongest *innocent* explanations |
+| **2 — Adversarial for existing code** | Steel-man: "This is good quality because…" — cite primary sources |
+| **3 — Decision** | Label: **CONFIRMED BUG** / **BY DESIGN** / **IMPROVEMENT (optional)** / **UNKNOWN** |
+
+**Change proposal allowed only when:**
+
+- Label is **CONFIRMED BUG** (primary source + repro/test), **or**
+- User explicitly asked for a different design, **or**
+- Round 3 concludes the new design satisfies **all** cases the old code handled **and** is **clearly much better** (document why in the proposal table)
+
+If Round 3 is **BY DESIGN** or **IMPROVEMENT (optional)**: report as observation, not a fix queue item.
+
+---
+
+## Proposal table (when change is allowed)
+
+| Field | Content |
+|-------|---------|
+| Issue ID | Feature + file:line |
+| Debate summary | One line per round (1/2/3) |
+| Existing design wins | What we would lose by changing |
+| Why change anyway | Only for CONFIRMED BUG or user-approved redesign |
+| Smallest fix | Files touched |
+| Verification | Commands + failure-mode test |
+
+Then enter `fix-review-before-stack` (Pass 1–4) if implementing.
+
+---
+
+## Forbidden
+
+- "This feels unnecessary" without reading the spec/plan that introduced it
+- Refactors driven by style preference when behavior matches intentional design
+- Skipping Round 2 ("steel-man the existing code")
+- Treating subagent or grep output as proof without primary-source re-read
+- Implementing **IMPROVEMENT (optional)** without user approval
+
+---
+
+## Tie-in with 3-pass fix review
+
+```
+Suspected issue
+ → Triple design-intent debate (this rule)
+ → If CONFIRMED BUG or user-approved redesign
+     → fix-review-before-stack Pass 0–4
+ → Report: debate labels + verification; separate BY DESIGN from fix queue
+```
