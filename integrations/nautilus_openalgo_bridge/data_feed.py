@@ -91,7 +91,7 @@ class OpenAlgoQuoteFeed:
             return self._poll_impl(symbols)
 
     def _poll_impl(self, symbols: list[str] | None = None) -> dict[str, QuoteSnapshot]:
-        watch_symbols = symbols or list(self.config.watch_symbols)
+        watch_symbols = list(symbols or [])
         requests = multiquote_requests(watch_symbols)
         if not requests:
             return {}

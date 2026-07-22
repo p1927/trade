@@ -28,8 +28,7 @@ class OpenAlgoLiveDataClientFactory(LiveDataClientFactory):
         cache: Cache,
         clock: LiveClock,
     ) -> OpenAlgoLiveDataClient:
-        bridge = get_bridge_config()
-        symbols = config.watch_symbols or bridge.watch_symbols
+        symbols = tuple(config.watch_symbols or ())
         provider = OpenAlgoInstrumentProvider(symbols=symbols)
         return OpenAlgoLiveDataClient(
             loop=loop,

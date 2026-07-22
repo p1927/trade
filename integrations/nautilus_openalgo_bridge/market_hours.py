@@ -54,6 +54,16 @@ def is_market_open_for_market(market: str, *, now: datetime | None = None) -> bo
 def agent_market(agent_id: str | None) -> str:
     if not agent_id:
         return "IN"
+    if str(agent_id).startswith("ws_"):
+        try:
+            from trade_integrations.autonomous_agents.nautilus_watch import list_registry_agents
+
+            for row in list_registry_agents():
+                if str(row.get("agent_id") or "") == agent_id:
+                    return str(row.get("market") or "IN").upper()
+        except Exception:
+            pass
+        return "IN"
     try:
         from trade_integrations.autonomous_agents.store import get_agent
         from trade_integrations.execution.profile import resolve_profile

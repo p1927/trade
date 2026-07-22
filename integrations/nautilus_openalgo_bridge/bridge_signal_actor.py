@@ -140,6 +140,17 @@ class BridgeSignalActor(Actor):
             result = dispatch_watch_alert_sync(agent_id, alert)
             reason = result.get("reason") or result.get("error") or ""
             self.log.info(f"Vibe dispatch: {result.get('status')}" + (f" ({reason})" if reason else ""))
+            if result.get("status") == "dispatched":
+                try:
+                    from trade_integrations.watch_registry.store import record_owner_alert_fired
+
+                    record_owner_alert_fired(
+                        agent_id,
+                        str(payload.get("message") or alert.message or "watch alert"),
+                        symbol=str(payload.get("symbol") or alert.symbol or ""),
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             self.log.error(f"Vibe dispatch failed: {exc}")
 

@@ -37,11 +37,30 @@ def main(argv: list[str] | None = None) -> int:
 
     trigger = args.trigger_vibe or bool(args.agent_id) or args.registry
 
+    agent_id = args.agent_id
+    if args.registry and not agent_id:
+        try:
+            from trade_integrations.autonomous_agents.nautilus_watch import get_registry_agent_ids
+
+            reg_ids = get_registry_agent_ids()
+            if reg_ids:
+                agent_id = reg_ids[0]
+            elif not args.dry_run and not args.legacy_poll and not args.once:
+                pass
+            else:
+                logging.basicConfig(level=logging.ERROR)
+                logging.error("registry mode but no agents in log/nautilus-watch.agents.json")
+                return 1
+        except Exception as exc:
+            logging.basicConfig(level=logging.ERROR)
+            logging.error("failed to load watch registry: %s", exc)
+            return 1
+
     if args.dry_run or args.legacy_poll or args.once:
         from nautilus_openalgo_bridge.runtime.poll_loop import run_poll_loop
 
         return run_poll_loop(
-            agent_id=args.agent_id,
+            agent_id=agent_id,
             once=args.once or args.dry_run,
             trigger_vibe=trigger and not args.dry_run,
             dry_run=args.dry_run,
@@ -59,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         from nautilus_openalgo_bridge.runtime.poll_loop import run_poll_loop
 
         return run_poll_loop(
-            agent_id=args.agent_id,
+            agent_id=agent_id,
             once=False,
             trigger_vibe=trigger,
             dry_run=False,

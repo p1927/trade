@@ -9,7 +9,7 @@ from typing import Any
 
 from nautilus_openalgo_bridge.config import get_bridge_config, is_bridge_market_open, is_watch_enabled
 from nautilus_openalgo_bridge.data_feed import OpenAlgoQuoteFeed
-from nautilus_openalgo_bridge.handoff import handoff_mtime, load_agent_watch_spec, load_handoff
+from nautilus_openalgo_bridge.handoff import handoff_mtime, load_handoff
 from nautilus_openalgo_bridge.intent_queue import process_pending_intents
 from nautilus_openalgo_bridge.models import BridgeSignal, WatchSpec
 from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
@@ -31,14 +31,7 @@ def _agent_mtime(agent_id: str) -> float | None:
 
 
 def _default_watch_spec() -> WatchSpec:
-    cfg = get_bridge_config()
-    rules = [
-        {"symbol": symbol, "metric": "spot_move_pct", "threshold": 0.5, "direction": "either"}
-        for symbol in cfg.watch_symbols
-        if symbol != "INDIAVIX"
-    ]
-    rules.append({"symbol": "INDIAVIX", "metric": "level_above", "threshold": 14.0})
-    return WatchSpec.from_dict({"rules": rules})
+    return WatchSpec.from_dict({})
 
 
 def _resolve_watch_spec(agent_id: str | None) -> WatchSpec:
@@ -46,9 +39,6 @@ def _resolve_watch_spec(agent_id: str | None) -> WatchSpec:
         handoff = load_handoff(agent_id)
         if handoff and handoff.watch_spec.rules:
             return handoff.watch_spec
-        raw = load_agent_watch_spec(agent_id)
-        if raw:
-            return WatchSpec.from_dict(raw)
         return WatchSpec.from_dict({})
     return _default_watch_spec()
 
@@ -126,6 +116,17 @@ def run_once(
         )
 
 
+def _resolve_poll_symbols(agent_id: str | None) -> list[str]:
+    if not agent_id:
+        return []
+    try:
+        from trade_integrations.watch_registry.scope import symbols_for_owner
+
+        return list(symbols_for_owner(agent_id))
+    except Exception:
+        return []
+
+
 def _run_once_impl(
     *,
     agent_id: str | None = None,
@@ -136,7 +137,8 @@ def _run_once_impl(
     cfg = get_bridge_config()
     feed = OpenAlgoQuoteFeed()
     spec = _resolve_watch_spec(agent_id)
-    quotes = feed.poll()
+    poll_symbols = _resolve_poll_symbols(agent_id)
+    quotes = feed.poll(poll_symbols)
     alerts = evaluate_watch_spec(spec, quotes, baselines=baselines or {})
 
     handoff = load_handoff(agent_id) if agent_id else None
@@ -217,13 +219,14 @@ def run_once_alpaca(
     cfg = get_bridge_config()
     feed = AlpacaQuoteFeed()
     spec = _resolve_watch_spec(agent_id)
-    try:
-        from trade_integrations.autonomous_agents.store import get_agent
-
-        agent = get_agent(agent_id) if agent_id else None
-        symbols = [str(s).upper() for s in (agent.get("symbols") or ["SPY"])] if agent else ["SPY"]
-    except Exception:
-        symbols = ["SPY"]
+    symbols = _resolve_poll_symbols(agent_id)
+    if not symbols:
+        return {
+            "quotes": {},
+            "alerts": [],
+            "dispatches": [],
+            "intents_processed": [],
+        }
     quotes = feed.poll(symbols)
     alerts = evaluate_watch_spec(spec, quotes, baselines=baselines or {})
 
@@ -366,7 +369,7 @@ def run_poll_loop(
             except RuntimeError as exc:
                 logger.debug("intent queue tick skipped: %s", exc)
 
-        quotes = feed.poll()
+        quotes = feed.poll(_resolve_poll_symbols(agent_id))
         for symbol, snap in quotes.items():
             baselines.setdefault(symbol, snap.ltp)
 

@@ -98,26 +98,34 @@ def _agent_market(agent_id: str) -> str:
         return "IN"
 
 
+def _symbols_for_agent_id(agent_id: str) -> list[str]:
+    """Symbols to poll for one Nautilus owner — registry-only, no env defaults."""
+    aid = str(agent_id or "").strip()
+    if not aid:
+        return []
+    try:
+        from trade_integrations.watch_registry.scope import symbols_for_owner
+
+        syms = list(symbols_for_owner(aid))
+        if syms:
+            return [str(s).upper() for s in syms]
+    except Exception:
+        pass
+    return []
+
+
 def _collect_watch_symbols(agent_ids: list[str], bridge: BridgeConfig) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    in_symbols: set[str] = set(bridge.watch_symbols)
+    in_symbols: set[str] = set()
     us_symbols: set[str] = set()
     for aid in agent_ids:
         market = _agent_market(aid)
-        try:
-            from trade_integrations.autonomous_agents.store import get_agent
-
-            agent = get_agent(aid) or {}
-            syms = [str(s).upper() for s in (agent.get("symbols") or [])]
-        except Exception:
-            syms = []
+        syms = _symbols_for_agent_id(aid)
+        if not syms:
+            continue
         if market == "US":
-            us_symbols.update(syms or ["SPY"])
+            us_symbols.update(syms)
         else:
-            in_symbols.update(syms or ["NIFTY"])
-    if not in_symbols:
-        in_symbols = set(bridge.watch_symbols)
-    if not us_symbols and any(_agent_market(a) == "US" for a in agent_ids):
-        us_symbols.add("SPY")
+            in_symbols.update(syms)
     return tuple(sorted(in_symbols)), tuple(sorted(us_symbols))
 
 
@@ -158,7 +166,7 @@ def build_trading_node_config(
             "trigger_vibe": trigger_vibe,
             "alert_cooldown_sec": cfg.alert_cooldown_sec,
             "market": _agent_market(aid) if aid else "IN",
-            "watch_symbols": list(us_symbols if aid and _agent_market(aid) == "US" else in_symbols),
+            "watch_symbols": list(_symbols_for_agent_id(aid) if aid else []),
         }
         actors.append(
             ImportableActorConfig(

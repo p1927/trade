@@ -59,8 +59,7 @@ class OpenAlgoLiveDataClient(LiveMarketDataClient):
         self._symbol_by_instrument: dict[InstrumentId, str] = {}
 
     async def _connect(self) -> None:
-        bridge_cfg = get_bridge_config()
-        symbols = self._cfg.watch_symbols or bridge_cfg.watch_symbols
+        symbols = tuple(self._cfg.watch_symbols or ())
         for symbol in symbols:
             instrument = build_index_instrument(symbol)
             self._symbol_by_instrument[instrument.id] = normalize_symbol(symbol)

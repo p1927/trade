@@ -331,6 +331,10 @@ async def dispatch_watch_alert(
     config: BridgeConfig | None = None,
 ) -> dict[str, Any]:
     """Send alert summary + full reasoning prompt to the agent's Vibe session."""
+    agent_id = str(agent_id or "").strip()
+    if agent_id.startswith("ws_"):
+        return await _dispatch_session_watch_alert(agent_id, alert, quotes=quotes, config=config)
+
     agent = get_agent(agent_id)
     if not agent:
         return {"status": "error", "error": f"agent not found: {agent_id}"}
@@ -363,6 +367,16 @@ async def dispatch_watch_alert(
 
     try:
         result = await caller(session_id, prompt)
+        try:
+            from trade_integrations.watch_registry.store import record_owner_alert_fired
+
+            record_owner_alert_fired(
+                agent_id,
+                str(alert.message or "watch alert"),
+                symbol=str(alert.symbol or ""),
+            )
+        except Exception:
+            pass
         return {"status": "dispatched", "session_id": session_id, "result": result}
     except RuntimeError as exc:
         logger.warning("Vibe dispatch failed for %s: %s", agent_id, exc)
@@ -382,6 +396,53 @@ def dispatch_watch_alert_sync(
     return asyncio.run(
         dispatch_watch_alert(agent_id, alert, quotes=quotes, config=config)
     )
+
+
+async def _dispatch_session_watch_alert(
+    nautilus_owner: str,
+    alert: WatchAlert,
+    *,
+    quotes: dict[str, QuoteSnapshot] | None = None,
+    config: BridgeConfig | None = None,
+) -> dict[str, Any]:
+    from nautilus_openalgo_bridge.handoff import load_handoff
+
+    handoff = load_handoff(nautilus_owner)
+    session_id = str(handoff.vibe_session_id if handoff else "").strip()
+    if not session_id:
+        try:
+            from trade_integrations.watch_registry.store import list_watches_for_nautilus_owner
+
+            watches = list_watches_for_nautilus_owner(nautilus_owner)
+            if watches:
+                session_id = str(watches[0].get("vibe_session_id") or "").strip()
+        except Exception:
+            pass
+    if not session_id:
+        return {"status": "error", "error": "session watch has no vibe_session_id"}
+
+    prompt = (
+        build_bridge_alert_block(alert, quotes)
+        + "\n# Interactive session watch alert\n"
+        "Re-evaluate your thesis and decide whether to act, adjust the watch, or dismiss.\n"
+    )
+    caller = make_vibe_message_client(config)
+    try:
+        result = await caller(session_id, prompt)
+        try:
+            from trade_integrations.watch_registry.store import record_owner_alert_fired
+
+            record_owner_alert_fired(
+                nautilus_owner,
+                str(alert.message or "watch alert"),
+                symbol=str(alert.symbol or ""),
+            )
+        except Exception:
+            pass
+        return {"status": "dispatched", "session_id": session_id, "result": result}
+    except RuntimeError as exc:
+        logger.warning("Vibe dispatch failed for session owner %s: %s", nautilus_owner, exc)
+        return {"status": "error", "error": str(exc)}
 
 
 def ping_vibe_backend(config: BridgeConfig | None = None) -> dict[str, Any]:

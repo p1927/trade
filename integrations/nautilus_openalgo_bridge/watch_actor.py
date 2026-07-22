@@ -13,7 +13,7 @@ from nautilus_trader.common.config import ActorConfig
 from nautilus_trader.model.data import QuoteTick
 
 from nautilus_openalgo_bridge.config import get_bridge_config
-from nautilus_openalgo_bridge.handoff import handoff_mtime, load_agent_watch_spec, load_handoff
+from nautilus_openalgo_bridge.handoff import handoff_mtime, load_handoff
 from nautilus_openalgo_bridge.models import BridgeSignal, QuoteSnapshot, WatchAlert, WatchSpec
 from nautilus_openalgo_bridge.nautilus_instruments import default_watch_instrument_ids
 from nautilus_openalgo_bridge.reconcile import open_positions_from_book, total_unrealized_pnl
@@ -57,7 +57,12 @@ class WatchActor(Actor):
 
     def on_start(self) -> None:
         self._reload_watch_spec(force=True)
-        symbols = self._watch_symbols or self._bridge.watch_symbols
+        symbols = self._watch_symbols
+        if not symbols:
+            self.log.warning(
+                f"WatchActor started agent={self._agent_id or 'default'} with no watch symbols — idle",
+            )
+            return
         for iid in default_watch_instrument_ids(symbols, market=self._market):
             self.subscribe_quote_ticks(iid)
         self.subscribe_signal(SIGNAL_REVIEW)
@@ -149,9 +154,7 @@ class WatchActor(Actor):
         if handoff and handoff.watch_spec.rules:
             self._spec = handoff.watch_spec
         else:
-            raw = load_agent_watch_spec(self._agent_id)
-            if raw:
-                self._spec = WatchSpec.from_dict(raw)
+            self._spec = WatchSpec.from_dict({})
         self._refresh_spot_baselines()
 
     def _refresh_spot_baselines(self) -> None:
