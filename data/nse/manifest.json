@@ -39,17 +39,17 @@
     {
       "path": "fii_dii/fii_dii_daily.parquet",
       "dataset": "fii_dii",
-      "sha256": "63f039cdd88cfde0cc12abc4f45611f4e93ec415ab44c6904e915dffb1da7891",
+      "sha256": "2afa51ac2041c02aaa9a7ba05425ef50b7dec5b94e4bcf773186b0c76bce04ea",
       "rows": 4277,
       "date_range": {
         "start": "2007-01-06",
         "end": "2026-07-21"
       },
-      "fetched_at": "2026-07-21T20:40:42.893856+00:00",
+      "fetched_at": "2026-07-22T06:13:14.665147+00:00",
       "source": "niftyinvest_api"
     }
   ],
-  "updated_at": "2026-07-21T20:40:42.894379+00:00",
+  "updated_at": "2026-07-22T06:13:18.889716+00:00",
   "seed_layers": {
     "fii_dii": {
       "fingerprint": "4a33944aac11a98eb4e4853b08129076c307131b13370631f5457a2c7d96a870",
@@ -65,8 +65,8 @@
     }
   },
   "hub_sync": {
-    "fingerprint": "9ab17a14ca355ecf072f5f832e0dd97c3acceaf62614b28be94e22c41a83f86c",
-    "updated_at": "2026-07-21T17:43:15.362021+00:00",
+    "fingerprint": "69addb100b13633fb34a26e973642592d37093f7c86635037012d6e5f9fa26fb",
+    "updated_at": "2026-07-22T06:13:18.889650+00:00",
     "last_counts": {
       "fii_dii": 4166,
       "fpi": 1,
