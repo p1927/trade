@@ -194,12 +194,11 @@ Implement phase scope only
 
 | Phase | Status |
 |-------|--------|
-| 1a Core engine | Pending |
-| 1b OpenAlgo plugin | Pending |
-| 1c Hub no-learn | Pending |
-| 1d UI + gates | Pending |
-| 2 Options | Pending |
+| 1a Core engine | **Met** — ReplayCatalog, SimClock, HF replay |
+| 1b OpenAlgo plugin | **Met** — broker plugin, multiquotes/quotes/optionchain |
+| 1c Hub no-learn | **Met** — `hub_no_learn()` gate + tests |
+| 1d UI + gates | **Partial** — broker login + frontend rebuild; sim panel pending |
+| 2 Options (NFO) | **Met** — HF options replay + symtoken master contract |
+| 2b OpenAlgo parity | **Met** — master contract, NFO quotes, margin, history 1m, depth |
 | 3 Tick recorder | Pending |
 | 4 Ops | Pending |
-
-**Blocked for code:** plan mode — switch to **Agent mode** and say **execute Phase 1a** to start.

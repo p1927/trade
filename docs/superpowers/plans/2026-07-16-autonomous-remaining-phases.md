@@ -16,9 +16,12 @@
 
 ## Phase 3 — Outcome ledger → ranker calibration
 
-- Extend `outcome_ledger.py`: metrics, per-strategy adjustment, reconcile on EXIT
-- Wire `paper_strategy_calibration_adjustment(name)` into `strategy_ranker.py`
-- Inject `[paper_calibration]` into `hub_context.py` for agent turns
+**Status:** **Shipped** — global ranker + autonomous learning bridge via `agent_learning.py`.
+
+- `outcome_ledger.py`: metrics, per-strategy adjustment, reconcile on EXIT — **done**
+- `paper_strategy_calibration_adjustment(name)` in `strategy_ranker.py` — **done**
+- `[trade_calibration]` in `hub_context.py` for agent turns — **done** (via session prefetch)
+- `agent_learning.py`: lifecycle + per-agent reflections + learnings in turns; EXIT hooks — **done**
 
 ## Phase 4 — Autonomous Hub UI
 

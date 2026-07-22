@@ -56,12 +56,33 @@ ONGOING
 
 Lightweight **watch ticks** (5–10 min) run between full **research ticks** (60–120 min). Material alerts bypass the schedule and dispatch immediate full reasoning.
 
+## Observe–revise intelligence (locked)
+
+1. **Duration-bound objective** — Mandate includes a holding horizon; revision turns weigh expected profit vs time remaining, not direction alone.
+2. **Three-tier attention** — Nautilus owns sub-minute polling; agent gets (a) lightweight watch summaries on mandate interval, (b) full reasoning on material alerts or user guidance, (c) optional scheduled deep research only when explicitly enabled.
+3. **Minimum agent attention floor** — Defaults: watch summary **5–10 min**, alert cooldown **≥300s**, revision blocked while `streaming`, research cooldown **15 min** between full turns.
+4. **Strategy-encoded watchers** — `watch_spec` reflects chosen strategy with explicit entry/exit levels; generic mandate dumps are bootstrap placeholders only.
+5. **Revision checklist** — On `strategy_revision`: hub delta + live quotes + positions + strategy progress → ENTER | HOLD | REVISE | EXIT; update `watch_spec` when levels change.
+6. **Observe module split** — TradingAgents/hub = batch dossier; Vibe built-in = live synthesis; Nautilus = rule eval and hard exits; no duplicate LLM polling paths.
+
+## Learning over time (locked)
+
+Reuse [`auto_paper/`](integrations/trade_integrations/auto_paper/) — do not fork a parallel learning stack.
+
+1. **Record every closed trade** — `outcome_ledger` row with `agent_id`, strategy, net P&L, mandate snapshot (ENTER via basket, EXIT via bridge reconcile).
+2. **Learn at two levels** — (1) **global** ranker calibration from pooled outcomes (±0.05 after ≥3 closes per strategy); (2) **per-agent** `learnings[]` on agent JSON + lifecycle `tried_strategies` / plan-B from paper session.
+3. **Inject learnings into turns** — `agent_learning.format_learning_context_for_prompt` adds lifecycle, reflections, recent decisions, and agent learnings to `build_full_reasoning_prompt`; hub prefetch adds `[trade_calibration]`.
+4. **No silent repeat** — Strategies in `tried_strategies` must not be re-entered without new hub evidence or explicit user guidance.
+5. **Reflection on EXIT** — `save_reflection` + append `agent.learnings` on every `record_autonomous_decision(EXIT)`.
+6. **Deep learning (optional v2)** — After thesis-break or max-loss EXIT, bounded TradingAgents refresh or web research to validate failure cause (mirror prediction hypothesis validation — not open-ended browse every tick).
+
 ## What each agent instance must persist
 
 `reports/hub/_data/autonomous_agents/{id}.json` at minimum:
 
 - Mandate, symbols, constraints (budget, max daily loss, confidence threshold, paper/live)
-- `thesis` — direction, strategy, confidence, rationale, `updated_at`
+- `thesis` — direction, strategy, confidence, rationale, `tried_strategies`, `updated_at`
+- `learnings` — last N structured trade lessons (EXIT events, P&L when known)
 - `watch_spec` — Nautilus rules (spot move %, VIX, flatten-at-close, thesis-break)
 - `vibe_session_id` — 1:1 chat transcript (user guidance + scheduler turns)
 - Last watch / research / decision timestamps
@@ -102,11 +123,13 @@ Same Vibe session runtime. Autonomous sessions tagged `session_kind: autonomous_
 | Agent create (orchestrator propose/commit) | In progress — see `docs/superpowers/specs/2026-07-16-autonomous-agents-design.md` |
 | Parallel hub + TradingAgents research | **Met** — hub artifacts + async debate API |
 | Vibe synthesis + strategy ranker | **Met** — options/stock skills, widgets |
-| Nautilus watch + OpenAlgo bridge | Planned — `docs/superpowers/plans/2026-07-16-nautilus-openalgo-bridge.md` |
-| Alert → Vibe revision turn | Planned — `vibe_trigger.py` + `autonomous_agents/turns.py` |
-| Entry handoff + position reconciliation | Planned — `handoff.py` + bridge execute |
-| Outcome ledger → ranker calibration | Planned — `autonomous-remaining-phases.md` Phase 3 |
-| Autonomous hub UI (cards, health, runtime) | Planned — remaining phases Phase 4 |
+| Nautilus watch + OpenAlgo bridge | **Met** — detached node, watch registry, vibe_trigger |
+| Alert → Vibe revision turn | **Met** — `vibe_trigger.py` + `autonomous_agents/turns.py` |
+| Entry handoff + position reconciliation | **Partial** — handoff sync on ENTER/REVISE; continuous reconcile planned |
+| Outcome ledger → global ranker calibration | **Met** — `outcome_ledger.py` + ranker nudge + `[trade_calibration]` in hub context |
+| Per-agent learning in autonomous turns | **Met** — `agent_learning.py` bridges lifecycle, reflections, learnings |
+| Attention-gate parity (Nautilus node path) | **Met** — `skip_if_unchanged_gate` in `vibe_trigger.dispatch_watch_alert` |
+| Autonomous hub UI (cards, health, runtime) | **Partial** — `runtime_status.py`; full Phase 4 UI planned |
 
 ## Before starting any task, ask
 
