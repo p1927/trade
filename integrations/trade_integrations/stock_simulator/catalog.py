@@ -8,28 +8,33 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from trade_integrations.stock_simulator.hf_paths import index_parquet_path, index_slug
+
 IST = ZoneInfo("Asia/Kolkata")
 
-_INDEX_SYMBOLS: dict[tuple[str, str], str] = {
-    ("NIFTY", "NSE_INDEX"): "nifty50",
-    ("NIFTY 50", "NSE_INDEX"): "nifty50",
-    ("NIFTY50", "NSE_INDEX"): "nifty50",
-}
-
-_INTRADAY_CSV = "nifty50_intraday_5min.csv"
+_LEGACY_INTRADAY_CSV = "nifty50_intraday_5min.csv"
 
 
 def _normalize_naive_to_ist(ts: pd.Timestamp) -> pd.Timestamp:
     if ts.tzinfo is not None:
         return ts.tz_convert(IST)
-    # nifty50_intraday_5min.csv stores naive timestamps in UTC (03:45 UTC = 09:15 IST).
     return ts.tz_localize("UTC").tz_convert(IST)
+
+
+def _bucket_ts(sim_ist: datetime, bar_minutes: int) -> datetime:
+    bucket = sim_ist.replace(second=0, microsecond=0)
+    if bar_minutes <= 1:
+        return bucket
+    minute = bucket.minute - (bucket.minute % bar_minutes)
+    return bucket.replace(minute=minute)
 
 
 class ReplayCatalog:
     def __init__(self, data_root: Path) -> None:
         self.data_root = data_root
         self._frames: dict[str, pd.DataFrame] = {}
+        self._bar_minutes: dict[str, int] = {}
+        self._legacy_nifty: pd.DataFrame | None = None
 
     def available_dates(self, symbol: str, exchange: str) -> list[str]:
         frame = self._load_symbol(symbol, exchange)
@@ -39,17 +44,36 @@ class ReplayCatalog:
         return sorted(days)
 
     def bar_at(self, symbol: str, exchange: str, sim_now: datetime) -> dict[str, float | int] | None:
-        frame = self._load_symbol(symbol, exchange)
-        if frame.empty:
+        slug = index_slug(symbol, exchange)
+        if not slug:
             return None
         sim_ist = sim_now.astimezone(IST)
         day = sim_ist.date().isoformat()
+
+        bar = self._bar_from_frame(self._load_symbol(symbol, exchange), sim_ist, day)
+        if bar is not None:
+            return bar
+
+        if slug == "NIFTY":
+            legacy = self._load_legacy_nifty_csv()
+            return self._bar_from_frame(legacy, sim_ist, day, bar_minutes=5)
+        return None
+
+    def _bar_from_frame(
+        self,
+        frame: pd.DataFrame,
+        sim_ist: datetime,
+        day: str,
+        *,
+        bar_minutes: int | None = None,
+    ) -> dict[str, float | int] | None:
+        if frame.empty:
+            return None
         day_frame = frame[frame["day"] == day]
         if day_frame.empty:
             return None
-        bucket = sim_ist.replace(second=0, microsecond=0)
-        minute = bucket.minute - (bucket.minute % 5)
-        bucket = bucket.replace(minute=minute)
+        minutes = bar_minutes or int(frame.attrs.get("bar_minutes", 1))
+        bucket = _bucket_ts(sim_ist, minutes)
         row = day_frame[day_frame["ts_ist"] <= bucket]
         if row.empty:
             return None
@@ -67,26 +91,46 @@ class ReplayCatalog:
             "bar_ts": hit["ts_ist"].isoformat(),
         }
 
-    def _slug(self, symbol: str, exchange: str) -> str | None:
-        key = (symbol.strip().upper(), exchange.strip().upper())
-        return _INDEX_SYMBOLS.get(key)
-
     def _load_symbol(self, symbol: str, exchange: str) -> pd.DataFrame:
-        slug = self._slug(symbol, exchange)
+        slug = index_slug(symbol, exchange)
         if not slug:
             return pd.DataFrame()
         if slug in self._frames:
             return self._frames[slug]
-        path = self.data_root / _INTRADAY_CSV
-        if not path.is_file():
-            self._frames[slug] = pd.DataFrame()
+
+        hf_path = index_parquet_path(self.data_root, slug)
+        if hf_path.is_file():
+            raw = pd.read_parquet(hf_path)
+            raw["ts_ist"] = pd.to_datetime(raw["timestamp"], errors="coerce")
+            if raw["ts_ist"].dt.tz is None:
+                raw["ts_ist"] = raw["ts_ist"].dt.tz_localize(IST)
+            else:
+                raw["ts_ist"] = raw["ts_ist"].dt.tz_convert(IST)
+            raw = raw.dropna(subset=["ts_ist"]).sort_values("ts_ist")
+            raw["day"] = raw["ts_ist"].dt.date.astype(str)
+            t = raw["ts_ist"].dt.time
+            open_t = datetime.strptime("09:15", "%H:%M").time()
+            close_t = datetime.strptime("15:30", "%H:%M").time()
+            raw = raw[(t >= open_t) & (t <= close_t)]
+            raw.attrs["bar_minutes"] = 1
+            self._bar_minutes[slug] = 1
+            self._frames[slug] = raw.reset_index(drop=True)
             return self._frames[slug]
+
+        self._frames[slug] = pd.DataFrame()
+        return self._frames[slug]
+
+    def _load_legacy_nifty_csv(self) -> pd.DataFrame:
+        if self._legacy_nifty is not None:
+            return self._legacy_nifty
+        path = self.data_root / _LEGACY_INTRADAY_CSV
+        if not path.is_file():
+            self._legacy_nifty = pd.DataFrame()
+            return self._legacy_nifty
         raw = pd.read_csv(path)
         raw["ts_ist"] = pd.to_datetime(raw["date"], errors="coerce").map(_normalize_naive_to_ist)
-        raw = raw.dropna(subset=["ts_ist"])
-        raw = raw.sort_values("ts_ist")
+        raw = raw.dropna(subset=["ts_ist"]).sort_values("ts_ist")
         raw["day"] = raw["ts_ist"].dt.date.astype(str)
-        # NSE cash session in IST
         t = raw["ts_ist"].dt.time
         open_t = datetime.strptime("09:15", "%H:%M").time()
         close_t = datetime.strptime("15:30", "%H:%M").time()
@@ -94,5 +138,6 @@ class ReplayCatalog:
         raw["bucket"] = raw["ts_ist"].dt.floor("5min")
         raw = raw.drop_duplicates(subset=["day", "bucket"], keep="first")
         raw = raw.drop(columns=["bucket"])
-        self._frames[slug] = raw.reset_index(drop=True)
-        return self._frames[slug]
+        raw.attrs["bar_minutes"] = 5
+        self._legacy_nifty = raw.reset_index(drop=True)
+        return self._legacy_nifty

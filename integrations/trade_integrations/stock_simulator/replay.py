@@ -33,6 +33,7 @@ class ReplayService:
         )
         self.catalog = ReplayCatalog(config.data_root)
         self._options = None
+        self._options_store = None
         self._tick_thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -59,6 +60,7 @@ class ReplayService:
             stepped=self.config.is_stepped,
         )
         self.catalog = ReplayCatalog(self.config.data_root)
+        self._options_store = None
         if self.config.is_stepped:
             from trade_integrations.stock_simulator.state_store import persist_sim_now
 
@@ -108,13 +110,29 @@ class ReplayService:
         expiry_date: str | None = None,
         strike_count: int = 10,
     ) -> dict[str, Any]:
-        from trade_integrations.stock_simulator.options.synthesizer import synthesize_option_chain
-
         now = self.sim_now()
         spot_bar = self.catalog.bar_at(symbol, exchange, now)
         if spot_bar is None:
             raise ValueError(f"No spot bar for option chain: {symbol}/{exchange}")
         spot = float(spot_bar.get("ltp") or spot_bar.get("close") or 0)
+
+        if self._options_store is None:
+            from trade_integrations.stock_simulator.options.replay_store import OptionsReplayStore
+
+            self._options_store = OptionsReplayStore(self.config.data_root)
+
+        if self._options_store.has_underlying(symbol, exchange):
+            chain = self._options_store.chain_at(
+                underlying=symbol,
+                exchange=exchange,
+                spot=spot,
+                sim_ts=now,
+                expiry_date=expiry_date,
+                strike_count=strike_count,
+            )
+            if chain is not None:
+                return chain
+
         if self._options is None:
             from trade_integrations.stock_simulator.options.synthesizer import OptionsSynthesizer
 
@@ -132,10 +150,15 @@ class ReplayService:
         return self.clock.step(minutes=minutes)
 
     def status(self) -> dict[str, Any]:
+        bn_dates = self.catalog.available_dates("BANKNIFTY", "NSE_INDEX")
         return {
             "mode": self.config.mode,
             "clock": self.clock.status(),
-            "available_dates": self.catalog.available_dates("NIFTY", "NSE_INDEX")[-5:],
+            "available_dates": {
+                "NIFTY": self.catalog.available_dates("NIFTY", "NSE_INDEX")[-3:],
+                "BANKNIFTY": bn_dates[-3:] if bn_dates else [],
+            },
+            "hf_replay": bool(bn_dates),
         }
 
     def _tick_loop(self) -> None:

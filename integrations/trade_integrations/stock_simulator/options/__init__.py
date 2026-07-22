@@ -1,1 +1,1 @@
-"""Synthetic NFO option chains from replay spot."""
+"""NFO option chains from HF replay store or Black-Scholes fallback."""

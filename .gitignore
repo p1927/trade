@@ -244,6 +244,8 @@ data/nse/raw/
 !data/nse/**/*.parquet
 # Wide constituent CSV export exceeds GitHub 100MB limit — use parquet only
 data/nse/historic_data/nifty50_constituent_ohlcv_daily.csv
+# Hugging Face replay bulk download (~4GB) — local only
+data/nse/historic_data/replay/hf-india-index-options-1m/
 
 # Stack runtime artifacts (daemon pidfiles, Nautilus registry, local logs)
 log/

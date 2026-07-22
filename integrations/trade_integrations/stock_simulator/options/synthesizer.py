@@ -54,7 +54,7 @@ class OptionsSynthesizer:
         expiry = expiry_date or _next_weekly_expiry(sim_ts)
         expiry_dt = datetime.strptime(expiry[:10], "%Y-%m-%d").replace(tzinfo=IST, hour=15, minute=30)
         t_years = max(1 / 365, (expiry_dt - sim_ts.astimezone(IST)).total_seconds() / (365 * 24 * 3600))
-        step = 50.0 if spot >= 10000 else 100.0
+        step = 100.0 if spot >= 20000 else (50.0 if spot >= 10000 else 100.0)
         atm = round(spot / step) * step
         strikes = [atm + (i - strike_count // 2) * step for i in range(strike_count)]
         legs: list[dict[str, Any]] = []
