@@ -180,6 +180,10 @@ def mcp_record_decision(
         )
         if entry["decision"] in {"REVISE", "ADJUST"}:
             agent["last_revision_at"] = entry["at"]
+        if entry["decision"] == "EXIT":
+            from trade_integrations.autonomous_agents.agent_learning import apply_exit_learning
+
+            apply_exit_learning(agent, decision_entry=entry)
         save_agent(agent)
         try:
             from trade_integrations.autonomous_agents.bootstrap import finalize_bootstrap_if_ready
@@ -204,6 +208,7 @@ def mcp_record_decision(
         confidence=norm_confidence,
         direction=direction,
         strategy=strategy,
+        autonomous_agent_id=agent_id,
     )
     agent = get_agent(agent_id) or agent
     last = dict(result.get("decision") or {})
@@ -227,8 +232,10 @@ def mcp_record_decision(
         agent["last_revision_at"] = last.get("at")
     if decision_upper == "EXIT":
         from nautilus_openalgo_bridge.handoff import clear_agent_position_state
+        from trade_integrations.autonomous_agents.agent_learning import apply_exit_learning
 
         clear_agent_position_state(agent_id)
+        apply_exit_learning(agent, decision_entry=last)
     elif decision_upper in {"ENTER", "REVISE", "ADJUST"}:
         try:
             from nautilus_openalgo_bridge.reconcile import sync_handoff_from_position_book
@@ -236,6 +243,10 @@ def mcp_record_decision(
             sync_handoff_from_position_book(agent_id, underlying=ticker)
         except Exception:
             pass
+    else:
+        from trade_integrations.autonomous_agents.agent_learning import sync_agent_thesis_from_lifecycle
+
+        sync_agent_thesis_from_lifecycle(agent)
     save_agent(agent)
     try:
         from trade_integrations.autonomous_agents.bootstrap import finalize_bootstrap_if_ready

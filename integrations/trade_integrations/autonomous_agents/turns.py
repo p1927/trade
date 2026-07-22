@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from trade_integrations.autonomous_agents.agent_learning import read_learning_snapshot
+from trade_integrations.autonomous_agents.strategy_progress import format_strategy_progress_for_prompt
 from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
 from trade_integrations.auto_paper.strategy_scorer import format_scorer_for_prompt, score_ranked_strategies
 from trade_integrations.execution.profile import resolve_profile
@@ -66,11 +68,14 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
     thesis = dict(agent.get("thesis") or {})
     mc = mandate_config_from_agent(agent)
 
+    learning_snapshot = read_learning_snapshot(agent=agent)
+    display_thesis = {**thesis, **dict(learning_snapshot.get("thesis_overlay") or {})}
+
     thesis_block = ""
-    if thesis:
+    if display_thesis:
         thesis_block = (
             "## Prior thesis\n"
-            f"```json\n{json.dumps(thesis, indent=2, default=str)}\n```\n"
+            f"```json\n{json.dumps(display_thesis, indent=2, default=str)}\n```\n"
         )
 
     guidance_block = ""
@@ -81,9 +86,13 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
             f"```json\n{json.dumps(guidance, indent=2)}\n```\n"
         )
 
+    learning_block = learning_snapshot.get("prompt_text") or ""
+
+    progress_block = format_strategy_progress_for_prompt(agent=agent, turn_kind=turn_kind)
+
     scorer_block = ""
     if routing.uses_strategy_scorer:
-        tried = list(thesis.get("tried_strategies") or [])
+        tried = list(learning_snapshot.get("tried_strategies") or display_thesis.get("tried_strategies") or [])
         scorer_block = format_scorer_for_prompt(score_ranked_strategies(focus, tried=tried))
 
     kind_note = kind_note_for(profile.prompt_fragment_id, turn_kind)
@@ -206,7 +215,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 {mandate}
 
 {mandate_json}
-{thesis_block}{guidance_block}{scorer_block}
+{thesis_block}{guidance_block}{learning_block}{progress_block}{scorer_block}
 {skill_block}{index_flow_note}{bootstrap_block}{flow}
 {harness_block}
 {_RUNNING_AGENT_FOOTER}"""
