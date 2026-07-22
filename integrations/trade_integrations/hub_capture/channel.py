@@ -80,6 +80,21 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _skip_hub_learning(
+    *,
+    quote: dict[str, Any] | None = None,
+    chain: dict[str, Any] | None = None,
+) -> bool:
+    from trade_integrations.stock_simulator.integration import hub_no_learn
+
+    if hub_no_learn():
+        return True
+    for payload in (quote, chain):
+        if isinstance(payload, dict) and payload.get("simulated"):
+            return True
+    return False
+
+
 def _today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
@@ -264,6 +279,8 @@ def _chain_from_hub_latest(
 
 
 def _patch_options_latest(entity_id: str, chain_data: dict[str, Any], quote: dict[str, Any] | None = None) -> None:
+    if _skip_hub_learning(quote=quote, chain=chain_data):
+        return
     path = _options_latest_path(entity_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file():
@@ -498,22 +515,23 @@ def get_history(
     record_channel_stat("vendor_fetch", "ohlcv_daily")
 
     if entity is not None and should_capture(entity, "ohlcv_daily") and not frame.empty:
-        try:
-            from trade_integrations.dataflows.openalgo import to_index_research_frame
-            from trade_integrations.hub_capture.ohlcv_cache import merge_with_cache
+        if not _skip_hub_learning():
+            try:
+                from trade_integrations.dataflows.openalgo import to_index_research_frame
+                from trade_integrations.hub_capture.ohlcv_cache import merge_with_cache
 
-            index_frame = to_index_research_frame(frame)
-            merge_with_cache(
-                symbol,
-                start_key,
-                end_key,
-                index_frame,
-                source="openalgo",
-                vendor="openalgo",
-                cache_before={},
-            )
-        except Exception as exc:
-            logger.debug("hub ohlcv cache write failed for %s: %s", symbol, exc)
+                index_frame = to_index_research_frame(frame)
+                merge_with_cache(
+                    symbol,
+                    start_key,
+                    end_key,
+                    index_frame,
+                    source="openalgo",
+                    vendor="openalgo",
+                    cache_before={},
+                )
+            except Exception as exc:
+                logger.debug("hub ohlcv cache write failed for %s: %s", symbol, exc)
 
     if policy != FreshnessPolicy.LIVE and max_age > 0:
         _l1_cache.set(cache_key, frame.copy(), ttl_seconds=max_age)

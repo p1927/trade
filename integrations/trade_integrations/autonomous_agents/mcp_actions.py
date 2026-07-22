@@ -121,6 +121,17 @@ def _attach_decision_metadata(
     return entry
 
 
+def _record_sim_eval_decision(*, agent_id: str, decision: dict[str, Any]) -> None:
+    try:
+        from trade_integrations.stock_simulator.integration import is_simulator_active
+        from trade_integrations.stock_simulator.sim_runs import record_decision
+
+        if is_simulator_active():
+            record_decision(agent_id=agent_id, decision=decision)
+    except Exception:
+        pass
+
+
 def mcp_record_decision(
     *,
     agent_id: str,
@@ -173,6 +184,7 @@ def mcp_record_decision(
             finalize_bootstrap_if_ready(agent_id)
         except Exception:
             pass
+        _record_sim_eval_decision(agent_id=agent_id, decision=entry)
         return {
             "status": "ok",
             "agent_id": agent_id,
@@ -228,6 +240,7 @@ def mcp_record_decision(
         finalize_bootstrap_if_ready(agent_id)
     except Exception:
         pass
+    _record_sim_eval_decision(agent_id=agent_id, decision=last)
     return {
         "status": "ok",
         "agent_id": agent_id,

@@ -33,6 +33,13 @@ def is_us_market_session_open(*, now: datetime | None = None) -> bool:
 
 def is_in_market_session_open(*, now: datetime | None = None) -> bool:
     """India NSE intraday window from bridge config."""
+    try:
+        from trade_integrations.stock_simulator.integration import sim_market_session_open
+
+        if sim_market_session_open(market="IN"):
+            return True
+    except Exception:
+        pass
     now_ist = (now or datetime.now(IST)).astimezone(IST)
     return is_bridge_market_open(get_bridge_config(), now=now_ist)
 

@@ -32,6 +32,13 @@ def _parse_hhmm(value: str) -> time:
 
 def is_market_session_open(config: AutoPaperConfig, *, now: datetime | None = None) -> bool:
     """Return True during configured NSE intraday window on weekdays."""
+    try:
+        from trade_integrations.stock_simulator.integration import sim_market_session_open
+
+        if sim_market_session_open(market="IN"):
+            return True
+    except Exception:
+        pass
     now = now or datetime.now(IST)
     if now.weekday() >= 5:
         return False

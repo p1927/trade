@@ -160,6 +160,19 @@ async def _run_nautilus_poll_tick(
 
 async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     """Run a lightweight watch tick; dispatch full reasoning if alerts fire."""
+    result = await _run_watch_tick_impl(agent_id)
+    try:
+        from trade_integrations.stock_simulator.integration import maybe_advance_sim_after_watch
+
+        step_info = maybe_advance_sim_after_watch()
+        if step_info and isinstance(result, dict):
+            result["sim_step"] = step_info
+    except Exception:
+        pass
+    return result
+
+
+async def _run_watch_tick_impl(agent_id: str) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent or str(agent.get("status")) != "running":
         return {"skipped": True, "reason": "agent_not_running"}
@@ -176,7 +189,15 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
         from nautilus_openalgo_bridge.market_hours import is_market_open_for_market
 
         market = "US" if profile.is_us else "IN"
-        if not is_market_open_for_market(market):
+        sim_open = False
+        if market == "IN":
+            try:
+                from trade_integrations.stock_simulator.integration import sim_market_session_open
+
+                sim_open = sim_market_session_open(market="IN")
+            except Exception:
+                sim_open = False
+        if not sim_open and not is_market_open_for_market(market):
             summary = f"[autonomous_watch] {market} market closed — summary only"
             feedback = {"alerts": [], "requires_action": False, "focus_ticker": focus}
             _persist_watch_state(agent, summary=summary, feedback=feedback, status="closed")

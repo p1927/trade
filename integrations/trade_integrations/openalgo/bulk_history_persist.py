@@ -654,6 +654,10 @@ def persist_openalgo_bulk(
     symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """Bulk-fetch OpenAlgo daily OHLCV for a symbol universe and persist all tiers."""
+    from trade_integrations.stock_simulator.integration import hub_no_learn
+
+    if hub_no_learn():
+        return {"status": "skipped", "reason": "hub_no_learn"}
     end = (end_date or date.today().isoformat())[:10]
     start = (date.fromisoformat(end) - timedelta(days=min(max(years, 1), _MAX_YEARS) * 366)).isoformat()
     universe = symbols or resolve_symbol_universe(bundle)

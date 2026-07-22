@@ -145,6 +145,10 @@ def record_chain_snapshot(
     captured_at: str | None = None,
 ) -> dict[str, Any]:
     """Persist option chain snapshot when capture gate allows."""
+    from trade_integrations.stock_simulator.integration import hub_no_learn
+
+    if hub_no_learn() or chain_data.get("simulated"):
+        return {"status": "skipped", "reason": "hub_no_learn"}
     if not should_capture(entity_id, "derivatives_chain"):
         return {"status": "skipped", "reason": "capture_disabled"}
     rows = _flatten_chain_rows(
@@ -238,6 +242,10 @@ def record_quote_snapshot(
     source: str = "openalgo",
     captured_at: str | None = None,
 ) -> dict[str, Any]:
+    from trade_integrations.stock_simulator.integration import hub_no_learn
+
+    if hub_no_learn() or quote.get("simulated"):
+        return {"status": "skipped", "reason": "hub_no_learn"}
     if not should_capture(entity_id, "derivatives_chain"):
         return {"status": "skipped", "reason": "capture_disabled"}
     ts = captured_at or _now_iso()

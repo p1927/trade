@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 def run_intraday_capture(*, entity_id: str | None = None) -> dict[str, Any]:
     """Fetch and persist option chain for each capture-enabled entity (v1: NIFTY)."""
+    from trade_integrations.stock_simulator.integration import hub_no_learn
+
+    if hub_no_learn():
+        return {"status": "skipped", "reason": "hub_no_learn", "entities": {}}
     reg = load_registry(create=False)
     entities = reg.get("entities") or []
     if entity_id:

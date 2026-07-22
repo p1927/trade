@@ -96,6 +96,20 @@ async def bootstrap_agent(agent_id: str) -> None:
     save_agent(agent)
 
     try:
+        from trade_integrations.stock_simulator.integration import is_simulator_active
+        from trade_integrations.stock_simulator.sim_runs import start_run
+
+        if is_simulator_active():
+            constraints = dict(agent.get("constraints") or {})
+            budget = constraints.get("budget_inr")
+            start_run(
+                agent_id=agent_id,
+                starting_capital=float(budget) if budget is not None else None,
+            )
+    except Exception:
+        logger.debug("sim eval run start skipped", exc_info=True)
+
+    try:
         await asyncio.gather(run_watch_tick(agent_id), _prefetch_bootstrap_research(agent_id))
         dispatched = await dispatch_full_reasoning(agent_id, turn_kind="bootstrap")
         if not dispatched:
