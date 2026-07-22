@@ -93,7 +93,7 @@ def test_catalog_dedupes_intraday_session_bars():
     from trade_integrations.stock_simulator.catalog import ReplayCatalog
 
     catalog = ReplayCatalog(REPO / "data/nse/historic_data")
-    frame = catalog._load_symbol("NIFTY", "NSE_INDEX")
+    frame = catalog._load_legacy_nifty_csv()
     day_count = len(frame[frame["day"] == "2021-03-25"])
     # Full NSE session 09:15–15:30 at 5m ≈ 76 bars (archive ends ~15:25 on this day)
     assert 70 <= day_count <= 78
