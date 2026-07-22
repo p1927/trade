@@ -145,70 +145,51 @@ def is_agent_in_registry(agent_id: str) -> bool:
 
 
 def _agent_market_and_symbols(agent_id: str) -> tuple[str, list[str]]:
+    agent_id = str(agent_id or "").strip()
+    if not agent_id:
+        return "IN", []
     try:
-        from trade_integrations.autonomous_agents.store import get_agent
-        from trade_integrations.execution.routing_context import resolve_agent_routing
+        from trade_integrations.watch_registry.scope import parse_nautilus_owner_id, symbols_for_owner
 
-        agent = get_agent(agent_id) or {}
-        if not agent:
-            logger.error("Nautilus registry bind skipped — agent %s not found", agent_id)
+        kind, oid = parse_nautilus_owner_id(agent_id)
+        syms = list(symbols_for_owner(agent_id))
+        if not syms:
             return "IN", []
-        routing = resolve_agent_routing(agent)
-        return routing.market, list(routing.watch_symbols)
+        if kind == "autonomous_agent" or agent_id.startswith("aa_"):
+            from trade_integrations.autonomous_agents.store import get_agent
+            from trade_integrations.execution.routing_context import resolve_agent_routing
+
+            agent = get_agent(oid if kind == "autonomous_agent" else agent_id) or {}
+            if agent:
+                return resolve_agent_routing(agent).market, syms
+        return "IN", syms
     except Exception as exc:
         logger.error("Nautilus registry bind failed for %s: %s", agent_id, exc)
         return "IN", []
 
 
 def add_agent_to_registry(agent_id: str) -> dict[str, Any]:
+    """Sync watch registry owner into log/nautilus-watch.agents.json (registry-only symbols)."""
     agent_id = str(agent_id or "").strip()
     if not agent_id:
         raise ValueError("agent_id required")
-    registry = load_registry()
-    agents: list[dict[str, Any]] = list(registry.get("agents") or [])
-    old_ids = sorted(get_registry_agent_ids())
-    market, symbols = _agent_market_and_symbols(agent_id)
-    if not symbols:
-        raise ValueError(f"cannot bind agent {agent_id} to Nautilus registry — missing agent or watch symbols")
-    now = datetime.now(timezone.utc).isoformat()
-    replaced = False
-    for row in agents:
-        if str(row.get("agent_id") or "") == agent_id:
-            row["market"] = market
-            row["symbols"] = symbols
-            row["bound_at"] = row.get("bound_at") or now
-            replaced = True
-            break
-    if not replaced:
-        agents.append(
-            {
-                "agent_id": agent_id,
-                "market": market,
-                "symbols": symbols,
-                "bound_at": now,
-            }
+    try:
+        from trade_integrations.watch_registry.store import (
+            migrate_agent_watch_spec_to_registry,
+            sync_nautilus_registry_from_watches,
         )
-    registry["agents"] = agents
-    registry["node_agent_ids"] = sorted(str(row.get("agent_id") or "") for row in agents if row.get("agent_id"))
-    pid = _read_pid()
-    if pid is not None and _process_alive(pid):
-        registry["node_pid"] = pid
-    saved = save_registry(registry)
-    new_ids = sorted(get_registry_agent_ids())
-    if old_ids != new_ids:
-        live_pid = _read_pid()
-        if live_pid is not None and _process_alive(live_pid):
-            logger.info(
-                "Nautilus registry changed %s → %s — restarting watch node",
-                old_ids,
-                new_ids,
-            )
-            _stop_existing()
-            try:
-                _launch_watch(use_registry=True)
-            except Exception:
-                logger.exception("failed to relaunch Nautilus watch after registry change")
-    return saved
+
+        if agent_id.startswith("aa_"):
+            migrate_agent_watch_spec_to_registry(agent_id)
+        sync_nautilus_registry_from_watches(restart_if_changed=True)
+    except Exception as exc:
+        logger.error("watch registry sync failed for %s: %s", agent_id, exc)
+        raise ValueError(f"cannot bind agent {agent_id} to Nautilus registry — {exc}") from exc
+    if not is_agent_in_registry(agent_id):
+        raise ValueError(
+            f"cannot bind agent {agent_id} to Nautilus registry — no active watches in registry"
+        )
+    return load_registry()
 
 
 def remove_agent_from_registry(agent_id: str) -> dict[str, Any]:
@@ -360,7 +341,19 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
         return None
 
     reconcile_stale_watch_pid()
-    add_agent_to_registry(agent_id)
+    try:
+        from trade_integrations.watch_registry.store import (
+            migrate_agent_watch_spec_to_registry,
+            sync_nautilus_registry_from_watches,
+        )
+
+        migrate_agent_watch_spec_to_registry(agent_id)
+        sync_nautilus_registry_from_watches(restart_if_changed=False)
+    except Exception:
+        logger.debug("watch registry migrate skipped for %s", agent_id, exc_info=True)
+
+    if not is_agent_in_registry(agent_id):
+        return f"Nautilus watch not started — no active watches for {agent_id}"
 
     pid = _read_pid()
     if pid is not None and _process_alive(pid):
@@ -403,20 +396,27 @@ def ensure_nautilus_watch_for_running_agents() -> int:
         return 0
 
     reconcile_stale_watch_pid()
-    started = 0
-    for agent in list_agents():
-        if str(agent.get("status")) != "running":
-            continue
-        try:
-            profile = resolve_profile(agent=agent)
-        except Exception:
-            continue
-        if not profile.uses_nautilus_watch:
-            continue
-        agent_id = str(agent.get("id") or "")
-        if not agent_id:
-            continue
-        add_agent_to_registry(agent_id)
+    try:
+        from trade_integrations.watch_registry.store import (
+            migrate_agent_watch_spec_to_registry,
+            sync_nautilus_registry_from_watches,
+        )
+
+        for agent in list_agents():
+            if str(agent.get("status")) != "running":
+                continue
+            try:
+                profile = resolve_profile(agent=agent)
+            except Exception:
+                continue
+            if not profile.uses_nautilus_watch:
+                continue
+            agent_id = str(agent.get("id") or "")
+            if agent_id.startswith("aa_"):
+                migrate_agent_watch_spec_to_registry(agent_id)
+        sync_nautilus_registry_from_watches(restart_if_changed=True)
+    except Exception:
+        logger.debug("ensure_nautilus_watch_for_running_agents registry sync failed", exc_info=True)
 
     agent_ids = get_registry_agent_ids()
     if not agent_ids:
@@ -426,6 +426,7 @@ def ensure_nautilus_watch_for_running_agents() -> int:
     if pid is not None and _process_alive(pid):
         return len(agent_ids)
 
+    started = 0
     try:
         _launch_watch(use_registry=True)
         started = 1

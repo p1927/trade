@@ -12,7 +12,7 @@ class MonitorConfig:
     spot_drift_pct: float = 1.5
     max_age_minutes: int = 30
     poll_cron: str = "*/5 * * * *"
-    watchlist: tuple[str, ...] = ("NIFTY", "BANKNIFTY")
+    watchlist: tuple[str, ...] = ()
 
 
 def _env_bool(name: str, default: str = "false") -> bool:
@@ -26,8 +26,8 @@ def is_monitor_enabled() -> bool:
 
 
 def get_monitor_config() -> MonitorConfig:
-    """Load monitor thresholds and watchlist from environment."""
-    watchlist_raw = os.getenv("OPTIONS_MONITOR_WATCHLIST", "NIFTY,BANKNIFTY")
+    """Load monitor thresholds from environment (no global watchlist defaults)."""
+    watchlist_raw = os.getenv("OPTIONS_MONITOR_WATCHLIST", "").strip()
     watchlist = tuple(
         item.strip().upper()
         for item in watchlist_raw.split(",")
@@ -38,5 +38,5 @@ def get_monitor_config() -> MonitorConfig:
         spot_drift_pct=float(os.getenv("OPTIONS_MONITOR_SPOT_DRIFT_PCT", "1.5")),
         max_age_minutes=int(os.getenv("OPTIONS_MONITOR_MAX_AGE_MINUTES", "30")),
         poll_cron=os.getenv("OPTIONS_MONITOR_POLL_CRON", "*/5 * * * *"),
-        watchlist=watchlist or ("NIFTY", "BANKNIFTY"),
+        watchlist=watchlist,
     )

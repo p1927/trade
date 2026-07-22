@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from trade_integrations.autonomous_agents.proposals import propose_autonomous_agent
 from trade_integrations.autonomous_agents.store import get_agent, list_agents, load_proposal, save_agent
 from trade_integrations.auto_paper.mcp_actions import get_status, record_decision
 from trade_integrations.execution.profile import resolve_profile
+
+logger = logging.getLogger(__name__)
 
 
 def mcp_propose(**kwargs: Any) -> dict[str, Any]:
@@ -300,6 +303,25 @@ def mcp_set_watch_spec(
 
     handoff = None
     if profile.uses_nautilus_watch:
+        vibe_sid = str(agent.get("vibe_session_id") or "").strip()
+        try:
+            from trade_integrations.watch_registry.store import create_watch, list_watches, update_watch
+
+            existing = list_watches(owner_kind="autonomous_agent", owner_id=agent_id, active_only=True)
+            if existing:
+                update_watch(str(existing[0].get("watch_id")), watch_spec=watch_spec)
+            elif vibe_sid:
+                create_watch(
+                    owner_kind="autonomous_agent",
+                    owner_id=agent_id,
+                    vibe_session_id=vibe_sid,
+                    watch_spec=watch_spec,
+                    symbols=list(agent.get("symbols") or []),
+                    label="strategy watch",
+                )
+        except Exception:
+            logger.debug("watch registry sync failed for %s", agent_id, exc_info=True)
+
         from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
 
         handoff = sync_watch_spec_to_handoff(agent_id, watch_spec)
@@ -413,3 +435,40 @@ def mcp_submit_bridge_execution_intent(
     path = submit_intent(intent)
     results = process_pending_intents(max_count=1)
     return {"status": "submitted", "path": str(path), "results": results}
+
+
+def mcp_list_watches(
+    *,
+    session_id: str | None = None,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    from trade_integrations.watch_registry.api import mcp_list_watches as _list
+
+    return _list(session_id=session_id, agent_id=agent_id)
+
+
+def mcp_create_session_watch(
+    session_id: str,
+    watch_spec: dict[str, Any],
+    *,
+    symbols: list[str] | None = None,
+    label: str | None = None,
+    one_shot: bool = False,
+) -> dict[str, Any]:
+    from trade_integrations.watch_registry.api import mcp_create_watch
+
+    return mcp_create_watch(
+        owner_kind="session",
+        owner_id=session_id,
+        vibe_session_id=session_id,
+        watch_spec=watch_spec,
+        symbols=symbols,
+        label=label,
+        one_shot=one_shot,
+    )
+
+
+def mcp_delete_watch(watch_id: str) -> dict[str, Any]:
+    from trade_integrations.watch_registry.api import mcp_delete_watch as _delete
+
+    return _delete(watch_id)

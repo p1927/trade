@@ -19,7 +19,7 @@ class AutoPaperConfig:
     budget_inr: float = 20_000.0
     max_daily_loss_inr: float = 2_000.0
     min_strategy_score: float = 0.45
-    watchlist: tuple[str, ...] = ("NIFTY", "BANKNIFTY")
+    watchlist: tuple[str, ...] = ()
     poll_cron: str = "*/5 * * * *"
     product: str = "NRML"
     market_open: str = "09:20"
@@ -32,7 +32,7 @@ class AutoPaperConfig:
 
 def get_auto_paper_config() -> AutoPaperConfig:
     """Load auto paper trading settings from environment."""
-    watchlist_raw = os.getenv("AUTO_PAPER_WATCHLIST", "NIFTY,BANKNIFTY")
+    watchlist_raw = os.getenv("AUTO_PAPER_WATCHLIST", "").strip()
     watchlist = tuple(
         item.strip().upper()
         for item in watchlist_raw.split(",")
@@ -43,7 +43,7 @@ def get_auto_paper_config() -> AutoPaperConfig:
         budget_inr=float(os.getenv("AUTO_PAPER_BUDGET_INR", "20000")),
         max_daily_loss_inr=float(os.getenv("AUTO_PAPER_MAX_DAILY_LOSS_INR", "2000")),
         min_strategy_score=float(os.getenv("AUTO_PAPER_MIN_STRATEGY_SCORE", "0.45")),
-        watchlist=watchlist or ("NIFTY", "BANKNIFTY"),
+        watchlist=watchlist,
         poll_cron=os.getenv("AUTO_PAPER_POLL_CRON", "*/5 * * * *"),
         product=os.getenv("AUTO_PAPER_PRODUCT", "NRML").strip().upper() or "NRML",
         market_open=os.getenv("AUTO_PAPER_MARKET_OPEN", "09:20"),

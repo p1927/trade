@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -18,6 +19,8 @@ from trade_integrations.autonomous_agents.defaults import (
     REQUIRED_PROPOSAL_FIELDS,
 )
 from trade_integrations.autonomous_agents.market import symbol_execution_market
+
+logger = logging.getLogger(__name__)
 from trade_integrations.autonomous_agents.market_resolve import resolve_proposal_symbols
 from trade_integrations.auto_paper.mandate_config import (
     MandateConfig,
@@ -646,6 +649,12 @@ def _commit_autonomous_agent_locked(
         agent["infra_pending"] = blocking
         agent["infra_last_attempt_at"] = now
         save_agent(agent)
+        try:
+            from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
+
+            sync_nautilus_registry_from_watches(restart_if_changed=True)
+        except Exception:
+            pass
 
     result: dict[str, Any] = {
         "status": "ok",
@@ -681,9 +690,9 @@ def stop_autonomous_agent(agent_id: str) -> dict[str, Any]:
     except Exception:
         pass
     try:
-        from trade_integrations.autonomous_agents.nautilus_watch import remove_agent_from_registry
+        from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
 
-        remove_agent_from_registry(agent_id)
+        sync_nautilus_registry_from_watches(restart_if_changed=True)
     except Exception:
         pass
     return {"status": "ok", "agent": agent}
@@ -696,6 +705,12 @@ def pause_autonomous_agent(agent_id: str) -> dict[str, Any]:
     agent["status"] = "paused"
     agent["pause_reason"] = "user"
     save_agent(agent)
+    try:
+        from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
+
+        sync_nautilus_registry_from_watches(restart_if_changed=True)
+    except Exception:
+        pass
     return {"status": "ok", "agent": agent}
 
 
@@ -721,6 +736,23 @@ def resume_autonomous_agent(agent_id: str) -> dict[str, Any]:
     agent["status"] = "running"
     agent["pause_reason"] = None
     save_agent(agent)
+    try:
+        from trade_integrations.execution.profile import resolve_profile
+
+        profile = resolve_profile(agent=agent)
+        if profile.uses_nautilus_watch:
+            from trade_integrations.watch_registry.store import (
+                migrate_agent_watch_spec_to_registry,
+                sync_nautilus_registry_from_watches,
+            )
+
+            migrate_agent_watch_spec_to_registry(agent_id)
+            sync_nautilus_registry_from_watches(restart_if_changed=True)
+            from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+
+            ensure_nautilus_watch_for_agent(agent_id)
+    except Exception:
+        pass
     return {"status": "ok", "agent": agent}
 
 
@@ -730,9 +762,10 @@ def delete_autonomous_agent(agent_id: str) -> dict[str, Any]:
         raise ValueError(f"agent not found: {agent_id}")
 
     try:
-        from trade_integrations.autonomous_agents.nautilus_watch import remove_agent_from_registry
+        from trade_integrations.watch_registry.store import delete_watches_for_owner, sync_nautilus_registry_from_watches
 
-        remove_agent_from_registry(agent_id)
+        delete_watches_for_owner(owner_kind="autonomous_agent", owner_id=agent_id)
+        sync_nautilus_registry_from_watches(restart_if_changed=True)
     except Exception:
         pass
     try:
