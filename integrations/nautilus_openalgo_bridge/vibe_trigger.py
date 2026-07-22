@@ -13,7 +13,7 @@ from typing import Any
 
 from nautilus_openalgo_bridge.config import BridgeConfig, get_bridge_config
 from nautilus_openalgo_bridge.hub_paths import load_agent_json, save_agent_json
-from nautilus_openalgo_bridge.models import QuoteSnapshot, WatchAlert
+from nautilus_openalgo_bridge.models import BridgeSignal, QuoteSnapshot, WatchAlert
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,42 @@ def get_agent(agent_id: str) -> dict[str, Any]:
 
 def save_agent(agent: dict[str, Any]) -> dict[str, Any]:
     return save_agent_json(agent)
+
+
+def _gate_minutes_for_agent(agent: dict[str, Any]) -> int:
+    watch_spec = agent.get("watch_spec") or {}
+    if isinstance(watch_spec, dict):
+        gate = watch_spec.get("gate") or {}
+        try:
+            return max(1, int(gate.get("skip_if_unchanged_minutes") or 30))
+        except (TypeError, ValueError):
+            pass
+    return 30
+
+
+def _within_vibe_dispatch_cooldown(agent: dict[str, Any], *, now: float | None = None) -> bool:
+    """True when REVIEW_NEEDED should be suppressed (matches legacy poll_loop gate)."""
+    import time
+
+    now_ts = now if now is not None else time.time()
+    last = agent.get("last_vibe_dispatch_at") or agent.get("last_revision_at")
+    if not last:
+        return False
+    try:
+        if isinstance(last, (int, float)):
+            last_ts = float(last)
+        else:
+            dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            last_ts = dt.timestamp()
+    except (TypeError, ValueError):
+        return False
+    return (now_ts - last_ts) < (_gate_minutes_for_agent(agent) * 60)
+
+
+def _mark_vibe_dispatched(agent: dict[str, Any]) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    agent["last_vibe_dispatch_at"] = now
+    agent["last_revision_at"] = now
 
 
 def _vibe_api_key(config: BridgeConfig | None = None) -> str | None:
@@ -165,12 +201,17 @@ async def dispatch_thesis_alert(
     caller = make_vibe_message_client(config)
     agent["streaming"] = True
     agent["last_bridge_alert_at"] = alert.fired_at
-    agent["last_revision_at"] = alert.fired_at
     save_agent(agent)
     try:
         result = await caller(session_id, prompt)
+        latest = get_agent(agent_id) or agent
+        latest["streaming"] = True
+        latest["last_bridge_alert_at"] = alert.fired_at
+        _mark_vibe_dispatched(latest)
+        save_agent(latest)
         return {"status": "dispatched", "session_id": session_id, "result": result}
     except RuntimeError as exc:
+        logger.warning("Vibe thesis dispatch failed for %s: %s", agent_id, exc)
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
@@ -356,13 +397,15 @@ async def dispatch_watch_alert(
     except ImportError:
         pass
 
+    if alert.signal == BridgeSignal.REVIEW_NEEDED and _within_vibe_dispatch_cooldown(agent):
+        return {"status": "skipped", "reason": "skip_if_unchanged_gate"}
+
     prompt = build_alert_turn_prompt(agent=agent, alert=alert, quotes=quotes)
     caller = make_vibe_message_client(config)
 
     agent["streaming"] = True
     agent["last_bridge_alert_at"] = alert.fired_at
     agent["last_bridge_alert"] = alert.to_dict()
-    agent["last_revision_at"] = alert.fired_at
     save_agent(agent)
 
     try:
@@ -377,6 +420,12 @@ async def dispatch_watch_alert(
             )
         except Exception:
             pass
+        latest = get_agent(agent_id) or agent
+        latest["streaming"] = True
+        latest["last_bridge_alert_at"] = alert.fired_at
+        latest["last_bridge_alert"] = alert.to_dict()
+        _mark_vibe_dispatched(latest)
+        save_agent(latest)
         return {"status": "dispatched", "session_id": session_id, "result": result}
     except RuntimeError as exc:
         logger.warning("Vibe dispatch failed for %s: %s", agent_id, exc)

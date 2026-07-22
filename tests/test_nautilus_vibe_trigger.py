@@ -94,9 +94,9 @@ def test_dispatch_watch_alert_sync_success(mock_client_factory, mock_save, mock_
     result = dispatch_watch_alert_sync("aa_test", alert)
     assert result["status"] == "dispatched"
     assert mock_save.called
-    # streaming must stay True until session service finalizes the turn
     last_saved = mock_save.call_args_list[-1][0][0]
     assert last_saved.get("streaming") is True
+    assert last_saved.get("last_vibe_dispatch_at")
 
 
 @patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
@@ -127,6 +127,7 @@ def test_dispatch_watch_alert_sync_error_clears_streaming(mock_client_factory, m
     assert result["status"] == "error"
     last_saved = mock_save.call_args_list[-1][0][0]
     assert last_saved.get("streaming") is False
+    assert not last_saved.get("last_vibe_dispatch_at")
 
 
 @patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
@@ -159,3 +160,32 @@ def test_dispatch_skips_when_not_running(mock_get_agent):
     )
     result = dispatch_watch_alert_sync("aa_test", alert)
     assert result["status"] == "skipped"
+
+
+@patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
+@patch("nautilus_openalgo_bridge.vibe_trigger.save_agent")
+@patch("nautilus_openalgo_bridge.vibe_trigger.make_vibe_message_client")
+def test_dispatch_skips_within_skip_if_unchanged_gate(mock_client_factory, mock_save, mock_get_agent):
+    from datetime import datetime, timezone
+
+    agent = {
+        "id": "aa_test",
+        "status": "running",
+        "vibe_session_id": "sess123",
+        "streaming": False,
+        "plan_approved_at": "2026-07-01T00:00:00+00:00",
+        "watch_spec": {"gate": {"skip_if_unchanged_minutes": 30}},
+        "last_vibe_dispatch_at": datetime.now(timezone.utc).isoformat(),
+    }
+    mock_get_agent.return_value = agent
+    alert = WatchAlert(
+        signal=BridgeSignal.REVIEW_NEEDED,
+        rule=None,
+        symbol="NIFTY",
+        message="move",
+    )
+    result = dispatch_watch_alert_sync("aa_test", alert)
+    assert result["status"] == "skipped"
+    assert result.get("reason") == "skip_if_unchanged_gate"
+    mock_client_factory.assert_not_called()
+    mock_save.assert_not_called()
