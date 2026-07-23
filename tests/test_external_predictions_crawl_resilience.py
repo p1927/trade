@@ -142,6 +142,110 @@ def test_validate_record_uses_high_when_mid_missing() -> None:
     assert validated.target.mid == 24000.0
 
 
+def test_browser_profile_tiers_default_stealth(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.crawl4ai_client import (
+        browser_profile_tiers,
+        primary_browser_profile,
+    )
+
+    monkeypatch.delenv("CRAWL4AI_CDP_URL", raising=False)
+    monkeypatch.delenv("CRAWL4AI_PROXY", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.setenv("CRAWL4AI_UNDETECTED", "0")
+    assert browser_profile_tiers() == ["stealth"]
+    assert primary_browser_profile() == "stealth"
+
+
+def test_browser_profile_tiers_cdp_before_stealth(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.crawl4ai_client import (
+        browser_profile_tiers,
+        next_browser_profile,
+        primary_browser_profile,
+    )
+
+    monkeypatch.setenv("CRAWL4AI_CDP_URL", "http://127.0.0.1:9222")
+    monkeypatch.delenv("CRAWL4AI_PROXY", raising=False)
+    monkeypatch.setenv("CRAWL4AI_UNDETECTED", "0")
+    assert browser_profile_tiers() == ["cdp", "stealth"]
+    assert primary_browser_profile() == "cdp"
+    assert next_browser_profile("cdp") == "stealth"
+
+
+def test_filter_searxng_hits_rejects_off_domain() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+        filter_searxng_hits_for_source,
+    )
+
+    source = ExternalPredictionSource(
+        id="moneycontrol",
+        display_name="Moneycontrol",
+        domains=["moneycontrol.com"],
+    )
+    hits = [
+        {
+            "url": "https://timesofindia.indiatimes.com/markets/nifty",
+            "title": "Nifty 50 target forecast",
+        },
+        {
+            "url": "https://www.moneycontrol.com/news/business/markets/nifty-50-outlook",
+            "title": "Nifty 50 weekly outlook target",
+        },
+    ]
+    filtered = filter_searxng_hits_for_source(hits, source)
+    assert len(filtered) == 1
+    assert "moneycontrol.com" in filtered[0]["url"]
+
+
+def test_resolve_source_urls_includes_landing_and_curated() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_fetcher import (
+        resolve_source_urls,
+    )
+
+    source = ExternalPredictionSource(
+        id="motilal_oswal",
+        display_name="Motilal Oswal",
+        domains=["motilaloswal.com", "economictimes.indiatimes.com"],
+        landing_urls=["https://www.motilaloswal.com/research-and-reports"],
+        curated_urls=["https://economictimes.indiatimes.com/topic/nifty-50"],
+    )
+    urls = resolve_source_urls(source, horizon_days=14)
+    assert "https://www.motilaloswal.com/research-and-reports" in urls
+    assert "https://economictimes.indiatimes.com/topic/nifty-50" in urls
+    assert urls.index("https://www.motilaloswal.com/research-and-reports") < urls.index(
+        "https://economictimes.indiatimes.com/topic/nifty-50"
+    )
+
+
+def test_browse_enabled_from_landing_urls_when_entry_empty() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.browse_agent import (
+        browse_enabled_for_source,
+        resolve_browse_entry_urls,
+    )
+
+    source = ExternalPredictionSource(
+        id="choice_india",
+        display_name="Choice India",
+        domains=["choiceindia.com"],
+        landing_urls=["https://choiceindia.com/blog"],
+        entry_urls=[],
+    )
+    assert browse_enabled_for_source(source)
+    entries = resolve_browse_entry_urls(source, horizon_days=14)
+    assert entries == ["https://choiceindia.com/blog"]
+
+
+def test_is_structured_hub_weekly_support_resistance() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.validators import (
+        is_structured_nifty_forecast_hub,
+    )
+
+    body = (
+        "Nifty 50 weekly outlook: support at 24,000 and resistance at 24,800 "
+        "for the coming week."
+    )
+    assert is_structured_nifty_forecast_hub(body, title="Weekly Nifty 50 view")
+
+
 def test_validate_record_rejects_resistance_only_level() -> None:
     from trade_integrations.dataflows.index_research.external_predictions.models import (
         ExternalPredictionRecord,

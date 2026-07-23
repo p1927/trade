@@ -117,3 +117,76 @@ def test_infra_heal_resumes_agent(agents_hub, monkeypatch):
     assert healed["status"] == "running"
     assert healed.get("pause_reason") is None
     assert get_agent(agent_id)["status"] == "running"
+
+
+@pytest.mark.unit
+def test_start_required_infra_defers_nautilus_until_plan_approved(agents_hub, monkeypatch):
+    from trade_integrations.autonomous_agents.infra_startup import start_required_infra
+    from trade_integrations.execution.profile import resolve_profile
+
+    called: list[str] = []
+
+    def _fake_ensure(agent_id: str):
+        called.append(agent_id)
+        return f"Nautilus watch not started — no active watches for {agent_id}"
+
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.nautilus_watch.ensure_nautilus_watch_for_agent",
+        _fake_ensure,
+    )
+
+    agent = {
+        "id": "aa_defer_nautilus",
+        "symbols": ["NIFTY"],
+        "constraints": {"mode": "paper"},
+        "execution_market": "IN",
+        "execution_backend": "openalgo",
+    }
+    profile = resolve_profile(agent=agent)
+    blocking, warnings = start_required_infra(
+        agent=agent,
+        profile=profile,
+        proposal={"constraints": agent["constraints"]},
+        primary_symbol="NIFTY",
+        symbols=["NIFTY"],
+        vibe_session_id="sess_defer",
+        fresh_mandate_cfg=None,
+    )
+
+    assert called == []
+    assert blocking == []
+    assert warnings == []
+
+
+@pytest.mark.unit
+def test_start_required_infra_blocks_nautilus_when_plan_approved(agents_hub, monkeypatch):
+    from trade_integrations.autonomous_agents.infra_startup import start_required_infra
+    from trade_integrations.execution.profile import resolve_profile
+
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.nautilus_watch.ensure_nautilus_watch_for_agent",
+        lambda agent_id: f"Nautilus watch not started — no active watches for {agent_id}",
+    )
+
+    agent = {
+        "id": "aa_need_nautilus",
+        "symbols": ["NIFTY"],
+        "constraints": {"mode": "paper"},
+        "execution_market": "IN",
+        "execution_backend": "openalgo",
+        "plan_approved_at": "2026-07-16T20:00:00+00:00",
+    }
+    profile = resolve_profile(agent=agent)
+    blocking, warnings = start_required_infra(
+        agent=agent,
+        profile=profile,
+        proposal={"constraints": agent["constraints"]},
+        primary_symbol="NIFTY",
+        symbols=["NIFTY"],
+        vibe_session_id="sess_need",
+        fresh_mandate_cfg=None,
+    )
+
+    assert len(blocking) == 1
+    assert "no active watches" in blocking[0]
+    assert warnings == []

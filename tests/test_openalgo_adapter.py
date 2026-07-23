@@ -8,7 +8,7 @@ import pytest
 import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
 import trade_integrations  # noqa: F401 — apply runtime patches
-from trade_integrations.dataflows.openalgo import resolve_openalgo_symbol
+from trade_integrations.openalgo.symbols import resolve_openalgo_symbol
 from trade_integrations.dataflows.errors import NoMarketDataError
 
 

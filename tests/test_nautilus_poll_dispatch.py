@@ -1,4 +1,4 @@
-"""Tests for legacy poll-loop alert dispatch market routing."""
+"""Tests for watch alert dispatch market routing (poll_loop helper used by node path)."""
 
 from __future__ import annotations
 

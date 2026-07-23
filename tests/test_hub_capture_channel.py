@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -12,7 +13,29 @@ import pytest
 def hub_tmp(tmp_path, monkeypatch):
     hub = tmp_path / "hub"
     hub.mkdir()
+
+    def _hub_dir() -> Path:
+        return hub
+
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(hub))
+    monkeypatch.setenv("HUB_NO_LEARN", "0")
+    monkeypatch.setenv("OPENALGO_BROKER", "")
+    monkeypatch.setenv("STOCK_SIMULATOR_MODE", "")
+    monkeypatch.delenv("REDIRECT_URL", raising=False)
+    monkeypatch.setattr("trade_integrations.context.hub.get_hub_dir", _hub_dir)
+    import trade_integrations.hub_capture.registry as capture_registry
+    import trade_integrations.hub_capture.channel as channel_mod
+
+    monkeypatch.setattr(capture_registry, "get_hub_dir", _hub_dir)
+    monkeypatch.setattr(channel_mod, "get_hub_dir", _hub_dir)
+    monkeypatch.setattr("trade_integrations.stock_simulator.integration.hub_no_learn", lambda: False)
+    monkeypatch.setattr("trade_integrations.stock_simulator.integration.is_simulator_active", lambda: False)
+
+    with channel_mod._l1_cache._lock:
+        channel_mod._l1_cache._entries.clear()
+    stats_path = hub / "_data" / "capture" / "channel_stats.json"
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    stats_path.write_text("{}", encoding="utf-8")
     return hub
 
 

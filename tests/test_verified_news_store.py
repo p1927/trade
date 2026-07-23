@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from trade_integrations.hub_storage import verified_news_store as store
+
+
+def _patch_hub_dir(monkeypatch, hub: Path) -> None:
+    for target in (
+        "trade_integrations.context.hub.get_hub_dir",
+        "trade_integrations.hub_storage.news_events_store.get_hub_dir",
+        "trade_integrations.hub_storage.verified_news_store.get_hub_dir",
+        "trade_integrations.hub_storage.news_event_index.get_hub_dir",
+    ):
+        monkeypatch.setattr(target, lambda _hub=hub: _hub)
 
 
 @pytest.fixture
@@ -15,8 +26,16 @@ def hub_tmp(tmp_path, monkeypatch):
 
     hub = tmp_path / "hub"
     hub.mkdir()
+    _patch_hub_dir(monkeypatch, hub)
     monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub)
     return hub
+
+
+def _two_sources(prefix: str = "https://example.com") -> list[dict[str, str]]:
+    return [
+        {"vendor": "rss", "publisher": "A", "url": f"{prefix}/1"},
+        {"vendor": "rss", "publisher": "B", "url": f"{prefix}/2"},
+    ]
 
 
 def test_upsert_and_get_round_trip(hub_tmp):
@@ -96,6 +115,7 @@ def test_build_snapshot_from_hub(hub_tmp):
             "canonical_story_id": "title:approved story",
             "title": "Approved story",
             "content_summary": "Body",
+            "sources": _two_sources(),
             "verification_status": "approved",
             "verification": {"status": "approved"},
             "verification_data_as_of": "2026-02-17",

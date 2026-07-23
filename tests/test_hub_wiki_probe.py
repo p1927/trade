@@ -67,7 +67,6 @@ def test_ingest_rows_blocked_when_wiki_down(hub_tmp, monkeypatch):
     monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(staging_store, "is_entity_pipeline_enabled", lambda: True)
-    monkeypatch.setattr(staging_store, "is_legacy_ingest_enabled", lambda: False)
     monkeypatch.setattr(
         "trade_integrations.dataflows.hub_wiki.probe.check_ingest_allowed",
         lambda **_: {
@@ -134,3 +133,38 @@ def test_build_hub_status_forwards_wiki_fields(hub_tmp, monkeypatch):
     assert staging.get("user_message") == "Start LLM Wiki.app"
     assert staging.get("llm_wiki_ok") is False
     assert staging.get("llm_wiki_required") is True
+
+
+def test_build_hub_status_fails_closed_on_pending_news_migration(hub_tmp, monkeypatch):
+    from trade_integrations.hub_storage import verified_news_store as verified_store
+    from trade_integrations.hub_storage.hub_status import build_hub_status
+
+    verified_store.seed_legacy_record(
+        {
+            "canonical_story_id": "evt:gate",
+            "ticker": "NIFTY",
+            "title": "Pending migration story",
+            "content_summary": "Needs cutover.",
+            "published_at": "2026-07-16T10:00:00+00:00",
+            "verification_status": "approved",
+            "tags": {"topics": ["fii"]},
+            "sources": [{"vendor": "rss", "url": "https://example.com/gate"}],
+        }
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.hub_status.pipeline_pause_status",
+        lambda **_: {"pipeline_paused": False, "pause_reason": "", "user_message": ""},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.news_hub_bridge.hub_news_pipeline_status",
+        lambda **_: {"pipeline_paused": False},
+    )
+
+    status = build_hub_status(entity_id="NIFTY")
+    gates = status.get("gates") or {}
+    assert gates.get("hub_ready") is False
+    blocking = list(gates.get("blocking") or [])
+    assert blocking and blocking[0].get("id") == "news_events_migration"
+    staging = status.get("news_staging") or {}
+    assert staging.get("pipeline_paused") is True
+    assert staging.get("pause_reason") == "news_events_migration_required"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -20,14 +21,36 @@ from trade_integrations.dataflows.index_research.news_verification import (
 )
 
 
+def _patch_hub_dir(monkeypatch, hub: Path) -> None:
+    for target in (
+        "trade_integrations.context.hub.get_hub_dir",
+        "trade_integrations.hub_storage.news_events_store.get_hub_dir",
+        "trade_integrations.hub_storage.verified_news_store.get_hub_dir",
+        "trade_integrations.hub_storage.news_event_index.get_hub_dir",
+    ):
+        monkeypatch.setattr(target, lambda _hub=hub: _hub)
+
+
 @pytest.fixture
 def hub_tmp(tmp_path, monkeypatch):
     from trade_integrations.context import hub as hub_mod
 
     hub = tmp_path / "hub"
     hub.mkdir()
+    _patch_hub_dir(monkeypatch, hub)
     monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub)
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.probe.check_ingest_allowed",
+        lambda **_: {"blocked": False},
+    )
     return hub
+
+
+def _two_sources(prefix: str = "https://example.com") -> list[dict[str, str]]:
+    return [
+        {"vendor": "rss", "publisher": "A", "url": f"{prefix}/1"},
+        {"vendor": "rss", "publisher": "B", "url": f"{prefix}/2"},
+    ]
 
 
 def test_de_clickbait_strips_prefix():
@@ -180,15 +203,14 @@ def test_ingest_cache_hit_skips_reverify(hub_tmp, monkeypatch):
 
     monkeypatch.setattr(engine, "verify_enriched_news", counting_verify)
     monkeypatch.setattr(
-        engine,
-        "collect_headlines_for_day",
+        "trade_integrations.dataflows.index_research.news_impact_engine.collect_headlines_for_day",
         lambda *a, **k: [
             {
                 "canonical_story_id": "title:cached story",
                 "id": "title:cached story",
                 "title": "Cached story",
                 "summary": "FII sold heavily.",
-                "sources": [{"vendor": "rss", "url": "", "publisher": "rss"}],
+                "sources": _two_sources(),
                 "published_at": "2026-07-16",
             }
         ],
@@ -210,7 +232,7 @@ def test_ingest_cache_hit_skips_reverify(hub_tmp, monkeypatch):
             "canonical_story_id": "title:cached story",
             "title": "Cached story",
             "content_summary": "FII sold heavily.",
-            "sources": [{"vendor": "rss", "url": "", "publisher": "rss"}],
+            "sources": _two_sources(),
             "published_at": "2026-07-16",
             "verification_status": "partial",
             "verification": {"status": "partial"},
@@ -253,14 +275,13 @@ def test_cache_hit_merges_tags_when_cached_sparse(hub_tmp, monkeypatch):
 
     monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(
-        engine,
-        "collect_headlines_for_day",
+        "trade_integrations.dataflows.index_research.news_impact_engine.collect_headlines_for_day",
         lambda *a, **k: [
             {
                 "canonical_story_id": "title:sparse story",
                 "title": "Sparse story",
                 "summary": "FII sold heavily; oil prices rose.",
-                "sources": [{"vendor": "rss", "url": "", "publisher": "rss"}],
+                "sources": _two_sources(),
                 "published_at": "2026-07-16",
                 "tags": {
                     "topics": ["fii", "oil"],
@@ -287,7 +308,7 @@ def test_cache_hit_merges_tags_when_cached_sparse(hub_tmp, monkeypatch):
             "canonical_story_id": "title:sparse story",
             "title": "Sparse story",
             "content_summary": "FII sold heavily.",
-            "sources": [{"vendor": "rss", "url": "", "publisher": "rss"}],
+            "sources": _two_sources(),
             "published_at": "2026-07-16",
             "verification_status": "partial",
             "verification": {"status": "partial"},
@@ -321,7 +342,7 @@ def test_resolve_news_impact_prefers_snapshot_and_hydrates_tags(hub_tmp, monkeyp
             "canonical_story_id": "title:hydrate me",
             "title": "Hydrate me",
             "content_summary": "US markets dragged Nifty lower.",
-            "sources": [{"vendor": "rss", "url": "", "publisher": "rss"}],
+            "sources": _two_sources(),
             "published_at": "2026-07-16",
             "verification_status": "approved",
             "verification": {"status": "approved"},
@@ -344,6 +365,7 @@ def test_resolve_news_impact_prefers_snapshot_and_hydrates_tags(hub_tmp, monkeyp
                         "canonical_story_id": "title:hydrate me",
                         "title": "Hydrate me",
                         "tags": {},
+                        "sources": _two_sources(),
                     }
                 ],
             }
@@ -367,8 +389,7 @@ def test_resolve_news_impact_returns_hub_empty_without_live_collect(hub_tmp, mon
     monkeypatch.setattr(store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(engine, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setattr(
-        engine,
-        "collect_headlines_for_day",
+        "trade_integrations.dataflows.index_research.news_impact_engine.collect_headlines_for_day",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("collect forbidden")),
     )
 
@@ -390,8 +411,7 @@ def test_headlines_for_day_skips_live_collect_by_default(hub_tmp, monkeypatch):
 
     called: list[int] = []
     monkeypatch.setattr(
-        engine,
-        "collect_headlines_for_day",
+        "trade_integrations.dataflows.index_research.news_impact_engine.collect_headlines_for_day",
         lambda *a, **k: called.append(1) or [],
     )
 

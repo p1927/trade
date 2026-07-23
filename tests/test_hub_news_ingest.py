@@ -58,6 +58,10 @@ def test_run_hub_news_ingest_rss_only(hub_tmp, monkeypatch):
         "trade_integrations.dataflows.hub_wiki.client.health_check",
         lambda: {"ok": True},
     )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.pipeline_cancel.check_pipeline_cancel",
+        lambda: None,
+    )
 
     from trade_integrations.dataflows.index_research.hub_news_ingest import run_hub_news_ingest
 

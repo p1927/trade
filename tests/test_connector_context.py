@@ -130,3 +130,23 @@ def test_symbol_allowed_for_connector_market() -> None:
     ok, err = symbol_allowed_for_connector_market("NIFTY", "US")
     assert ok is False
     assert err is not None
+
+
+@pytest.mark.unit
+def test_autonomous_agent_rejects_alpaca_profile(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_TRADING_RUNTIME_ROOT", str(tmp_path))
+    cfg = tmp_path / "trading-connections.json"
+    cfg.write_text(json.dumps({"selected_profile": "alpaca-paper-sdk"}), encoding="utf-8")
+    agent = {"id": "aa_test", "type": "autonomous_agent.instance"}
+    with pytest.raises(ValueError, match="cannot use Alpaca SDK"):
+        load_active_connector_context(agent=agent)
+
+
+@pytest.mark.unit
+def test_non_autonomous_agent_allows_alpaca_profile(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("VIBE_TRADING_RUNTIME_ROOT", str(tmp_path))
+    cfg = tmp_path / "trading-connections.json"
+    cfg.write_text(json.dumps({"selected_profile": "alpaca-paper-sdk"}), encoding="utf-8")
+    ctx = load_active_connector_context(agent={"id": "session_xyz"})
+    assert ctx is not None
+    assert ctx.profile_id == "alpaca-paper-sdk"

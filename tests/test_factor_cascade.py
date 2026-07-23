@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from trade_integrations.dataflows.index_research.factor_cascade import (
+from trade_integrations.dataflows.index_research.cascade import (
     build_cascade_overrides,
     overrides_from_event_preset,
 )

@@ -14,12 +14,13 @@ if str(INTEGRATIONS) not in sys.path:
 
 from trade_integrations.autonomous_agents.plan_approval import (  # noqa: E402
     approve_agent_plan,
+    ensure_plan_approval_record,
     is_awaiting_plan_approval,
     is_plan_approved,
     request_plan_reapproval,
     resolve_widget_id,
 )
-from trade_integrations.autonomous_agents.store import get_agent, save_agent  # noqa: E402
+from trade_integrations.autonomous_agents.store import get_agent, load_agent, save_agent  # noqa: E402
 
 
 @pytest.fixture
@@ -110,6 +111,5 @@ def test_normalize_legacy_plan_approval_backfills_widget_ids(hub_tmp: Path):
     agent["plan_approved_at"] = "2026-07-16T20:00:00+00:00"
     agent.pop("approved_trade_plan_widget_id", None)
     save_agent(agent)
-    loaded = get_agent("aa_plan")
-    assert loaded is not None
+    loaded = ensure_plan_approval_record(load_agent("aa_plan") or {}, persist=True)
     assert loaded.get("approved_trade_plan_widget_id") == "tp_test_plan"

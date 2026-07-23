@@ -55,19 +55,17 @@ class TestAutonomousTurns:
         def _fake_progress(**kwargs):
             if kwargs.get("turn_kind") != "strategy_revision":
                 return ""
-            return (
-                "## Strategy progress (mandatory — cite before REVISE/HOLD/EXIT)\n"
-                "```json\n{\"position_state\": \"flat\"}\n```\n"
-            )
+            return "## Strategy progress\n- flat\n"
 
         monkeypatch.setattr(
-            "trade_integrations.autonomous_agents.turns.format_strategy_progress_for_prompt",
+            "trade_integrations.autonomous_agents.turns.format_strategy_progress_compact",
             _fake_progress,
         )
         revision = build_full_reasoning_prompt(agent=agent, turn_kind="strategy_revision")
         research = build_full_reasoning_prompt(agent=agent, turn_kind="research")
-        assert "Strategy progress (mandatory" in revision
-        assert "Strategy progress (mandatory" not in research
+        assert "Strategy progress" in revision
+        assert "Strategy progress" not in research
+        assert len(revision) <= 5000
 
     def test_read_strategy_progress_snapshot_does_not_raise(self):
         from trade_integrations.autonomous_agents.strategy_progress import read_strategy_progress_snapshot

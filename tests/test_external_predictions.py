@@ -522,7 +522,7 @@ def test_url_policy_rejects_careers_and_options() -> None:
         "markets-rally-on-fii-flows/articleshow/999.cms"
     )
     assert is_allowed_url(generic_url, title="Markets rally on FII flows").allowed is False
-    assert is_candidate_article_url(generic_url, title="Markets rally on FII flows").allowed is True
+    assert is_candidate_article_url(generic_url, title="Markets rally on FII flows").allowed is False
 
     nifty_score = link_score(
         "Nifty 50 target raised to 26,500",
@@ -543,15 +543,15 @@ def test_link_discovery_summary() -> None:
         format_link_discovery_summary,
     )
 
-    stats = LinkDiscoveryStats(seen=10, kept=2, skip_reasons=Counter({"not_article": 5, "wrong_domain": 3}))
+    stats = LinkDiscoveryStats(seen=10, kept=2, skip_reasons=Counter({"no_forecast_signal": 5, "wrong_domain": 3}))
     summary = format_link_discovery_summary(stats)
     assert "10 seen" in summary
     assert "2 kept" in summary
-    assert "5 not_article" in summary
+    assert "5 no_forecast_signal" in summary
     assert "3 wrong_domain" in summary
 
 
-def test_extract_article_links_ranks_nifty_and_accepts_generic_headlines() -> None:
+def test_extract_article_links_ranks_nifty_forecast_signals() -> None:
     from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_fetcher import (
         extract_article_links,
     )
@@ -568,9 +568,8 @@ def test_extract_article_links_ranks_nifty_and_accepts_generic_headlines() -> No
 [Index options guide](https://economictimes.indiatimes.com/markets/options/nifty-ce-pe)
 """
     links = extract_article_links(markdown, source, limit=3)
-    assert len(links) == 2
+    assert len(links) == 1
     assert links[0].endswith("/articleshow/123.cms")
-    assert links[1].endswith("/articleshow/456.cms")
 
 
 def test_extract_article_links_prefers_native_scored_links() -> None:
@@ -596,8 +595,8 @@ def test_extract_article_links_prefers_native_scored_links() -> None:
         },
     ]
     links = extract_article_links("", source, limit=2, native_links=native_links)
+    assert len(links) == 1
     assert links[0].endswith("/articleshow/777.cms")
-    assert links[1].endswith("/articleshow/888.cms")
 
 
 def test_horizon_validator_accepts_window() -> None:
