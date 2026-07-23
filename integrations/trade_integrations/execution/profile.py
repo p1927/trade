@@ -91,13 +91,16 @@ def _build_execution_profile(
     mc = mandate_config_from_agent(agent)
     instruments = _instruments_tuple(mc)
     sym_tuple = tuple(str(s).upper() for s in (agent.get("symbols") or ["NIFTY"]) if str(s).strip())
-    fragment = _prompt_fragment_id(
-        market=market,
-        mode=mode,
-        instruments=instruments,
-        mandate_text=str(agent.get("mandate") or ""),
-        symbols=sym_tuple or ("NIFTY",),
-    )
+    if mc.agent_mode == "observe":
+        fragment = "in_index_observe" if market == "IN" else "us_equity_observe"
+    else:
+        fragment = _prompt_fragment_id(
+            market=market,
+            mode=mode,
+            instruments=instruments,
+            mandate_text=str(agent.get("mandate") or ""),
+            symbols=sym_tuple or ("NIFTY",),
+        )
 
     if market == "US":
         return ExecutionProfile(

@@ -302,21 +302,25 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
     if not agent or str(agent.get("status")) != "running":
         return False
 
-    if turn_kind in {"strategy_revision", "research", "post_execution"}:
+    from trade_integrations.autonomous_agents.turns import effective_turn_kind
+
+    effective = effective_turn_kind(agent, turn_kind)
+
+    if effective in {"strategy_revision", "research", "post_execution", "watch_report"}:
         try:
             from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
             if not is_plan_approved(agent):
                 logger.info(
                     "skip %s turn for %s: plan not yet approved",
-                    turn_kind,
+                    effective,
                     agent_id,
                 )
                 return False
         except ImportError:
             pass
 
-    if turn_kind == "research" and _research_turn_recently_ran(agent):
+    if turn_kind == "research" and effective == "research" and _research_turn_recently_ran(agent):
         logger.info("skip research turn for %s: recent full reasoning within cooldown", agent_id)
         return False
 
@@ -329,11 +333,11 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
         return False
 
     prefetch_note = ""
-    if turn_kind in {"strategy_revision", "research", "post_execution"}:
+    if effective in {"strategy_revision", "research", "post_execution", "watch_report"}:
         try:
             from trade_integrations.autonomous_agents.research_prefetch import prefetch_turn_research
 
-            await prefetch_turn_research(agent_id, turn_kind=turn_kind)
+            await prefetch_turn_research(agent_id, turn_kind=effective)
         except Exception as exc:
             logger.warning("prefetch_turn_research failed for %s: %s", agent_id, exc)
             prefetch_note = (
@@ -351,9 +355,9 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
 
     prompt = build_autonomous_turn_prompt(agent=agent, turn_kind=turn_kind) + prefetch_note
     agent["streaming"] = True
-    agent["active_turn_kind"] = turn_kind
+    agent["active_turn_kind"] = effective
     agent["last_full_reasoning_at"] = datetime.now(timezone.utc).isoformat()
-    if turn_kind == "strategy_revision":
+    if effective in {"strategy_revision", "watch_report"}:
         agent["last_revision_at"] = agent["last_full_reasoning_at"]
     elif turn_kind == "post_execution":
         agent["last_post_execution_at"] = agent["last_full_reasoning_at"]

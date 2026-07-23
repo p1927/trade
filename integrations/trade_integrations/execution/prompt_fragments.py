@@ -63,6 +63,17 @@ Do **not** use `get_autonomous_market_feedback` for watch alerts — Nautilus br
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_stock_trade_widget`; live execution via OpenAlgo or `/trade/execute-basket`
 3. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP""",
+    "in_index_observe": """## Required flow (observe — index watch & report)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_research_status(ticker="{focus}", asset_type="index")` — read hub context only; do not refresh unless stale
+3. `get_index_trade_plan(ticker="{focus}")` for outlook — **read only**, no widget
+4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)` — encode spot-move / schedule rules
+5. `record_autonomous_decision` with decision=WATCH or SKIP and a concise market report in rationale — **no orders, no widgets**""",
+    "us_equity_observe": """## Required flow (observe — US watch & report)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")` for live context
+3. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)`
+4. `record_autonomous_decision` with WATCH or SKIP and a concise report — **no orders**""",
 }
 
 _KIND_NOTES: dict[str, dict[str, str]] = {
@@ -76,6 +87,18 @@ _KIND_NOTES: dict[str, dict[str, str]] = {
         "strategy_revision": "**Alert-driven strategy revision.** Re-evaluate thesis; REVISE | EXIT | HOLD | ENTER with leg diff.",
         "post_execution": "**Post-execution review.** Confirm fills/order_state; HOLD | REVISE | EXIT; update watchers if levels changed.",
         "default": "Alert-driven full reasoning turn.",
+    },
+    "in_index_observe": {
+        "research": "Scheduled watch-report turn — summarize index move and regime; no trading.",
+        "strategy_revision": "**Watch alert report** — explain what changed; WATCH or SKIP only.",
+        "watch_report": "Post a concise index watch report; no trade widgets or orders.",
+        "default": "Observe-only report turn.",
+    },
+    "us_equity_observe": {
+        "research": "Scheduled watch-report turn — summarize price action; no trading.",
+        "strategy_revision": "**Watch alert report** — explain what changed; WATCH or SKIP only.",
+        "watch_report": "Post a concise watch report; no orders.",
+        "default": "Observe-only report turn.",
     },
 }
 
@@ -92,9 +115,13 @@ def prompt_fragment_for(
         flow = _bootstrap_flow(fragment_id, agent_id=agent_id, focus=focus, threshold=threshold)
         if isinstance(flow, str) and flow.startswith("##"):
             return flow
+    if turn_kind in {"strategy_revision", "watch_report"} and fragment_id.endswith("_observe"):
+        return _observe_report_flow(fragment_id, agent_id=agent_id, focus=focus)
     if turn_kind == "strategy_revision":
         return _revision_flow(fragment_id, agent_id=agent_id, focus=focus, threshold=threshold)
     if turn_kind == "research":
+        if fragment_id.endswith("_observe"):
+            return _observe_report_flow(fragment_id, agent_id=agent_id, focus=focus)
         if not _research_on_schedule_enabled():
             return (
                 "## Required flow\n"
@@ -129,6 +156,17 @@ _REVISION_NOTE = (
     "Update watchers via `set_agent_watch_spec` with the new strategy name. No user confirmation needed."
 )
 
+_OBSERVE_BOOTSTRAP_NOTE = (
+    "**Observe bootstrap** — first run after confirm. "
+    "Load index context, set watch rules, post an initial WATCH/SKIP report. "
+    "No trade-plan widgets or plan approval."
+)
+
+_OBSERVE_REPORT_NOTE = (
+    "**Watch report turn** — summarize index/spot move, regime, and material alerts. "
+    "Decision must be WATCH or SKIP only; do not place orders."
+)
+
 _RESEARCH_SKIP_NOTE = (
     "**Scheduled research skipped** — autonomous agents only revise on Nautilus watcher alerts. "
     "Do not call trade widget tools on this turn."
@@ -137,7 +175,11 @@ _RESEARCH_SKIP_NOTE = (
 
 def kind_note_for(fragment_id: str, turn_kind: str) -> str:
     if turn_kind == "bootstrap":
+        if fragment_id.endswith("_observe"):
+            return _OBSERVE_BOOTSTRAP_NOTE
         return _BOOTSTRAP_NOTE
+    if turn_kind in {"strategy_revision", "watch_report"} and fragment_id.endswith("_observe"):
+        return _OBSERVE_REPORT_NOTE
     if turn_kind == "strategy_revision":
         return _REVISION_NOTE
     if turn_kind == "research":
@@ -150,6 +192,19 @@ def kind_note_for(fragment_id: str, turn_kind: str) -> str:
 
 
 def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: int = 75) -> str:
+    if fragment_id == "in_index_observe":
+        return f"""## Required flow (observe bootstrap — index)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_research_status(ticker="{focus}", asset_type="index")` — read hub once if complete
+3. `get_index_trade_plan(ticker="{focus}")` — outlook only, no widget
+4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)`
+5. `record_autonomous_decision` with WATCH or SKIP and initial report — **stop** (no plan approval)"""
+    if fragment_id == "us_equity_observe":
+        return f"""## Required flow (observe bootstrap — US)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")`
+3. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)`
+4. `record_autonomous_decision` with WATCH or SKIP and initial report — **stop**"""
     if fragment_id == "in_equity_paper":
         return f"""## Required flow (bootstrap — India equity)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
@@ -181,6 +236,20 @@ def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: i
         order_tool=_US_ORDER_TOOL,
         order_tool_live=_US_ORDER_TOOL_LIVE,
     )
+
+
+def _observe_report_flow(fragment_id: str, *, agent_id: str, focus: str) -> str:
+    if fragment_id == "us_equity_observe":
+        return f"""## Required flow (watch report)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")`
+3. Summarize move, alerts, and outlook in chat
+4. `record_autonomous_decision` with WATCH or SKIP — **no orders or widgets**"""
+    return f"""## Required flow (watch report)
+1. `get_autonomous_agent_status(agent_id="{agent_id}")`
+2. `get_research_status(ticker="{focus}", asset_type="index")` if hub stale
+3. Summarize index move, VIX/regime, and alerts in chat
+4. `record_autonomous_decision` with WATCH or SKIP — **no orders or widgets**"""
 
 
 def _research_on_schedule_enabled() -> bool:

@@ -14,6 +14,7 @@ from trade_integrations.autonomous_agents.strategy_progress import (
     format_strategy_progress_for_prompt,
 )
 from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
+from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
 from trade_integrations.autonomous_agents.strategy_rank import format_scorer_for_prompt, score_ranked_strategies
 from trade_integrations.execution.profile import resolve_profile
 from trade_integrations.execution.routing_context import (
@@ -43,6 +44,36 @@ Respond with this structure only (no audit IDs, no "next-turn expectation", no i
 - Use hub research and live tools; cite prediction range and provenance when recommending a strategy.
 - **Never** mention: handoff cycle, cached context, synthetic alert, audit pa_, verification reads, idempotent reads.
 """
+
+_OBSERVE_AGENT_FOOTER = """
+## Output format (mandatory — trader-facing)
+Respond with this structure only (no audit IDs, no "next-turn expectation", no implementation notes):
+
+## Decision: WATCH | SKIP (confidence N%)
+**View:** direction · spot · VIX/regime (cite live tool or hub research)
+**Watch:** active rules — material alerts since last turn or "none"
+**Report:** concise market summary for the user
+
+## Output rules (mandatory)
+- Decide autonomously on this turn — **do not ask the user questions** or offer optional follow-ups.
+- Call `record_autonomous_decision` with **WATCH or SKIP only** plus `confidence`, `direction`, and a short report in rationale.
+- Do **not** create trade-plan widgets, call `execute_autonomous_basket`, or recommend ENTER/REVISE/EXIT unless the user explicitly asks to trade.
+- Use hub research and live tools; cite prediction range when relevant.
+- **Never** mention: handoff cycle, cached context, synthetic alert, audit pa_, verification reads, idempotent reads.
+"""
+
+
+def _footer_for_agent(agent: dict[str, Any]) -> str:
+    return _OBSERVE_AGENT_FOOTER if is_observe_agent(agent) else _RUNNING_AGENT_FOOTER
+
+
+def effective_turn_kind(agent: dict[str, Any], turn_kind: str) -> str:
+    """Map trading turn kinds to watch-report turns for observe-only agents."""
+    if not is_observe_agent(agent):
+        return turn_kind
+    if turn_kind in {"research", "strategy_revision", "post_execution"}:
+        return "watch_report"
+    return turn_kind
 
 HTTP_PROMPT_LIMIT = 5000
 _TRUNC_MARKER = "\n\n[truncated — see agent_context prefetch]\n\n"
@@ -99,8 +130,10 @@ def build_autonomous_turn_prompt(
     threshold = int(constraints.get("confidence_threshold") or 75)
     thesis = dict(agent.get("thesis") or {})
     mc = mandate_config_from_agent(agent)
+    observe = is_observe_agent(agent)
+    effective_kind = effective_turn_kind(agent, turn_kind)
 
-    kind_note = kind_note_for(profile.prompt_fragment_id, turn_kind)
+    kind_note = kind_note_for(profile.prompt_fragment_id, effective_kind)
     header = session_header_for(profile.market, mode=profile.mode)
     title_suffix = " — US / OpenAlgo" if profile.is_us else ""
     market_label = "US (OpenAlgo paper)" if profile.is_us and profile.is_paper else (
@@ -144,7 +177,7 @@ def build_autonomous_turn_prompt(
     learning_block = format_learning_compact(agent=agent)
 
     revision_watch_block = ""
-    if turn_kind in {"strategy_revision", "post_execution"}:
+    if not observe and turn_kind in {"strategy_revision", "post_execution"}:
         revision_watch_block = (
             "## Revision watch rules\n"
             "- If REVISE changes strategy/levels: `set_agent_watch_spec` before `record_autonomous_decision`.\n"
@@ -155,29 +188,19 @@ def build_autonomous_turn_prompt(
         agent_id=agent_id,
         focus=focus,
         threshold=threshold,
-        turn_kind=turn_kind,
+        turn_kind=effective_kind if turn_kind != "bootstrap" else turn_kind,
     )
 
-    bootstrap_block = ""
-    if turn_kind == "bootstrap":
-        bootstrap_block = (
-            "\n## Bootstrap checklist\n"
-            f"1. `get_autonomous_agent_status(agent_id=\"{agent_id}\")`\n"
-            "2. One hub research + **one** trade-plan widget for the profile.\n"
-            f"3. `set_agent_watch_spec(agent_id=\"{agent_id}\", strategy=<chosen>)`\n"
-            "4. `record_autonomous_decision` — **stop**; user approves widget before Nautilus runs.\n"
-        )
-
-    skill_block = format_advisor_skill_block(routing, turn_kind=turn_kind)
+    skill_block = "" if observe else format_advisor_skill_block(routing, turn_kind=turn_kind)
     index_flow_note = ""
-    if routing.research_asset_type == "index" and not profile.is_us:
+    if not observe and routing.research_asset_type == "index" and not profile.is_us:
         index_flow_note = (
             f"\n## Index flow\nUse `get_research_status(ticker=\"{focus}\", asset_type=\"index\")`, "
             f"`get_index_trade_plan`, `get_index_trade_widget`.\n"
         )
 
     harness_block = ""
-    if agent.get("e2e_harness") and turn_kind == "research" and profile.is_paper:
+    if not observe and agent.get("e2e_harness") and turn_kind == "research" and profile.is_paper:
         harness_block = "\n## Harness\nEnter paper position if flat, then set watch rules and record decision.\n"
 
     body = f"""# Autonomous agent turn ({turn_kind}){title_suffix}
@@ -193,9 +216,9 @@ def build_autonomous_turn_prompt(
 {budget_line}- Mandate: {mandate_line}
 
 {alert_block}{thesis_block}{guidance_block}{learning_block}{progress_block}{revision_watch_block}
-{skill_block}{index_flow_note}{bootstrap_block}{flow}
+{skill_block}{index_flow_note}{flow}
 {harness_block}
-{_RUNNING_AGENT_FOOTER}"""
+{_footer_for_agent(agent)}"""
     return fit_autonomous_prompt(body)
 
 
@@ -216,6 +239,8 @@ def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = 
     threshold = int(constraints.get("confidence_threshold") or 75)
     thesis = dict(agent.get("thesis") or {})
     mc = mandate_config_from_agent(agent)
+    observe = is_observe_agent(agent)
+    effective_kind = effective_turn_kind(agent, turn_kind)
 
     learning_snapshot = read_learning_snapshot(agent=agent)
     display_thesis = {**thesis, **dict(learning_snapshot.get("thesis_overlay") or {})}
@@ -240,7 +265,7 @@ def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = 
     progress_block = format_strategy_progress_for_prompt(agent=agent, turn_kind=turn_kind)
 
     revision_watch_block = ""
-    if turn_kind in {"strategy_revision", "post_execution"}:
+    if not observe and turn_kind in {"strategy_revision", "post_execution"}:
         revision_watch_block = (
             "\n## Revision watch rules (mandatory)\n"
             "- If REVISE/ADJUST changes strategy, stop, target, or entry levels, call "
@@ -250,18 +275,18 @@ def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = 
         )
 
     scorer_block = ""
-    if routing.uses_strategy_scorer:
+    if not observe and routing.uses_strategy_scorer:
         tried = list(learning_snapshot.get("tried_strategies") or display_thesis.get("tried_strategies") or [])
         scorer_block = format_scorer_for_prompt(score_ranked_strategies(focus, tried=tried))
 
-    kind_note = kind_note_for(profile.prompt_fragment_id, turn_kind)
+    kind_note = kind_note_for(profile.prompt_fragment_id, effective_kind if turn_kind != "bootstrap" else turn_kind)
     header = session_header_for(profile.market, mode=profile.mode)
     flow = prompt_fragment_for(
         profile.prompt_fragment_id,
         agent_id=agent_id,
         focus=focus,
         threshold=threshold,
-        turn_kind=turn_kind,
+        turn_kind=effective_kind if turn_kind != "bootstrap" else turn_kind,
     )
 
     market_label = "US (OpenAlgo paper)" if profile.is_us and profile.is_paper else (
@@ -288,7 +313,7 @@ def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = 
     title_suffix = " — US / OpenAlgo" if profile.is_us else ""
 
     bootstrap_block = ""
-    if turn_kind == "bootstrap":
+    if turn_kind == "bootstrap" and not observe:
         if routing.research_asset_type == "index" and not profile.is_us:
             research_step = (
                 f"2. Call `get_research_status(ticker=\"{focus}\", asset_type=\"index\")` **once**; "
@@ -326,7 +351,7 @@ def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = 
         )
 
     harness_block = ""
-    if agent.get("e2e_harness") and turn_kind == "research" and profile.is_paper:
+    if not observe and agent.get("e2e_harness") and turn_kind == "research" and profile.is_paper:
         if profile.is_us:
             harness_block = (
                 "\n## Harness (paper verification)\n"
@@ -342,17 +367,17 @@ def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = 
                 "via the normal OpenAlgo basket flow on this turn, then set watch rules and "
                 "record the decision.\n"
             )
-    elif agent.get("e2e_harness") and turn_kind == "strategy_revision" and profile.is_us and profile.is_paper:
+    elif not observe and agent.get("e2e_harness") and turn_kind == "strategy_revision" and profile.is_us and profile.is_paper:
         harness_block = (
             "\n## Harness (paper verification)\n"
             f"If you hold {focus} shares, close via `submit_bridge_execution_intent` (EXIT) "
             "or let Nautilus stop rules fire, then record EXIT.\n"
         )
 
-    skill_block = format_advisor_skill_block(routing, turn_kind=turn_kind)
+    skill_block = "" if observe else format_advisor_skill_block(routing, turn_kind=turn_kind)
 
     index_flow_note = ""
-    if routing.research_asset_type == "index" and not profile.is_us:
+    if not observe and routing.research_asset_type == "index" and not profile.is_us:
         index_flow_note = (
             "\n## Index research flow\n"
             f"For index outlook on **{focus}**, use `get_research_status(ticker=\"{focus}\", "
@@ -379,7 +404,7 @@ def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = 
 {thesis_block}{guidance_block}{learning_block}{progress_block}{revision_watch_block}{scorer_block}
 {skill_block}{index_flow_note}{bootstrap_block}{flow}
 {harness_block}
-{_RUNNING_AGENT_FOOTER}"""
+{_footer_for_agent(agent)}"""
 
 
 def build_orchestrator_system_note() -> str:

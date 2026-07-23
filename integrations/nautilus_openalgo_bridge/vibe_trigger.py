@@ -143,15 +143,17 @@ def build_alert_turn_prompt(
 ) -> str:
     from trade_integrations.autonomous_agents.turns import (
         build_autonomous_turn_prompt,
+        effective_turn_kind,
         fit_autonomous_prompt,
     )
 
+    alert_kind = effective_turn_kind(agent, "strategy_revision")
     return fit_autonomous_prompt(
         extra_block
         + build_bridge_alert_block(alert, quotes)
         + build_autonomous_turn_prompt(
             agent=agent,
-            turn_kind="strategy_revision",
+            turn_kind=alert_kind,
             alert_message=str(alert.message or ""),
         )
     )
@@ -208,8 +210,11 @@ async def dispatch_thesis_alert(
         extra_block=build_thesis_alert_block(alert),
     )
     caller = make_vibe_message_client(config)
+    from trade_integrations.autonomous_agents.turns import effective_turn_kind
+
+    alert_kind = effective_turn_kind(agent, "strategy_revision")
     agent["streaming"] = True
-    agent["active_turn_kind"] = "strategy_revision"
+    agent["active_turn_kind"] = alert_kind
     agent["last_bridge_alert_at"] = alert.fired_at
     save_agent(agent)
     try:
@@ -266,6 +271,11 @@ async def dispatch_quant_alert(
         return {"status": "error", "error": "agent has no vibe_session_id"}
     if agent.get("streaming"):
         return {"status": "skipped", "reason": "turn_in_flight"}
+
+    from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
+
+    if is_observe_agent(agent):
+        return {"status": "skipped", "reason": "observe_quant_disabled"}
 
     prompt = build_quant_alert_block(alert_type, message, delta) + build_full_reasoning_prompt(
         agent=agent,
@@ -368,8 +378,11 @@ async def dispatch_watch_alert(
     prompt = build_alert_turn_prompt(agent=agent, alert=alert, quotes=quotes)
     caller = make_vibe_message_client(config)
 
+    from trade_integrations.autonomous_agents.turns import effective_turn_kind
+
+    alert_kind = effective_turn_kind(agent, "strategy_revision")
     agent["streaming"] = True
-    agent["active_turn_kind"] = "strategy_revision"
+    agent["active_turn_kind"] = alert_kind
     agent["last_bridge_alert_at"] = alert.fired_at
     agent["last_bridge_alert"] = alert.to_dict()
     save_agent(agent)

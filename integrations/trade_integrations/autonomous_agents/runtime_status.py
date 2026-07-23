@@ -191,7 +191,7 @@ def _nautilus_state_for_agent(agent: dict[str, Any]) -> str:
 
     bootstrap = str(agent.get("bootstrap_status") or "")
     created_age = _parse_iso_age_min(agent.get("created_at"))
-    if bootstrap in {"pending", "running"}:
+    if bootstrap in {"pending", "running", "awaiting_plan_approval"}:
         return "expected"
     if created_age is not None and created_age <= 5.0 and bootstrap != "done":
         return "expected"
@@ -225,6 +225,7 @@ def _resolve_watch_path_for_agent(
     nautilus_alive: bool,
     in_registry: bool,
     nautilus_bound_agent: str | None,
+    nautilus_state: str | None = None,
 ) -> str:
     if profile is not None and profile.uses_nautilus_watch:
         if not nautilus_on:
@@ -233,6 +234,8 @@ def _resolve_watch_path_for_agent(
         if nautilus_alive and (in_registry or (bound and bound == agent_id)):
             return "nautilus_detached"
         if nautilus_alive:
+            return "nautilus_scheduler_poll"
+        if nautilus_state == "poll_ok":
             return "nautilus_scheduler_poll"
         return "degraded"
     return "agent_native"
@@ -307,6 +310,7 @@ def build_agent_runtime(agent: dict[str, Any], *, authority: Any | None = None) 
         nautilus_alive=nautilus_alive,
         in_registry=in_registry,
         nautilus_bound_agent=nautilus_bound_agent,
+        nautilus_state=nautilus_state,
     )
 
     scheduler_health = _scheduler_health_for_agent(
