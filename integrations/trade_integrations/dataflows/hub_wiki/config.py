@@ -9,6 +9,7 @@ Storage layout (under hub root, default ``reports/hub/``):
         sources/          # immutable exports from hub events (LLM Wiki auto-watch)
         sources/inbox/    # manual drop zone
         sources/news/     # Trade distilled event markdown + JSON audit
+        sources/research/ # Trade Deep Research exports (immutable)
         assets/
       wiki/               # LLM Wiki-generated pages after ingest (do not write events/ directly)
 
@@ -64,8 +65,29 @@ def llm_wiki_news_sources_dir() -> Path:
     return llm_wiki_sources_dir() / "news"
 
 
+def llm_wiki_research_sources_dir() -> Path:
+    return llm_wiki_sources_dir() / "research"
+
+
 def llm_wiki_wiki_dir() -> Path:
     return get_llm_wiki_project_dir() / "wiki"
+
+
+def llm_wiki_concepts_dir() -> Path:
+    return llm_wiki_wiki_dir() / "concepts"
+
+
+def llm_wiki_queries_dir() -> Path:
+    return llm_wiki_wiki_dir() / "queries"
+
+
+def llm_wiki_synthesis_dir() -> Path:
+    return llm_wiki_wiki_dir() / "synthesis"
+
+
+def llm_wiki_wiki_sources_dir() -> Path:
+    """LLM Wiki-generated source summary pages (not Trade raw exports)."""
+    return llm_wiki_wiki_dir() / "sources"
 
 
 def llm_wiki_events_dir() -> Path:

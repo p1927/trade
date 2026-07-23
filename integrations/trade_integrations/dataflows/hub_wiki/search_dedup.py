@@ -198,6 +198,7 @@ def build_source_event_index(*, news_dir: Path | None = None) -> dict[str, dict[
             "slug": slug,
             "title": str(payload.get("title") or ""),
             "publish_day": str(payload.get("publish_day") or ""),
+            "content_fingerprint": str(payload.get("content_fingerprint") or ""),
             "references": list(payload.get("references") or []),
             "timeline": list(payload.get("timeline") or []),
             "json_path": str(json_path),

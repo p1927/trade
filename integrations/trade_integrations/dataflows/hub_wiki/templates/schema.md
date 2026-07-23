@@ -6,14 +6,17 @@
 |------|-----------|---------|
 | event | wiki/ (ingested) | Distilled market events after LLM Wiki ingest |
 | entity | wiki/entities/ | Macro/micro actors (RBI, Iran, Reliance, oil) |
-| theme | wiki/themes/ | Cross-cutting themes (rate cycle, geopolitical risk) |
-| source | raw/sources/news/ | Immutable exports from hub events (Trade writes here) |
+| concept | wiki/concepts/ | Cross-cutting concepts (rate cycle, geopolitical risk) |
+| source | wiki/sources/ | LLM-generated per-source summaries |
+| query | wiki/queries/ | Saved Deep Research answers (LLM-generated) |
+| raw event | raw/sources/news/ | Immutable exports from hub events (Trade writes here) |
+| raw research | raw/sources/research/ | Immutable Deep Research exports (Trade writes here) |
 
-## Frontmatter (source exports in raw/sources/news/)
+## Frontmatter (raw exports in raw/sources/news/ or raw/sources/research/)
 
 ```yaml
 ---
-type: event
+type: event          # or research for Deep Research exports
 title: Human-readable title
 sources: [news/slug.md]
 event_id: evt:abc123
@@ -25,13 +28,15 @@ compiled_at: ISO8601
 processing_version: 1
 source_count: 8
 linked_factors: [oil_brent, fii_net_5d]
+gap_kind: conflicts   # research exports only
 ---
 ```
 
 ## Rules
 
 - Wiki pages are **derived** from `events.parquet` — regenerate, never authoritative over SSOT.
-- Trade exports to `raw/sources/news/`; LLM Wiki ingest builds searchable `wiki/` pages.
+- Trade exports to `raw/sources/news/` and `raw/sources/research/` only; LLM Wiki ingest builds searchable `wiki/` pages.
+- Map `linked_factors` to `[[entity-slug]]` / `[[concept-slug]]` wikilinks on ingest.
 - Impact numbers come from `event_outcomes` ledger, not free-form LLM prose.
 - Outliers stay in a **Conflicts** section; do not delete dissenting sources.
-- Use `[[entity-slug]]` wikilinks between events, entities, and themes.
+- `type: event` on a raw source file is a Trade convention; LLM Wiki generates typed wiki pages on ingest.

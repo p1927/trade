@@ -8,10 +8,16 @@ from pathlib import Path
 from trade_integrations.dataflows.hub_wiki.config import (
     get_llm_wiki_project_dir,
     legacy_sources_dir,
+    llm_wiki_concepts_dir,
+    llm_wiki_entities_dir,
     llm_wiki_news_sources_dir,
+    llm_wiki_queries_dir,
     llm_wiki_raw_assets_dir,
+    llm_wiki_research_sources_dir,
     llm_wiki_sources_dir,
+    llm_wiki_synthesis_dir,
     llm_wiki_wiki_dir,
+    llm_wiki_wiki_sources_dir,
 )
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -78,8 +84,14 @@ def ensure_llm_wiki_project() -> Path:
         llm_wiki_sources_dir(),
         llm_wiki_sources_dir() / "inbox",
         llm_wiki_news_sources_dir(),
+        llm_wiki_research_sources_dir(),
         llm_wiki_raw_assets_dir(),
         llm_wiki_wiki_dir(),
+        llm_wiki_entities_dir(),
+        llm_wiki_concepts_dir(),
+        llm_wiki_wiki_sources_dir(),
+        llm_wiki_queries_dir(),
+        llm_wiki_synthesis_dir(),
     ):
         path.mkdir(parents=True, exist_ok=True)
 

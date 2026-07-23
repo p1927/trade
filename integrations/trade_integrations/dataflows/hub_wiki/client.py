@@ -166,3 +166,35 @@ def search_wiki(
         f"/api/v1/projects/{pid}/search",
         body={"query": query, "topK": top_k, "includeContent": include_content},
     )
+
+
+def chat_wiki(
+    message: str,
+    *,
+    mode: str = "deep",
+    project_id: str | None = None,
+    timeout: float = 120.0,
+) -> dict[str, Any]:
+    """POST /api/v1/projects/{id}/chat — Deep Research / agent chat."""
+    pid = project_id or resolve_project_id()
+    if not pid:
+        return {"ok": False, "error": "LLM_Wiki project id not configured"}
+    body: dict[str, Any] = {"message": message, "mode": mode}
+    payload = _request(
+        "POST",
+        f"/api/v1/projects/{pid}/chat",
+        body=body,
+        timeout=timeout,
+    )
+    if payload.get("ok") is False and "message" not in payload:
+        alt = _request(
+            "POST",
+            f"/api/v1/projects/{pid}/chat",
+            body={"query": message, "mode": mode},
+            timeout=timeout,
+        )
+        if alt.get("ok") is not False or alt.get("message") or alt.get("content"):
+            payload = alt
+    if payload.get("ok") is not False:
+        payload.setdefault("ok", True)
+    return payload

@@ -2,6 +2,7 @@
 
 from trade_integrations.dataflows.hub_wiki.bootstrap import ensure_llm_wiki_project
 from trade_integrations.dataflows.hub_wiki.client import (
+    chat_wiki,
     count_project_files,
     health_check,
     list_project_files,
@@ -14,9 +15,13 @@ from trade_integrations.dataflows.hub_wiki.client import (
 )
 from trade_integrations.dataflows.hub_wiki.compile import (
     batch_rescan_if_enabled,
+    compile_all_events_to_wiki,
     compile_and_rescan_event,
     compile_event_by_id,
     compile_event_to_wiki,
+    event_content_fingerprint,
+    source_export_is_current,
+    wiki_backfill_enabled,
     wiki_compile_enabled,
 )
 from trade_integrations.dataflows.hub_wiki.config import (
@@ -50,18 +55,31 @@ from trade_integrations.dataflows.hub_wiki.probe import (
     require_llm_wiki_for_hub_news,
     stack_status_message,
 )
+from trade_integrations.dataflows.hub_wiki.audit import audit_hub_wiki_sync
+from trade_integrations.dataflows.hub_wiki.research import (
+    export_research_for_event,
+    maybe_research_event_gaps,
+    wiki_deep_research_enabled,
+)
+from trade_integrations.dataflows.hub_wiki.research_gaps import detect_research_gaps
 __all__ = [
+    "audit_hub_wiki_sync",
     "batch_rescan_if_enabled",
     "build_duplicate_groups_wiki",
     "build_search_query",
     "build_source_event_index",
+    "chat_wiki",
     "check_ingest_allowed",
+    "compile_all_events_to_wiki",
     "compile_and_rescan_event",
     "compile_event_by_id",
     "compile_event_to_wiki",
     "count_project_files",
+    "detect_research_gaps",
     "embedding_available",
     "ensure_llm_wiki_project",
+    "event_content_fingerprint",
+    "export_research_for_event",
     "fetch_embedding",
     "find_wiki_match_for_record",
     "get_llm_wiki_project_dir",
@@ -74,6 +92,7 @@ __all__ = [
     "llm_wiki_base_url",
     "llm_wiki_project_id",
     "llm_wiki_required_for_hub_news",
+    "maybe_research_event_gaps",
     "probe_llm_wiki",
     "project_path_aligned",
     "resolve_project_id",
@@ -82,8 +101,11 @@ __all__ = [
     "reset_wiki_search_availability_cache",
     "search_wiki",
     "stack_status_message",
+    "source_export_is_current",
     "trigger_sources_rescan",
+    "wiki_backfill_enabled",
     "wiki_compile_enabled",
+    "wiki_deep_research_enabled",
     "wiki_search_available",
     "wiki_search_enabled",
     "wiki_search_max_per_pass",
