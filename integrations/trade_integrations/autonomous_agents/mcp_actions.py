@@ -6,11 +6,61 @@ import logging
 from typing import Any
 
 from trade_integrations.autonomous_agents.proposals import propose_autonomous_agent
-from trade_integrations.autonomous_agents.store import get_agent, list_agents, load_proposal, save_agent
-from trade_integrations.auto_paper.mcp_actions import get_status, record_decision
-from trade_integrations.execution.profile import resolve_profile
+from trade_integrations.autonomous_agents.store import get_agent, list_agents, load_agent, load_proposal, save_agent
+from trade_integrations.autonomous_agents.agent_status import get_agent_execution_status, load_openalgo_authority
+from trade_integrations.autonomous_agents.decisions import record_agent_decision
+from trade_integrations.execution.profile import resolve_profile, resolve_profile_from_context
 
 logger = logging.getLogger(__name__)
+
+
+def activate_watch_spec_for_agent(
+    agent_id: str,
+    agent: dict[str, Any],
+    watch_spec: dict[str, Any],
+    *,
+    profile: Any | None = None,
+) -> Any:
+    """Sync watch registry + Nautilus handoff (deferred until plan approval during bootstrap)."""
+    profile = profile or resolve_profile(agent=agent)
+    handoff = None
+    if not profile.uses_nautilus_watch:
+        return handoff
+
+    vibe_sid = str(agent.get("vibe_session_id") or "").strip()
+    try:
+        from trade_integrations.watch_registry.store import create_watch, list_watches, update_watch
+
+        existing = list_watches(owner_kind="autonomous_agent", owner_id=agent_id, active_only=True)
+        if existing:
+            update_watch(str(existing[0].get("watch_id")), watch_spec=watch_spec)
+        elif vibe_sid:
+            create_watch(
+                owner_kind="autonomous_agent",
+                owner_id=agent_id,
+                vibe_session_id=vibe_sid,
+                watch_spec=watch_spec,
+                symbols=list(agent.get("symbols") or []),
+                label="strategy watch",
+            )
+    except Exception:
+        logger.debug("watch registry sync failed for %s", agent_id, exc_info=True)
+
+    from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
+
+    handoff = sync_watch_spec_to_handoff(agent_id, watch_spec)
+    if profile.uses_nautilus_handoff:
+        try:
+            from nautilus_openalgo_bridge.reconcile import sync_handoff_from_position_book
+
+            sync_handoff_from_position_book(agent_id, underlying=str(agent.get("symbols", ["NIFTY"])[0]))
+        except Exception:
+            pass
+
+    latest = get_agent(agent_id) or agent
+    latest.pop("watch_spec_pending_activation", None)
+    save_agent(latest)
+    return handoff
 
 
 def mcp_propose(**kwargs: Any) -> dict[str, Any]:
@@ -22,7 +72,11 @@ def mcp_get_status(agent_id: str | None = None) -> dict[str, Any]:
         agent = get_agent(agent_id)
         if not agent:
             return {"status": "error", "error": f"agent not found: {agent_id}"}
-        profile = resolve_profile(agent=agent)
+        authority = load_openalgo_authority(agent=agent)
+        if authority.market_context is not None:
+            profile = resolve_profile_from_context(agent=agent, market_context=authority.market_context)
+        else:
+            profile = resolve_profile(agent=agent)
         bridge_status = None
         if profile.uses_nautilus_handoff:
             try:
@@ -34,36 +88,38 @@ def mcp_get_status(agent_id: str | None = None) -> dict[str, Any]:
                 )
             except Exception:
                 bridge_status = None
-        paper_status = get_status(autonomous_agent_id=agent_id if profile.uses_openalgo_auto_paper else None)
-        session = paper_status.get("session") or {}
-        paper_active = bool(session.get("enabled"))
-        session_agent = str(session.get("autonomous_agent_id") or "").strip()
-        paper_matches = not session_agent or session_agent == agent_id
+        from trade_integrations.autonomous_agents.runtime_status import build_agent_runtime
+
+        runtime = build_agent_runtime(agent, authority=authority)
+        paper_status = get_agent_execution_status(agent_id=agent_id, agent=agent, authority=authority)
+        execution_context = runtime.get("execution_context") or {}
+        session = dict(paper_status.get("session") or {})
         return {
             "status": "ok",
             "agent": agent,
             "execution_profile": profile.prompt_fragment_id,
-            "execution_market": profile.market,
+            "execution_market": execution_context.get("market_region") or profile.market,
             "execution_backend": profile.backend,
-            "paper_session_active": paper_active if profile.uses_openalgo_auto_paper and paper_matches else None,
-            "paper_session": session if profile.uses_openalgo_auto_paper and paper_matches else None,
+            "execution_mode": "paper" if execution_context.get("paper") else profile.mode,
+            "paper_session_active": bool((agent.get("status") or "") == "running")
+            if profile.uses_openalgo_paper
+            else None,
+            "paper_session": session if profile.uses_openalgo_paper else None,
             "paper_note": (
                 "US agent — OpenAlgo Alpaca plugin is execution authority; INR sandbox P&L may not apply."
                 if profile.is_us
-                else (
-                    "OpenAlgo paper session belongs to a different agent — ignore session P&L for this agent."
-                    if paper_active and not paper_matches
-                    else None
-                )
+                else None
             ),
             "mandate_config": agent.get("mandate_config") or paper_status.get("mandate_config"),
             "bridge_status": bridge_status,
-            "watch_path": "nautilus_bridge" if profile.uses_nautilus_handoff else "legacy",
-            "scheduler_health": paper_status.get("scheduler_health"),
-            "market_open": paper_status.get("market_open"),
-            "lifecycle": session.get("lifecycle"),
+            "watch_path": runtime.get("watch_path"),
+            "scheduler_health": runtime.get("scheduler_health"),
+            "market_open": runtime.get("market_open"),
+            "lifecycle": agent.get("lifecycle") or paper_status.get("lifecycle"),
+            "execution_context": runtime.get("execution_context"),
+            "analyze_mode": runtime.get("analyze_mode"),
         }
-    return {"status": "ok", "agents": list_agents(), "paper_status": get_status()}
+    return {"status": "ok", "agents": list_agents(), "paper_status": get_agent_execution_status()}
 
 
 def mcp_get_proposal(proposal_id: str) -> dict[str, Any]:
@@ -188,77 +244,18 @@ def mcp_record_decision(
     target: float | None = None,
     spot: float | None = None,
     pnl_inr: float | None = None,
+    append_outcome: bool = True,
 ) -> dict[str, Any]:
-    from datetime import datetime, timezone
-
     agent = get_agent(agent_id)
     if not agent:
         return {"status": "error", "error": f"agent not found: {agent_id}"}
+    if str(agent.get("status") or "") not in ("running",):
+        return {"status": "error", "error": f"agent not running: {agent.get('status')}"}
 
     norm_confidence = _normalize_confidence(confidence)
     profile = resolve_profile(agent=agent)
-    if not profile.uses_openalgo_auto_paper:
-        entry = {
-            "at": datetime.now(timezone.utc).isoformat(),
-            "decision": str(decision).strip().upper(),
-            "rationale": rationale.strip(),
-            "ticker": (ticker or (agent.get("symbols") or ["SPY"])[0]).strip().upper(),
-            "actions_taken": actions_taken or [],
-            "execution_market": profile.market,
-        }
-        _attach_decision_metadata(
-            entry,
-            confidence=norm_confidence,
-            direction=direction,
-            strategy=strategy,
-            stop=stop,
-            target=target,
-            spot=spot,
-        )
-        if pnl_inr is not None:
-            entry["pnl_inr"] = float(pnl_inr)
-        agent["last_decision"] = entry
-        _merge_thesis_from_decision(
-            agent,
-            decision=decision,
-            rationale=rationale,
-            confidence=norm_confidence,
-            direction=direction,
-            strategy=strategy,
-            stop=stop,
-            target=target,
-            spot=spot,
-        )
-        watch_sync = {}
-        if entry["decision"] in {"REVISE", "ADJUST"}:
-            agent["last_revision_at"] = entry["at"]
-            watch_sync = _apply_revision_watch_sync(
-                agent,
-                decision=decision,
-                strategy=strategy,
-                stop=stop,
-                target=target,
-                spot=spot,
-            )
-        if entry["decision"] == "EXIT":
-            from trade_integrations.autonomous_agents.agent_learning import apply_exit_learning
-
-            apply_exit_learning(agent, decision_entry=entry)
-        save_agent(agent)
-        from trade_integrations.autonomous_agents.bootstrap import safe_finalize_bootstrap_if_ready
-
-        safe_finalize_bootstrap_if_ready(agent_id)
-        _record_sim_eval_decision(agent_id=agent_id, decision=entry)
-        return {
-            "status": "ok",
-            "agent_id": agent_id,
-            "decision": entry,
-            "thesis": agent.get("thesis"),
-            "watch_spec_sync": watch_sync or None,
-            "paper_note": f"{profile.market} agent — decision stored on agent record (not OpenAlgo session).",
-        }
-
-    result = record_decision(
+    result = record_agent_decision(
+        agent,
         decision=decision,
         rationale=rationale,
         ticker=ticker,
@@ -266,9 +263,9 @@ def mcp_record_decision(
         confidence=norm_confidence,
         direction=direction,
         strategy=strategy,
-        autonomous_agent_id=agent_id,
+        append_outcome=append_outcome,
     )
-    agent = get_agent(agent_id) or agent
+    agent = load_agent(agent_id) or agent
     last = dict(result.get("decision") or {})
     _attach_decision_metadata(
         last,
@@ -281,6 +278,8 @@ def mcp_record_decision(
     )
     if pnl_inr is not None:
         last["pnl_inr"] = float(pnl_inr)
+    if not profile.uses_openalgo_paper:
+        last["execution_market"] = profile.market
     agent["last_decision"] = last
     _merge_thesis_from_decision(
         agent,
@@ -293,8 +292,9 @@ def mcp_record_decision(
         target=target,
         spot=spot,
     )
-    decision_upper = str(decision).upper()
-    watch_sync = {}
+
+    decision_upper = str(decision).strip().upper()
+    watch_sync: dict[str, Any] = {}
     if decision_upper in {"REVISE", "ADJUST"}:
         agent["last_revision_at"] = last.get("at")
         watch_sync = _apply_revision_watch_sync(
@@ -309,9 +309,10 @@ def mcp_record_decision(
         from nautilus_openalgo_bridge.handoff import clear_agent_position_state
         from trade_integrations.autonomous_agents.agent_learning import apply_exit_learning
 
-        clear_agent_position_state(agent_id)
+        if profile.uses_nautilus_handoff:
+            clear_agent_position_state(agent_id)
         apply_exit_learning(agent, decision_entry=last)
-    elif decision_upper in {"ENTER", "REVISE", "ADJUST"}:
+    elif decision_upper in {"ENTER", "REVISE", "ADJUST"} and profile.uses_nautilus_handoff:
         try:
             from nautilus_openalgo_bridge.reconcile import sync_handoff_from_position_book
 
@@ -322,18 +323,24 @@ def mcp_record_decision(
         from trade_integrations.autonomous_agents.agent_learning import sync_agent_thesis_from_lifecycle
 
         sync_agent_thesis_from_lifecycle(agent)
+
     save_agent(agent)
     from trade_integrations.autonomous_agents.bootstrap import safe_finalize_bootstrap_if_ready
 
     safe_finalize_bootstrap_if_ready(agent_id)
     _record_sim_eval_decision(agent_id=agent_id, decision=last)
-    return {
+    response: dict[str, Any] = {
         "status": "ok",
         "agent_id": agent_id,
         **{k: v for k, v in result.items() if k != "status"},
         "thesis": agent.get("thesis"),
         "watch_spec_sync": watch_sync or None,
     }
+    if not profile.uses_openalgo_paper:
+        response["paper_note"] = (
+            f"{profile.market} agent — decision stored on agent record (not OpenAlgo session)."
+        )
+    return response
 
 
 def mcp_set_watch_spec(
@@ -389,38 +396,16 @@ def mcp_set_watch_spec(
         pass
 
     handoff = None
-    if profile.uses_nautilus_watch:
-        vibe_sid = str(agent.get("vibe_session_id") or "").strip()
-        try:
-            from trade_integrations.watch_registry.store import create_watch, list_watches, update_watch
+    from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
-            existing = list_watches(owner_kind="autonomous_agent", owner_id=agent_id, active_only=True)
-            if existing:
-                update_watch(str(existing[0].get("watch_id")), watch_spec=watch_spec)
-            elif vibe_sid:
-                create_watch(
-                    owner_kind="autonomous_agent",
-                    owner_id=agent_id,
-                    vibe_session_id=vibe_sid,
-                    watch_spec=watch_spec,
-                    symbols=list(agent.get("symbols") or []),
-                    label="strategy watch",
-                )
-        except Exception:
-            logger.debug("watch registry sync failed for %s", agent_id, exc_info=True)
-
-        from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
-
-        handoff = sync_watch_spec_to_handoff(agent_id, watch_spec)
-        if profile.uses_nautilus_handoff:
-            try:
-                from nautilus_openalgo_bridge.reconcile import sync_handoff_from_position_book
-
-                sync_handoff_from_position_book(agent_id, underlying=str(agent.get("symbols", ["NIFTY"])[0]))
-            except Exception:
-                pass
-
-    _maybe_post_watchers_system_message(agent, summary)
+    agent = get_agent(agent_id) or agent
+    if is_plan_approved(agent):
+        handoff = activate_watch_spec_for_agent(agent_id, agent, watch_spec, profile=profile)
+        _maybe_post_watchers_system_message(agent, summary)
+    else:
+        agent = get_agent(agent_id) or agent
+        agent["watch_spec_pending_activation"] = True
+        save_agent(agent)
 
     return {
         "status": "ok",
@@ -510,6 +495,8 @@ def mcp_submit_bridge_execution_intent(
         mc = mandate_config_from_agent(agent)
         legs = [ExecutionLeg.from_dict(row) for row in legs_from_widget(widget, product=mc.resolve_product())]
 
+    from nautilus_openalgo_bridge.agent_scoping import strategy_tag_for_agent
+
     intent = ExecutionIntent(
         action=intent_action,
         agent_id=agent_id,
@@ -517,7 +504,7 @@ def mcp_submit_bridge_execution_intent(
         legs=legs,
         widget_id=widget_id,
         underlying=(underlying or (agent.get("symbols") or ["NIFTY"])[0]).upper(),
-        strategy="vibe_bridge_intent",
+        strategy=strategy_tag_for_agent(agent_id),
     )
     path = submit_intent(intent)
     results = process_pending_intents(max_count=1)
@@ -559,3 +546,90 @@ def mcp_delete_watch(watch_id: str) -> dict[str, Any]:
     from trade_integrations.watch_registry.api import mcp_delete_watch as _delete
 
     return _delete(watch_id)
+
+
+def mcp_stop_running_agents(*, unregister_scheduler: bool = True) -> dict[str, Any]:
+    from trade_integrations.autonomous_agents.audit import write_agent_audit
+    from trade_integrations.autonomous_agents.proposals import stop_autonomous_agent
+    from trade_integrations.autonomous_agents.scheduler_cleanup import (
+        remove_agent_scheduler_jobs,
+        remove_obsolete_scheduler_jobs,
+    )
+
+    running_ids = [
+        str(row.get("id") or "")
+        for row in list_agents()
+        if str(row.get("status") or "") == "running" and str(row.get("id") or "")
+    ]
+    stopped_agents: list[str] = []
+    agent_jobs_removed: dict[str, dict[str, bool]] = {}
+    stop_errors: list[dict[str, str]] = []
+
+    for agent_id in running_ids:
+        try:
+            stop_autonomous_agent(agent_id)
+            stopped_agents.append(agent_id)
+            agent_jobs_removed[agent_id] = remove_agent_scheduler_jobs(agent_id)
+        except ValueError as exc:
+            stop_errors.append({"agent_id": agent_id, "error": str(exc)})
+        except Exception as exc:
+            stop_errors.append({"agent_id": agent_id, "error": str(exc)})
+            logger.warning("stop_autonomous_agent failed for %s: %s", agent_id, exc)
+
+    scheduler_removed: dict[str, bool] = {}
+    if unregister_scheduler:
+        try:
+            scheduler_removed = remove_obsolete_scheduler_jobs()
+        except Exception:
+            logger.debug("obsolete scheduler job cleanup skipped", exc_info=True)
+
+    top_status = "stopped"
+    if stop_errors and stopped_agents:
+        top_status = "partial"
+    elif stop_errors and not stopped_agents:
+        top_status = "error"
+
+    audit = write_agent_audit(
+        "session_stopped",
+        detail={
+            "stopped_agents": stopped_agents,
+            "agent_jobs_removed": agent_jobs_removed,
+            "scheduler_removed": scheduler_removed,
+            "stop_errors": stop_errors,
+        },
+    )
+    return {
+        "status": top_status,
+        "stopped_agents": stopped_agents,
+        "agent_jobs_removed": agent_jobs_removed,
+        "scheduler_removed": scheduler_removed,
+        "stop_errors": stop_errors,
+        "audit": {"agent_audit": audit, "audit_id": audit.get("audit_id")},
+    }
+
+
+def mcp_get_market_feedback(*, agent_id: str | None = None, ticker: str | None = None) -> dict[str, Any]:
+    from trade_integrations.autonomous_agents.execution_actions import get_market_feedback as _get
+
+    resolved_id = agent_id
+    if not resolved_id:
+        running = [a for a in list_agents() if str(a.get("status") or "") == "running"]
+        if len(running) == 1:
+            resolved_id = str(running[0].get("id") or "")
+    return _get(ticker=ticker, agent_id=resolved_id)
+
+
+def mcp_execute_basket(
+    widget_id: str,
+    *,
+    agent_id: str | None = None,
+    confidence: int | None = None,
+) -> dict[str, Any]:
+    from trade_integrations.autonomous_agents.execution_actions import execute_basket as _exec
+
+    resolved_id = agent_id
+    if not resolved_id:
+        running = [a for a in list_agents() if str(a.get("status") or "") == "running"]
+        if len(running) == 1:
+            resolved_id = str(running[0].get("id") or "")
+    return _exec(widget_id, confidence=confidence, agent_id=resolved_id)
