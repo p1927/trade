@@ -19,6 +19,7 @@ from trade_integrations.dataflows.index_research.external_predictions.source_reg
 from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
     is_allowed_url,
     is_candidate_article_url,
+    link_has_forecast_signal,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.searxng_finance import search_finance
@@ -84,8 +85,14 @@ def _relevance_score(result: dict[str, Any], source: ExternalPredictionSource) -
         str(result.get(key) or "") for key in ("title", "content", "url")
     ).lower()
     score = 0.0
-    if _matches_source_domain(str(result.get("url") or ""), source):
+    url = str(result.get("url") or "")
+    if not _matches_source_domain(url, source):
+        return -1.0
+    if _matches_source_domain(url, source):
         score += 3.0
+    title = str(result.get("title") or "")
+    if link_has_forecast_signal(f"{title} {url}"):
+        score += 2.5
     for term in _RELEVANCE_TERMS:
         if term in blob:
             score += 0.5
@@ -96,13 +103,38 @@ def _relevance_score(result: dict[str, Any], source: ExternalPredictionSource) -
     return score
 
 
+def filter_searxng_hits_for_source(
+    hits: list[dict[str, Any]],
+    source: ExternalPredictionSource,
+) -> list[dict[str, Any]]:
+    """Keep hits on source domains; prefer forecast-signal URLs."""
+    domain_ok: list[dict[str, Any]] = []
+    for row in hits:
+        url = str(row.get("url") or "").strip()
+        if not url or not _matches_source_domain(url, source):
+            continue
+        domain_ok.append(row)
+    if not domain_ok:
+        return []
+    with_signal = [
+        row
+        for row in domain_ok
+        if link_has_forecast_signal(
+            f"{row.get('title') or ''} {row.get('url') or ''}"
+        )
+    ]
+    pool = with_signal or domain_ok
+    return sorted(pool, key=lambda row: _relevance_score(row, source), reverse=True)
+
+
 def rank_search_results(
     results: list[dict[str, Any]],
     source: ExternalPredictionSource,
     *,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
-    ranked = sorted(results, key=lambda row: _relevance_score(row, source), reverse=True)
+    filtered = filter_searxng_hits_for_source(results, source)
+    ranked = sorted(filtered, key=lambda row: _relevance_score(row, source), reverse=True)
     return ranked[:limit]
 
 
@@ -411,6 +443,16 @@ def extract_via_searxng_fallback(
             pipeline.warn(
                 "searxng",
                 f"SearXNG fallback skipped — all queries failed for {source.display_name}",
+                source_id=source.id,
+            )
+        return None
+
+    hits = filter_searxng_hits_for_source(hits, source)
+    if not hits:
+        if pipeline:
+            pipeline.warn(
+                "searxng",
+                f"SearXNG fallback — no domain-valid hits for {source.display_name}",
                 source_id=source.id,
             )
         return None

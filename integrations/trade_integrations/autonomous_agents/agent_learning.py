@@ -150,6 +150,30 @@ def format_learning_context_for_prompt(*, agent: dict[str, Any]) -> str:
     return read_learning_snapshot(agent=agent)["prompt_text"]
 
 
+def format_learning_compact(*, agent: dict[str, Any]) -> str:
+    """Bounded learning lines for compact prompts (full detail via prefetch)."""
+    snapshot = read_learning_snapshot(agent=agent)
+    lines: list[str] = []
+    tried = list(snapshot.get("tried_strategies") or [])
+    if tried:
+        lines.append(f"- Tried: {', '.join(str(s) for s in tried[:5])}")
+    for decision in _recent_decisions(agent)[-2:]:
+        rationale = str(decision.get("rationale") or "")[:120]
+        lines.append(
+            f"- Recent {decision.get('decision')}: "
+            f"{decision.get('confidence')}% — {rationale}"
+        )
+    learnings = list(agent.get("learnings") or [])[-2:]
+    for row in learnings:
+        lines.append(
+            f"- Learning ({row.get('event')}): "
+            f"{str(row.get('strategy') or '')} — {str(row.get('rationale') or '')[:80]}"
+        )
+    if not lines:
+        return ""
+    return "## Agent learning\n" + "\n".join(lines) + "\n"
+
+
 def record_reflection_on_exit(
     *,
     agent: dict[str, Any],

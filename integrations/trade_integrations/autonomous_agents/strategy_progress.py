@@ -418,3 +418,31 @@ def format_strategy_progress_for_prompt(*, agent: dict[str, Any], turn_kind: str
         f"```json\n{json.dumps(snapshot, indent=2, default=str)}\n```\n"
         f"{footer}"
     )
+
+
+def format_strategy_progress_compact(*, agent: dict[str, Any], turn_kind: str) -> str:
+    """One-line strategy progress for compact autonomous prompts (detail in prefetch)."""
+    if turn_kind not in {"strategy_revision", "post_execution"}:
+        return ""
+    try:
+        payload = read_strategy_progress_snapshot(agent=agent)
+    except Exception:
+        return ""
+    snapshot = payload.get("snapshot") or {}
+    if not snapshot:
+        return ""
+    assessment = dict(snapshot.get("assessment") or {})
+    position = dict(snapshot.get("position") or {})
+    thesis = dict(snapshot.get("thesis") or {})
+    hub = dict(snapshot.get("hub_research") or {})
+    notes = list(assessment.get("notes") or [])
+    note = str(notes[0])[:100] if notes else "none"
+    return (
+        "## Strategy progress\n"
+        f"- State: {assessment.get('position_state', '?')} · "
+        f"aligned={assessment.get('strategy_aligned')} · "
+        f"strategy={thesis.get('strategy')} · "
+        f"spot={position.get('spot')} · "
+        f"hub_stale={assessment.get('hub_stale_vs_thesis')} · "
+        f"note: {note}\n"
+    )

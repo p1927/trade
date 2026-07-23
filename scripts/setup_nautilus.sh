@@ -26,7 +26,8 @@ if [[ "$verify_only" == true ]]; then
     echo "Nautilus venv: missing (run ./scripts/setup_nautilus.sh)"
     exit 1
   fi
-  "${VENV}/bin/python" -c "import nautilus_trader, requests; print('nautilus_trader:', nautilus_trader.__version__)"
+  export PYTHONPATH="${ROOT}/integrations:${ROOT}/tradingagents${PYTHONPATH:+:${PYTHONPATH}}"
+  "${VENV}/bin/python" -c "import nautilus_trader, nautilus_openalgo_bridge, requests; print('nautilus_trader:', nautilus_trader.__version__)"
   exit 0
 fi
 
@@ -39,4 +40,5 @@ fi
 "${VENV}/bin/pip" install "nautilus_trader>=1.228" redis requests
 
 echo "Nautilus watch venv ready at ${VENV}"
-"${VENV}/bin/python" -c "import nautilus_trader; print('nautilus_trader:', nautilus_trader.__version__)"
+export PYTHONPATH="${ROOT}/integrations:${ROOT}/tradingagents${PYTHONPATH:+:${PYTHONPATH}}"
+"${VENV}/bin/python" -c "import nautilus_trader, nautilus_openalgo_bridge; print('nautilus_trader:', nautilus_trader.__version__)"

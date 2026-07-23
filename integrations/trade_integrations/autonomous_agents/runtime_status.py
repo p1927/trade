@@ -112,7 +112,7 @@ def _scheduler_health_for_agent(
     bootstrap = str(agent.get("bootstrap_status") or "")
     if bootstrap == "failed":
         return "bootstrap_failed"
-    if bootstrap in {"pending", "running"}:
+    if bootstrap in {"pending", "running", "awaiting_plan_approval"}:
         return "initializing"
 
     created_age = _parse_iso_age_min(agent.get("created_at"))
@@ -152,6 +152,10 @@ def _scheduler_health_for_agent(
             return "ok"
         if reason_age is not None and reason_age <= stale_research_min:
             return "ok"
+        approved_age = _parse_iso_age_min(agent.get("plan_approved_at"))
+        if approved_age is not None and approved_age <= max(5.0, stale_watch_min):
+            if agent.get("watch_spec") or (agent.get("mandate_config") or {}).get("watch_spec"):
+                return "initializing"
         return "stale"
 
     if not linked_paper.get("enabled"):
@@ -195,6 +199,9 @@ def _nautilus_state_for_agent(agent: dict[str, Any]) -> str:
     if watch_age is not None and watch_age > stale_watch_min:
         return "stale"
     if created_age is not None and created_age > 10.0 and watch_age is None:
+        approved_age = _parse_iso_age_min(agent.get("plan_approved_at"))
+        if approved_age is not None and approved_age <= 15.0:
+            return "expected"
         return "stale"
     return "expected"
 

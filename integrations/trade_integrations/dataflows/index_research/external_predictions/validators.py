@@ -38,6 +38,13 @@ _RESISTANCE_PHRASE = re.compile(
     re.I,
 )
 
+_STRUCTURED_HUB = re.compile(
+    r"next\s+(?:week|month)[^.\n]{0,160}nifty\s*50[^.\n]{0,160}(?:prediction|forecast)|"
+    r"nifty\s*50\s+support\s+and\s+resistance",
+    re.I,
+)
+_HORIZON_TABLE_STYLES = frozenset({"next_week_table", "next_month_table"})
+
 MIN_INDEX_LEVEL = 15_000.0
 MAX_INDEX_LEVEL = 35_000.0
 
@@ -102,6 +109,37 @@ def _explicit_nifty_target_at_level(text: str, level: float) -> bool:
     return False
 
 
+def is_structured_nifty_forecast_hub(
+    body: str,
+    *,
+    title: str = "",
+    url: str = "",
+    provenance: dict[str, Any] | None = None,
+) -> bool:
+    """True for daily/weekly support-resistance forecast hub pages (not analyst price targets)."""
+    prov = provenance or {}
+    if str(prov.get("regex_style") or "") in _HORIZON_TABLE_STYLES:
+        return True
+    blob = " ".join([body or "", title or "", url or ""])
+    if not _NIFTY50.search(blob):
+        return False
+    if _STRUCTURED_HUB.search(blob):
+        return True
+    if re.search(r"/market/nifty/?", url or "", re.I) and re.search(
+        r"support\s+and\s+resistance|next\s+week",
+        blob,
+        re.I,
+    ):
+        return True
+    if re.search(r"weekly|next\s+week", blob, re.I) and re.search(
+        r"support|resistance",
+        blob,
+        re.I,
+    ):
+        return True
+    return False
+
+
 def reject_resistance_only_target(
     record: ExternalPredictionRecord,
     body: str,
@@ -113,6 +151,14 @@ def reject_resistance_only_target(
         return record
 
     prov = record.provenance or {}
+    if is_structured_nifty_forecast_hub(
+        body,
+        title=str(prov.get("title") or ""),
+        url=str(prov.get("url") or ""),
+        provenance=prov,
+    ):
+        return record
+
     text = " ".join(
         [
             body or "",
@@ -185,9 +231,16 @@ def validate_record(
         return record
 
     if used_regex_only and not _NIFTY_TARGET_PARAGRAPH.search(text):
-        record.fetch_status = "not_found"
-        record.error_message = "weak_regex_no_nifty50_target_context"
-        return record
+        prov = record.provenance or {}
+        if not is_structured_nifty_forecast_hub(
+            text,
+            title=str(prov.get("title") or ""),
+            url=str(prov.get("url") or ""),
+            provenance=prov,
+        ):
+            record.fetch_status = "not_found"
+            record.error_message = "weak_regex_no_nifty50_target_context"
+            return record
 
     instrument = str(record.extraction.get("instrument") or (record.provenance or {}).get("instrument") or "")
     if instrument and instrument.upper() not in {"NIFTY50", "NIFTY 50", "NIFTY"}:

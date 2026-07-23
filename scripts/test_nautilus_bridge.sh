@@ -31,13 +31,9 @@ if [[ -f "$ROOT/.env" ]]; then
 fi
 
 if [[ -n "${OPENALGO_API_KEY:-}" ]]; then
-  echo "==> Live OpenAlgo dry-run (single poll — legacy fallback only)"
-  ./scripts/run_nautilus_watch.sh --dry-run || {
-    echo "OpenAlgo dry-run failed (is OpenAlgo running on OPENALGO_HOST?)" >&2
-    exit 1
-  }
+  echo "==> Skipping legacy poll dry-run (removed — use verify_autonomous_integration for live node)"
 else
-  echo "==> Skipping live dry-run (OPENALGO_API_KEY not set)"
+  echo "==> Skipping live verify (OPENALGO_API_KEY not set)"
 fi
 
 if [[ -n "${OPENALGO_API_KEY:-}" && -x "${ROOT}/.venv-nautilus/bin/python" ]]; then

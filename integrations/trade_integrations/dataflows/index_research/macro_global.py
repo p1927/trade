@@ -119,7 +119,7 @@ def _fetch_us_10y() -> dict[str, Any] | None:
 
 
 def _fetch_openalgo_vix() -> dict[str, Any] | None:
-    from trade_integrations.dataflows.openalgo import fetch_openalgo_live_snapshot
+    from trade_integrations.openalgo.market_data import fetch_openalgo_live_snapshot
 
     snap = fetch_openalgo_live_snapshot("INDIAVIX")
     if not snap or snap.get("ltp") is None:

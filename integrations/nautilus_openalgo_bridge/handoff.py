@@ -243,10 +243,3 @@ def clear_agent_position_state(agent_id: str) -> None:
     thesis.pop("open_legs", None)
     agent["thesis"] = thesis
     save_agent(agent)
-
-
-def enqueue_intent(intent: ExecutionIntent) -> Path:
-    """Backward-compatible alias for submit_intent — queue intent for async execution."""
-    from nautilus_openalgo_bridge.intent_queue import submit_intent
-
-    return submit_intent(intent)

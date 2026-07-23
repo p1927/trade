@@ -384,6 +384,24 @@ def migrate_agent_watch_spec_to_registry(agent_id: str) -> dict[str, Any] | None
     )
 
 
+def migrate_all_agent_watch_specs_to_registry() -> dict[str, Any]:
+    """One-time migration: create registry watches from legacy agent.watch_spec."""
+    from trade_integrations.autonomous_agents.store import list_agents
+
+    migrated: list[str] = []
+    skipped: list[str] = []
+    for agent in list_agents():
+        agent_id = str(agent.get("id") or "").strip()
+        if not agent_id.startswith("aa_"):
+            continue
+        row = migrate_agent_watch_spec_to_registry(agent_id)
+        if row:
+            migrated.append(agent_id)
+        else:
+            skipped.append(agent_id)
+    return {"migrated": migrated, "skipped": skipped, "migrated_count": len(migrated)}
+
+
 def record_owner_alert_fired(
     nautilus_owner: str,
     message: str,

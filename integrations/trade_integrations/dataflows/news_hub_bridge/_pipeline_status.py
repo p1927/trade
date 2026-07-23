@@ -23,7 +23,6 @@ from trade_integrations.hub_storage.news_migrations import load_migration_state,
 from trade_integrations.hub_storage.news_staging_store import (
     discarded_count,
     is_entity_pipeline_enabled,
-    is_legacy_ingest_enabled,
     pipeline_pause_status,
     staging_queue_detail,
 )
@@ -95,7 +94,6 @@ def hub_news_pipeline_status(*, ticker: str = "NIFTY") -> dict[str, Any]:
         "ticker": sym,
         "ssot": "events.parquet",
         "entity_pipeline_enabled": is_entity_pipeline_enabled(),
-        "legacy_ingest_enabled": is_legacy_ingest_enabled(),
         "pipeline_paused": bool(pause.get("pipeline_paused")),
         "pause_reason": str(pause.get("pause_reason") or ""),
         "minimax_configured": bool(pause.get("minimax_configured")),

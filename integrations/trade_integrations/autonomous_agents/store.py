@@ -87,13 +87,11 @@ def list_agents() -> list[dict[str, Any]]:
 
 def get_agent(agent_id: str) -> dict[str, Any] | None:
     from trade_integrations.autonomous_agents.agent_schema import ensure_agent_lifecycle
-    from trade_integrations.autonomous_agents.plan_approval import ensure_plan_approval_record
 
     data = load_agent(agent_id)
     if not data:
         return None
-    data = ensure_agent_lifecycle(data, persist=True)
-    return ensure_plan_approval_record(data, persist=True)
+    return ensure_agent_lifecycle(data, persist=True)
 
 
 def save_proposal(proposal: dict[str, Any]) -> dict[str, Any]:

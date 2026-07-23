@@ -243,7 +243,7 @@ def _normalize_bars(frame: pd.DataFrame, *, symbol: str) -> pd.DataFrame:
     if "timestamp" in working.columns and "date" not in working.columns and "Date" not in working.columns:
         working["Date"] = pd.to_datetime(working["timestamp"], unit="s", errors="coerce")
 
-    from trade_integrations.dataflows.openalgo import to_index_research_frame
+    from trade_integrations.openalgo.market_data import to_index_research_frame
 
     normalized = to_index_research_frame(working)
     if normalized.empty:

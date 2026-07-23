@@ -69,7 +69,7 @@ def _fetch_nifty_context() -> dict[str, Any] | None:
 
 
 def _fetch_openalgo_vix() -> dict[str, Any] | None:
-    from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+    from trade_integrations.openalgo.market_data import fetch_openalgo_quote
 
     quote = fetch_openalgo_quote("INDIAVIX")
     ltp = quote.get("ltp") if quote else None
@@ -79,7 +79,7 @@ def _fetch_openalgo_vix() -> dict[str, Any] | None:
 
 
 def _fetch_openalgo_nifty() -> dict[str, Any] | None:
-    from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+    from trade_integrations.openalgo.market_data import fetch_openalgo_quote
 
     quote = fetch_openalgo_quote("NIFTY")
     ltp = quote.get("ltp") if quote else None

@@ -230,22 +230,18 @@ def create_test_agent(*, symbols: list[str], name: str, mandate: str) -> tuple[s
 
     lib.load_env()
     agent_id, session_id = lib.create_paper_agent(name=name, mandate=mandate, symbols=symbols)
-    from datetime import datetime, timezone
-    from trade_integrations.autonomous_agents.store import get_agent, save_agent
-
-    agent = get_agent(agent_id) or {}
-    # Bridge alert dispatch requires an approved plan; bootstrap may not finish when markets are closed.
-    agent["plan_approved_at"] = datetime.now(timezone.utc).isoformat()
-    agent["bootstrap_status"] = "done"
-    agent.pop("plan_approval_required", None)
     if symbols and symbols[0].upper() != "SPY":
+        from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+        agent = get_agent(agent_id) or {}
         agent["watch_spec"] = {
             "rules": [
                 {"symbol": "NIFTY", "metric": "spot_move_pct", "threshold": 0.01, "direction": "either"},
                 {"symbol": "INDIAVIX", "metric": "level_above", "threshold": 99.0},
             ],
         }
-    save_agent(agent)
+        save_agent(agent)
+    lib.ensure_agent_plan_approved(agent_id)
     return agent_id, session_id
 
 

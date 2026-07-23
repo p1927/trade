@@ -141,10 +141,19 @@ def build_alert_turn_prompt(
     quotes: dict[str, QuoteSnapshot] | None = None,
     extra_block: str = "",
 ) -> str:
-    return (
+    from trade_integrations.autonomous_agents.turns import (
+        build_autonomous_turn_prompt,
+        fit_autonomous_prompt,
+    )
+
+    return fit_autonomous_prompt(
         extra_block
         + build_bridge_alert_block(alert, quotes)
-        + build_full_reasoning_prompt(agent=agent, turn_kind="strategy_revision")
+        + build_autonomous_turn_prompt(
+            agent=agent,
+            turn_kind="strategy_revision",
+            alert_message=str(alert.message or ""),
+        )
     )
 
 

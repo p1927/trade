@@ -42,7 +42,7 @@ def _now_iso() -> str:
 
 
 def _fetch_index_quotes() -> dict[str, dict[str, Any]]:
-    from trade_integrations.dataflows.openalgo import fetch_openalgo_live_snapshot
+    from trade_integrations.openalgo.market_data import fetch_openalgo_live_snapshot
 
     quotes: dict[str, dict[str, Any]] = {}
     for symbol in _INDEX_QUOTE_SYMBOLS:

@@ -448,6 +448,12 @@ def build_snapshot_from_hub(
     mix_limit = max(4, limit // 3)
     items = (reconciled_items[:mix_limit] + live_items)[:limit]
 
+    from trade_integrations.dataflows.index_research.news_prediction_visibility import (
+        filter_prediction_attribution_items,
+    )
+
+    items = filter_prediction_attribution_items(items)
+
     rejected_count = count_by_status(ticker=sym).get("rejected", 0)
     if include_rejected:
         rejected_items = [

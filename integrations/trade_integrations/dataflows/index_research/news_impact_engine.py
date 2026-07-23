@@ -19,6 +19,9 @@ from trade_integrations.dataflows.index_research.news_dedup import (
     story_key_from_row,
 )
 from trade_integrations.dataflows.index_research.news_enrichment import enrich_headline
+from trade_integrations.dataflows.index_research.news_prediction_visibility import (
+    filter_prediction_attribution_items,
+)
 from trade_integrations.dataflows.index_research.news_verification import (
     is_approved_status,
     verify_enriched_news,
@@ -330,6 +333,21 @@ def ingest_headlines_for_day(
     force_reverify: bool = False,
 ) -> dict[str, int]:
     """Ingest raw headlines, verify cache misses only, upsert hub. Returns counters."""
+    try:
+        from trade_integrations.dataflows.hub_wiki.probe import check_ingest_allowed
+
+        gate = check_ingest_allowed()
+        if gate.get("blocked"):
+            return {
+                "ingested": 0,
+                "cache_hits": 0,
+                "verified": 0,
+                "blocked": 1,
+                "pipeline_paused": 1,
+            }
+    except Exception:
+        pass
+
     today = (day or datetime.now(timezone.utc).date().isoformat())[:10]
     frame = load_aligned_factor_history(days=120)
 
@@ -344,7 +362,15 @@ def ingest_headlines_for_day(
         else:
             spot = 0.0
 
-    rows = merge_raw_headlines(collect_headlines_for_day(today, ticker=ticker, limit=headline_limit), ticker=ticker)
+    rows = merge_raw_headlines(
+        collect_headlines_for_day(
+            today,
+            ticker=ticker,
+            limit=headline_limit,
+            allow_live_collect=True,
+        ),
+        ticker=ticker,
+    )
     return ingest_headline_rows(
         rows,
         ticker=ticker,
@@ -386,6 +412,18 @@ def build_news_impact_snapshot(
     include_rejected: bool = False,
 ) -> dict[str, Any]:
     """Build snapshot: optionally ingest new headlines, then read from hub SSOT."""
+    ingest_blocked: dict[str, Any] | None = None
+    if refresh_ingest:
+        try:
+            from trade_integrations.dataflows.hub_wiki.probe import check_ingest_allowed
+
+            gate = check_ingest_allowed()
+            if gate.get("blocked"):
+                ingest_blocked = gate
+                refresh_ingest = False
+        except Exception:
+            pass
+
     if refresh_ingest:
         ingest_headlines_for_day(
             ticker=ticker,
@@ -407,6 +445,11 @@ def build_news_impact_snapshot(
     report["debate_summary"] = _debate_summary(ticker)
     items = [hydrate_news_item_from_hub(row, ticker=ticker) for row in (report.get("items") or [])]
     report["items"] = items
+    if ingest_blocked:
+        report["ingest_blocked"] = True
+        report["pipeline_paused"] = True
+        report["pause_reason"] = str(ingest_blocked.get("reason") or "llm_wiki_unavailable")
+        report["user_message"] = str(ingest_blocked.get("user_message") or "")
     if not items:
         return _apply_hub_empty_status(report)
     return report
@@ -497,6 +540,7 @@ def resolve_news_impact(
         pass
     if hydrate_from_hub:
         items = [hydrate_news_item_from_hub(row, ticker=sym) for row in items]
+    items = filter_prediction_attribution_items(items)
     report["items"] = items[:limit]
     if report.get("summary") is None:
         report["summary"] = {}
@@ -519,7 +563,10 @@ def list_recent_verified_headlines(*, ticker: str = "NIFTY", limit: int = 12) ->
         ticker=ticker,
     )
     rows = union_headlines_with_staging(rows, ticker=ticker, limit=limit)
-    return [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
+    rows = filter_prediction_attribution_items(
+        [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
+    )
+    return rows
 
 
 def list_approved_for_date(day: str, *, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
@@ -532,7 +579,10 @@ def list_approved_for_date(day: str, *, ticker: str = "NIFTY", limit: int = 12) 
         ticker=ticker,
     )
     rows = union_headlines_with_staging(rows, ticker=ticker, limit=limit)
-    return [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
+    rows = filter_prediction_attribution_items(
+        [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
+    )
+    return rows
 
 
 def to_headline_dict(item: dict[str, Any]) -> dict[str, Any]:
@@ -702,7 +752,9 @@ def headlines_for_prediction_date(
         key=lambda r: publish_day_from_value(str(r.get("published_at") or "")),
         reverse=True,
     )
-    return [hydrate_news_item_from_hub(row, ticker=ticker) for row in safe[:limit]]
+    return filter_prediction_attribution_items(
+        [hydrate_news_item_from_hub(row, ticker=ticker) for row in safe[:limit]]
+    )
 
 
 def headlines_for_day(
@@ -740,7 +792,9 @@ def headlines_for_day(
             ticker=sym,
         )
         rows = [to_headline_dict(r) for r in raw if r.get("title")]
-    return [hydrate_news_item_from_hub(row, ticker=sym) for row in rows[:limit]]
+    return filter_prediction_attribution_items(
+        [hydrate_news_item_from_hub(row, ticker=sym) for row in rows[:limit]]
+    )
 
 
 def sync_news_impact_to_index_doc(doc: Any) -> dict[str, Any]:

@@ -192,7 +192,7 @@ trade start nautilus-watch --agent-id aa_your_agent_id
 trade up
 ```
 
-If `.venv-nautilus` is missing, the stack falls back to the **legacy poll loop** (same OpenAlgo feed; run `./scripts/setup_nautilus.sh` for full TradingNode). Verify: `./scripts/verify_autonomous_integration.py`
+If `.venv-nautilus` is missing, `trade up` / `./scripts/run_nautilus_watch.sh` **exit with an error** — install the Nautilus venv via `./scripts/setup_nautilus.sh` before starting autonomous watch. Verify: `./scripts/verify_autonomous_integration.py`
 
 ### Troubleshooting
 

@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -536,6 +537,161 @@ def stop_autonomous_agents_session() -> None:
         pass
 
 
+def cleanup_all_autonomous_agents(*, clear_nautilus_registry: bool = True) -> dict[str, Any]:
+    """Stop and delete all autonomous agents; clear watches and Nautilus registry for a clean E2E."""
+    from trade_integrations.autonomous_agents.store import list_agents
+    from trade_integrations.autonomous_agents.teardown import teardown_agent_resources
+
+    result: dict[str, Any] = {"deleted": [], "errors": []}
+
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import stop_nautilus_watch_completely
+
+        if clear_nautilus_registry:
+            result["nautilus"] = stop_nautilus_watch_completely()
+    except Exception as exc:
+        result["nautilus_error"] = str(exc)
+
+    stop_autonomous_agents_session()
+
+    for agent in list(list_agents()):
+        agent_id = str(agent.get("id") or "").strip()
+        if not agent_id.startswith("aa_"):
+            continue
+        status = str(agent.get("status") or "")
+        try:
+            if status == "draft":
+                teardown_agent_resources(agent, mode="draft")
+            else:
+                teardown_agent_resources(agent, mode="active", flatten_positions=False)
+            result["deleted"].append(agent_id)
+        except Exception as exc:
+            result["errors"].append({"agent_id": agent_id, "error": str(exc)})
+
+    try:
+        from trade_integrations.watch_registry.store import _watches_root
+
+        root = _watches_root()
+        if root.is_dir():
+            for path in root.glob("w_*.json"):
+                path.unlink(missing_ok=True)
+            index = root / "index.json"
+            if index.is_file():
+                index.write_text('{"owners": {}, "updated_at": null}', encoding="utf-8")
+            result["watches_cleared"] = True
+    except Exception as exc:
+        result["watches_clear_error"] = str(exc)
+
+    reg_path = ROOT / "log" / "nautilus-watch.agents.json"
+    if clear_nautilus_registry and reg_path.is_file():
+        reg_path.unlink(missing_ok=True)
+
+    return result
+
+
+def wait_for_registry_watches(
+    agent_id: str,
+    *,
+    min_count: int = 1,
+    timeout_sec: int = 30,
+) -> list[dict[str, Any]]:
+    """Poll watch registry until agent has active watches."""
+    from trade_integrations.watch_registry.store import list_watches
+
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        rows = list_watches(owner_kind="autonomous_agent", owner_id=agent_id, active_only=True)
+        if len(rows) >= min_count:
+            return rows
+        time.sleep(2)
+    return list_watches(owner_kind="autonomous_agent", owner_id=agent_id, active_only=True)
+
+
+def ensure_nautilus_watch_running(*, timeout_sec: int = 60) -> bool:
+    """Ensure Nautilus watch node is up via trade heal."""
+    import subprocess
+
+    reg_path = ROOT / "log" / "nautilus-watch.agents.json"
+    if reg_path.is_file():
+        try:
+            payload = json.loads(reg_path.read_text(encoding="utf-8"))
+            if not (payload.get("agents") or []):
+                reg_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    for attempt in range(3):
+        subprocess.run([str(ROOT / "trade"), "heal"], cwd=ROOT, check=False, capture_output=True)
+        deadline = time.time() + max(15, timeout_sec // 3)
+        while time.time() < deadline:
+            try:
+                from trade_integrations.autonomous_agents.nautilus_watch import get_watch_process_status
+
+                status = get_watch_process_status()
+                if status.get("alive"):
+                    return True
+            except Exception:
+                pass
+            time.sleep(3)
+
+        launch = ROOT / "scripts" / "run_nautilus_watch.sh"
+        if launch.is_file():
+            env = os.environ.copy()
+            env["PYTHONPATH"] = f"{INTEGRATIONS}{os.pathsep}{ROOT / 'tradingagents'}{os.pathsep}{env.get('PYTHONPATH', '')}"
+            subprocess.Popen(
+                [str(launch)],
+                cwd=ROOT,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(5)
+    return False
+
+
+def ensure_agent_running_and_bootstrap(agent_id: str) -> dict[str, Any]:
+    """Resume infra-paused agents and ensure bootstrap is scheduled (E2E + recovery)."""
+    from trade_integrations.autonomous_agents.infra_startup import attempt_infra_heal
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    agent = get_agent(agent_id) or {}
+    if str(agent.get("pause_reason") or "") == "infra":
+        healed = attempt_infra_heal(agent_id)
+        if healed:
+            agent = healed
+
+    status = str(agent.get("status") or "")
+    bootstrap = str(agent.get("bootstrap_status") or "")
+    if status == "paused" and not agent.get("plan_approved_at"):
+        pending = list(agent.get("infra_pending") or [])
+        if not pending or all("no active watches" in str(p).lower() for p in pending):
+            agent["status"] = "running"
+            agent["pause_reason"] = None
+            agent["infra_pending"] = []
+            save_agent(agent)
+
+    agent = get_agent(agent_id) or agent
+    bootstrap = str(agent.get("bootstrap_status") or "")
+    if bootstrap in {"pending", "failed", ""}:
+        try:
+            vibe_post(f"/autonomous-agents/{agent_id}/resume")
+        except Exception:
+            pass
+        sys.path.insert(0, str(ROOT / "vibetrading" / "agent"))
+        try:
+            from src.scheduled_research.autonomous_bootstrap import schedule_agent_bootstrap
+
+            schedule_agent_bootstrap(agent_id)
+        except Exception:
+            pass
+        agent = get_agent(agent_id) or agent
+        if str(agent.get("bootstrap_status") or "") == "failed":
+            agent["bootstrap_status"] = "pending"
+            agent.pop("bootstrap_error", None)
+            save_agent(agent)
+    return get_agent(agent_id) or agent
+
+
 def stop_agent(agent_id: str) -> None:
     try:
         vibe_post(f"/autonomous-agents/{agent_id}/stop")
@@ -743,6 +899,90 @@ def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = N
     agent["constraints"] = constraints
     save_agent(agent)
     return str(agent_id), str(session_id)
+
+
+def wait_for_plan_approval_gate(agent_id: str, *, timeout_sec: int = 600) -> dict[str, Any]:
+    """Poll until bootstrap_status == awaiting_plan_approval."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integrations"))
+    from trade_integrations.autonomous_agents.store import get_agent
+
+    deadline = time.time() + timeout_sec
+    last_status = ""
+    while time.time() < deadline:
+        agent = get_agent(agent_id) or {}
+        status = str(agent.get("bootstrap_status") or "")
+        if status != last_status:
+            last_status = status
+        if status == "awaiting_plan_approval":
+            return agent
+        if status == "done" and agent.get("plan_approved_at"):
+            return agent
+        if status in {"failed", "error"}:
+            raise RuntimeError(f"bootstrap failed: {status}")
+        time.sleep(15)
+    raise TimeoutError(f"agent {agent_id} not awaiting plan approval after {timeout_sec}s (last={last_status})")
+
+
+def approve_agent_plan_via_api(agent_id: str, *, widget_id: str | None = None) -> dict[str, Any]:
+    """POST /autonomous-agents/{id}/approve-plan — production approval path."""
+    payload: dict[str, Any] = {}
+    if widget_id:
+        payload["widget_id"] = widget_id
+    result = vibe_post(f"/autonomous-agents/{agent_id}/approve-plan", payload or None)
+    if str(result.get("status") or "") != "ok":
+        raise RuntimeError(f"approve-plan failed: {json.dumps(result)[:300]}")
+    return result
+
+
+def seed_plan_approval_fixture(agent_id: str, *, widget_id: str = "tp_e2e_fixture") -> None:
+    """Fast path: awaiting approval + watch_spec without stamping plan_approved_at."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integrations"))
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    agent = get_agent(agent_id) or {}
+    symbols = list(agent.get("symbols") or ["NIFTY"])
+    focus = symbols[0].upper()
+    agent["bootstrap_status"] = "awaiting_plan_approval"
+    agent["plan_approval_required"] = True
+    agent["active_trade_plan_widget_id"] = widget_id
+    agent["last_decision"] = {
+        "decision": "HOLD",
+        "at": datetime.now(timezone.utc).isoformat(),
+        "confidence": 70,
+        "strategy": "hold_cash",
+    }
+    agent["watch_spec"] = {
+        "rules": [
+            {"symbol": focus, "metric": "spot_move_pct", "threshold": 0.5, "direction": "either"},
+        ],
+    }
+    agent["watch_spec_pending_activation"] = True
+    agent.pop("plan_approved_at", None)
+    save_agent(agent)
+
+
+def ensure_agent_plan_approved(agent_id: str, *, widget_id: str | None = None) -> dict[str, Any]:
+    """Wait for approval gate or seed fixture, then approve via API."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integrations"))
+    from trade_integrations.autonomous_agents.store import get_agent
+
+    agent = get_agent(agent_id) or {}
+    if agent.get("plan_approved_at"):
+        return agent
+    status = str(agent.get("bootstrap_status") or "")
+    if status not in {"awaiting_plan_approval", "done"}:
+        try:
+            wait_for_plan_approval_gate(agent_id, timeout_sec=120)
+        except TimeoutError:
+            seed_plan_approval_fixture(
+                agent_id,
+                widget_id=widget_id or f"tp_{(agent.get('symbols') or ['NIFTY'])[0]}_e2e",
+            )
+    agent = get_agent(agent_id) or {}
+    wid = widget_id or agent.get("active_trade_plan_widget_id")
+    if not agent.get("plan_approved_at"):
+        approve_agent_plan_via_api(agent_id, widget_id=str(wid) if wid else None)
+    return get_agent(agent_id) or {}
 
 
 def assert_turn_tools_or_fail(

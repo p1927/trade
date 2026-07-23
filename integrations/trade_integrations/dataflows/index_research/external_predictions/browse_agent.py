@@ -24,7 +24,7 @@ from trade_integrations.dataflows.index_research.external_predictions.models imp
 )
 from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
     is_allowed_listing_url,
-    is_article_url,
+    link_has_forecast_signal,
     link_score,
     markdown_has_nifty50_forecast,
 )
@@ -56,8 +56,10 @@ class BrowseResult:
 
 
 def has_browse_entry_urls(source: ExternalPredictionSource) -> bool:
-    """True when the source has user-configured entry URLs for exploratory browse."""
-    return any(str(url or "").strip() for url in (source.entry_urls or []))
+    """True when the source has entry URLs or landing URLs for exploratory browse."""
+    if any(str(url or "").strip() for url in (source.entry_urls or [])):
+        return True
+    return any(str(url or "").strip() for url in (source.landing_urls or []))
 
 
 def resolve_browse_entry_urls(
@@ -68,7 +70,10 @@ def resolve_browse_entry_urls(
     """Return allowlisted, formatted entry URLs for exploratory browse."""
     urls: list[str] = []
     seen: set[str] = set()
-    for raw in source.entry_urls or []:
+    raw_entries = list(source.entry_urls or [])
+    if not raw_entries:
+        raw_entries = list(source.landing_urls or [])[:1]
+    for raw in raw_entries:
         url = _format_entry_url(str(raw or "").strip(), horizon_days=horizon_days)
         if not url or url in seen:
             continue
@@ -138,6 +143,76 @@ def _iter_browse_link_candidates(
     return rows
 
 
+def _vision_pick_listing_link(
+    *,
+    markdown: str,
+    native_links: list[dict[str, Any]] | None,
+    source: ExternalPredictionSource,
+    screenshot_b64: str,
+    visited: set[str],
+    current_url: str,
+    pipeline: PipelineLogger | None = None,
+) -> tuple[str, str]:
+    """Optional vision-assisted link pick when listing markdown is thin (max 1 call per session)."""
+    from trade_integrations.dataflows.index_research.external_predictions.minimax_vision import (
+        call_minimax_vision_json,
+        vision_enabled,
+    )
+
+    if not vision_enabled():
+        return "", ""
+    if len((markdown or "").strip()) >= 1200:
+        return "", ""
+
+    candidates: list[tuple[str, str]] = []
+    for title, url, _ in _iter_browse_link_candidates(markdown, native_links):
+        norm = _normalize_url(url)
+        if norm in visited or url == current_url:
+            continue
+        if not _domain_matches_source(url, source):
+            continue
+        if not link_has_forecast_signal(f"{title} {url}"):
+            continue
+        candidates.append((title or url, url))
+        if len(candidates) >= 10:
+            break
+    if not candidates:
+        return "", ""
+
+    lines = "\n".join(f"{idx + 1}. {title} — {url}" for idx, (title, url) in enumerate(candidates))
+    try:
+        payload = call_minimax_vision_json(
+            system_prompt=(
+                "Pick the listing link most likely to lead to a NIFTY 50 weekly/index forecast page. "
+                "Return JSON: {\"pick\": <1-based index or 0 if none>}."
+            ),
+            user_text=f"Which link is the NIFTY 50 forecast article?\n{lines}",
+            image_jpeg_b64_list=[screenshot_b64],
+            max_tokens=200,
+        )
+    except Exception as exc:
+        if pipeline:
+            pipeline.warn("browse", f"Vision link pick skipped: {exc}", source_id=source.id)
+        return "", ""
+
+    pick_raw = payload.get("pick", payload.get("index", 0))
+    try:
+        pick_idx = int(pick_raw)
+    except (TypeError, ValueError):
+        return "", ""
+    if pick_idx < 1 or pick_idx > len(candidates):
+        return "", ""
+    title, url = candidates[pick_idx - 1]
+    if pipeline:
+        pipeline.info(
+            "browse",
+            f"Vision picked listing link #{pick_idx}",
+            source_id=source.id,
+            url=url[:120],
+        )
+    return url, title
+
+
 def _pick_next_url(
     *,
     markdown: str,
@@ -187,9 +262,8 @@ def _page_has_forecast(
     horizon_days: int,
     keywords: list[str],
 ) -> bool:
-    """True when an article page body contains a NIFTY 50 forecast signal."""
-    if not is_article_url(url):
-        return False
+    """True when page body contains a NIFTY 50 forecast signal."""
+    del url  # qualify on content, not URL shape
     if not markdown_has_nifty50_forecast(markdown):
         return False
     return keyword_match_score(markdown, keywords, horizon_days=horizon_days) >= 1.0
@@ -291,6 +365,9 @@ def run_exploratory_browse(
             break
 
         native_links = row.metadata.get("links") if isinstance(row.metadata, dict) else None
+        screenshot_b64 = ""
+        if isinstance(row.metadata, dict):
+            screenshot_b64 = str(row.metadata.get("screenshot_b64") or "")
         next_url, link_text = _pick_next_url(
             markdown=row.markdown,
             native_links=native_links if isinstance(native_links, list) else None,
@@ -298,6 +375,16 @@ def run_exploratory_browse(
             current_url=current_url,
             visited=visited,
         )
+        if not next_url and screenshot_b64:
+            next_url, link_text = _vision_pick_listing_link(
+                markdown=row.markdown,
+                native_links=native_links if isinstance(native_links, list) else None,
+                source=source,
+                screenshot_b64=screenshot_b64,
+                visited=visited,
+                current_url=current_url,
+                pipeline=pipeline,
+            )
         if not next_url:
             if pipeline:
                 pipeline.info(

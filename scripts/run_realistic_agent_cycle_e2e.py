@@ -163,6 +163,13 @@ def main() -> int:
         _fail("agent create", f"agent {agent_id} not in store after commit")
         return 1
 
+    try:
+        lib.ensure_agent_plan_approved(agent_id)
+        _log("plan approval", "approved via API")
+    except Exception as exc:
+        _fail("plan approval", str(exc))
+        return 1
+
     print("\n── Phase 1: Research turn (analysis) ──", flush=True)
     try:
         _run_production_turn(

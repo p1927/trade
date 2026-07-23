@@ -8,7 +8,7 @@ from datetime import date, datetime
 from enum import Enum
 from zoneinfo import ZoneInfo
 
-from trade_integrations.dataflows.openalgo import resolve_openalgo_symbol
+from trade_integrations.openalgo.symbols import resolve_openalgo_symbol
 
 from .india_symbols import is_india_listed_symbol
 from .us_symbols import is_us_known_symbol

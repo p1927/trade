@@ -8,6 +8,7 @@ from typing import Any
 
 from trade_integrations.dataflows.index_research.external_predictions.extractor import (
     extract_prediction_from_text,
+    horizon_forecast_provenance,
 )
 from trade_integrations.dataflows.index_research.external_predictions.financial_expert_context import (
     load_expert_context,
@@ -113,7 +114,12 @@ Use the article text AND screenshot(s). Return ONLY valid JSON:
 Rules:
 - ONLY NIFTY 50 index level targets (15000-35000).
 - REJECT single-stock targets and options commentary without index level.
-- Do NOT treat technical resistance/support levels as analyst price targets unless explicitly labeled as a NIFTY target.
+- For structured forecast hub pages with "Next Week" / "Next Month" NIFTY 50 support/resistance
+  tables: read the section matching the user horizon ({horizon_days} trading days). Set target_low
+  to the minimum support, target_high to the maximum resistance, and target_mid to the midpoint
+  of that range across the dated rows in that section. These table forecasts ARE valid outputs.
+- For analyst prose articles: extract explicit NIFTY price targets; do NOT treat incidental
+  resistance phrases as the primary target unless labeled as a NIFTY target.
 - Extract target_date even when it differs from the user-selected horizon.
 
 Article text:
@@ -130,6 +136,7 @@ def _record_from_payload(
     title: str,
     url: str,
     snippet: str,
+    body: str,
     payload: dict[str, Any],
     attempt: int,
 ) -> ExternalPredictionRecord:
@@ -176,6 +183,7 @@ def _record_from_payload(
             "snippet": snippet[:500],
             "summary": str(payload.get("summary") or "").strip(),
             "instrument": str(payload.get("instrument") or "NIFTY50"),
+            **horizon_forecast_provenance(body, horizon_days=horizon_days),
         },
         extraction={
             "model": "minimax-m3-vision",
@@ -287,6 +295,7 @@ def extract_forecast(
             title=title,
             url=url,
             snippet=snippet,
+            body=body,
             payload=payload,
             attempt=attempt,
         )
@@ -295,6 +304,8 @@ def extract_forecast(
             record.error_message = "No numeric NIFTY target extracted"
             last_record = record
             validator_errors = [record.error_message]
+            if attempt >= _MAX_ATTEMPTS:
+                break
             continue
 
         validated = validate_record(record, body=body, used_regex_only=False)
@@ -335,9 +346,126 @@ def extract_forecast(
         }
         return validated
 
+    if pipeline:
+        pipeline.info(
+            "expert_agent",
+            "Vision extraction had no usable target — screenshot table retry",
+            source_id=source.id,
+        )
+    table_record = _extract_from_screenshot_tables(
+        source=source,
+        horizon_days=horizon_days,
+        spot=spot,
+        title=title,
+        url=url,
+        snippet=snippet,
+        body=body,
+        symbol=symbol,
+        images=images,
+        screenshot_artifacts=screenshot_artifacts,
+        pipeline=pipeline,
+    )
+    if table_record is not None and table_record.fetch_status == "ok":
+        return table_record
+
+    if pipeline:
+        pipeline.info(
+            "expert_agent",
+            "Vision extraction had no usable target — text/regex fallback",
+            source_id=source.id,
+        )
+    record = extract_prediction_from_text(
+        source=source,
+        horizon_days=horizon_days,
+        spot=spot,
+        title=title,
+        url=url,
+        snippet=snippet,
+        body=body,
+        symbol=symbol,
+        pipeline=pipeline,
+    )
     if screenshot_artifacts is not None:
-        _attach_artifact_provenance(last_record, screenshot_artifacts, symbol=symbol)
-    return last_record
+        _attach_artifact_provenance(record, screenshot_artifacts, symbol=symbol)
+    return record
+
+
+def _extract_from_screenshot_tables(
+    *,
+    source: ExternalPredictionSource,
+    horizon_days: int,
+    spot: float | None,
+    title: str,
+    url: str,
+    snippet: str,
+    body: str,
+    symbol: str,
+    images: list[str],
+    screenshot_artifacts: ScreenshotArtifacts | None,
+    pipeline: PipelineLogger | None,
+) -> ExternalPredictionRecord | None:
+    """Dedicated table-reading vision pass when text path found no numeric targets."""
+    if not images or not vision_enabled():
+        return None
+    if pipeline:
+        pipeline.info(
+            "expert_agent",
+            "Screenshot-first table extraction",
+            source_id=source.id,
+            tiles=len(images),
+        )
+    try:
+        payload = call_minimax_vision_json(
+            system_prompt=(
+                "Read NIFTY 50 index forecast tables from screenshots. "
+                "Extract support, resistance, and target levels for the requested horizon. "
+                "Output strict JSON only."
+            ),
+            user_text=(
+                f"Horizon: {horizon_days} trading days. Title: {title}. URL: {url}.\n"
+                "Return JSON with has_prediction, target_low, target_mid, target_high, "
+                "direction, target_date, forecast_section, horizon_window."
+            ),
+            image_jpeg_b64_list=images,
+            max_tokens=1200,
+        )
+    except Exception as exc:
+        if pipeline:
+            pipeline.warn(
+                "expert_agent",
+                f"Screenshot table extract failed: {exc}",
+                source_id=source.id,
+            )
+        return None
+
+    record = _record_from_payload(
+        source=source,
+        symbol=symbol,
+        horizon_days=horizon_days,
+        spot=spot,
+        title=title,
+        url=url,
+        snippet=snippet,
+        body=body,
+        payload=payload,
+        attempt=1,
+    )
+    if not any(v is not None for v in (record.target.low, record.target.mid, record.target.high)):
+        return None
+    validated = validate_record(record, body=body, used_regex_only=False)
+    if validated.fetch_status != "ok":
+        return validated
+    if screenshot_artifacts is not None:
+        _attach_artifact_provenance(validated, screenshot_artifacts, symbol=symbol)
+    validated.extraction = {
+        **dict(validated.extraction or {}),
+        "vision_checked": True,
+        "screenshot_table_extract": True,
+    }
+    prov = horizon_forecast_provenance(body, horizon_days=horizon_days)
+    if prov:
+        validated.provenance = {**dict(validated.provenance or {}), **prov}
+    return validated
 
 
 def _attach_artifact_provenance(

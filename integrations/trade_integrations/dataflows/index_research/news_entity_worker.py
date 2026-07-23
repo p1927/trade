@@ -790,6 +790,12 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         logger.debug("staging ttl purge skipped: %s", exc)
 
     if pause.get("pipeline_paused"):
+        reason = str(pause.get("pause_reason") or "")
+        logger.warning(
+            "hub news entity job paused: %s (%s)",
+            reason,
+            pause.get("user_message") or pause.get("pause_reason") or "",
+        )
         skipped = {
             "skipped": True,
             "pipeline_paused": True,

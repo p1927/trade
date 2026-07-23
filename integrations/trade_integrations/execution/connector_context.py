@@ -64,6 +64,21 @@ def connector_from_profile_id(profile_id: str) -> str:
     return pid.split("-", 1)[0]
 
 
+def _validate_autonomous_connector_profile(agent: dict, profile_id: str) -> None:
+    """Autonomous agents must route execution through OpenAlgo, not Alpaca SDK profiles."""
+    agent_id = str(agent.get("id") or "").strip()
+    agent_type = str(agent.get("type") or "")
+    if not agent_id.startswith("aa_") and agent_type != "autonomous_agent.instance":
+        return
+    connector = connector_from_profile_id(profile_id)
+    if connector == "alpaca":
+        raise ValueError(
+            f"Autonomous agent {agent_id or '(draft)'} cannot use Alpaca SDK profile "
+            f"{profile_id!r} — configure OpenAlgo (OPENALGO_API_KEY + OPENALGO_HOST) "
+            "and select an openalgo-* connector profile."
+        )
+
+
 def connector_execution_market(connector: str) -> MarketCode:
     """Map connector key to IN/US; stock simulator forces IN for OpenAlgo only."""
     key = str(connector or "").strip().lower()
@@ -144,6 +159,8 @@ def load_active_connector_context(
     connector = connector_from_profile_id(profile_id)
     if not connector:
         return None
+    if agent:
+        _validate_autonomous_connector_profile(agent, profile_id)
     return ConnectorExecutionContext(
         profile_id=profile_id,
         connector=connector,

@@ -129,6 +129,14 @@ def _fetch_index_headlines(
         logger.debug("hub headlines_for_day failed for %s: %s", day, exc)
 
     try:
+        from trade_integrations.dataflows.hub_wiki.probe import llm_wiki_required_for_hub_news, check_ingest_allowed
+
+        if llm_wiki_required_for_hub_news() and check_ingest_allowed().get("blocked"):
+            return []
+    except Exception:
+        pass
+
+    try:
         from trade_integrations.dataflows.index_research.company_news_backfill import (
             _fetch_rss_headlines,
             _google_news_rss_url,

@@ -294,15 +294,47 @@ def _hub_paths() -> dict[str, str]:
         "news_events_migration_state": _hub_relative(
             hub / "_data" / "news_events" / "migration_state.json"
         ),
-        "news_verified_records_legacy": _hub_relative(
-            hub / "_data" / "news_verified" / "records.parquet"
-        ),
         "llm_wiki_project": _hub_relative(hub / "llm-wiki"),
         "index_research_latest": _hub_relative(hub / "NIFTY" / "index_research" / "latest.json"),
         "capture_registry": _hub_relative(hub / "_data" / "capture_registry.json"),
         "worker_last": _hub_relative(hub / "_data" / "news_staging" / "worker_last.json"),
     }
     return paths
+
+
+_NEWS_MIGRATION_ACTION = "python scripts/migrate_hub_news_records_once.py --apply"
+
+
+def _build_hub_gates(*, migration_state: dict[str, Any]) -> dict[str, Any]:
+    """Fail-closed rollup for hub readiness — consumers need not inspect nested migration fields."""
+    blocking: list[dict[str, Any]] = []
+    if migration_state.get("error"):
+        blocking.append(
+            {
+                "id": "news_events_migration",
+                "passes": False,
+                "needed": True,
+                "action": _NEWS_MIGRATION_ACTION,
+                "user_message": f"News migration state unavailable: {migration_state['error']}",
+            }
+        )
+    elif migration_state.get("needed"):
+        blocking.append(
+            {
+                "id": "news_events_migration",
+                "passes": False,
+                "needed": True,
+                "action": _NEWS_MIGRATION_ACTION,
+                "user_message": (
+                    "Legacy news records must be migrated to the events SSOT before hub news is reliable. "
+                    f"Run: {_NEWS_MIGRATION_ACTION}"
+                ),
+            }
+        )
+    return {
+        "hub_ready": not blocking,
+        "blocking": blocking,
+    }
 
 
 def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
@@ -354,16 +386,28 @@ def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
     except Exception as exc:
         migration_state = {"error": str(exc)}
 
+    gates = _build_hub_gates(migration_state=migration_state)
+    migration_gate_active = not gates.get("hub_ready", True)
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "entity_id": sym,
         "hub_dir": str(hub),
         "paths": _hub_paths(),
+        "gates": gates,
         "news_staging": {
             "entity_pipeline_enabled": is_entity_pipeline_enabled(),
-            "pipeline_paused": bool(pause.get("pipeline_paused")),
-            "pause_reason": str(pause.get("pause_reason") or ""),
-            "user_message": str(pause.get("user_message") or ""),
+            "pipeline_paused": bool(pause.get("pipeline_paused")) or migration_gate_active,
+            "pause_reason": (
+                "news_events_migration_required"
+                if migration_gate_active
+                else str(pause.get("pause_reason") or "")
+            ),
+            "user_message": (
+                str((gates.get("blocking") or [{}])[0].get("user_message") or "")
+                if migration_gate_active
+                else str(pause.get("user_message") or "")
+            ),
             "llm_wiki_ok": bool(pause.get("llm_wiki_ok", True)),
             "llm_wiki_required": bool(pause.get("llm_wiki_required", False)),
             "minimax_configured": bool(pause.get("minimax_configured")),

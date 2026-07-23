@@ -393,7 +393,7 @@ stack_process_in_trade_repo() {
     if [[ "$args" == *"$root"* ]]; then
       return 0
     fi
-    if [[ "$args" == *"cli._legacy"* || "$args" == *"app.py"* || "$args" == *"/vite"* ]]; then
+    if [[ "$args" == *"cli._legacy"* || "$args" == *"cli.main"* || "$args" == *"app.py"* || "$args" == *"/vite"* ]]; then
       return 0
     fi
   fi
@@ -973,7 +973,7 @@ stack_start_vibe_api() {
       echo "[stack] Vibe API already up at $base (pid $(stack_claim_pid vibe-api))"
       return 0
     fi
-    stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli._legacy serve"
+    stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli.main serve"
     echo "[stack] Vibe API healthy at $base — leaving running (synced claim)"
     return 0
   fi
@@ -985,7 +985,7 @@ stack_start_vibe_api() {
         echo "[stack] Vibe API on :$port is busy but healthy — leaving it running"
         return 0
       fi
-      stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli._legacy serve"
+      stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli.main serve"
       echo "[stack] Vibe API on :$port is busy but healthy — leaving running (synced claim)"
       return 0
     fi
@@ -1017,11 +1017,11 @@ stack_start_vibe_api() {
   STACK_LAUNCH_EXPECT_PORT="$port"
   stack_launch_detached \
     "$pidfile" "$logfile" "$agent_dir" \
-    "$py" -m cli._legacy "${serve_args[@]}"
+    "$py" -m cli.main "${serve_args[@]}"
   unset STACK_LAUNCH_EXPECT_PORT STACK_LAUNCH_SERVICE
   stack_wait_for_url "Vibe API" "$base/" 60
   stack_sync_pidfile_from_port "$pidfile" "$port"
-  stack_write_claim "vibe-api" "$(stack_read_pid "$pidfile")" "$port" "cli._legacy serve"
+  stack_write_claim "vibe-api" "$(stack_read_pid "$pidfile")" "$port" "cli.main serve"
 }
 
 stack_start_vibe_ui() {
@@ -1611,6 +1611,10 @@ PY
     ok=0
   fi
 
+  if declare -f stack_print_llm_wiki_status >/dev/null 2>&1; then
+    stack_print_llm_wiki_status
+  fi
+
   echo "══════════════════════════════════════════════════════════"
   local hub_ok=0
   if stack_status_hub_docker; then
@@ -1737,8 +1741,33 @@ except Exception:
     pass
 PY
   fi
+  py="$(stack_pick_python)"
+  if [[ -z "$agent_id" ]]; then
+    if [[ ! -f "$log_dir/nautilus-watch.agents.json" ]]; then
+      echo "[stack] skip Nautilus watch — no agents in registry yet"
+      return 0
+    fi
+    if ! "$py" -c "
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+data = json.loads(p.read_text())
+sys.exit(0 if (data.get('agents') or []) else 1)
+" "$log_dir/nautilus-watch.agents.json" 2>/dev/null; then
+      echo "[stack] skip Nautilus watch — registry empty (await plan approval / watches)"
+      return 0
+    fi
+  fi
   if [[ -f "$log_dir/nautilus-watch.agents.json" ]]; then
-    cmd+=(--registry)
+    if "$py" -c "
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+data = json.loads(p.read_text())
+sys.exit(0 if (data.get('agents') or []) else 1)
+" "$log_dir/nautilus-watch.agents.json" 2>/dev/null; then
+      cmd+=(--registry)
+    fi
   elif [[ -n "$agent_id" ]]; then
     cmd+=(--agent-id "$agent_id")
     echo "$agent_id" >"$agent_id_file"

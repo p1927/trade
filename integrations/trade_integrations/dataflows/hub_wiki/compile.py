@@ -128,12 +128,6 @@ def render_event_source(event: dict[str, Any], *, source_rel_path: str) -> str:
     return "\n".join(fm_lines)
 
 
-def render_event_page(event: dict[str, Any]) -> str:
-    """Backward-compatible alias for ``render_event_source``."""
-    slug = event_slug(event)
-    return render_event_source(event, source_rel_path=f"news/{slug}.md")
-
-
 def render_source_export(event: dict[str, Any]) -> str:
     """JSON audit sidecar under raw/sources/news/."""
     structured = event.get("structured_summary") if isinstance(event.get("structured_summary"), dict) else {}

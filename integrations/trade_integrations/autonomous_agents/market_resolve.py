@@ -93,7 +93,7 @@ def _openalgo_exchange_for(symbol: str, market: MarketCode) -> str | None:
     if market != "IN":
         return None
     try:
-        from trade_integrations.dataflows.openalgo import resolve_openalgo_symbol
+        from trade_integrations.openalgo.symbols import resolve_openalgo_symbol
 
         _, exchange = resolve_openalgo_symbol(symbol)
         return exchange or "NSE"

@@ -347,7 +347,9 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
         logger.warning("no session service for autonomous agent %s", agent_id)
         return False
 
-    prompt = build_full_reasoning_prompt(agent=agent, turn_kind=turn_kind) + prefetch_note
+    from trade_integrations.autonomous_agents.turns import build_autonomous_turn_prompt
+
+    prompt = build_autonomous_turn_prompt(agent=agent, turn_kind=turn_kind) + prefetch_note
     agent["streaming"] = True
     agent["active_turn_kind"] = turn_kind
     agent["last_full_reasoning_at"] = datetime.now(timezone.utc).isoformat()

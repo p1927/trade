@@ -66,6 +66,13 @@ def main() -> int:
     )
     _log("agent", agent_id)
 
+    try:
+        lib.ensure_agent_plan_approved(agent_id)
+        _log("plan approval", "approved via API")
+    except Exception as exc:
+        fail("plan approval", str(exc))
+        return 1
+
     watch_proc = None
     if not e2e.is_us and lib.VENV_NAUTILUS.is_file():
         watch_proc = lib.start_watch_node(agent_id)

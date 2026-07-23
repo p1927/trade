@@ -702,6 +702,19 @@ def _commit_autonomous_agent_locked(
         logger.debug("quote prewarm skipped for %s", agent_id, exc_info=True)
 
     if blocking and profile.market == "IN":
+        try:
+            from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+            if not is_plan_approved(agent):
+                watch_only = all(
+                    "no active watches" in str(item).lower() for item in blocking if str(item).strip()
+                )
+                if watch_only:
+                    blocking = []
+        except Exception:
+            pass
+
+    if blocking and profile.market == "IN":
         agent["status"] = "paused"
         agent["pause_reason"] = "infra"
         agent["infra_pending"] = blocking
@@ -814,12 +827,8 @@ def resume_autonomous_agent(agent_id: str) -> dict[str, Any]:
 
         profile = resolve_profile(agent=agent)
         if profile.uses_nautilus_watch:
-            from trade_integrations.watch_registry.store import (
-                migrate_agent_watch_spec_to_registry,
-                sync_nautilus_registry_from_watches,
-            )
+            from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
 
-            migrate_agent_watch_spec_to_registry(agent_id)
             sync_nautilus_registry_from_watches(restart_if_changed=True)
             from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
 

@@ -571,16 +571,6 @@ def minimax_configured() -> bool:
     return _configured()
 
 
-def is_legacy_ingest_enabled() -> bool:
-    """Force direct verify path (skip staging) when ``HUB_NEWS_LEGACY_INGEST=1``."""
-    return os.getenv("HUB_NEWS_LEGACY_INGEST", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def rule_fallback_distillation_enabled() -> bool:
     return os.getenv("HUB_NEWS_RULE_FALLBACK_DISTILL", "1").strip().lower() in {
         "1",

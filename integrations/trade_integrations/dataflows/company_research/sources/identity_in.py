@@ -28,7 +28,7 @@ def _stage_now() -> datetime:
 
 
 def _fetch_openalgo(normalized: NormalizedTicker) -> dict[str, Any] | None:
-    from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+    from trade_integrations.openalgo.market_data import fetch_openalgo_quote
 
     quote = fetch_openalgo_quote(normalized.input_ticker)
     if not quote:

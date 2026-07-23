@@ -11,6 +11,7 @@ _DENY_PATH = re.compile(
     r"products|trading-features|stocks#)(?:/|$|[?#])|\.pdf(?:$|[?#])",
     re.I,
 )
+_MEDIA_PATH = re.compile(r"\.(?:png|jpe?g|gif|webp|svg|ico)(?:$|[?#])", re.I)
 _NIFTY50_SIGNAL = re.compile(r"nifty\s*50|nifty50", re.I)
 _FORECAST_SIGNAL = re.compile(
     r"target|forecast|outlook|projection|sees\s+nifty|nifty.*target|peg.*nifty",
@@ -44,13 +45,31 @@ def is_allowed_listing_url(url: str) -> UrlPolicyResult:
     path = urlparse(u).path.lower()
     if _DENY_PATH.search(path) or _DENY_PATH.search(u.lower()):
         return UrlPolicyResult(False, "deny_path")
+    if _MEDIA_PATH.search(path) or _MEDIA_PATH.search(u.lower()):
+        return UrlPolicyResult(False, "media_asset")
     if _OPTIONS_SIGNAL.search(u):
         return UrlPolicyResult(False, "options_content")
     return UrlPolicyResult(True, "ok")
 
 
+def link_has_forecast_signal(blob: str) -> bool:
+    """True when link title/URL text suggests a NIFTY index forecast page."""
+    text = blob or ""
+    if _has_nifty_index_signal(text):
+        return True
+    if re.search(r"\bnifty\b", text, re.I) and _FORECAST_SIGNAL.search(text):
+        return True
+    if re.search(r"\bnifty\b", text, re.I) and re.search(
+        r"support|resistance|prediction|outlook",
+        text,
+        re.I,
+    ):
+        return True
+    return False
+
+
 def is_candidate_article_url(url: str, *, title: str = "") -> UrlPolicyResult:
-    """Loose article discovery — article-shaped paths on allowlisted domains, no NIFTY-in-title rule."""
+    """Rankable forecast link — deny junk paths/media; require NIFTY forecast signal in title+URL."""
     u = (url or "").strip()
     if not u:
         return UrlPolicyResult(False, "empty_url")
@@ -60,15 +79,17 @@ def is_candidate_article_url(url: str, *, title: str = "") -> UrlPolicyResult:
 
     if _DENY_PATH.search(path) or _DENY_PATH.search(u.lower()):
         return UrlPolicyResult(False, "deny_path")
+    if _MEDIA_PATH.search(path) or _MEDIA_PATH.search(u.lower()):
+        return UrlPolicyResult(False, "media_asset")
     if _OPTIONS_SIGNAL.search(blob):
         return UrlPolicyResult(False, "options_content")
-    if not is_article_url(u):
-        return UrlPolicyResult(False, "not_article")
+    if not link_has_forecast_signal(blob):
+        return UrlPolicyResult(False, "no_forecast_signal")
     return UrlPolicyResult(True, "ok")
 
 
 def link_score(title: str, url: str, *, native_score: float | None = None) -> float:
-    """Rank article candidates — higher is more likely to contain a NIFTY 50 street forecast."""
+    """Rank forecast link candidates — higher is more likely to contain a NIFTY 50 forecast."""
     blob = f"{title} {url}"
     score = 0.0
     if native_score is not None and native_score > 0:
@@ -77,8 +98,8 @@ def link_score(title: str, url: str, *, native_score: float | None = None) -> fl
         score += 2.0
     if _FORECAST_SIGNAL.search(blob):
         score += 1.5
-    if is_article_url(url):
-        score += 3.0
+    if re.search(r"support|resistance", blob, re.I) and re.search(r"\bnifty\b", blob, re.I):
+        score += 1.0
     return score
 
 
@@ -101,8 +122,25 @@ def is_allowed_url(url: str, *, title: str = "") -> UrlPolicyResult:
     return UrlPolicyResult(True, "ok")
 
 
+_LINK_ONLY_LINE = re.compile(r"^\[.*\]\(.*\)\s*$")
+_IMAGE_ONLY_LINE = re.compile(r"^!\[.*\]\(.*\)\s*$")
+
+
+def markdown_prose_body(markdown: str) -> str:
+    """Drop nav/link-only lines so forecast checks use page prose, not anchor text."""
+    lines: list[str] = []
+    for line in (markdown or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _IMAGE_ONLY_LINE.match(stripped) or _LINK_ONLY_LINE.match(stripped):
+            continue
+        lines.append(stripped)
+    return "\n".join(lines)
+
+
 def markdown_has_nifty50_forecast(markdown: str) -> bool:
-    text = markdown or ""
+    text = markdown_prose_body(markdown)
     if not _has_nifty_index_signal(text):
         return False
     if not re.search(r"target|forecast|outlook|projection|sees", text, re.I):

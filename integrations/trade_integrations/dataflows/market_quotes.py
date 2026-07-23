@@ -61,7 +61,7 @@ def fetch_live_quote(
 
     if use_openalgo:
         try:
-            from trade_integrations.dataflows.openalgo import fetch_openalgo_quote
+            from trade_integrations.openalgo.market_data import fetch_openalgo_quote
 
             return fetch_openalgo_quote(raw)
         except Exception:

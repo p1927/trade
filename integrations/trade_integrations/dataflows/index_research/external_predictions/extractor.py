@@ -32,6 +32,69 @@ _RANGE_PATTERN = re.compile(
     r"(\d{1,2}[,.]?\d{3,5})\s*(?:-|to|–)\s*(\d{1,2}[,.]?\d{3,5})",
     re.I,
 )
+_TABLE_LEVEL = re.compile(r"\d{1,2}[,.]?\d{3,5}(?:\.\d+)?")
+_NEXT_WEEK_SECTION = re.compile(
+    r"next\s+week[^#\n]{0,160}nifty\s*50[^#\n]{0,160}(?:prediction|forecast)",
+    re.I,
+)
+_NEXT_MONTH_SECTION = re.compile(
+    r"next\s+month[^#\n]{0,160}nifty[^#\n]{0,160}(?:prediction|forecast)",
+    re.I,
+)
+_DATE_ROW = re.compile(r"\b\d{2}-\d{2}-\d{4}\b")
+
+_HORIZON_TABLE_BOOST = {
+    "next_week_table": 5.0,
+    "next_month_table": 4.0,
+}
+
+
+def markdown_horizon_table_signal(body: str, *, horizon_days: int) -> str:
+    """Return next_week_table|next_month_table when a dated horizon section exists."""
+    hz = max(1, int(horizon_days))
+    if hz <= 14:
+        section = _section_after_heading(body or "", _NEXT_WEEK_SECTION)
+        if section.strip() and _DATE_ROW.search(section):
+            return "next_week_table"
+    else:
+        section = _section_after_heading(body or "", _NEXT_MONTH_SECTION)
+        if section.strip() and _DATE_ROW.search(section):
+            return "next_month_table"
+    return ""
+
+
+def horizon_forecast_provenance(
+    body: str,
+    *,
+    horizon_days: int,
+    regex_style: str = "",
+) -> dict[str, Any]:
+    """Structured provenance for hub/table forecasts (section + date window)."""
+    meta: dict[str, Any] = {}
+    style = regex_style or markdown_horizon_table_signal(body, horizon_days=horizon_days)
+    if style:
+        meta["forecast_section"] = style
+    hz = max(1, int(horizon_days))
+    heading_match = _NEXT_WEEK_SECTION if hz <= 14 else _NEXT_MONTH_SECTION
+    match = heading_match.search(body or "")
+    if match:
+        heading = match.group(0).strip()
+        tail = (body or "")[match.end() : match.end() + 120]
+        date_blob = f"{heading} {tail}"
+        if heading:
+            meta["forecast_heading"] = heading[:200]
+        dates = re.findall(r"\d{2}-\d{2}-\d{4}", date_blob)
+        if len(dates) >= 2:
+            meta["horizon_window"] = f"{dates[0]} to {dates[-1]}"
+        elif dates:
+            meta["horizon_window"] = dates[0]
+    return meta
+
+
+def crawl_result_horizon_boost(markdown: str, *, horizon_days: int) -> float:
+    """Content score boost when markdown contains a horizon-matching forecast table."""
+    style = markdown_horizon_table_signal(markdown, horizon_days=horizon_days)
+    return _HORIZON_TABLE_BOOST.get(style, 0.0)
 
 
 def _ensure_env_loaded() -> None:
@@ -190,8 +253,83 @@ Article:
 """
 
 
-def _regex_fallback(body: str, spot: float | None) -> ExternalPredictionTarget:
+def _section_after_heading(body: str, heading: re.Pattern[str]) -> str:
+    match = heading.search(body or "")
+    if not match:
+        return ""
+    rest = body[match.end() :]
+    next_heading = re.search(r"\n##\s", rest)
+    return rest[: next_heading.start()] if next_heading else rest
+
+
+def _levels_from_dated_table(section: str, spot: float | None) -> ExternalPredictionTarget:
+    """Parse daily support/resistance (or support/resistance/trend) rows in a forecast table."""
     target = ExternalPredictionTarget()
+    supports: list[float] = []
+    resistances: list[float] = []
+    trends: list[float] = []
+    for line in section.splitlines():
+        if not _DATE_ROW.search(line):
+            continue
+        nums = [
+            _normalize_level(_maybe_float(raw), spot)
+            for raw in _TABLE_LEVEL.findall(line)
+        ]
+        nums = [n for n in nums if n is not None]
+        if len(nums) >= 3:
+            supports.append(nums[0])
+            resistances.append(nums[1])
+            trends.append(nums[2])
+        elif len(nums) >= 2:
+            supports.append(nums[0])
+            resistances.append(nums[-1])
+    if not supports and not resistances:
+        return target
+    if supports:
+        target.low = min(supports)
+    if resistances:
+        target.high = max(resistances)
+    if trends:
+        target.mid = round(sum(trends) / len(trends), 2)
+    elif target.low is not None and target.high is not None:
+        target.mid = round((target.low + target.high) / 2, 2)
+    elif resistances:
+        target.mid = round(sum(resistances) / len(resistances), 2)
+    return target
+
+
+def _horizon_table_fallback(
+    body: str,
+    spot: float | None,
+    *,
+    horizon_days: int,
+) -> tuple[ExternalPredictionTarget, str]:
+    """Prefer Next Week / Next Month tables for structured forecast hub pages."""
+    hz = max(1, int(horizon_days))
+    if hz <= 14:
+        section = _section_after_heading(body, _NEXT_WEEK_SECTION)
+        style = "next_week_table"
+    else:
+        section = _section_after_heading(body, _NEXT_MONTH_SECTION)
+        style = "next_month_table"
+    if not section.strip():
+        return ExternalPredictionTarget(), ""
+    target = _levels_from_dated_table(section, spot)
+    if any(v is not None for v in (target.low, target.mid, target.high)):
+        return target, style
+    return ExternalPredictionTarget(), ""
+
+
+def _regex_fallback(
+    body: str,
+    spot: float | None,
+    *,
+    horizon_days: int = 14,
+) -> tuple[ExternalPredictionTarget, str]:
+    target = ExternalPredictionTarget()
+    table_target, table_style = _horizon_table_fallback(body, spot, horizon_days=horizon_days)
+    if any(v is not None for v in (table_target.low, table_target.mid, table_target.high)):
+        return table_target, table_style
     range_match = _RANGE_PATTERN.search(body)
     if range_match:
         low = _normalize_level(_maybe_float(range_match.group(1)), spot)
@@ -200,21 +338,21 @@ def _regex_fallback(body: str, spot: float | None) -> ExternalPredictionTarget:
             target.low = min(low, high)
             target.high = max(low, high)
             target.mid = round((target.low + target.high) / 2, 2)
-            return target
+            return target, "range_pattern"
     levels: list[float] = []
     for match in _LEVEL_PATTERN.finditer(body):
         level = _normalize_level(_maybe_float(match.group(1)), spot)
         if level:
             levels.append(level)
     if not levels:
-        return target
+        return target, ""
     if len(levels) >= 2:
         target.low = min(levels)
         target.high = max(levels)
         target.mid = round(sum(levels) / len(levels), 2)
     else:
         target.mid = levels[0]
-    return target
+    return target, "level_pattern"
 
 
 def _call_minimax(prompt: str, *, max_tokens: int = 1200) -> dict[str, Any]:
@@ -298,8 +436,9 @@ def extract_prediction_from_text(
             high=_normalize_level(_maybe_float(payload.get("target_high")), spot),
         )
         used_regex_target = False
+        regex_style = ""
         if not any(v is not None for v in (target.low, target.mid, target.high)):
-            target = _regex_fallback(text, spot)
+            target, regex_style = _regex_fallback(text, spot, horizon_days=horizon_days)
             used_regex_target = any(v is not None for v in (target.low, target.mid, target.high))
             if used_regex_target:
                 model_name = "regex"
@@ -394,6 +533,11 @@ def extract_prediction_from_text(
                 "summary": summary,
                 "horizon_days": horizon_days,
                 "instrument": str(payload.get("instrument") or "NIFTY50"),
+                **horizon_forecast_provenance(
+                    text,
+                    horizon_days=horizon_days,
+                    regex_style=regex_style,
+                ),
             },
             extraction={
                 "model": model_name,

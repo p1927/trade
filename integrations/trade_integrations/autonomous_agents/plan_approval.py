@@ -47,14 +47,62 @@ def _infer_revision_source(agent: dict[str, Any]) -> str:
     return "informational"
 
 
+def _normalize_agent_watch_spec(agent: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve watch_spec with coerced rules; build from thesis strategy when missing."""
+    from trade_integrations.autonomous_agents.bootstrap import _coerce_watch_rules
+
+    for raw in (
+        dict(agent.get("watch_spec") or {}),
+        dict((agent.get("mandate_config") or {}).get("watch_spec") or {}),
+    ):
+        rules = _coerce_watch_rules(raw.get("rules"))
+        if rules:
+            spec = dict(raw)
+            spec["rules"] = rules
+            if not spec.get("strategy"):
+                thesis_strategy = (agent.get("thesis") or {}).get("strategy")
+                if thesis_strategy:
+                    spec["strategy"] = thesis_strategy
+            return spec
+
+    strategy = (agent.get("thesis") or {}).get("strategy")
+    if strategy:
+        from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
+        from trade_integrations.autonomous_agents.strategy_watch_spec import build_watch_spec_for_strategy
+
+        mc = mandate_config_from_agent(agent)
+        symbols = list(agent.get("symbols") or ["NIFTY"])
+        built = build_watch_spec_for_strategy(
+            strategy=str(strategy),
+            mandate=mc,
+            symbols=symbols,
+        )
+        rules = _coerce_watch_rules(built.get("rules"))
+        if rules:
+            built["rules"] = rules
+            return built
+    return None
+
+
 def activate_agent_watch(agent_id: str, agent: dict[str, Any]) -> None:
     """Start Nautilus watch and sync handoff watch_spec after plan approval."""
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
     try:
         from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
 
         ensure_nautilus_watch_for_agent(agent_id)
     except Exception:
         logger.debug("ensure_nautilus_watch_for_agent failed for %s", agent_id, exc_info=True)
+
+    watch_spec = _normalize_agent_watch_spec(agent) or {}
+    if watch_spec:
+        agent = get_agent(agent_id) or agent
+        agent["watch_spec"] = watch_spec
+        mc = dict(agent.get("mandate_config") or {})
+        mc["watch_spec"] = watch_spec
+        agent["mandate_config"] = mc
+        save_agent(agent)
 
     watch_spec = dict(agent.get("watch_spec") or {})
     if watch_spec.get("rules"):
@@ -66,20 +114,35 @@ def activate_agent_watch(agent_id: str, agent: dict[str, Any]) -> None:
             logger.debug("sync_watch_spec_to_handoff failed for %s", agent_id, exc_info=True)
 
 
-def activate_agent_watch_after_approval(agent_id: str, agent: dict[str, Any]) -> None:
-    """Backward-compatible alias."""
-    activate_agent_watch(agent_id, agent)
-
-
 def _activate_deferred_watch_spec(agent_id: str, agent: dict[str, Any]) -> None:
     from trade_integrations.autonomous_agents.mcp_actions import activate_watch_spec_for_agent
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
     from trade_integrations.execution.profile import resolve_profile
 
-    watch_spec = dict(agent.get("watch_spec") or {})
-    if not watch_spec.get("rules"):
+    agent = get_agent(agent_id) or agent
+    watch_spec = _normalize_agent_watch_spec(agent)
+    if not watch_spec:
         return
+    agent["watch_spec"] = watch_spec
+    mc = dict(agent.get("mandate_config") or {})
+    mc["watch_spec"] = watch_spec
+    agent["mandate_config"] = mc
+    save_agent(agent)
+
     profile = resolve_profile(agent=agent)
     activate_watch_spec_for_agent(agent_id, agent, watch_spec, profile=profile)
+    try:
+        from trade_integrations.watch_registry.store import migrate_agent_watch_spec_to_registry
+
+        migrate_agent_watch_spec_to_registry(agent_id)
+    except Exception:
+        logger.debug("migrate_agent_watch_spec_to_registry failed for %s", agent_id, exc_info=True)
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import add_agent_to_registry
+
+        add_agent_to_registry(agent_id)
+    except Exception:
+        logger.debug("add_agent_to_registry failed for %s", agent_id, exc_info=True)
 
 
 def _pause_scheduled_research(agent_id: str) -> None:
@@ -203,8 +266,24 @@ def approve_agent_plan(agent_id: str, *, widget_id: str | None = None) -> dict[s
 
     activate_agent_watch(agent_id, agent)
     _activate_deferred_watch_spec(agent_id, agent)
+    _nudge_watch_job(agent_id)
 
     return {"status": "ok", "agent": agent, "plan_approved_at": now}
+
+
+def _nudge_watch_job(agent_id: str) -> None:
+    try:
+        import sys
+        from pathlib import Path
+
+        agent_src = Path(__file__).resolve().parents[3] / "vibetrading" / "agent"
+        if agent_src.is_dir() and str(agent_src) not in sys.path:
+            sys.path.insert(0, str(agent_src))
+        from src.scheduled_research.autonomous_agent_jobs import nudge_watch_job_after_plan_approval
+
+        nudge_watch_job_after_plan_approval(agent_id)
+    except Exception:
+        logger.debug("nudge watch job failed for %s", agent_id, exc_info=True)
 
 
 def reject_agent_plan(agent_id: str, *, note: str = "") -> dict[str, Any]:

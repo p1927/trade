@@ -31,26 +31,34 @@ def start_required_infra(
     constraints = dict(proposal.get("constraints") or {})
 
     if profile.uses_nautilus_watch:
-        try:
-            from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+        from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
-            watch_warning = ensure_nautilus_watch_for_agent(str(agent.get("id") or ""))
-            if watch_warning:
-                msg = str(watch_warning)
+        if is_plan_approved(agent):
+            try:
+                from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+
+                watch_warning = ensure_nautilus_watch_for_agent(str(agent.get("id") or ""))
+                if watch_warning:
+                    msg = str(watch_warning)
+                    if profile.market == "IN":
+                        blocking.append(msg)
+                    else:
+                        warnings.append(msg)
+            except Exception as exc:
+                logger.warning("ensure_nautilus_watch failed for %s", agent.get("id"), exc_info=True)
+                msg = (
+                    f"Nautilus watch not started ({exc}). "
+                    "Run: trade start nautilus-watch --registry"
+                )
                 if profile.market == "IN":
                     blocking.append(msg)
                 else:
                     warnings.append(msg)
-        except Exception as exc:
-            logger.warning("ensure_nautilus_watch failed for %s", agent.get("id"), exc_info=True)
-            msg = (
-                f"Nautilus watch not started ({exc}). "
-                "Run: trade start nautilus-watch --registry"
+        else:
+            logger.debug(
+                "deferring Nautilus watch for %s until plan approval (no registry rows yet)",
+                agent.get("id"),
             )
-            if profile.market == "IN":
-                blocking.append(msg)
-            else:
-                warnings.append(msg)
 
     # Handoff/watch_spec sync deferred until plan approval (R7-04) — see plan_approval.approve_agent_plan.
 
@@ -110,6 +118,19 @@ def attempt_infra_heal(agent_id: str) -> dict[str, Any] | None:
         vibe_session_id=str(agent.get("vibe_session_id") or ""),
         fresh_mandate_cfg=mc,
     )
+
+    if blocking:
+        try:
+            from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+            if not is_plan_approved(agent):
+                watch_only = all(
+                    "no active watches" in str(item).lower() for item in blocking if str(item).strip()
+                )
+                if watch_only:
+                    blocking = []
+        except Exception:
+            pass
 
     if blocking:
         agent["infra_pending"] = blocking

@@ -27,11 +27,13 @@ from trade_integrations.dataflows.index_research.external_predictions.models imp
 from trade_integrations.dataflows.index_research.external_predictions.store import (
     load_source_prediction,
 )
+from trade_integrations.dataflows.index_research.external_predictions.extractor import (
+    crawl_result_horizon_boost,
+)
 from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
     MIN_KEYWORD_SCORE,
     is_allowed_listing_url,
     is_allowed_url,
-    is_article_url,
     is_candidate_article_url,
     link_score,
     markdown_has_nifty50_forecast,
@@ -153,10 +155,10 @@ def resolve_source_urls(
         if last_ok_url:
             ordered_raw.append(last_ok_url)
 
-    raw_list = list(source.curated_urls or []) or list(curated_urls_for_source(source.id))
-    if not raw_list:
-        raw_list = list(source.landing_urls or [])
-    ordered_raw.extend(str(raw or "").strip() for raw in raw_list)
+    for raw in source.landing_urls or []:
+        ordered_raw.append(str(raw or "").strip())
+    curated_list = list(source.curated_urls or []) or list(curated_urls_for_source(source.id))
+    ordered_raw.extend(str(raw or "").strip() for raw in curated_list)
 
     urls: list[str] = []
     seen: set[str] = set()
@@ -222,7 +224,7 @@ def extract_article_links(
     native_links: list[dict[str, Any]] | None = None,
     pipeline: PipelineLogger | None = None,
 ) -> list[str]:
-    """Pull ranked article URLs from listing markdown / Crawl4AI native links."""
+    """Pull ranked forecast URLs from listing markdown / Crawl4AI native links."""
     candidate_limit = limit if limit is not None else _article_candidates_limit()
     stats = LinkDiscoveryStats()
     scored: list[tuple[float, str]] = []
@@ -387,6 +389,7 @@ def crawl_sources_parallel(
         article_results = crawl_urls_parallel_sync(
             [url for _, url in article_jobs],
             pipeline=pipeline,
+            capture_screenshot=True,
         )
         for (source_id, article_url), result in zip(article_jobs, article_results):
             grouped.setdefault(source_id, []).append((article_url, result))
@@ -401,7 +404,7 @@ def pick_best_crawl_result(
     horizon_days: int = 14,
     pipeline: PipelineLogger | None = None,
 ) -> tuple[str, CrawlPageResult] | None:
-    """Prefer article pages with strong NIFTY 50 index forecast signal in page body."""
+    """Prefer crawled pages with strong NIFTY 50 forecast signal in page body."""
     candidates: list[tuple[str, CrawlPageResult, float]] = []
     for url, row in rows:
         if not row.success or not row.markdown.strip():
@@ -416,8 +419,7 @@ def pick_best_crawl_result(
                 pipeline.info("crawl4ai", "Skipped crawl (no_nifty50_target)", url=url[:120])
             continue
         score = keyword_match_score(row.markdown, keywords, horizon_days=horizon_days)
-        if is_article_url(url):
-            score += 3.0
+        score += crawl_result_horizon_boost(row.markdown, horizon_days=horizon_days)
         if score >= MIN_KEYWORD_SCORE:
             candidates.append((url, row, score))
 

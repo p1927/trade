@@ -695,3 +695,89 @@ def fetch_option_chain_with_fallback(
         underlying.upper(),
         "OpenAlgo and nselib option chain both unavailable",
     )
+
+
+def to_index_research_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize OpenAlgo or yfinance OHLCV to index_research columns (date, close, …)."""
+    from trade_integrations.hub_storage.date_parse import format_date_series
+
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=["date", "close"])
+
+    working = frame.copy()
+    if "Date" in working.columns:
+        date_series = working["Date"]
+    elif "date" in working.columns:
+        date_series = working["date"]
+    elif "Datetime" in working.columns:
+        date_series = working["Datetime"]
+    else:
+        date_series = working.iloc[:, 0]
+
+    out = pd.DataFrame()
+    out["date"] = format_date_series(date_series)
+    for src_upper, src_lower, dst in (
+        ("Close", "close", "close"),
+        ("Open", "open", "open"),
+        ("High", "high", "high"),
+        ("Low", "low", "low"),
+        ("Volume", "volume", "volume"),
+    ):
+        if src_upper in working.columns:
+            out[dst] = working[src_upper].astype(float)
+        elif src_lower in working.columns:
+            out[dst] = working[src_lower].astype(float)
+
+    out = out.dropna(subset=["date"])
+    if "close" not in out.columns:
+        return pd.DataFrame(columns=["date", "close"])
+
+    cols = ["date", "close"]
+    for optional in ("high", "low", "open", "volume"):
+        if optional in out.columns:
+            cols.append(optional)
+    return out[cols].sort_values("date").reset_index(drop=True)
+
+
+def fetch_openalgo_quote(symbol: str, *, policy=None) -> dict | None:
+    """Fetch a single live quote for an equity or index symbol (hub channel when registered)."""
+    from trade_integrations.hub_capture.channel import get_quote
+    from trade_integrations.openalgo.freshness import FreshnessPolicy
+
+    if policy is None:
+        policy = FreshnessPolicy.NORMAL
+    return get_quote(symbol, fetch_quote_raw, policy=policy)
+
+
+def fetch_openalgo_live_snapshot(symbol: str) -> dict[str, Any] | None:
+    """Live quote snapshot from OpenAlgo (hub channel when entity registered)."""
+    quote = fetch_openalgo_quote(symbol)
+    if not quote or quote.get("ltp") is None:
+        return None
+    return {
+        "ltp": float(quote["ltp"]),
+        "change_pct": quote.get("change_pct"),
+        "volume": quote.get("volume"),
+        "high_52w": quote.get("high_52w"),
+        "low_52w": quote.get("low_52w"),
+        "source": quote.get("source") or "openalgo",
+    }
+
+
+def fetch_option_chain(
+    underlying: str,
+    exchange: str,
+    *,
+    expiry_date: str | None = None,
+    strike_count: int | None = None,
+) -> dict:
+    """Fetch normalized option chain payload (hub channel when registered)."""
+    from trade_integrations.hub_capture.channel import get_chain
+
+    return get_chain(
+        underlying,
+        exchange,
+        fetch_option_chain_channel_vendor,
+        expiry_date=expiry_date,
+        strike_count=strike_count,
+    )

@@ -517,7 +517,7 @@ def get_history(
     if entity is not None and should_capture(entity, "ohlcv_daily") and not frame.empty:
         if not _skip_hub_learning():
             try:
-                from trade_integrations.dataflows.openalgo import to_index_research_frame
+                from trade_integrations.openalgo.market_data import to_index_research_frame
                 from trade_integrations.hub_capture.ohlcv_cache import merge_with_cache
 
                 index_frame = to_index_research_frame(frame)
@@ -621,8 +621,8 @@ def warm_entity_channel(entity_id: str, *, kind: str = "options") -> dict[str, A
     if kind in ("options", "index", "stock"):
         from trade_integrations.openalgo.market_data import (
             fetch_option_chain_channel_vendor,
+            fetch_quote_raw,
         )
-        from trade_integrations.dataflows.openalgo import _fetch_live_quote_raw
 
         try:
             chain = get_chain(entity, "NFO", fetch_option_chain_channel_vendor, strike_count=15)
@@ -630,7 +630,7 @@ def warm_entity_channel(entity_id: str, *, kind: str = "options") -> dict[str, A
         except Exception as exc:
             summary["chain"] = {"status": "error", "error": str(exc)}
         try:
-            quote = get_quote(entity, _fetch_live_quote_raw)
+            quote = get_quote(entity, fetch_quote_raw)
             summary["quote"] = {"status": "ok" if quote else "empty"}
         except Exception as exc:
             summary["quote"] = {"status": "error", "error": str(exc)}

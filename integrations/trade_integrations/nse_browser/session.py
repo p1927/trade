@@ -474,10 +474,6 @@ class NodriverSession:
                 logger.debug("trigger_csv_download %r failed: %s", label, exc)
         return clicked
 
-    async def click_download_links(self) -> list[str]:
-        """Deprecated — use trigger_csv_download (guarded by env flag)."""
-        return await self.trigger_csv_download()
-
     async def find_csv_hrefs(self) -> list[str]:
         if self.tab is None:
             return []

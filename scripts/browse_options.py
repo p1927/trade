@@ -31,11 +31,11 @@ _load_trade_env()
 
 import trade_integrations  # noqa: F401
 
-from trade_integrations.dataflows.openalgo import (
+from trade_integrations.openalgo.market_data import (
     fetch_option_chain,
     fetch_option_expiry_dates,
-    normalize_openalgo_expiry,
 )
+from trade_integrations.openalgo.symbols import normalize_openalgo_expiry
 from trade_integrations.dataflows.options_research.browse_summary import (
     build_browse_summary,
     format_browse_markdown,

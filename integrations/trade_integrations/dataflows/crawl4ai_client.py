@@ -19,7 +19,9 @@ _DATA_DIR = Path("_data") / "crawl4ai"
 _LAST_BATCH = "last_batch.json"
 _WAITING = "waiting.json"
 _IN_FLIGHT = "in_flight.json"
-_DEFAULT_MAX_PARALLEL = 4
+_DEFAULT_MAX_PARALLEL = 2
+_DEFAULT_INTER_REQUEST_DELAY_SEC = 0.0
+_DEFAULT_DELAY_BEFORE_RETURN_HTML = 3.5
 
 
 @dataclass
@@ -118,15 +120,148 @@ def crawl4ai_queue_stats() -> dict[str, Any]:
     }
 
 
-def _browser_config() -> Any:
+def _inter_request_delay_sec() -> float:
+    raw = os.environ.get("CRAWL4AI_INTER_REQUEST_DELAY_SEC", "").strip()
+    if not raw:
+        return _DEFAULT_INTER_REQUEST_DELAY_SEC
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _DEFAULT_INTER_REQUEST_DELAY_SEC
+
+
+def _delay_before_return_html() -> float:
+    raw = os.environ.get("CRAWL4AI_DELAY_BEFORE_RETURN_HTML", "").strip()
+    if not raw:
+        return _DEFAULT_DELAY_BEFORE_RETURN_HTML
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _DEFAULT_DELAY_BEFORE_RETURN_HTML
+
+
+def _cdp_url() -> str:
+    return os.environ.get("CRAWL4AI_CDP_URL", "").strip()
+
+
+def _proxy_url_raw() -> str:
+    return (os.environ.get("CRAWL4AI_PROXY") or os.environ.get("HTTP_PROXY") or "").strip()
+
+
+def _undetected_enabled() -> bool:
+    return os.environ.get("CRAWL4AI_UNDETECTED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _parse_proxy_config() -> Any | None:
+    raw = _proxy_url_raw()
+    if not raw:
+        return None
+    from crawl4ai import ProxyConfig
+    from urllib.parse import urlparse
+
+    parsed = urlparse(raw)
+    if not parsed.hostname:
+        return ProxyConfig(server=raw)
+    server = f"{parsed.scheme or 'http'}://{parsed.hostname}"
+    if parsed.port:
+        server = f"{server}:{parsed.port}"
+    username = parsed.username or None
+    password = parsed.password or None
+    return ProxyConfig(server=server, username=username, password=password)
+
+
+def browser_profile_tiers() -> list[str]:
+    """Ordered browser profiles to try — CDP, proxy, undetected (optional), then stealth."""
+    tiers: list[str] = []
+    if _cdp_url():
+        tiers.append("cdp")
+    if _proxy_url_raw():
+        tiers.append("proxy")
+    if _undetected_enabled():
+        tiers.append("undetected")
+    tiers.append("stealth")
+    seen: set[str] = set()
+    out: list[str] = []
+    for tier in tiers:
+        if tier in seen:
+            continue
+        seen.add(tier)
+        out.append(tier)
+    return out
+
+
+def primary_browser_profile() -> str:
+    tiers = browser_profile_tiers()
+    return tiers[0] if tiers else "stealth"
+
+
+def next_browser_profile(current: str) -> str | None:
+    tiers = browser_profile_tiers()
+    try:
+        idx = tiers.index(current)
+    except ValueError:
+        return None
+    if idx + 1 >= len(tiers):
+        return None
+    return tiers[idx + 1]
+
+
+def _browser_config(profile: str = "stealth") -> Any:
     from crawl4ai import BrowserConfig
 
+    proxy_config = _parse_proxy_config()
+    if profile == "cdp":
+        cdp = _cdp_url()
+        if cdp:
+            return BrowserConfig(
+                browser_mode="cdp",
+                cdp_url=cdp,
+                headless=False,
+                enable_stealth=True,
+                light_mode=True,
+                text_mode=False,
+            )
+    if profile == "proxy" and proxy_config is not None:
+        return BrowserConfig(
+            headless=True,
+            enable_stealth=True,
+            light_mode=True,
+            text_mode=False,
+            proxy_config=proxy_config,
+        )
+    if profile == "undetected":
+        return BrowserConfig(
+            headless=True,
+            enable_stealth=True,
+            light_mode=False,
+            text_mode=False,
+        )
     return BrowserConfig(
         headless=True,
         enable_stealth=True,
         light_mode=True,
         text_mode=False,
+        proxy_config=proxy_config if profile == "stealth" and proxy_config else None,
     )
+
+
+def _make_crawler(profile: str) -> Any:
+    from crawl4ai import AsyncWebCrawler, UndetectedAdapter
+    from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
+
+    config = _browser_config(profile)
+    if profile == "undetected":
+        strategy = AsyncPlaywrightCrawlerStrategy(
+            browser_config=config,
+            browser_adapter=UndetectedAdapter(),
+        )
+        return AsyncWebCrawler(crawler_strategy=strategy, config=config)
+    return AsyncWebCrawler(config=config)
 
 
 def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
@@ -136,6 +271,7 @@ def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
         "cache_mode": CacheMode.BYPASS,
         "word_count_threshold": 5,
         "screenshot": screenshot,
+        "delay_before_return_html": _delay_before_return_html(),
     }
     if score_links:
         try:
@@ -197,8 +333,14 @@ async def crawl_urls_parallel(
     pipeline: Any | None = None,
     score_links: bool = False,
     capture_screenshot: bool | None = None,
+    browser_profile: str | None = None,
+    escalate_on_bot_block: bool = True,
 ) -> list[CrawlPageResult]:
     """Fetch URLs concurrently via one shared AsyncWebCrawler process."""
+    from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
+        is_blocklisted_crawl_domain,
+        is_bot_block_error,
+    )
     from trade_integrations.dataflows import source_availability
 
     cleaned = [u.strip() for u in urls if str(u or "").strip()]
@@ -219,41 +361,50 @@ async def crawl_urls_parallel(
 
     parallel = max_parallel or _max_parallel()
     want_screenshot = _screenshots_enabled() if capture_screenshot is None else capture_screenshot
+    profile = browser_profile or primary_browser_profile()
     if pipeline:
         pipeline.info(
             "crawl4ai",
-            f"Launching stealth parallel crawl ({len(cleaned)} URL(s), max_parallel={parallel})",
+            f"Launching {profile} parallel crawl ({len(cleaned)} URL(s), max_parallel={parallel})",
         )
 
     _adjust_counter(_waiting_path(), "waiting", len(cleaned))
     batch_started = time.time()
+    results_by_url: dict[str, CrawlPageResult] = {}
     results: list[CrawlPageResult] = []
     batch_error = ""
+    inter_delay = _inter_request_delay_sec()
 
-    try:
-        from crawl4ai import AsyncWebCrawler
-
-        semaphore = asyncio.Semaphore(parallel)
-
-        async with AsyncWebCrawler(config=_browser_config()) as crawler:
+    async def _run_batch(url_list: list[str], batch_profile: str) -> None:
+        async with _make_crawler(batch_profile) as crawler:
+            semaphore = asyncio.Semaphore(parallel)
 
             async def _crawl_one(url: str) -> CrawlPageResult:
                 started = time.time()
                 _adjust_counter(_in_flight_path(), "in_flight", 1)
                 _adjust_counter(_waiting_path(), "waiting", -1)
                 if pipeline:
-                    pipeline.info("crawl4ai", f"Fetching {url[:100]}", url=url)
+                    pipeline.info(
+                        "crawl4ai",
+                        f"Fetching ({batch_profile}) {url[:100]}",
+                        url=url,
+                    )
                 try:
+                    if inter_delay > 0 and is_blocklisted_crawl_domain(url):
+                        await asyncio.sleep(inter_delay)
                     async with semaphore:
                         result = await crawler.arun(
                             url=url,
                             config=_run_config(score_links=score_links, screenshot=want_screenshot),
                         )
+                    if inter_delay > 0:
+                        await asyncio.sleep(inter_delay)
                     elapsed_ms = (time.time() - started) * 1000.0
                     if result.success:
                         markdown = str(getattr(result, "markdown", "") or "")
                         title = ""
                         metadata = dict(getattr(result, "metadata", None) or {})
+                        metadata["browser_profile"] = batch_profile
                         native_links = _serialize_native_links(getattr(result, "links", None))
                         if native_links:
                             metadata["links"] = native_links
@@ -284,6 +435,7 @@ async def crawl_urls_parallel(
                         success=False,
                         error_message=error_message,
                         elapsed_ms=elapsed_ms,
+                        metadata={"browser_profile": batch_profile},
                     )
                 except Exception as exc:
                     elapsed_ms = (time.time() - started) * 1000.0
@@ -294,16 +446,57 @@ async def crawl_urls_parallel(
                         success=False,
                         error_message=str(exc),
                         elapsed_ms=elapsed_ms,
+                        metadata={"browser_profile": batch_profile},
                     )
                 finally:
                     _adjust_counter(_in_flight_path(), "in_flight", -1)
 
-            gathered = await asyncio.gather(*[_crawl_one(url) for url in cleaned], return_exceptions=True)
-            for url, item in zip(cleaned, gathered):
+            gathered = await asyncio.gather(
+                *[_crawl_one(url) for url in url_list],
+                return_exceptions=True,
+            )
+            for url, item in zip(url_list, gathered):
                 if isinstance(item, Exception):
-                    results.append(CrawlPageResult(url=url, success=False, error_message=str(item)))
+                    results_by_url[url] = CrawlPageResult(
+                        url=url,
+                        success=False,
+                        error_message=str(item),
+                        metadata={"browser_profile": batch_profile},
+                    )
                 else:
-                    results.append(item)
+                    results_by_url[url] = item
+
+    try:
+        await _run_batch(cleaned, profile)
+
+        if escalate_on_bot_block:
+            blocked_urls: list[str] = []
+            for url in cleaned:
+                row = results_by_url.get(url)
+                if row is None:
+                    continue
+                if row.success and (row.markdown or "").strip():
+                    continue
+                if is_bot_block_error(row.error_message):
+                    blocked_urls.append(url)
+            next_profile = next_browser_profile(profile)
+            if blocked_urls and next_profile:
+                if pipeline:
+                    pipeline.info(
+                        "crawl4ai",
+                        f"Bot block on {len(blocked_urls)} URL(s) — retry with {next_profile}",
+                    )
+                _adjust_counter(_waiting_path(), "waiting", len(blocked_urls))
+                await _run_batch(blocked_urls, next_profile)
+                for url in blocked_urls:
+                    retry_row = results_by_url.get(url)
+                    if retry_row is not None:
+                        retry_row.metadata = {
+                            **dict(retry_row.metadata or {}),
+                            "bot_profile_tried": profile,
+                        }
+
+        results = [results_by_url[u] for u in cleaned if u in results_by_url]
 
         ok_count = sum(1 for row in results if row.success)
         if ok_count:
@@ -330,6 +523,7 @@ async def crawl_urls_parallel(
                 "success_count": sum(1 for row in results if row.success),
                 "elapsed_ms": round(elapsed_ms, 1),
                 "max_parallel": parallel,
+                "browser_profile": profile,
                 "error": batch_error,
                 "finished_at": time.time(),
             }

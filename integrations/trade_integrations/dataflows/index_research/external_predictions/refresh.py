@@ -152,12 +152,15 @@ def _extract_from_crawl(
     pipeline: PipelineLogger | None = None,
 ) -> ExternalPredictionRecord:
     keywords = source_keywords(src, horizon_days=horizon_days)
-    body = filter_markdown_for_extraction(
+    filtered = filter_markdown_for_extraction(
         markdown,
         keywords,
         horizon_days=horizon_days,
     )
-    snippet = "\n".join(body.splitlines()[:12])
+    snippet = "\n".join(filtered.splitlines()[:12]) if filtered.strip() else "\n".join(
+        (markdown or "").splitlines()[:12]
+    )
+    body = (markdown or "").strip() or filtered
     artifacts: ScreenshotArtifacts | None = None
     if screenshot_b64:
         try:

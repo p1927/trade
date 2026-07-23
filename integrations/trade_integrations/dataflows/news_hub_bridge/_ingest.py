@@ -165,7 +165,6 @@ def ingest_rows_to_hub(
         from trade_integrations.hub_storage.news_staging_store import (
             enqueue_raw_ref,
             is_entity_pipeline_enabled,
-            is_legacy_ingest_enabled,
             pipeline_pause_status,
             staging_backpressure_active,
         )
@@ -189,7 +188,7 @@ def ingest_rows_to_hub(
         if not merged:
             return {"ingested": 0, "cache_hits": 0, "verified": 0}
 
-        if is_legacy_ingest_enabled() or not is_entity_pipeline_enabled():
+        if not is_entity_pipeline_enabled():
             return ingest_headline_rows(
                 merged,
                 ticker=hub_sym,
@@ -232,7 +231,17 @@ def ingest_rows_to_hub(
             }
 
         queued = 0
+        relevance_discarded = 0
+        from trade_integrations.dataflows.index_research.news_relevance import (
+            assess_ref_relevance,
+            relevance_min_confidence,
+        )
+
         for row in merged:
+            verdict = assess_ref_relevance(row, ticker=hub_sym)
+            if not verdict.relevant and verdict.confidence >= relevance_min_confidence():
+                relevance_discarded += 1
+                continue
             tagged = build_article_tags(
                 str(row.get("title") or ""),
                 str(row.get("summary") or ""),
@@ -262,6 +271,7 @@ def ingest_rows_to_hub(
             "verified": int(sync_stats.get("processed") or 0),
             "created": int(sync_stats.get("created") or 0),
             "updated": int(sync_stats.get("updated") or 0),
+            "relevance_discarded": relevance_discarded,
             "distill": distill_mode if not pause.get("pipeline_paused") else "paused",
             "pipeline_paused": bool(pause.get("pipeline_paused")),
             "pause_reason": str(pause.get("pause_reason") or ""),
@@ -285,7 +295,7 @@ def ingest_news_articles(
     kind: str = "ticker",
     collection_day: str | None = None,
     sync_distill_limit: int | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     hub_sym = hub_ticker_for_symbol(ticker, kind=kind)
     rows = [article_to_hub_row(a) for a in articles if str(getattr(a, "title", "") or "").strip()]
     return ingest_rows_to_hub(

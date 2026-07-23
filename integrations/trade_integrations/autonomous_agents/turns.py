@@ -5,8 +5,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from trade_integrations.autonomous_agents.agent_learning import read_learning_snapshot
-from trade_integrations.autonomous_agents.strategy_progress import format_strategy_progress_for_prompt
+from trade_integrations.autonomous_agents.agent_learning import (
+    format_learning_compact,
+    read_learning_snapshot,
+)
+from trade_integrations.autonomous_agents.strategy_progress import (
+    format_strategy_progress_compact,
+    format_strategy_progress_for_prompt,
+)
 from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
 from trade_integrations.autonomous_agents.strategy_rank import format_scorer_for_prompt, score_ranked_strategies
 from trade_integrations.execution.profile import resolve_profile
@@ -38,6 +44,23 @@ Respond with this structure only (no audit IDs, no "next-turn expectation", no i
 - **Never** mention: handoff cycle, cached context, synthetic alert, audit pa_, verification reads, idempotent reads.
 """
 
+HTTP_PROMPT_LIMIT = 5000
+_TRUNC_MARKER = "\n\n[truncated — see agent_context prefetch]\n\n"
+
+
+def fit_autonomous_prompt(content: str, *, limit: int = HTTP_PROMPT_LIMIT) -> str:
+    """Ensure autonomous turn text fits Vibe HTTP message limit; preserve decision footer."""
+    text = str(content or "").strip()
+    if len(text) <= limit:
+        return text
+    footer_idx = text.rfind("## Output format")
+    if footer_idx > 0:
+        footer = text[footer_idx:]
+        head_budget = limit - len(_TRUNC_MARKER) - len(footer)
+        if head_budget > 200:
+            return text[:head_budget] + _TRUNC_MARKER + footer
+    return text[: max(0, limit - 16)] + "\n[truncated]\n"
+
 
 def _symbols_line(symbols: list[str]) -> str:
     return ", ".join(symbols) if symbols else "NIFTY"
@@ -55,8 +78,134 @@ def build_watch_summary_message(*, agent: dict[str, Any], feedback: dict[str, An
     )
 
 
+def build_autonomous_turn_prompt(
+    *,
+    agent: dict[str, Any],
+    turn_kind: str = "research",
+    compact: bool = True,
+    alert_message: str | None = None,
+) -> str:
+    """Build autonomous turn prompt; compact mode fits HTTP limit (heavy context prefetched)."""
+    if not compact:
+        return _build_expanded_reasoning_prompt(agent=agent, turn_kind=turn_kind)
+
+    profile = resolve_profile(agent=agent)
+    routing = resolve_agent_routing(agent)
+    symbols = list(agent.get("symbols") or (["SPY"] if profile.is_us else ["NIFTY"]))
+    focus = symbols[0]
+    constraints = dict(agent.get("constraints") or {})
+    mandate = str(agent.get("mandate") or "")
+    agent_id = str(agent.get("id") or "")
+    threshold = int(constraints.get("confidence_threshold") or 75)
+    thesis = dict(agent.get("thesis") or {})
+    mc = mandate_config_from_agent(agent)
+
+    kind_note = kind_note_for(profile.prompt_fragment_id, turn_kind)
+    header = session_header_for(profile.market, mode=profile.mode)
+    title_suffix = " — US / OpenAlgo" if profile.is_us else ""
+    market_label = "US (OpenAlgo paper)" if profile.is_us and profile.is_paper else (
+        "US (OpenAlgo live)" if profile.is_us else "IN (OpenAlgo analyzer)"
+    )
+    instrument_line = ", ".join(profile.allowed_instruments)
+
+    mandate_line = mandate if len(mandate) <= 240 else mandate[:237] + "..."
+    budget_line = ""
+    if not profile.is_us:
+        budget = float(constraints.get("budget_inr") or 20_000)
+        max_loss = float(constraints.get("max_daily_loss_inr") or 2_000)
+        budget_line = (
+            f"- Budget: ₹{budget:,.0f} paper | Max daily loss: ₹{max_loss:,.0f} | "
+            f"Holding: {mc.holding_period} | Flatten: {mc.flatten_policy}\n"
+        )
+
+    thesis_bits = []
+    if thesis.get("strategy"):
+        thesis_bits.append(f"strategy={thesis.get('strategy')}")
+    if thesis.get("confidence") is not None:
+        thesis_bits.append(f"confidence={thesis.get('confidence')}%")
+    if thesis.get("decision"):
+        thesis_bits.append(f"decision={thesis.get('decision')}")
+    thesis_block = ""
+    if thesis_bits:
+        thesis_block = f"## Prior thesis\n- {' · '.join(thesis_bits)}\n"
+
+    guidance_block = ""
+    guidance = list(agent.get("user_guidance") or [])[-3:]
+    if guidance:
+        lines = [f"- {str(g.get('text') or '')[:120]}" for g in guidance if isinstance(g, dict)]
+        if lines:
+            guidance_block = "## User guidance\n" + "\n".join(lines) + "\n"
+
+    alert_block = ""
+    if alert_message:
+        alert_block = f"## Nautilus alert\n- {alert_message}\n"
+
+    progress_block = format_strategy_progress_compact(agent=agent, turn_kind=turn_kind)
+    learning_block = format_learning_compact(agent=agent)
+
+    revision_watch_block = ""
+    if turn_kind in {"strategy_revision", "post_execution"}:
+        revision_watch_block = (
+            "## Revision watch rules\n"
+            "- If REVISE changes strategy/levels: `set_agent_watch_spec` before `record_autonomous_decision`.\n"
+        )
+
+    flow = prompt_fragment_for(
+        profile.prompt_fragment_id,
+        agent_id=agent_id,
+        focus=focus,
+        threshold=threshold,
+        turn_kind=turn_kind,
+    )
+
+    bootstrap_block = ""
+    if turn_kind == "bootstrap":
+        bootstrap_block = (
+            "\n## Bootstrap checklist\n"
+            f"1. `get_autonomous_agent_status(agent_id=\"{agent_id}\")`\n"
+            "2. One hub research + **one** trade-plan widget for the profile.\n"
+            f"3. `set_agent_watch_spec(agent_id=\"{agent_id}\", strategy=<chosen>)`\n"
+            "4. `record_autonomous_decision` — **stop**; user approves widget before Nautilus runs.\n"
+        )
+
+    skill_block = format_advisor_skill_block(routing, turn_kind=turn_kind)
+    index_flow_note = ""
+    if routing.research_asset_type == "index" and not profile.is_us:
+        index_flow_note = (
+            f"\n## Index flow\nUse `get_research_status(ticker=\"{focus}\", asset_type=\"index\")`, "
+            f"`get_index_trade_plan`, `get_index_trade_widget`.\n"
+        )
+
+    harness_block = ""
+    if agent.get("e2e_harness") and turn_kind == "research" and profile.is_paper:
+        harness_block = "\n## Harness\nEnter paper position if flat, then set watch rules and record decision.\n"
+
+    body = f"""# Autonomous agent turn ({turn_kind}){title_suffix}
+
+{header}
+
+{kind_note}
+
+## Mandate
+- Agent: **{agent.get('name') or focus}** (`{agent_id}`)
+- Symbols: {_symbols_line(symbols)} · Market: **{profile.market}** ({market_label})
+- Threshold: {threshold}% · Instruments: {instrument_line} · Mode: {constraints.get('mode') or profile.mode}
+{budget_line}- Mandate: {mandate_line}
+
+{alert_block}{thesis_block}{guidance_block}{learning_block}{progress_block}{revision_watch_block}
+{skill_block}{index_flow_note}{bootstrap_block}{flow}
+{harness_block}
+{_RUNNING_AGENT_FOOTER}"""
+    return fit_autonomous_prompt(body)
+
+
 def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "research") -> str:
-    """Build a full agent turn prompt for an autonomous instance."""
+    """Build a compact autonomous turn prompt (fits Vibe HTTP limit)."""
+    return build_autonomous_turn_prompt(agent=agent, turn_kind=turn_kind, compact=True)
+
+
+def _build_expanded_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "research") -> str:
+    """Legacy expanded prompt with full JSON blocks (tests / prefetch source)."""
     profile = resolve_profile(agent=agent)
     routing = resolve_agent_routing(agent)
     symbols = list(agent.get("symbols") or (["SPY"] if profile.is_us else ["NIFTY"]))

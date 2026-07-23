@@ -2,34 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from typing import Any
 
 from nautilus_openalgo_bridge.config import BridgeConfig, get_bridge_config
-
-
-def _load_base_openalgo_client():
-    """Load autonomous_agents OpenAlgoClient without importing trade_integrations package init."""
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "trade_integrations"
-        / "execution"
-        / "openalgo_client.py"
-    )
-    spec = importlib.util.spec_from_file_location("_autonomous_agents_openalgo_client", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load OpenAlgo client from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.OpenAlgoClient
-
-
-_BaseOpenAlgoClient = _load_base_openalgo_client()
+from trade_integrations.execution.openalgo_client import OpenAlgoClient as _BaseOpenAlgoClient
 
 
 class BridgeOpenAlgoClient(_BaseOpenAlgoClient):
-    """Extends autonomous_agents OpenAlgo client with quote endpoints."""
+    """Extends execution OpenAlgo client with quote endpoints."""
 
     def _quote_port(self):
         adapter = getattr(self, "_quote_port_adapter", None)

@@ -62,6 +62,30 @@ def _seed_source(
     )
 
 
+_BROKER_LANDING_URLS: dict[str, tuple[str, ...]] = {
+    "motilal_oswal": ("https://www.motilaloswal.com/research-and-reports",),
+    "icici_direct": ("https://www.icicidirect.com/research/equity",),
+    "hdfc_securities": ("https://www.hdfcsec.com/research-and-reports",),
+}
+
+_REGISTRY_OVERRIDES: dict[str, dict[str, Any]] = {
+    "choice_india": {
+        "landing_urls": ["https://choiceindia.com/blog"],
+        "entry_urls": ["https://choiceindia.com/blog"],
+        "curated_urls": [
+            "https://choiceindia.com/blog/indian-stock-market-prediction-for-next-week",
+        ],
+    },
+    "livemint": {
+        "landing_urls": ["https://www.livemint.com/market/stock-market-news"],
+        "curated_urls": [
+            "https://www.livemint.com/market/stock-market-news",
+            "https://www.livemint.com/market",
+        ],
+    },
+}
+
+
 _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
     _seed_source(
         id="moneycontrol",
@@ -93,35 +117,53 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
             "Nifty 50 outlook {year}",
         ],
     ),
-    _seed_source(
+    ExternalPredictionSource(
         id="motilal_oswal",
         display_name="Motilal Oswal",
         kind="broker",
-        domains=["motilaloswal.com", "economictimes.indiatimes.com", "moneycontrol.com"],
         search_queries=[
             "Motilal Oswal Nifty 50 target {horizon} days",
             "Motilal Oswal Nifty outlook {year}",
         ],
+        domains=["motilaloswal.com", "economictimes.indiatimes.com", "moneycontrol.com"],
+        landing_urls=list(_BROKER_LANDING_URLS["motilal_oswal"]),
+        curated_urls=list(curated_urls_for_source("motilal_oswal")),
+        search_keywords=list(_SEED_KEYWORDS),
+        watchlisted=True,
+        added_by="seed",
+        removable=False,
     ),
-    _seed_source(
+    ExternalPredictionSource(
         id="icici_direct",
         display_name="ICICI Direct",
         kind="broker",
-        domains=["icicidirect.com", "economictimes.indiatimes.com", "moneycontrol.com"],
         search_queries=[
             "ICICI Direct Nifty 50 target {horizon} days",
             "ICICI Direct Nifty outlook forecast",
         ],
+        domains=["icicidirect.com", "economictimes.indiatimes.com", "moneycontrol.com"],
+        landing_urls=list(_BROKER_LANDING_URLS["icici_direct"]),
+        curated_urls=list(curated_urls_for_source("icici_direct")),
+        search_keywords=list(_SEED_KEYWORDS),
+        watchlisted=True,
+        added_by="seed",
+        removable=False,
     ),
-    _seed_source(
+    ExternalPredictionSource(
         id="hdfc_securities",
         display_name="HDFC Securities",
         kind="broker",
-        domains=["hdfcsec.com", "economictimes.indiatimes.com", "moneycontrol.com"],
         search_queries=[
             "HDFC Securities Nifty 50 target {horizon} days",
             "HDFC Securities Nifty outlook {year}",
         ],
+        domains=["hdfcsec.com", "economictimes.indiatimes.com", "moneycontrol.com"],
+        landing_urls=list(_BROKER_LANDING_URLS["hdfc_securities"]),
+        curated_urls=list(curated_urls_for_source("hdfc_securities")),
+        search_keywords=list(_SEED_KEYWORDS),
+        watchlisted=True,
+        added_by="seed",
+        removable=False,
     ),
     _seed_source(
         id="goldman_sachs",
@@ -153,6 +195,44 @@ def _slugify(value: str) -> str:
 
 def _seed_by_id() -> dict[str, ExternalPredictionSource]:
     return {src.id: src for src in _SEED_SOURCES}
+
+
+def resync_curated_urls(*, persist: bool = True) -> list[ExternalPredictionSource]:
+    """Align persisted registry curated/landing URLs with curated_urls.py defaults."""
+    path = registry_path()
+    if not path.is_file():
+        return seed_registry_if_missing()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return seed_registry_if_missing()
+    rows = payload.get("sources") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return seed_registry_if_missing()
+    sources: list[ExternalPredictionSource] = []
+    for row in rows:
+        src = ExternalPredictionSource.from_dict(row)
+        if src is not None:
+            sources.append(src)
+    changed = False
+    for src in sources:
+        defaults = list(curated_urls_for_source(src.id))
+        if defaults and list(src.curated_urls or []) != defaults:
+            src.curated_urls = defaults
+            changed = True
+        broker_landing = _BROKER_LANDING_URLS.get(src.id)
+        if broker_landing and list(src.landing_urls or []) != list(broker_landing):
+            src.landing_urls = list(broker_landing)
+            changed = True
+        override = _REGISTRY_OVERRIDES.get(src.id)
+        if override:
+            for key, value in override.items():
+                if list(getattr(src, key, None) or []) != list(value):
+                    setattr(src, key, list(value))
+                    changed = True
+    if changed and persist:
+        save_registry(sources)
+    return sources
 
 
 def _merge_seed_defaults(sources: list[ExternalPredictionSource]) -> list[ExternalPredictionSource]:

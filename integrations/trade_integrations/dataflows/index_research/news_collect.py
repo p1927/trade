@@ -26,6 +26,25 @@ def _headline_id(title: str, url: str = "", published_at: str = "") -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _hub_row_to_collect_dict(row: dict[str, Any], *, day: str) -> dict[str, Any]:
+    title = str(row.get("title") or "").strip()
+    url = str(row.get("url") or row.get("link") or "")
+    published = normalize_published_at(
+        str(row.get("published_at") or row.get("publish_day") or ""),
+        fallback_day=day,
+    )
+    summary = str(row.get("content_summary") or row.get("summary") or "")
+    return {
+        "id": _headline_id(title, url, published),
+        "title": title,
+        "summary": summary,
+        "url": url,
+        "source": str(row.get("source") or "hub_events"),
+        "published_at": published[:32],
+        "fingerprint": headline_fingerprint(title, url or title),
+    }
+
+
 def _load_archive_headlines(day: str, *, symbol: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
     path = get_hub_dir() / _NEWS_DAILY / f"{day[:10]}.parquet"
     if not path.is_file():
@@ -68,6 +87,30 @@ def _load_archive_headlines(day: str, *, symbol: str = "NIFTY", limit: int = 12)
             }
         )
     return rows
+
+
+def _load_hub_event_headlines(day: str, *, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
+    try:
+        from trade_integrations.hub_storage.verified_news_store import list_verified_records
+
+        rows = list_verified_records(
+            status=["approved", "partial"],
+            publish_day=day[:10],
+            limit=limit,
+            ticker=ticker,
+        )
+        return [_hub_row_to_collect_dict(row, day=day) for row in rows if row.get("title")]
+    except Exception:
+        return []
+
+
+def _live_collect_allowed() -> bool:
+    try:
+        from trade_integrations.dataflows.hub_wiki.probe import check_ingest_allowed
+
+        return not bool(check_ingest_allowed().get("blocked"))
+    except Exception:
+        return True
 
 
 def _fetch_aggregator_headlines(ticker: str, day: str, *, limit: int = 8) -> list[dict[str, Any]]:
@@ -117,8 +160,9 @@ def collect_headlines_for_day(
     *,
     ticker: str = "NIFTY",
     limit: int = 12,
+    allow_live_collect: bool = False,
 ) -> list[dict[str, Any]]:
-    """Collect headlines for a calendar day; archive first, then RSS/aggregator."""
+    """Collect headlines for a calendar day — archive + hub SSOT first; live sources gated."""
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
 
@@ -138,7 +182,12 @@ def collect_headlines_for_day(
 
     for row in _load_archive_headlines(day, symbol=ticker, limit=limit):
         _add(row)
+    for row in _load_hub_event_headlines(day, ticker=ticker, limit=limit):
+        _add(row)
     if len(out) >= limit:
+        return merge_raw_headlines(out[:limit], ticker=ticker)
+
+    if not allow_live_collect or not _live_collect_allowed():
         return merge_raw_headlines(out[:limit], ticker=ticker)
 
     for row in _fetch_aggregator_headlines(ticker, day, limit=limit):
@@ -175,16 +224,29 @@ def collect_headlines_for_window(
     ticker: str = "NIFTY",
     limit_per_day: int = 6,
     max_total: int = 40,
+    allow_live_collect: bool = False,
 ) -> list[dict[str, Any]]:
     try:
         start_d = date.fromisoformat(start[:10])
         end_d = date.fromisoformat(end[:10])
     except ValueError:
-        return collect_headlines_for_day(start, ticker=ticker, limit=max_total)
+        return collect_headlines_for_day(
+            start,
+            ticker=ticker,
+            limit=max_total,
+            allow_live_collect=allow_live_collect,
+        )
 
     rows: list[dict[str, Any]] = []
     day = start_d
     while day <= end_d and len(rows) < max_total:
-        rows.extend(collect_headlines_for_day(day.isoformat(), ticker=ticker, limit=limit_per_day))
+        rows.extend(
+            collect_headlines_for_day(
+                day.isoformat(),
+                ticker=ticker,
+                limit=limit_per_day,
+                allow_live_collect=allow_live_collect,
+            )
+        )
         day += timedelta(days=1)
     return merge_raw_headlines(rows[:max_total], ticker=ticker)

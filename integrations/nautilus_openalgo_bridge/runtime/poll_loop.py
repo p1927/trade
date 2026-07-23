@@ -1,4 +1,4 @@
-"""Legacy poll-loop fallback (used for --dry-run and --legacy-poll)."""
+"""Internal poll-loop helpers (single-shot ``run_once`` for tests and degraded paths)."""
 
 from __future__ import annotations
 
@@ -279,22 +279,6 @@ def _run_once_impl(
         "dispatches": dispatch_results,
         "intents_processed": intent_results,
     }
-
-
-def run_once_alpaca(
-    *,
-    agent_id: str | None = None,
-    baselines: dict[str, float] | None = None,
-    trigger_vibe: bool = False,
-    process_intents: bool = False,
-) -> dict[str, Any]:
-    """Deprecated alias — US watch uses OpenAlgo via ``run_once``."""
-    return run_once(
-        agent_id=agent_id,
-        baselines=baselines,
-        trigger_vibe=trigger_vibe,
-        process_intents=process_intents,
-    )
 
 
 def _poll_loop_market(agent_id: str | None) -> str:
