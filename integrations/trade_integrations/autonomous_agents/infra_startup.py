@@ -162,6 +162,14 @@ def attempt_infra_heal(agent_id: str) -> dict[str, Any] | None:
     agent["infra_pending"] = []
     save_agent(agent)
 
+    if profile.uses_nautilus_watch:
+        try:
+            from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
+
+            sync_nautilus_registry_from_watches(restart_if_changed=True)
+        except Exception:
+            logger.warning("nautilus registry sync failed after infra heal for %s", agent_id, exc_info=True)
+
     if warnings:
         logger.info("infra heal warnings for %s: %s", agent_id, warnings)
     return agent

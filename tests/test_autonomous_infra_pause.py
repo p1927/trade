@@ -79,6 +79,7 @@ def test_commit_pauses_on_infra_failure(agents_hub, monkeypatch):
         session_service=FakeSvc(),
     )
     agent = result["agent"]
+    assert result["status"] == "infra_paused"
     assert result.get("infra_paused") is True
     assert agent["status"] == "paused"
     assert agent["pause_reason"] == "infra"

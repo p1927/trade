@@ -251,6 +251,21 @@ def record_watch_fired(watch_id: str, message: str) -> dict[str, Any] | None:
     return watch
 
 
+def _agent_eligible_for_nautilus_registry(agent: dict[str, Any]) -> bool:
+    """Running agents, or infra-paused plan-approved agents with active registry watches."""
+    status = str(agent.get("status") or "")
+    if status == "running":
+        return True
+    if status == "paused" and str(agent.get("pause_reason") or "") == "infra":
+        try:
+            from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+            return is_plan_approved(agent)
+        except Exception:
+            return False
+    return False
+
+
 def list_active_nautilus_owners() -> list[dict[str, Any]]:
     """Owners with at least one active watch and non-empty symbol scope."""
     index = _load_index()
@@ -282,7 +297,7 @@ def list_active_nautilus_owners() -> list[dict[str, Any]]:
                 from trade_integrations.execution.routing_context import resolve_agent_routing
 
                 agent = get_agent(oid) or {}
-                if not agent or str(agent.get("status") or "") != "running":
+                if not agent or not _agent_eligible_for_nautilus_registry(agent):
                     continue
                 market = resolve_agent_routing(agent).market
             except Exception:
@@ -349,7 +364,7 @@ def _sync_owner_handoff(owner_kind: str, owner_id: str) -> None:
             )
         )
     except Exception as exc:
-        logger.debug("handoff sync skipped for %s: %s", noid, exc)
+        logger.warning("handoff sync skipped for %s: %s", noid, exc)
 
 
 def migrate_agent_watch_spec_to_registry(agent_id: str) -> dict[str, Any] | None:

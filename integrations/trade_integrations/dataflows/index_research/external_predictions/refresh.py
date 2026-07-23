@@ -449,16 +449,19 @@ def refresh_source(
     navigation_steps: list[NavigationStep] | None = None
 
     if not used_fast:
+        crawl_best = pick_best_crawl_result(
+            rows,
+            source_keywords(src, horizon_days=horizon_days),
+            horizon_days=horizon_days,
+            pipeline=None,
+        )
         browse_from_landing = False
         if not browse_enabled_for_source(src):
-            preview_best = pick_best_crawl_result(
-                rows,
-                source_keywords(src, horizon_days=horizon_days),
-                horizon_days=horizon_days,
-                pipeline=None,
-            )
-            browse_from_landing = preview_best is None and bool(src.landing_urls)
-        if browse_enabled_for_source(src) or browse_from_landing:
+            browse_from_landing = crawl_best is None and bool(src.landing_urls)
+        should_browse = crawl_best is None and (
+            browse_enabled_for_source(src) or browse_from_landing
+        )
+        if should_browse:
             browse = run_exploratory_browse(
                 src,
                 horizon_days=horizon_days,
@@ -482,6 +485,12 @@ def refresh_source(
                     f"Exploratory browse did not find forecast — using crawl batch ({browse.error_message})",
                     source_id=source_id,
                 )
+        elif pipeline and crawl_best is not None and browse_enabled_for_source(src):
+            pipeline.info(
+                "browse",
+                "Skipping exploratory browse — crawl batch already has a forecast candidate",
+                source_id=source_id,
+            )
 
     try:
         record = _record_from_crawl_group(

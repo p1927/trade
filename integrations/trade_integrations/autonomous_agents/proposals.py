@@ -730,11 +730,12 @@ def _commit_autonomous_agent_locked(
         except Exception:
             logger.warning("nautilus registry sync failed during commit for %s", agent_id, exc_info=True)
 
+    infra_paused = bool(blocking and profile.market == "IN")
     result: dict[str, Any] = {
-        "status": "ok",
+        "status": "infra_paused" if infra_paused else "ok",
         "agent": agent,
         "vibe_session_id": vibe_session.session_id,
-        "infra_paused": bool(blocking and profile.market == "IN"),
+        "infra_paused": infra_paused,
     }
     if paper_session_warnings:
         result["paper_session_warnings"] = paper_session_warnings

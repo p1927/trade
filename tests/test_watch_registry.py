@@ -82,3 +82,43 @@ def test_sync_nautilus_registry_from_session_watch(hub_tmp: Path, log_dir: Path,
     result = sync_nautilus_registry_from_watches(restart_if_changed=False)
     assert result["status"] == "ok"
     assert "ws_sess_sync" in nw.get_registry_agent_ids()
+
+
+def test_list_active_nautilus_owners_includes_infra_paused_plan_approved(
+    hub_tmp: Path,
+    log_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from trade_integrations.autonomous_agents.store import save_agent
+    from trade_integrations.watch_registry import create_watch, list_active_nautilus_owners
+
+    agents_dir = hub_tmp / "_data" / "autonomous_agents"
+    agents_dir.mkdir(parents=True)
+    agent_id = "aa_infra_watch"
+    save_agent(
+        {
+            "id": agent_id,
+            "type": "autonomous_agent.instance",
+            "name": "Infra paused",
+            "status": "paused",
+            "pause_reason": "infra",
+            "plan_approved_at": "2026-07-16T20:00:00+00:00",
+            "vibe_session_id": "sess_infra",
+            "symbols": ["NIFTY"],
+            "execution_market": "IN",
+            "execution_backend": "openalgo",
+            "constraints": {"mode": "paper"},
+            "mandate_config": {},
+            "watch_spec": _sample_spec(),
+        }
+    )
+    create_watch(
+        owner_kind="autonomous_agent",
+        owner_id=agent_id,
+        vibe_session_id="sess_infra",
+        watch_spec=_sample_spec(),
+        symbols=["NIFTY"],
+    )
+    owners = list_active_nautilus_owners()
+    assert any(row.get("owner_id") == agent_id for row in owners)

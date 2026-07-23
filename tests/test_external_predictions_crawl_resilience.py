@@ -623,3 +623,63 @@ def test_refresh_source_preserves_searxng_provenance(monkeypatch: pytest.MonkeyP
     )
     assert record.provenance.get("navigation_mode") == "searxng_fallback"
     assert record.provenance.get("fetch_method") == "searxng_text"
+
+
+def test_browse_skips_when_crawl_has_forecast(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.crawl4ai_client import CrawlPageResult
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionSource,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.refresh import (
+        refresh_source,
+    )
+
+    src = ExternalPredictionSource(
+        id="moneycontrol",
+        display_name="Moneycontrol",
+        domains=["moneycontrol.com"],
+        entry_urls=["https://www.moneycontrol.com/markets"],
+    )
+    crawl_row = (
+        "https://www.moneycontrol.com/news/nifty-outlook.html",
+        CrawlPageResult(
+            url="https://www.moneycontrol.com/news/nifty-outlook.html",
+            success=True,
+            title="Nifty weekly outlook",
+            markdown="Nifty 50 target 26500 by expiry",
+        ),
+    )
+    browse_calls: list[str] = []
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.get_source",
+        lambda _sid: src,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.try_fast_path_then_exploratory",
+        lambda *_a, **_k: (None, [crawl_row], None),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.browse_enabled_for_source",
+        lambda _src: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.pick_best_crawl_result",
+        lambda *_a, **_k: crawl_row,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.run_exploratory_browse",
+        lambda *_a, **_k: browse_calls.append("browse") or None,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh._record_from_crawl_group",
+        lambda *_a, **_k: type("Rec", (), {"fetch_status": "ok", "provenance": {"fetch_method": "crawl4ai"}})(),
+    )
+
+    refresh_source(
+        "moneycontrol",
+        symbol="NIFTY",
+        horizon_days=14,
+        crawl_group={"moneycontrol": [crawl_row]},
+    )
+    assert browse_calls == []
