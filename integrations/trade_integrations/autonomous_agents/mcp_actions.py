@@ -245,12 +245,9 @@ def mcp_record_decision(
 
             apply_exit_learning(agent, decision_entry=entry)
         save_agent(agent)
-        try:
-            from trade_integrations.autonomous_agents.bootstrap import finalize_bootstrap_if_ready
+        from trade_integrations.autonomous_agents.bootstrap import safe_finalize_bootstrap_if_ready
 
-            finalize_bootstrap_if_ready(agent_id)
-        except Exception:
-            pass
+        safe_finalize_bootstrap_if_ready(agent_id)
         _record_sim_eval_decision(agent_id=agent_id, decision=entry)
         return {
             "status": "ok",
@@ -326,12 +323,9 @@ def mcp_record_decision(
 
         sync_agent_thesis_from_lifecycle(agent)
     save_agent(agent)
-    try:
-        from trade_integrations.autonomous_agents.bootstrap import finalize_bootstrap_if_ready
+    from trade_integrations.autonomous_agents.bootstrap import safe_finalize_bootstrap_if_ready
 
-        finalize_bootstrap_if_ready(agent_id)
-    except Exception:
-        pass
+    safe_finalize_bootstrap_if_ready(agent_id)
     _record_sim_eval_decision(agent_id=agent_id, decision=last)
     return {
         "status": "ok",
@@ -360,7 +354,7 @@ def mcp_set_watch_spec(
 
     strategy_name = strategy or (watch_spec or {}).get("strategy") or (agent.get("thesis") or {}).get("strategy")
     if strategy_name:
-        from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+        from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
         from trade_integrations.autonomous_agents.strategy_watch_spec import (
             build_watch_spec_for_strategy,
             format_watch_spec_summary,
@@ -508,7 +502,7 @@ def mcp_submit_bridge_execution_intent(
         from trade_integrations.trade_widgets.store import load_trade_widget
         from trade_integrations.execution.bridge_intent import legs_from_widget
         from nautilus_openalgo_bridge.models import ExecutionLeg
-        from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+        from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
 
         widget = load_trade_widget(widget_id)
         if not widget:

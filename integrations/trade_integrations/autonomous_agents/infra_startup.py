@@ -30,31 +30,6 @@ def start_required_infra(
     warnings: list[str] = []
     constraints = dict(proposal.get("constraints") or {})
 
-    if profile.uses_openalgo_auto_paper and not profile.uses_nautilus_handoff:
-        try:
-            from trade_integrations.auto_paper.mcp_actions import start_auto_paper
-
-            start_auto_paper(
-                ticker=primary_symbol,
-                budget_inr=float(constraints.get("budget_inr") or DEFAULT_BUDGET_INR),
-                watchlist=symbols,
-                max_daily_loss_inr=float(
-                    constraints.get("max_daily_loss_inr") or DEFAULT_MAX_DAILY_LOSS_INR
-                ),
-                mandate=str(proposal.get("mandate") or ""),
-                vibe_session_id=vibe_session_id,
-                mandate_config=fresh_mandate_cfg.to_dict(),
-                autonomous_agent_id=str(agent.get("id") or ""),
-                nautilus_bridge_mode=profile.uses_nautilus_handoff,
-            )
-        except Exception as exc:
-            logger.warning("start_auto_paper failed for %s", agent.get("id"), exc_info=True)
-            msg = f"start_auto_paper failed: {exc}"
-            if profile.market == "IN":
-                blocking.append(msg)
-            else:
-                warnings.append(msg)
-
     if profile.uses_nautilus_watch:
         try:
             from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
@@ -109,7 +84,7 @@ def attempt_infra_heal(agent_id: str) -> dict[str, Any] | None:
     if _infra_heal_throttled(agent):
         return agent
 
-    from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+    from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
     from trade_integrations.execution.profile import resolve_profile
 
     profile = resolve_profile(agent=agent)

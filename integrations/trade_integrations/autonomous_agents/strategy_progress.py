@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
 from trade_integrations.execution.profile import resolve_profile
 from trade_integrations.execution.routing_context import resolve_agent_routing
 

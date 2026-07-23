@@ -11,6 +11,26 @@ from trade_integrations.autonomous_agents.watch import dispatch_full_reasoning, 
 
 logger = logging.getLogger(__name__)
 
+_bootstrap_locks: dict[str, asyncio.Lock] = {}
+
+_DEFAULT_BOOTSTRAP_TIMEOUT_S = 540.0
+
+
+def _bootstrap_timeout_seconds() -> float:
+    import os
+
+    raw = os.getenv("AUTONOMOUS_BOOTSTRAP_TIMEOUT_S", str(_DEFAULT_BOOTSTRAP_TIMEOUT_S)).strip()
+    try:
+        return max(60.0, float(raw))
+    except ValueError:
+        return _DEFAULT_BOOTSTRAP_TIMEOUT_S
+
+
+def is_bootstrap_coroutine_active(agent_id: str) -> bool:
+    """True when a bootstrap_agent coroutine currently holds the per-agent lock."""
+    lock = _bootstrap_locks.get(str(agent_id or "").strip())
+    return lock is not None and lock.locked()
+
 
 def _bootstrap_structured_plan_ready(agent: dict) -> bool:
     """Options agents need structured legs in thesis/recommended before plan approval."""
@@ -41,14 +61,44 @@ def _bootstrap_structured_plan_ready(agent: dict) -> bool:
     return False
 
 
+def _bootstrap_watch_spec_ready(agent: dict) -> bool:
+    """Bootstrap must persist strategy-encoded watchers before finalize."""
+    for spec_source in (
+        dict(agent.get("watch_spec") or {}),
+        dict((agent.get("mandate_config") or {}).get("watch_spec") or {}),
+    ):
+        rules = spec_source.get("rules") or []
+        if isinstance(rules, list) and len(rules) >= 1:
+            return True
+    return False
+
+
+def bootstrap_finalize_prerequisites_met(agent: dict) -> bool:
+    """True when bootstrap can safely auto-finalize (structured plan + watch_spec)."""
+    return _bootstrap_structured_plan_ready(agent) and _bootstrap_watch_spec_ready(agent)
+
+
+def safe_finalize_bootstrap_if_ready(agent_id: str) -> bool:
+    """Finalize bootstrap; log failures instead of swallowing them silently."""
+    try:
+        return finalize_bootstrap_if_ready(agent_id)
+    except Exception:
+        logger.warning("finalize_bootstrap_if_ready failed for %s", agent_id, exc_info=True)
+        return False
+
+
 def finalize_bootstrap_if_ready(agent_id: str) -> bool:
-    """Move to plan approval once bootstrap decision + watch_spec are recorded."""
+    """Auto-finalize bootstrap once decision, structured plan, and watch_spec are ready.
+
+    Sets ``plan_approved_at`` immediately (no manual approval gate) — aligns with
+    bootstrap prompt in ``turns.py`` and ``PlanApprovalBanner`` hiding when ``done``.
+    """
     agent = get_agent(agent_id)
     if not agent or str(agent.get("bootstrap_status")) != "running":
         return False
     if not agent.get("last_decision"):
         return False
-    if not _bootstrap_structured_plan_ready(agent):
+    if not bootstrap_finalize_prerequisites_met(agent):
         return False
 
     now = datetime.now(timezone.utc).isoformat()
@@ -94,6 +144,36 @@ async def _prefetch_bootstrap_research(agent_id: str) -> None:
 
 async def bootstrap_agent(agent_id: str) -> None:
     """Run first watch tick and bootstrap research turn for a newly committed agent."""
+    aid = str(agent_id or "").strip()
+    if not aid:
+        return
+    lock = _bootstrap_locks.setdefault(aid, asyncio.Lock())
+    if lock.locked():
+        logger.info("skip bootstrap for %s: coroutine already active", aid)
+        return
+    async with lock:
+        try:
+            await asyncio.wait_for(
+                _bootstrap_agent_locked(aid),
+                timeout=_bootstrap_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "bootstrap timed out for %s after %.0fs",
+                aid,
+                _bootstrap_timeout_seconds(),
+            )
+            latest = get_agent(aid) or {}
+            if str(latest.get("bootstrap_status") or "") == "running":
+                latest["bootstrap_status"] = "failed"
+                latest["bootstrap_error"] = (
+                    f"bootstrap timed out after {int(_bootstrap_timeout_seconds())}s"
+                )
+                latest["bootstrap_completed_at"] = datetime.now(timezone.utc).isoformat()
+                save_agent(latest)
+
+
+async def _bootstrap_agent_locked(agent_id: str) -> None:
     agent = get_agent(agent_id)
     if not agent or str(agent.get("status")) != "running":
         return

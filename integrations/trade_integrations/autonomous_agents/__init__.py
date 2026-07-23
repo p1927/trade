@@ -1,9 +1,5 @@
-"""Multi-instance autonomous trading agents — focused sessions on cron schedules."""
+"""Multi-instance autonomous trading agents — import submodules directly."""
 
-from trade_integrations.autonomous_agents.proposals import (
-    commit_autonomous_agent,
-    propose_autonomous_agent,
-)
 from trade_integrations.autonomous_agents.store import (
     delete_agent,
     get_agent,
@@ -13,8 +9,6 @@ from trade_integrations.autonomous_agents.store import (
 )
 
 __all__ = [
-    "commit_autonomous_agent",
-    "propose_autonomous_agent",
     "delete_agent",
     "get_agent",
     "list_agents",

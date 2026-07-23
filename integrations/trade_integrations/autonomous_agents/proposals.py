@@ -22,7 +22,7 @@ from trade_integrations.autonomous_agents.market import symbol_execution_market
 
 logger = logging.getLogger(__name__)
 from trade_integrations.autonomous_agents.market_resolve import resolve_proposal_symbols
-from trade_integrations.auto_paper.mandate_config import (
+from trade_integrations.autonomous_agents.mandate import (
     MandateConfig,
     resolve_allowed_instruments,
     resolve_mandate_config,
@@ -636,6 +636,8 @@ def _commit_autonomous_agent_locked(
             config=session_cfg,
         )
 
+    from trade_integrations.autonomous_agents.agent_schema import default_agent_lifecycle
+
     now = datetime.now(timezone.utc).isoformat()
     agent: dict[str, Any] = {
         "id": agent_id,
@@ -657,6 +659,8 @@ def _commit_autonomous_agent_locked(
         "schedules": dict(proposal.get("schedules") or {}),
         "alert_rules": fresh_mandate_cfg.alert_rules.to_dict(),
         "thesis": {},
+        "lifecycle": default_agent_lifecycle(),
+        "learnings": [],
         "user_guidance": [],
         "last_watch_at": None,
         "last_full_reasoning_at": None,
@@ -754,14 +758,6 @@ def stop_autonomous_agent(agent_id: str) -> dict[str, Any]:
         from nautilus_openalgo_bridge.handoff import clear_handoff
 
         clear_handoff(agent_id)
-    except Exception:
-        pass
-    try:
-        from trade_integrations.auto_paper.session_store import load_session, stop_session
-
-        session = load_session(autonomous_agent_id=agent_id)
-        if session.get("enabled") and str(session.get("autonomous_agent_id") or "") == agent_id:
-            stop_session(autonomous_agent_id=agent_id)
     except Exception:
         pass
     try:

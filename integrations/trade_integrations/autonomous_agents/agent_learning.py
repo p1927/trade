@@ -1,8 +1,28 @@
-"""Bridge auto_paper learning (lifecycle, reflections, outcomes) into autonomous agents."""
+"""Bridge learning into autonomous agents — prefer agent JSON lifecycle over session store."""
 
 from __future__ import annotations
 
 from typing import Any
+
+
+def _load_lifecycle_for_agent(agent: dict[str, Any], *, session: dict[str, Any] | None = None) -> dict[str, Any]:
+    from trade_integrations.autonomous_agents.lifecycle import default_lifecycle, load_lifecycle
+
+    lifecycle_raw = agent.get("lifecycle")
+    if isinstance(lifecycle_raw, dict) and str(lifecycle_raw.get("state") or "").strip():
+        return load_lifecycle({"lifecycle": lifecycle_raw})
+    if session is None:
+        agent_id = str(agent.get("id") or "").strip()
+        if agent_id:
+            try:
+                from trade_integrations.auto_paper.session_store import load_session
+
+                session = load_session(autonomous_agent_id=agent_id)
+            except Exception:
+                session = {}
+    if session:
+        return load_lifecycle(session)
+    return default_lifecycle()
 
 
 def _resolve_exit_strategy(
@@ -37,9 +57,9 @@ def sync_agent_thesis_from_lifecycle(
 
         session = load_session(autonomous_agent_id=agent_id)
 
-    from trade_integrations.auto_paper.lifecycle import load_lifecycle
+    from trade_integrations.autonomous_agents.lifecycle import format_lifecycle_for_prompt
 
-    lifecycle = load_lifecycle(session)
+    lifecycle = _load_lifecycle_for_agent(agent, session=session)
     thesis = dict(agent.get("thesis") or {})
 
     tried = list(lifecycle.get("tried_strategies") or [])
@@ -96,45 +116,41 @@ def read_learning_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
     if not agent_id:
         return empty
 
-    from trade_integrations.auto_paper.lifecycle import format_lifecycle_for_prompt, load_lifecycle
+    from trade_integrations.autonomous_agents.lifecycle import format_lifecycle_for_prompt
     from trade_integrations.auto_paper.reflection import format_reflections_for_prompt
     from trade_integrations.auto_paper.session_store import load_session
-    from trade_integrations.execution.profile import resolve_profile
 
-    profile = resolve_profile(agent=agent)
     parts: list[str] = []
     tried = list(empty["tried_strategies"])
     overlay: dict[str, Any] = {}
 
-    if profile.uses_openalgo_auto_paper:
+    lifecycle = _load_lifecycle_for_agent(agent)
+    parts.append(format_lifecycle_for_prompt(lifecycle))
+    tried = list(lifecycle.get("tried_strategies") or tried)
+    failures = list(lifecycle.get("failure_reasons") or [])[-5:]
+    plan_b = lifecycle.get("plan_b_candidates") or []
+    if tried:
+        overlay["tried_strategies"] = tried
+    if failures:
+        overlay["recent_failures"] = failures
+    if plan_b:
+        overlay["plan_b_candidates"] = plan_b
+
+    reflection_block = format_reflections_for_prompt(limit=2, agent_id=agent_id)
+    if reflection_block:
+        parts.append(reflection_block)
+
+    try:
         session = load_session(autonomous_agent_id=agent_id)
-        lifecycle = load_lifecycle(session)
-        if session.get("enabled") or session.get("lifecycle"):
-            parts.append(format_lifecycle_for_prompt(lifecycle))
-            tried = list(lifecycle.get("tried_strategies") or tried)
-            failures = list(lifecycle.get("failure_reasons") or [])[-5:]
-            plan_b = lifecycle.get("plan_b_candidates") or []
-            if tried:
-                overlay["tried_strategies"] = tried
-            if failures:
-                overlay["recent_failures"] = failures
-            if plan_b:
-                overlay["plan_b_candidates"] = plan_b
-
-        reflection_block = format_reflections_for_prompt(limit=2, agent_id=agent_id)
-        if reflection_block:
-            parts.append(reflection_block)
-
-        decisions = list(session.get("decisions") or [])[-5:]
-        if decisions:
-            parts.append(
-                "## Recent session decisions\n```json\n"
-                + json.dumps(decisions, indent=2, default=str)
-                + "\n```\n"
-            )
-    else:
-        thesis = agent.get("thesis") or {}
-        tried = list(thesis.get("tried_strategies") or [])
+    except Exception:
+        session = {}
+    decisions = list((session or {}).get("decisions") or [])[-5:]
+    if decisions:
+        parts.append(
+            "## Recent session decisions\n```json\n"
+            + json.dumps(decisions, indent=2, default=str)
+            + "\n```\n"
+        )
 
     learnings = agent.get("learnings") or []
     if learnings:
@@ -173,11 +189,10 @@ def record_reflection_on_exit(
 
         session = load_session(autonomous_agent_id=agent_id)
 
-    from trade_integrations.auto_paper.lifecycle import load_lifecycle
     from trade_integrations.auto_paper.market_feedback import _session_pnl_block
     from trade_integrations.auto_paper.reflection import save_reflection
 
-    lifecycle = load_lifecycle(session)
+    lifecycle = _load_lifecycle_for_agent(agent, session=session)
     strategy = _resolve_exit_strategy(
         decision_entry=decision_entry,
         lifecycle=lifecycle,

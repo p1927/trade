@@ -238,17 +238,6 @@ def flatten_agent_positions(agent: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _stop_agent_paper_session(agent_id: str) -> None:
-    try:
-        from trade_integrations.auto_paper.session_store import load_session, stop_session
-
-        session = load_session(autonomous_agent_id=agent_id)
-        if session.get("enabled") and str(session.get("autonomous_agent_id") or "") == agent_id:
-            stop_session(autonomous_agent_id=agent_id)
-    except Exception:
-        logger.debug("paper stop failed for %s", agent_id, exc_info=True)
-
-
 def _clear_agent_infra(agent_id: str) -> None:
     try:
         from trade_integrations.watch_registry.store import delete_watches_for_owner, sync_nautilus_registry_from_watches
@@ -350,7 +339,6 @@ def teardown_agent_resources(
         result["flatten"] = flatten_result
 
     _clear_agent_infra(agent_id)
-    _stop_agent_paper_session(agent_id)
     result["proposals_removed"] = delete_proposals_for_agent(
         vibe_session_id=vibe_session_id,
         draft_agent_id=agent_id,

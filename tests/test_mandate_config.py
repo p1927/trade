@@ -86,11 +86,11 @@ def test_assert_can_execute_halted():
 
 def test_validate_decision_hold_after_close_intraday(monkeypatch):
     monkeypatch.setattr(
-        "trade_integrations.auto_paper.mandate_enforcer.is_market_session_open",
-        lambda _cfg: False,
+        "trade_integrations.autonomous_agents.mandate_enforcer.is_trading_session_open",
+        lambda **kwargs: False,
     )
     monkeypatch.setattr(
-        "trade_integrations.auto_paper.mandate_enforcer.list_open_entries",
+        "trade_integrations.autonomous_agents.mandate_enforcer.list_open_entries",
         lambda: [{"widget_id": "tp_test"}],
     )
     session = {

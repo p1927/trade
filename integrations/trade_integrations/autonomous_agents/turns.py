@@ -7,8 +7,8 @@ from typing import Any
 
 from trade_integrations.autonomous_agents.agent_learning import read_learning_snapshot
 from trade_integrations.autonomous_agents.strategy_progress import format_strategy_progress_for_prompt
-from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
-from trade_integrations.auto_paper.strategy_scorer import format_scorer_for_prompt, score_ranked_strategies
+from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
+from trade_integrations.autonomous_agents.strategy_rank import format_scorer_for_prompt, score_ranked_strategies
 from trade_integrations.execution.profile import resolve_profile
 from trade_integrations.execution.routing_context import (
     format_advisor_skill_block,

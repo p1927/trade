@@ -34,8 +34,13 @@ def _parse_iso_age_seconds(raw: str | None) -> float | None:
         return None
 
 
-def is_session_turn_in_flight(session_id: str, *, stale_after_seconds: float = 30.0) -> bool:
-    """True when the Vibe session store shows a recent running attempt."""
+def is_session_turn_in_flight(session_id: str, *, stale_after_seconds: float | None = None) -> bool:
+    """True when the Vibe session store shows a running attempt.
+
+    Any ``status=running`` attempt blocks recovery — long LLM turns may exceed
+    ``stale_after_seconds``. Orphan running attempts are reclaimed by session
+    recovery (``recover_stale_running_attempts``), not by clearing agent.streaming.
+    """
     sid = str(session_id or "").strip()
     if not sid:
         return False
@@ -56,6 +61,8 @@ def is_session_turn_in_flight(session_id: str, *, stale_after_seconds: float = 3
             continue
         if str(data.get("status") or "") != "running":
             continue
+        if stale_after_seconds is None:
+            return True
         created_raw = str(data.get("created_at") or "")
         try:
             created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
@@ -69,7 +76,7 @@ def is_session_turn_in_flight(session_id: str, *, stale_after_seconds: float = 3
 
 def recover_stale_agent_streaming(*, max_age_s: float = _STALE_STREAMING_MAX_AGE_S) -> int:
     """Clear agent.streaming when no live session attempt exists (API crash mid-turn)."""
-    from trade_integrations.autonomous_agents.bootstrap import finalize_bootstrap_if_ready
+    from trade_integrations.autonomous_agents.bootstrap import safe_finalize_bootstrap_if_ready
     from trade_integrations.autonomous_agents.store import get_agent, list_agents, save_agent
 
     count = 0
@@ -94,7 +101,7 @@ def recover_stale_agent_streaming(*, max_age_s: float = _STALE_STREAMING_MAX_AGE
         )
         agent["streaming"] = False
         save_agent(agent)
-        finalize_bootstrap_if_ready(agent_id)
+        safe_finalize_bootstrap_if_ready(agent_id)
         count += 1
     return count
 
@@ -102,11 +109,47 @@ def recover_stale_agent_streaming(*, max_age_s: float = _STALE_STREAMING_MAX_AGE
 def _build_bootstrap_structure_recovery_message(*, agent_id: str, focus: str) -> str:
     return (
         "## Bootstrap finalize recovery\n"
-        f"Agent `{agent_id}` recorded a decision but the structured options plan is not ready.\n"
+        f"Agent `{agent_id}` recorded a decision but bootstrap is not ready to finalize.\n"
         f"1. Call `get_options_trade_plan(ticker=\"{focus}\")` or `get_options_trade_widget` once.\n"
-        "2. Ensure recommended legs are present, then call `set_agent_watch_spec`.\n"
+        "2. Call `set_agent_watch_spec` with the chosen strategy and levels.\n"
         "3. Update `record_autonomous_decision` if needed — then stop.\n"
     )
+
+
+def reserve_bootstrap_structure_recovery_slot(
+    agent_id: str,
+    *,
+    cooldown_s: float = _FINALIZE_RECOVERY_COOLDOWN_S,
+    max_attempts: int = _FINALIZE_RECOVERY_MAX_ATTEMPTS,
+) -> bool:
+    """Reserve a recovery attempt (cooldown + max attempts). Returns False if throttled."""
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    agent = get_agent(agent_id)
+    if not agent:
+        return False
+    if str(agent.get("bootstrap_status") or "") != "running":
+        return False
+    if agent.get("streaming"):
+        return False
+
+    attempts = int(agent.get("bootstrap_finalize_recovery_count") or 0)
+    if attempts >= max_attempts:
+        return False
+
+    cooldown_age = _parse_iso_age_seconds(str(agent.get("bootstrap_finalize_recovery_at") or ""))
+    if cooldown_age is not None and cooldown_age < cooldown_s:
+        return False
+
+    now = datetime.now(timezone.utc).isoformat()
+    agent["bootstrap_finalize_recovery_at"] = now
+    agent["bootstrap_finalize_recovery_count"] = attempts + 1
+    save_agent(agent)
+    return True
+
+
+def build_bootstrap_structure_recovery_message(*, agent_id: str, focus: str) -> str:
+    return _build_bootstrap_structure_recovery_message(agent_id=agent_id, focus=focus)
 
 
 def _schedule_bootstrap_structure_recovery(agent_id: str, *, focus: str) -> bool:
@@ -132,6 +175,9 @@ def _schedule_bootstrap_structure_recovery(agent_id: str, *, focus: str) -> bool
     if not session_id:
         return False
 
+    if not reserve_bootstrap_structure_recovery_slot(agent_id):
+        return False
+
     async def _enqueue() -> None:
         host = sys.modules.get("api_server") or sys.modules.get("agent.api_server")
         svc = host._get_session_service() if host else None
@@ -146,11 +192,6 @@ def _schedule_bootstrap_structure_recovery(agent_id: str, *, focus: str) -> bool
     if handle is None:
         return False
 
-    latest = get_agent(agent_id) or agent
-    now = datetime.now(timezone.utc).isoformat()
-    latest["bootstrap_finalize_recovery_at"] = now
-    latest["bootstrap_finalize_recovery_count"] = int(latest.get("bootstrap_finalize_recovery_count") or 0) + 1
-    save_agent(latest)
     logger.info("scheduled bootstrap structure recovery for %s", agent_id)
     return True
 
@@ -163,11 +204,10 @@ def recover_bootstrap_finalize_blocked(
 ) -> int:
     """Recover bootstrap stuck at running with a decision but no structured plan."""
     from trade_integrations.autonomous_agents.bootstrap import (
-        _bootstrap_structured_plan_ready,
+        bootstrap_finalize_prerequisites_met,
         finalize_bootstrap_if_ready,
     )
     from trade_integrations.autonomous_agents.store import get_agent, list_agents, save_agent
-    from trade_integrations.execution.profile import resolve_profile
 
     count = 0
     for agent in list_agents():
@@ -186,13 +226,7 @@ def recover_bootstrap_finalize_blocked(
         if not agent_id:
             continue
 
-        if _bootstrap_structured_plan_ready(agent):
-            if finalize_bootstrap_if_ready(agent_id):
-                count += 1
-            continue
-
-        profile = resolve_profile(agent=agent)
-        if "options" not in profile.allowed_instruments:
+        if bootstrap_finalize_prerequisites_met(agent):
             if finalize_bootstrap_if_ready(agent_id):
                 count += 1
             continue
@@ -207,7 +241,7 @@ def recover_bootstrap_finalize_blocked(
             latest = get_agent(agent_id) or agent
             latest["bootstrap_status"] = "failed"
             latest["bootstrap_error"] = (
-                "bootstrap could not finalize structured options plan after recovery retries"
+                "bootstrap could not finalize structured plan and watch_spec after recovery retries"
             )
             latest["bootstrap_completed_at"] = datetime.now(timezone.utc).isoformat()
             save_agent(latest)

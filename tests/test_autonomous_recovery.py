@@ -90,6 +90,27 @@ def test_is_session_turn_in_flight_detects_recent_running_attempt(tmp_path, monk
     assert is_session_turn_in_flight(sid) is True
 
 
+def test_is_session_turn_in_flight_treats_old_running_as_in_flight(tmp_path, monkeypatch) -> None:
+    sessions = tmp_path / "sessions"
+    sid = "sess_old_running"
+    attempt_dir = sessions / sid / "attempts" / "att_old"
+    attempt_dir.mkdir(parents=True)
+    old = (datetime.now(timezone.utc) - timedelta(seconds=900)).isoformat()
+    attempt_dir.joinpath("attempt.json").write_text(
+        json.dumps({"status": "running", "created_at": old}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.recovery._vibe_sessions_dir",
+        lambda: sessions,
+    )
+
+    from trade_integrations.autonomous_agents.recovery import is_session_turn_in_flight
+
+    assert is_session_turn_in_flight(sid) is True
+    assert is_session_turn_in_flight(sid, stale_after_seconds=30.0) is False
+
+
 def test_recover_bootstrap_finalize_blocked_schedules_recovery(tmp_path, monkeypatch) -> None:
     hub = tmp_path / "hub"
     agents_dir = hub / "_data" / "autonomous_agents"
@@ -119,3 +140,26 @@ def test_recover_bootstrap_finalize_blocked_schedules_recovery(tmp_path, monkeyp
 
     assert count == 1
     sched.assert_called_once()
+
+
+def test_reserve_bootstrap_structure_recovery_slot_respects_cooldown(tmp_path, monkeypatch) -> None:
+    hub = tmp_path / "hub"
+    (hub / "_data" / "autonomous_agents").mkdir(parents=True)
+    monkeypatch.setattr("trade_integrations.context.hub.get_hub_dir", lambda: hub)
+
+    recent = datetime.now(timezone.utc).isoformat()
+    agent = {
+        "id": "aa_recover1",
+        "status": "running",
+        "bootstrap_status": "running",
+        "bootstrap_finalize_recovery_at": recent,
+        "bootstrap_finalize_recovery_count": 1,
+        "vibe_session_id": "sess1",
+    }
+    from trade_integrations.autonomous_agents.store import save_agent
+
+    save_agent(agent)
+
+    from trade_integrations.autonomous_agents.recovery import reserve_bootstrap_structure_recovery_slot
+
+    assert reserve_bootstrap_structure_recovery_slot("aa_recover1", cooldown_s=300) is False

@@ -9,7 +9,7 @@ from typing import Any
 
 from trade_integrations.autonomous_agents.store import get_agent, save_agent
 from trade_integrations.autonomous_agents.turns import build_full_reasoning_prompt, build_watch_summary_message
-from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
 from trade_integrations.execution.enforce import bridge_watch_required, is_bridge_autonomous_agent
 from trade_integrations.execution.profile import resolve_profile
 
@@ -266,29 +266,17 @@ async def _run_watch_tick_impl(agent_id: str) -> dict[str, Any]:
             "watch_path": "degraded",
         }
 
-    feedback: dict[str, Any] = {}
-    try:
-        from trade_integrations.auto_paper.market_feedback import build_agent_market_feedback
-
-        feedback = build_agent_market_feedback(agent_id=agent_id, ticker=focus)
-    except Exception as exc:
-        logger.warning("watch feedback failed for %s: %s", agent_id, exc)
-        feedback = {"alerts": [f"feedback_error:{exc}"], "requires_action": False}
-
-    feedback.setdefault("focus_ticker", focus)
-    agent["last_market_feedback"] = feedback
-    summary = build_watch_summary_message(agent=agent, feedback=feedback)
-    _persist_watch_state(agent, summary=summary, feedback=feedback, status="watch")
+    feedback: dict[str, Any] = {"alerts": [], "requires_action": False, "focus_ticker": focus}
+    summary = "[autonomous_watch] Nautilus bridge required — legacy auto_paper watch removed"
+    _persist_watch_state(agent, summary=summary, feedback=feedback, status="degraded")
     if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
         await _append_watch_system_message(session_id, summary)
-
-    requires_action = bool(feedback.get("requires_action")) or bool(feedback.get("alerts"))
-    if requires_action and mc.revision_policy != "scheduled_only":
-        dispatched = await dispatch_full_reasoning(agent_id, turn_kind="strategy_revision")
-        status = "alert" if dispatched else "revision_skipped"
-        return {"status": status, "summary": summary, "feedback": feedback, "watch_path": "auto_paper_legacy"}
-
-    return {"status": "watch", "summary": summary, "feedback": feedback, "watch_path": "auto_paper_legacy"}
+    return {
+        "status": "degraded",
+        "reason": "nautilus_watch_required",
+        "summary": summary,
+        "watch_path": "degraded",
+    }
 
 
 def _research_turn_recently_ran(agent: dict[str, Any], *, cooldown_min: float = 15.0) -> bool:

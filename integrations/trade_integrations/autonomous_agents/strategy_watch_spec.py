@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from trade_integrations.auto_paper.mandate_config import MandateConfig, to_watch_spec
+from trade_integrations.autonomous_agents.mandate import MandateConfig, to_watch_spec
 
 
 def _norm_strategy(name: str | None) -> str:
@@ -25,7 +25,7 @@ def build_watch_spec_for_strategy(
     focus = (symbols[0] if symbols else "NIFTY").upper()
     exchange = "NSE"
     try:
-        from trade_integrations.auto_paper.mandate_config import _watch_exchange_for_symbol
+        from trade_integrations.autonomous_agents.mandate import _watch_exchange_for_symbol
 
         exchange = _watch_exchange_for_symbol(focus)
     except Exception:

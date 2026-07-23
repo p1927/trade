@@ -209,7 +209,7 @@ def test_max_concurrent_ignores_drafts(agents_hub, monkeypatch) -> None:
 
 
 @pytest.mark.unit
-def test_stop_autonomous_agent_uses_per_agent_stop(agents_hub, monkeypatch) -> None:
+def test_stop_autonomous_agent_does_not_call_paper_stop_session(agents_hub, monkeypatch) -> None:
     from trade_integrations.autonomous_agents.proposals import stop_autonomous_agent
     from trade_integrations.autonomous_agents.store import save_agent
 
@@ -224,24 +224,18 @@ def test_stop_autonomous_agent_uses_per_agent_stop(agents_hub, monkeypatch) -> N
     )
     calls: list[str] = []
 
-    def fake_load_session(*, autonomous_agent_id=None):
-        return {"enabled": True, "autonomous_agent_id": autonomous_agent_id}
-
     def fake_stop_session(*, autonomous_agent_id=None):
         calls.append(str(autonomous_agent_id))
         return {"enabled": False}
 
     monkeypatch.setattr(
-        "trade_integrations.auto_paper.session_store.load_session",
-        fake_load_session,
-    )
-    monkeypatch.setattr(
         "trade_integrations.auto_paper.session_store.stop_session",
         fake_stop_session,
     )
 
-    stop_autonomous_agent(agent_id)
-    assert calls == [agent_id]
+    result = stop_autonomous_agent(agent_id)
+    assert result["status"] == "ok"
+    assert calls == []
 
 
 @pytest.mark.unit

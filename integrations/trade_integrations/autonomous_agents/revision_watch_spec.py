@@ -133,7 +133,7 @@ def maybe_sync_watch_spec_on_revision(
     if not strategy_name:
         return {"status": "skipped", "reason": "no strategy to derive watch rules"}
 
-    from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+    from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
     from trade_integrations.autonomous_agents.strategy_watch_spec import (
         build_watch_spec_for_strategy,
         format_watch_spec_summary,
