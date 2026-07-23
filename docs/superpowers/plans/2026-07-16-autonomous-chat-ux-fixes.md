@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Vibe = strategy mind; OpenAlgo = sole execution authority; Nautilus = watch engine
-- India agents: no `get_auto_paper_market_feedback` for watch; bridge owns alerts
+- India agents: no `get_autonomous_market_feedback` for watch; bridge owns alerts
 - Paper first; structured JSON on agent instance (`thesis`, `watch_spec`, `last_decision`)
 - Open-source / free APIs only
 
@@ -62,7 +62,7 @@ ACTUAL:    Confirm → market-closed watch line → huge meta-audit prose → HO
 **Files:**
 - Modify: `integrations/trade_integrations/autonomous_agents/mcp_actions.py`
 - Modify: `openalgo/mcp/mcpserver.py` (`record_autonomous_decision` signature)
-- Modify: `integrations/trade_integrations/auto_paper/mcp_actions.py` (`record_decision` if needed)
+- Modify: `integrations/trade_integrations/autonomous_agents/mcp_actions.py` (`record_decision` if needed)
 - Test: `tests/test_autonomous_mcp_actions.py` (new)
 
 **Interfaces:**

@@ -107,10 +107,6 @@ def test_commit_reuses_orchestrator_session(monkeypatch, agents_hub):
 
     svc = FakeSvc()
     monkeypatch.setattr(
-        "trade_integrations.auto_paper.mcp_actions.start_auto_paper",
-        lambda **k: None,
-    )
-    monkeypatch.setattr(
         "trade_integrations.autonomous_agents.infra_startup.start_required_infra",
         lambda **k: ([], []),
     )

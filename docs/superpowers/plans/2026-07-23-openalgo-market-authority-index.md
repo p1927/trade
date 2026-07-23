@@ -12,7 +12,7 @@
 |-------|-----------|------|------------|--------|
 | 0 | [2026-07-23-market-authority-phase-0-connector.md](./2026-07-23-market-authority-phase-0-connector.md) | Finish in-flight refactor | — | **Met** — connector context, market_quotes, default profile parity |
 | 1 | [2026-07-23-market-authority-phase-1-marketcontext.md](./2026-07-23-market-authority-phase-1-marketcontext.md) | OpenAlgo API + SDK | Phase 0 | **Met** — `/api/v1/marketcontext` + Trade client |
-| 2 | [2026-07-23-market-authority-phase-2-paper-gates.md](./2026-07-23-market-authority-phase-2-paper-gates.md) | Cleanup + gate collapse | Phase 1 | **Met** — `context_verify`, preflight, auto_paper, trade_routes; env lock ops-only |
+| 2 | [2026-07-23-market-authority-phase-2-paper-gates.md](./2026-07-23-market-authority-phase-2-paper-gates.md) | Cleanup + gate collapse | Phase 1 | **Met** — `context_verify`, preflight, autonomous_agents, trade_routes; env lock ops-only |
 | 3 | [2026-07-23-market-authority-phase-3-trading-port.md](./2026-07-23-market-authority-phase-3-trading-port.md) | Port/adapter refactor | Phase 1–2 | **Met** — `OpenAlgoConnectorAdapter` for IN+US; direct Alpaca execution removed |
 | 4 | [2026-07-23-market-authority-phase-4-alpaca-plugin.md](./2026-07-23-market-authority-phase-4-alpaca-plugin.md) | OpenAlgo broker plugin | Phase 3 | **Met** — US via OpenAlgo Alpaca plugin; legacy bridge Alpaca feeds removed |
 | 5 | [2026-07-23-market-authority-phase-5-ws-watch.md](./2026-07-23-market-authority-phase-5-ws-watch.md) | Latency optimization | Phase 3 | **Partial** — `WATCH_FEED_MODE=ws` + REST fallback; bench script optional |

@@ -26,8 +26,8 @@ _BLOCKED_DIRECT_ORDER_TOOLS = frozenset(
     {
         "place_basket_order",
         "mcp_openalgo_place_basket_order",
-        "execute_auto_paper_basket",
-        "mcp_openalgo_execute_auto_paper_basket",
+        "execute_autonomous_basket",
+        "mcp_openalgo_execute_autonomous_basket",
     }
 )
 

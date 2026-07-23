@@ -70,7 +70,7 @@ def test_commit_pauses_on_infra_failure(agents_hub, monkeypatch):
     save_proposal(_ready_proposal())
     monkeypatch.setattr(
         "trade_integrations.autonomous_agents.infra_startup.start_required_infra",
-        lambda **k: (["start_auto_paper failed: down"], []),
+        lambda **k: (["propose_autonomous_agent failed: down"], []),
     )
 
     result = proposals.commit_autonomous_agent(
@@ -94,7 +94,7 @@ def test_infra_heal_resumes_agent(agents_hub, monkeypatch):
     save_proposal(_ready_proposal("aap_infra2"))
     monkeypatch.setattr(
         "trade_integrations.autonomous_agents.infra_startup.start_required_infra",
-        lambda **k: (["start_auto_paper failed: down"], []),
+        lambda **k: (["propose_autonomous_agent failed: down"], []),
     )
     result = proposals.commit_autonomous_agent(
         proposal_id="aap_infra2",

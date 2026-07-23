@@ -61,7 +61,7 @@ def main() -> int:
         "trade_integrations.hub_capture.rollup",
         "trade_integrations.hub_capture.channel",
         "trade_integrations.monitor.execution_ledger",
-        "trade_integrations.auto_paper.outcome_ledger",
+        "trade_integrations.autonomous_agents.outcome_ledger",
         "trade_integrations.dataflows.options_research.strategy_ranker",
     ]
     for mod in modules:
@@ -82,7 +82,7 @@ def main() -> int:
         "executions_json": data / "executions" / "ledger.json",
         "executions_parquet": data / "trades" / "executions.parquet",
         "fills_parquet": data / "trades" / "fills.parquet",
-        "outcomes_parquet": data / "auto_paper" / "outcomes.parquet",
+        "outcomes_parquet": data / "autonomous_agents" / "outcomes.parquet",
         "manifest": data / "manifest.json",
         "news_events": data / "news_events" / "events.parquet",
     }

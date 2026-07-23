@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from trade_integrations.auto_paper.mandate_config import MandateConfig, resolve_mandate_config
-from trade_integrations.auto_paper.mandate_enforcer import (
+from trade_integrations.autonomous_agents.mandate_config import MandateConfig, resolve_mandate_config
+from trade_integrations.autonomous_agents.mandate_enforcer import (
     MandateViolation,
     assert_widget_allowed,
     widget_instrument_class,
@@ -47,7 +47,7 @@ def test_resolve_profile_from_context_in_sandbox_paper() -> None:
     )
     assert profile.market == "IN"
     assert profile.mode == "paper"
-    assert profile.uses_openalgo_auto_paper
+    assert profile.uses_openalgo_paper
     assert profile.prompt_fragment_id == "in_options_paper"
 
 
@@ -64,7 +64,7 @@ def test_resolve_profile_from_context_in_broker_live() -> None:
     )
     assert profile.market == "IN"
     assert profile.mode == "live"
-    assert not profile.uses_openalgo_auto_paper
+    assert not profile.uses_openalgo_paper
     assert profile.prompt_fragment_id == "in_options_live"
 
 
@@ -152,7 +152,7 @@ def test_resolve_profile_falls_back_on_context_fetch_failure(monkeypatch) -> Non
     profile = resolve_profile(agent=agent)
 
     assert profile.mode == "paper"
-    assert profile.uses_openalgo_auto_paper
+    assert profile.uses_openalgo_paper
 
 
 def test_resolve_mandate_config_spy_equity() -> None:
@@ -212,7 +212,7 @@ def test_resolve_profile_us_paper(monkeypatch) -> None:
     profile = resolve_profile(agent=agent)
     assert profile.market == "US"
     assert profile.backend == "openalgo"
-    assert profile.uses_openalgo_auto_paper
+    assert profile.uses_openalgo_paper
     assert profile.uses_nautilus_watch
     assert profile.uses_nautilus_handoff
     assert profile.watch_backend == "nautilus_openalgo"
@@ -242,7 +242,7 @@ def test_resolve_profile_us_paper_from_market_context() -> None:
     profile = resolve_profile_from_context(agent=agent, market_context=ctx)
     assert profile.market == "US"
     assert profile.backend == "openalgo"
-    assert profile.uses_openalgo_auto_paper
+    assert profile.uses_openalgo_paper
     assert profile.uses_nautilus_handoff
     assert profile.watch_backend == "nautilus_openalgo"
     assert profile.prompt_fragment_id == "us_equity_paper"
@@ -257,7 +257,7 @@ def test_resolve_profile_in_options() -> None:
     }
     profile = resolve_profile(agent=agent)
     assert profile.market == "IN"
-    assert profile.uses_openalgo_auto_paper
+    assert profile.uses_openalgo_paper
     assert profile.uses_nautilus_handoff
 
 

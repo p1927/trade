@@ -20,7 +20,7 @@ if str(AGENT_SRC) not in sys.path:
 def agents_hub(tmp_path, monkeypatch):
     hub = tmp_path / "hub"
     (hub / "_data" / "autonomous_agents" / "proposals").mkdir(parents=True)
-    (hub / "_data" / "auto_paper" / "sessions").mkdir(parents=True)
+    (hub / "_data" / "autonomous_agents" / "sessions").mkdir(parents=True)
     monkeypatch.setattr(
         "trade_integrations.context.hub.get_hub_dir",
         lambda: hub,
@@ -222,15 +222,15 @@ def test_stop_autonomous_agent_does_not_call_paper_stop_session(agents_hub, monk
             "created_at": "2026-07-23T10:00:00Z",
         }
     )
-    calls: list[str] = []
+    calls: list[dict] = []
 
-    def fake_stop_session(*, autonomous_agent_id=None):
-        calls.append(str(autonomous_agent_id))
-        return {"enabled": False}
+    def fake_mcp_stop_running_agents(**kwargs):
+        calls.append(dict(kwargs))
+        return {"status": "stopped"}
 
     monkeypatch.setattr(
-        "trade_integrations.auto_paper.session_store.stop_session",
-        fake_stop_session,
+        "trade_integrations.autonomous_agents.mcp_actions.mcp_stop_running_agents",
+        fake_mcp_stop_running_agents,
     )
 
     result = stop_autonomous_agent(agent_id)

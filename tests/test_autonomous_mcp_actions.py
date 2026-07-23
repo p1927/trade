@@ -75,25 +75,8 @@ def test_record_decision_persists_thesis_us_agent(hub_tmp: Path):
     assert agent["last_decision"]["confidence"] == 40
 
 
-def test_record_decision_persists_thesis_in_agent(hub_tmp: Path, monkeypatch: pytest.MonkeyPatch):
+def test_record_decision_persists_thesis_in_agent(hub_tmp: Path):
     save_agent(_in_agent())
-
-    def _fake_record_decision(**kwargs):
-        return {
-            "status": "recorded",
-            "decision": {
-                "at": "2026-07-16T20:00:00+00:00",
-                "decision": kwargs["decision"].upper(),
-                "rationale": kwargs["rationale"],
-                "ticker": "NIFTY",
-                "actions_taken": [],
-            },
-        }
-
-    monkeypatch.setattr(
-        "trade_integrations.autonomous_agents.mcp_actions.record_decision",
-        _fake_record_decision,
-    )
 
     result = mcp_record_decision(
         agent_id="aa_in",
@@ -108,6 +91,7 @@ def test_record_decision_persists_thesis_in_agent(hub_tmp: Path, monkeypatch: py
     assert agent["thesis"]["confidence"] == 55
     assert agent["thesis"]["strategy"] == "long_straddle"
     assert agent["last_decision"]["confidence"] == 55
+    assert agent.get("lifecycle") is not None
 
 
 def test_record_decision_preserves_existing_thesis_fields(hub_tmp: Path):

@@ -32,6 +32,31 @@ def is_bootstrap_coroutine_active(agent_id: str) -> bool:
     return lock is not None and lock.locked()
 
 
+def _coerce_watch_rules(rules: object) -> list[dict]:
+    """Normalize watch_spec.rules whether stored as list or MCP/XML-style dict."""
+    if isinstance(rules, list):
+        return [r for r in rules if isinstance(r, dict)]
+    if isinstance(rules, dict):
+        item = rules.get("item")
+        if isinstance(item, list):
+            return [r for r in item if isinstance(r, dict)]
+        if isinstance(item, dict):
+            return [item]
+        if rules.get("symbol") or rules.get("metric"):
+            return [rules]
+    return []
+
+
+def _thesis_recommended_dict(thesis: dict) -> dict:
+    recommended = thesis.get("recommended")
+    if isinstance(recommended, dict):
+        return recommended
+    strategy = thesis.get("strategy")
+    if isinstance(strategy, dict):
+        return strategy
+    return {}
+
+
 def _bootstrap_structured_plan_ready(agent: dict) -> bool:
     """Options agents need structured legs in thesis/recommended before plan approval."""
     from trade_integrations.execution.profile import resolve_profile
@@ -40,7 +65,12 @@ def _bootstrap_structured_plan_ready(agent: dict) -> bool:
     if "options" not in profile.allowed_instruments:
         return True
     thesis = dict(agent.get("thesis") or {})
-    recommended = dict(thesis.get("recommended") or thesis.get("strategy") or {})
+    strategy_name = thesis.get("strategy")
+    if isinstance(strategy_name, str):
+        key = strategy_name.strip().lower().replace(" ", "_").replace("-", "_")
+        if key in {"hold_cash", "hold", "skip", "wait"}:
+            return True
+    recommended = _thesis_recommended_dict(thesis)
     legs = recommended.get("legs") or recommended.get("implementation_legs") or []
     if isinstance(legs, list) and len(legs) >= 1:
         return True
@@ -67,8 +97,7 @@ def _bootstrap_watch_spec_ready(agent: dict) -> bool:
         dict(agent.get("watch_spec") or {}),
         dict((agent.get("mandate_config") or {}).get("watch_spec") or {}),
     ):
-        rules = spec_source.get("rules") or []
-        if isinstance(rules, list) and len(rules) >= 1:
+        if _coerce_watch_rules(spec_source.get("rules")):
             return True
     return False
 

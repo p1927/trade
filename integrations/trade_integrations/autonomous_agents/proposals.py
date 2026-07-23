@@ -859,7 +859,7 @@ def delete_autonomous_agent(
 
 
 _INR_CLOSE_STRATEGIES = (
-    "auto_paper",
+    "autonomous_agent",
     "nautilus_bridge",
     "vibe_bridge_intent",
     "vibe_exit",
@@ -968,12 +968,12 @@ def clear_all_autonomous_agents(*, session_service: Any | None = None) -> dict[s
         except Exception as exc:
             errors.append({"agent_id": agent_id, "phase": "delete", "error": str(exc)})
 
-    auto_paper_stopped = False
+    agents_stopped = False
     try:
-        from trade_integrations.auto_paper.mcp_actions import stop_auto_paper
+        from trade_integrations.autonomous_agents.mcp_actions import mcp_stop_running_agents
 
-        stop_auto_paper(unregister_scheduler=True)
-        auto_paper_stopped = True
+        mcp_stop_running_agents(unregister_scheduler=True)
+        agents_stopped = True
     except Exception:
         pass
 
@@ -1001,7 +1001,7 @@ def clear_all_autonomous_agents(*, session_service: Any | None = None) -> dict[s
         "deleted": deleted,
         "remaining_count": len(remaining),
         "flatten": flatten,
-        "auto_paper_stopped": auto_paper_stopped,
+        "agents_stopped": agents_stopped,
         "artifacts_cleared": artifacts,
         "nautilus": nautilus,
         "errors": errors,

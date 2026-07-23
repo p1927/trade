@@ -12,7 +12,7 @@ Straightforward fixes are tracked in the fix plan; **do not implement here witho
 | R2-02 | Empty-leg EXIT calls account-wide `close_all` | A) Require non-empty legs always B) Scope close by strategy tag C) One agent per OpenAlgo account | B for paper multi-agent |
 | R2-04 | P&L/stops use whole OpenAlgo book | A) Filter all metrics by agent underlying/strategy B) Separate paper accounts per agent | A first |
 | R2-05 | Intent queue races (no locking) | A) `fcntl` flock on queue dir B) Redis claim C) Single processor only | B if Redis already required for Nautilus |
-| R7-05 | Global auto_paper session pointer | A) Per-agent session files B) Drop legacy auto_paper for bridge agents | B |
+| R7-05 | Global autonomous_agents session pointer | A) Per-agent session files B) Drop legacy autonomous_agents for bridge agents | B |
 
 **Blocks:** Multi-agent live autonomy, concurrent agents on one broker login.
 
@@ -24,7 +24,7 @@ Straightforward fixes are tracked in the fix plan; **do not implement here witho
 |----|---------|---------|----------------|
 | R12-01 | Raw `place_basket_order` MCP unguarded | A) Remove tool B) Hard-fail when bridge agent active C) Prompt-only (status quo) | B |
 | R12-02 | `/trade/execute-basket` direct REST | A) Block for autonomous session kinds B) Route through bridge C) Keep for interactive only | C + B for `session_kind=autonomous_agent` |
-| R12-05 | Dual ENTER (`auto_paper_direct` vs bridge) | A) Deprecate direct path for IN B) Document only | A for India autonomous |
+| R12-05 | Dual ENTER (`autonomous_agents_direct` vs bridge) | A) Deprecate direct path for IN B) Document only | A for India autonomous |
 
 **Blocks:** Fail-closed autonomous execution policy.
 

@@ -31,7 +31,7 @@ class ExecutionProfile:
     paper_session_kind: PaperSessionKind
     prompt_fragment_id: str
     watch_backend: WatchBackend
-    uses_openalgo_auto_paper: bool
+    uses_openalgo_paper: bool
     uses_nautilus_handoff: bool
     uses_nautilus_watch: bool
 
@@ -79,10 +79,7 @@ def _prompt_fragment_id(
 
 def _mode_from_market_context(market_context: MarketContext) -> ModeCode:
     """Derive paper/live mode from authoritative MarketContext."""
-    venue = market_context.execution_venue.strip().lower()
-    if market_context.market_region == "IN" and venue in ("sandbox", "broker"):
-        return "paper" if venue == "sandbox" else "live"
-    return "paper" if market_context.analyze_mode else "live"
+    return "paper" if market_context.is_paper_execution() else "live"
 
 
 def _build_execution_profile(
@@ -111,7 +108,7 @@ def _build_execution_profile(
             paper_session_kind="openalgo_per_agent" if mode == "paper" else "none",
             prompt_fragment_id=fragment,
             watch_backend="nautilus_openalgo",
-            uses_openalgo_auto_paper=True,
+            uses_openalgo_paper=True,
             uses_nautilus_handoff=True,
             uses_nautilus_watch=True,
         )
@@ -124,7 +121,7 @@ def _build_execution_profile(
         paper_session_kind="openalgo_per_agent" if mode == "paper" else "none",
         prompt_fragment_id=fragment,
         watch_backend="nautilus_openalgo",
-        uses_openalgo_auto_paper=mode == "paper",
+        uses_openalgo_paper=mode == "paper",
         uses_nautilus_handoff=True,
         uses_nautilus_watch=True,
     )

@@ -53,6 +53,29 @@ class MarketContext:
             capabilities=tuple(str(x) for x in caps),
         )
 
+    def is_paper_execution(self) -> bool:
+        """Derive paper vs live from authoritative OpenAlgo fields."""
+        venue = self.execution_venue.strip().lower()
+        if self.market_region == "IN" and venue in ("sandbox", "broker"):
+            return venue == "sandbox"
+        return self.analyze_mode
+
+    def to_execution_context_summary(self, *, profile_id: str | None = None) -> dict[str, Any]:
+        """Compact dict for autonomous status, MCP, and hub UI."""
+        summary: dict[str, Any] = {
+            "broker": self.data_broker,
+            "venue": self.execution_venue,
+            "market_region": self.market_region,
+            "analyze_mode": self.analyze_mode,
+            "paper": self.is_paper_execution(),
+            "context_generation": self.context_generation,
+            "positions_authority": self.positions_authority,
+            "simulator_active": bool(self.simulator.get("active")),
+        }
+        if profile_id:
+            summary["profile_id"] = profile_id
+        return summary
+
 
 def fetch_market_context(*, host: str, api_key: str, timeout: float = 20.0) -> MarketContext:
     """Fetch authoritative market context from OpenAlgo."""

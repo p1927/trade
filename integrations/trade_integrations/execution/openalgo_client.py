@@ -73,7 +73,7 @@ class OpenAlgoClient:
                     continue
         return None
 
-    def place_basket(self, orders: list[dict[str, Any]], *, strategy: str = "auto_paper") -> list[dict[str, Any]]:
+    def place_basket(self, orders: list[dict[str, Any]], *, strategy: str = "autonomous_agents") -> list[dict[str, Any]]:
         body = self._post(
             "basketorder",
             {"apikey": self.api_key, "strategy": strategy, "orders": orders},
@@ -84,7 +84,7 @@ class OpenAlgoClient:
             return [results]
         return results if isinstance(results, list) else []
 
-    def close_all_positions(self, *, strategy: str = "auto_paper") -> dict[str, Any]:
+    def close_all_positions(self, *, strategy: str = "autonomous_agents") -> dict[str, Any]:
         return self._post(
             "closeposition",
             {"apikey": self.api_key, "strategy": strategy},

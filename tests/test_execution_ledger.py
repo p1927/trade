@@ -207,6 +207,6 @@ def test_close_ledger_entry_sets_pnl_and_outcome(monkeypatch, tmp_path):
     assert closed.get("closed_at")
     assert closed.get("realized_pnl_inr") == 150.0
 
-    outcomes_path = tmp_path / "_data" / "auto_paper" / "outcomes.parquet"
+    outcomes_path = tmp_path / "_data" / "autonomous_agents" / "outcomes.parquet"
     outcomes_csv = outcomes_path.with_suffix(".csv")
     assert outcomes_path.is_file() or outcomes_csv.is_file()

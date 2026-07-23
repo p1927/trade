@@ -82,10 +82,6 @@ class TestOrchestratorProposeFlow:
             lambda: {"vibe_scheduler": "ok"},
         )
         monkeypatch.setattr(
-            "trade_integrations.auto_paper.mcp_actions.start_auto_paper",
-            lambda **k: None,
-        )
-        monkeypatch.setattr(
             "trade_integrations.autonomous_agents.infra_startup.start_required_infra",
             lambda **k: ([], []),
         )

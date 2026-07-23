@@ -39,7 +39,7 @@
 
 **Files:**
 - Modify: `integrations/nautilus_openalgo_bridge/execute.py`
-- Modify: `integrations/trade_integrations/auto_paper/outcome_ledger.py` (if hook missing)
+- Modify: `integrations/trade_integrations/autonomous_agents/outcome_ledger.py` (if hook missing)
 - Test: `tests/test_outcome_ledger_calibration.py` (extend)
 
 **Interfaces:**

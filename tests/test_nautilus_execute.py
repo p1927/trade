@@ -139,9 +139,9 @@ def test_execute_exit_records_outcome_ledger():
         "nautilus_openalgo_bridge.execute.reconcile_after_intent",
         return_value={"open_positions": 0, "unrealized_pnl_inr": 0.0},
     ), patch("nautilus_openalgo_bridge.handoff.clear_agent_position_state"), patch(
-        "trade_integrations.auto_paper.outcome_ledger.append_outcome"
+        "trade_integrations.autonomous_agents.outcome_ledger.append_outcome"
     ) as append_mock, patch(
-        "trade_integrations.auto_paper.outcome_ledger.reconcile_exit_outcome"
+        "trade_integrations.autonomous_agents.outcome_ledger.reconcile_exit_outcome"
     ) as reconcile_mock:
         result = execute_intent(intent, client=client, persist=False, skip_preflight=True)
     assert result["status"] == "executed"
@@ -176,8 +176,8 @@ def test_execute_exit_realized_pnl_from_partial_reconcile():
         "nautilus_openalgo_bridge.execute.reconcile_after_intent",
         return_value={"open_positions": 1, "unrealized_pnl_inr": -50.0},
     ), patch("nautilus_openalgo_bridge.handoff.clear_agent_position_state"), patch(
-        "trade_integrations.auto_paper.outcome_ledger.append_outcome"
-    ), patch("trade_integrations.auto_paper.outcome_ledger.reconcile_exit_outcome") as reconcile_mock:
+        "trade_integrations.autonomous_agents.outcome_ledger.append_outcome"
+    ), patch("trade_integrations.autonomous_agents.outcome_ledger.reconcile_exit_outcome") as reconcile_mock:
         result = execute_intent(intent, client=client, persist=False, skip_preflight=True)
     assert result["status"] == "executed"
     reconcile_mock.assert_called_once()

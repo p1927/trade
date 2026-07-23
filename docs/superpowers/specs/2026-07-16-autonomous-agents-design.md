@@ -15,7 +15,7 @@ The **`/autonomous` section** is the home for all autonomous trading. It is **no
 
 Creation, monitoring, and guidance all happen inside `/autonomous`. The global app sidebar only has one nav link ("Autonomous"). `/agent` stays for ad-hoc interactive research.
 
-**Maximize reuse:** existing Vibe session runtime, SSE stream, `Agent.tsx` chat components, `scheduled_research` executor, `trade_integrations/auto_paper` (market feedback, thesis-break, lifecycle), OpenAlgo MCP tools, hub research artifacts, options-advisor skills.
+**Maximize reuse:** existing Vibe session runtime, SSE stream, `Agent.tsx` chat components, `scheduled_research` executor, `trade_integrations/autonomous_agents` (market feedback, thesis-break, lifecycle), OpenAlgo MCP tools, hub research artifacts, options-advisor skills.
 
 ---
 
@@ -138,7 +138,7 @@ While agent is running, user types: "Don't enter until VIX > 14"
 
 ```
 Watch tick (every 5–10 min default)
-  → build_market_feedback (auto_paper), news/event checks, thesis-break
+  → build_market_feedback (autonomous_agents), news/event checks, thesis-break
   → Append watch summary to session as system turn marker (visible in chat)
   → If material alert → dispatch FULL_REASONING immediately
 
@@ -206,7 +206,7 @@ Orchestrator chat uses `session_kind: "autonomous_orchestrator"` (no `autonomous
 **On commit:**
 1. `svc.create_session(title="autonomous:NIFTY event vol", config={…})`
 2. Store `vibe_session_id` on `aa_<id>` instance
-3. Scheduler turns call `svc.send_message(vibe_session_id, turn_prompt)` — same path as auto-paper scheduled jobs today
+3. Scheduler turns call `svc.send_message(vibe_session_id, turn_prompt)` — same path as autonomous-agent scheduled jobs today
 
 User messages and scheduler turns share one transcript — full audit trail, user can scroll back.
 
@@ -264,11 +264,11 @@ User messages and scheduler turns share one transcript — full audit trail, use
 |-----------------|---------------------------|
 | `vibetrading/agent` session service | 1:1 chat per agent; SSE streaming; user send_message |
 | `scheduled_research/executor.py` | Watch + research cron jobs per agent |
-| `trade_integrations/auto_paper/market_feedback.py` | Watch tick: news, spot, OI, alerts |
+| `trade_integrations/autonomous_agents/market_feedback.py` | Watch tick: news, spot, OI, alerts |
 | `trade_integrations/monitor/thesis_break.py` | Alert → full reasoning |
-| `trade_integrations/auto_paper/agent_mandate.py` | Turn prompt templates (adapt for per-agent) |
-| `trade_integrations/auto_paper/lifecycle.py` | Position state in prompts |
-| `trade_integrations/auto_paper/mcp_actions.py` | Paper execution patterns |
+| `trade_integrations/autonomous_agents/agent_mandate.py` | Turn prompt templates (adapt for per-agent) |
+| `trade_integrations/autonomous_agents/lifecycle.py` | Position state in prompts |
+| `trade_integrations/autonomous_agents/mcp_actions.py` | Paper execution patterns |
 | `openalgo/mcp/mcpserver.py` | propose, status, market feedback, execute basket, record decision |
 | Hub `options_research` / `company_research` | Research context in full turns |
 | `stack/vibe/skills/options-advisor` | Agent skill for bounded autonomous behavior |
@@ -289,10 +289,10 @@ User messages and scheduler turns share one transcript — full audit trail, use
 |------|--------|---------|
 | `propose_autonomous_agent` | Orchestrator agent (read-only) | Draft proposal; return `missing_fields` or ready |
 | `get_autonomous_agent_status` | Per-agent turns | Session state at turn start |
-| `get_auto_paper_market_feedback` | Watch + full turns | **Reuse as-is** — news, alerts, positions |
+| `get_autonomous_market_feedback` | Watch + full turns | **Reuse as-is** — news, alerts, positions |
 | `get_options_trade_widget` / `get_options_trade_plan` | Full turns | **Reuse as-is** |
-| `execute_auto_paper_basket` | Full turns (paper act) | **Reuse as-is** |
-| `record_autonomous_decision` | Full turns | Log ENTER/EXIT/HOLD/SKIP (wrap `record_auto_paper_decision` pattern) |
+| `execute_autonomous_basket` | Full turns (paper act) | **Reuse as-is** |
+| `record_autonomous_decision` | Full turns | Log ENTER/EXIT/HOLD/SKIP (wrap `record_autonomous_decision` pattern) |
 | *(no commit tool)* | — | User confirms via UI only |
 
 ### `propose_autonomous_agent` defaults
@@ -381,7 +381,7 @@ Same underlying session runtime. Autonomous sessions tagged in `config.session_k
 | **3** | Watch + research dispatchers → `send_message` on bound session |
 | **4** | Extract `AgentChatPane`; build `Autonomous.tsx` hub + session views + agent cards |
 | **5** | `AutonomousAgentProposalCard` + SSE relay |
-| **6** | Turn prompts (reuse auto_paper mandate patterns) + user guidance injection + skills |
+| **6** | Turn prompts (reuse autonomous_agents mandate patterns) + user guidance injection + skills |
 
 ---
 

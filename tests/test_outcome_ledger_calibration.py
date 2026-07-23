@@ -13,7 +13,7 @@ INTEGRATIONS = ROOT / "integrations"
 if str(INTEGRATIONS) not in sys.path:
     sys.path.insert(0, str(INTEGRATIONS))
 
-from trade_integrations.auto_paper import outcome_ledger as ol  # noqa: E402
+from trade_integrations.autonomous_agents import outcome_ledger as ol  # noqa: E402
 
 
 @pytest.fixture
@@ -23,11 +23,11 @@ def ledger_path(tmp_path, monkeypatch):
     return path
 
 
-def test_paper_strategy_calibration_low_sample(ledger_path):
-    assert ol.paper_strategy_calibration_adjustment("long_straddle") == 0.0
+def test_agent_strategy_calibration_low_sample(ledger_path):
+    assert ol.agent_strategy_calibration_adjustment("long_straddle") == 0.0
 
 
-def test_paper_strategy_calibration_high_hit(ledger_path):
+def test_agent_strategy_calibration_high_hit(ledger_path):
     df = pd.DataFrame(
         [
             {"strategy": "long_straddle", "net_pnl_inr": 100.0, "action": "EXIT"},
@@ -36,7 +36,7 @@ def test_paper_strategy_calibration_high_hit(ledger_path):
         ]
     )
     ol.save_ledger(df)
-    assert ol.paper_strategy_calibration_adjustment("long_straddle") == pytest.approx(0.05)
+    assert ol.agent_strategy_calibration_adjustment("long_straddle") == pytest.approx(0.05)
 
 
 def test_reconcile_exit_outcome_fills_pnl(ledger_path):
@@ -81,4 +81,4 @@ def test_execution_calibration_adjustment(ledger_path):
     )
     ol.save_ledger(df)
     assert ol.execution_calibration_adjustment("iron_condor") == pytest.approx(0.05)
-    assert ol.paper_strategy_calibration_adjustment("iron_condor") == 0.0
+    assert ol.agent_strategy_calibration_adjustment("iron_condor") == 0.0

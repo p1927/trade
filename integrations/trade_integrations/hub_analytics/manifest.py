@@ -85,7 +85,7 @@ def build_manifest(hub: Path | None = None) -> dict[str, Any]:
     ledger_specs = {
         "index_predictions": data / "index_predictions" / "ledger.parquet",
         "options_predictions": data / "options_predictions" / "ledger.parquet",
-        "auto_paper_outcomes": data / "auto_paper" / "outcomes.parquet",
+        "autonomous_agents_outcomes": data / "autonomous_agents" / "outcomes.parquet",
         "trade_executions": data / "trades" / "executions.parquet",
         "trade_fills": data / "trades" / "fills.parquet",
         "news_events": data / "news_events" / "events.parquet",
@@ -177,13 +177,13 @@ def build_manifest(hub: Path | None = None) -> dict[str, Any]:
         pass
 
     try:
-        from trade_integrations.auto_paper.outcome_ledger import (
+        from trade_integrations.autonomous_agents.outcome_ledger import (
             compute_execution_calibration_metrics,
-            compute_paper_calibration_metrics,
+            compute_agent_calibration_metrics,
         )
 
         manifest["calibration"] = {
-            "paper": compute_paper_calibration_metrics(),
+            "paper": compute_agent_calibration_metrics(),
             "execution": compute_execution_calibration_metrics(),
         }
     except Exception:

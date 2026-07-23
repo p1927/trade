@@ -194,14 +194,12 @@ def _lifecycle_block(*, agent_id: str, profile: Any) -> dict[str, Any]:
         "entered_at": None,
         "active_widget_id": None,
     }
-    if not profile.uses_openalgo_auto_paper:
-        return block
     try:
-        from trade_integrations.auto_paper.lifecycle import load_lifecycle
-        from trade_integrations.auto_paper.session_store import load_session
+        from trade_integrations.autonomous_agents.lifecycle import load_agent_lifecycle
+        from trade_integrations.autonomous_agents.store import get_agent
 
-        session = load_session(autonomous_agent_id=agent_id)
-        lifecycle = load_lifecycle(session)
+        agent = get_agent(agent_id) or {}
+        lifecycle = load_agent_lifecycle(agent)
         block.update(
             {
                 "state": lifecycle.get("state"),
@@ -240,10 +238,10 @@ def _timing_block(
     }
     if mandate.holding_period == "intraday":
         try:
-            from trade_integrations.auto_paper.market_feedback import _minutes_to_session_close
-            from trade_integrations.auto_paper.config import get_auto_paper_config
+            from trade_integrations.autonomous_agents.market_hours import minutes_to_session_close
+            from trade_integrations.autonomous_agents.trading_config import get_agent_trading_config
 
-            block["minutes_to_session_close"] = _minutes_to_session_close(get_auto_paper_config())
+            block["minutes_to_session_close"] = minutes_to_session_close(get_agent_trading_config())
         except Exception:
             pass
     return block

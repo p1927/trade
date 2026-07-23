@@ -84,7 +84,7 @@ Copy structure from `openalgo/broker/dhan/` or `openalgo/broker/zerodha/` — th
 - Modify: `integrations/nautilus_openalgo_bridge/runtime/poll_loop.py` (US path)
 - Test: `tests/test_market_resolve.py`, US agent integration tests
 
-- [ ] **Step 1:** US profile sets `backend=openalgo`, `uses_openalgo_auto_paper=True` when Alpaca plugin available
+- [ ] **Step 1:** US profile sets `backend=openalgo`, `uses_openalgo_paper=True` when Alpaca plugin available
 - [ ] **Step 2:** Remove direct Alpaca poll path in bridge when OpenAlgo US available (feature flag `OPENALGO_US_VIA_PLUGIN=1`)
 - [ ] **Step 3:** Convergence gate
 - [ ] **Step 4:** Commit: `feat(execution): route US agents through OpenAlgo alpaca plugin`

@@ -66,19 +66,19 @@ def verify_agent_execution_context(
 
 ---
 
-### Task 3: Migrate auto_paper + trade_routes
+### Task 3: Migrate autonomous_agents + trade_routes
 
 **Files:**
-- Modify: `integrations/trade_integrations/auto_paper/mcp_actions.py`
-- Modify: `integrations/trade_integrations/auto_paper/openalgo_client.py`
+- Modify: `integrations/trade_integrations/autonomous_agents/mcp_actions.py`
+- Modify: `integrations/trade_integrations/autonomous_agents/openalgo_client.py`
 - Modify: `vibetrading/agent/src/api/trade_routes.py`
-- Test: existing auto_paper + trade route tests
+- Test: existing autonomous_agents + trade route tests
 
 - [ ] **Step 1:** Audit all `ensure_analyzer_mode` callsites (grep)
 - [ ] **Step 2:** Replace business routing with verify; keep single sync entry in `openalgo_client.ensure_analyzer_mode` only when verify says `allow_analyzer_sync`
 - [ ] **Step 3:** Update tests for fail-loud on mismatch
 - [ ] **Step 4:** Convergence gate (critical — order path)
-- [ ] **Step 5:** Commit: `refactor(auto-paper): MarketContext-first paper gates`
+- [ ] **Step 5:** Commit: `refactor(autonomous-agent): MarketContext-first paper gates`
 
 ---
 

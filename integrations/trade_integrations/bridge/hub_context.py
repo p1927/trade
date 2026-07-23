@@ -112,12 +112,12 @@ def format_research_context_for_agent(
 
 def _format_paper_calibration_context() -> str:
     try:
-        from trade_integrations.auto_paper.outcome_ledger import (
+        from trade_integrations.autonomous_agents.outcome_ledger import (
             compute_execution_calibration_metrics,
-            compute_paper_calibration_metrics,
+            compute_agent_calibration_metrics,
         )
 
-        paper = compute_paper_calibration_metrics()
+        paper = compute_agent_calibration_metrics()
         execution = compute_execution_calibration_metrics()
     except Exception:
         return ""

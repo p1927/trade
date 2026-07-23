@@ -83,12 +83,12 @@ def main() -> int:
         print(f"  removed {agent_id}", flush=True)
 
     try:
-        from trade_integrations.auto_paper.mcp_actions import stop_auto_paper
+        from trade_integrations.autonomous_agents.mcp_actions import mcp_stop_running_agents
 
-        stop_auto_paper()
-        print("  stopped global auto_paper session", flush=True)
+        mcp_stop_running_agents()
+        print("  stopped running autonomous agents", flush=True)
     except Exception as exc:
-        print(f"  warn stop_auto_paper: {exc}", flush=True)
+        print(f"  warn stop_running_agents: {exc}", flush=True)
 
     proposals_dir = hub / "autonomous_agents" / "proposals"
     if proposals_dir.is_dir():

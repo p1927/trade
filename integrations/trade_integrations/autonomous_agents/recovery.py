@@ -148,6 +148,20 @@ def reserve_bootstrap_structure_recovery_slot(
     return True
 
 
+def release_bootstrap_structure_recovery_slot(agent_id: str) -> None:
+    """Undo a reserved slot when recovery enqueue fails (do not burn attempt budget)."""
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    agent = get_agent(agent_id)
+    if not agent:
+        return
+    count = int(agent.get("bootstrap_finalize_recovery_count") or 0)
+    if count > 0:
+        agent["bootstrap_finalize_recovery_count"] = count - 1
+    agent.pop("bootstrap_finalize_recovery_at", None)
+    save_agent(agent)
+
+
 def build_bootstrap_structure_recovery_message(*, agent_id: str, focus: str) -> str:
     return _build_bootstrap_structure_recovery_message(agent_id=agent_id, focus=focus)
 
@@ -182,14 +196,25 @@ def _schedule_bootstrap_structure_recovery(agent_id: str, *, focus: str) -> bool
         host = sys.modules.get("api_server") or sys.modules.get("agent.api_server")
         svc = host._get_session_service() if host else None
         if not svc:
+            release_bootstrap_structure_recovery_slot(agent_id)
+            logger.warning("bootstrap structure recovery skipped for %s: no session service", agent_id)
             return
-        await svc.send_message(
-            session_id,
-            _build_bootstrap_structure_recovery_message(agent_id=agent_id, focus=focus),
-        )
+        try:
+            await svc.send_message(
+                session_id,
+                _build_bootstrap_structure_recovery_message(agent_id=agent_id, focus=focus),
+            )
+        except Exception:
+            release_bootstrap_structure_recovery_slot(agent_id)
+            logger.warning(
+                "bootstrap structure recovery send failed for %s",
+                agent_id,
+                exc_info=True,
+            )
 
     handle = schedule_coroutine(_enqueue(), label=f"bootstrap-recover-{agent_id[:12]}")
     if handle is None:
+        release_bootstrap_structure_recovery_slot(agent_id)
         return False
 
     logger.info("scheduled bootstrap structure recovery for %s", agent_id)

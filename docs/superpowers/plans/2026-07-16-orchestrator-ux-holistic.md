@@ -148,7 +148,7 @@ Same as S1; `mandate_config` from `parse_mandate_from_text`; card shows options 
 |------|----------|
 | Market | `symbol_execution_market` → US |
 | Card | USD budget, `US · Alpaca paper`, **no** Nautilus/OpenAlgo chips |
-| Commit | No `start_auto_paper` INR session; Alpaca warning if keys missing |
+| Commit | No `propose_autonomous_agent` INR session; Alpaca warning if keys missing |
 | Orchestrator | Must **not** demand Alpaca setup before showing card — warn on card, not block creation |
 
 ---
@@ -202,7 +202,7 @@ Idempotent: if open `ready` proposal exists for same orchestrator session + simi
 
 Orchestrator reply: "That guidance applies after the agent exists — confirm the proposal first, then open the agent card to guide it."
 
-No `execute_auto_paper_basket`, no SKIP/HOLD trading prose.
+No `execute_autonomous_basket`, no SKIP/HOLD trading prose.
 
 ---
 
@@ -255,12 +255,12 @@ Agent is **created** even if Nautilus is down; watch ticks return `degraded` (al
 
 ### F2 — Wrong tools invoked
 
-**Failure:** `propose_mandate_profiles`, `execute_auto_paper_basket`, `start_auto_paper_trading`, OpenAlgo execution tools.
+**Failure:** `propose_mandate_profiles`, `execute_autonomous_basket`, `propose_autonomous_agent`, OpenAlgo execution tools.
 
 **Mitigation:**
 - `build_registry(..., session_config)` → **allowlist** for orchestrator:
   - Allow: `propose_autonomous_agent`, `load_skill`, read-only browse/quote for symbol validation.
-  - Deny: mandate propose, execution, widgets, auto-paper start, bridge intents.
+  - Deny: mandate propose, execution, widgets, autonomous-agent start, bridge intents.
 - Tool descriptions updated so orchestrator doesn't see execution tools.
 
 **Files:** `tools/__init__.py` or `build_registry`, `propose_autonomous_agent_tool.py`

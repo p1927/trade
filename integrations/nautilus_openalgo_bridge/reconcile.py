@@ -351,6 +351,8 @@ def _record_decision_for_intent(
             ticker=intent.underlying,
             actions_taken=actions or None,
             pnl_inr=realized_pnl_inr if decision == "EXIT" else None,
+            strategy=intent.strategy,
+            append_outcome=decision != "EXIT",
         )
     except Exception:
         logger.debug("decision record after intent skipped", exc_info=True)

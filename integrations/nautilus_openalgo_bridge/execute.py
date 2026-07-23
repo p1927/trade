@@ -137,7 +137,7 @@ def execute_intent(
         payload["postflight"] = postflight
         realized_pnl = _exit_realized_pnl_from_reconcile(pre_exit_pnl, postflight)
         try:
-            from trade_integrations.auto_paper.outcome_ledger import append_outcome, reconcile_exit_outcome
+            from trade_integrations.autonomous_agents.outcome_ledger import append_outcome, reconcile_exit_outcome
 
             append_outcome(
                 symbol=str(intent.underlying or "NIFTY"),

@@ -276,7 +276,7 @@ def verified_flatten(
 
 
 def build_fireable_watch_spec(*, symbol: str, ltp: float, vix_ltp: float | None = None) -> dict[str, Any]:
-    from trade_integrations.auto_paper.mandate_config import _watch_exchange_for_symbol
+    from trade_integrations.autonomous_agents.mandate_config import _watch_exchange_for_symbol
 
     exchange = _watch_exchange_for_symbol(symbol)
     move_threshold = 0.5 if exchange == "US" else 0.001
@@ -527,11 +527,11 @@ def stop_watch_node(proc: subprocess.Popen[Any] | None) -> None:
         proc.kill()
 
 
-def stop_auto_paper_session() -> None:
+def stop_autonomous_agents_session() -> None:
     try:
-        from trade_integrations.auto_paper.mcp_actions import stop_auto_paper
+        from trade_integrations.autonomous_agents.mcp_actions import mcp_stop_running_agents
 
-        stop_auto_paper()
+        mcp_stop_running_agents()
     except Exception:
         pass
 
@@ -697,9 +697,9 @@ def create_paper_agent(*, name: str, mandate: str, symbols: list[str] | None = N
 
     syms = symbols or ["NIFTY"]
     if symbol_execution_market(syms[0]) == "US":
-        stop_auto_paper_session()
+        stop_autonomous_agents_session()
 
-    from trade_integrations.auto_paper.mandate_config import resolve_allowed_instruments
+    from trade_integrations.autonomous_agents.mandate_config import resolve_allowed_instruments
 
     exec_market = symbol_execution_market(syms[0])
     instruments = resolve_allowed_instruments(syms, mandate, execution_market=exec_market)

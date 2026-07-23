@@ -1,8 +1,7 @@
-"""Agent schema lifecycle backfill tests."""
+"""Agent schema lifecycle tests."""
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -18,7 +17,6 @@ if str(INTEGRATIONS) not in sys.path:
 def agents_hub(tmp_path, monkeypatch):
     hub = tmp_path / "hub"
     (hub / "_data" / "autonomous_agents").mkdir(parents=True)
-    (hub / "_data" / "auto_paper" / "sessions").mkdir(parents=True)
     monkeypatch.setattr(
         "trade_integrations.context.hub.get_hub_dir",
         lambda: hub,
@@ -42,10 +40,10 @@ def test_draft_skips_lifecycle_backfill(agents_hub) -> None:
 
 
 @pytest.mark.unit
-def test_get_agent_backfills_lifecycle_from_session(agents_hub, monkeypatch) -> None:
+def test_get_agent_assigns_default_lifecycle(agents_hub) -> None:
     from trade_integrations.autonomous_agents.store import get_agent, save_agent
 
-    agent_id = "aa_backfill_lc"
+    agent_id = "aa_default_lc"
     save_agent(
         {
             "id": agent_id,
@@ -54,21 +52,38 @@ def test_get_agent_backfills_lifecycle_from_session(agents_hub, monkeypatch) -> 
             "created_at": "2026-07-23T10:00:00Z",
         }
     )
-    session_payload = {
-        "enabled": True,
-        "autonomous_agent_id": agent_id,
-        "lifecycle": {
-            "state": "MONITORING",
-            "active_strategy": "iron_condor",
-            "tried_strategies": ["iron_condor"],
-        },
-    }
-    monkeypatch.setattr(
-        "trade_integrations.auto_paper.session_store.load_session",
-        lambda **kwargs: session_payload if kwargs.get("autonomous_agent_id") == agent_id else {},
-    )
 
     loaded = get_agent(agent_id)
     assert loaded is not None
-    assert loaded["lifecycle"]["state"] == "MONITORING"
-    assert loaded["lifecycle"]["active_strategy"] == "iron_condor"
+    assert loaded["lifecycle"]["state"] == "IDLE"
+
+
+@pytest.mark.unit
+def test_native_decision_blocks_lifecycle_backfill_on_get_agent(agents_hub) -> None:
+    from trade_integrations.autonomous_agents.mcp_actions import mcp_record_decision
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    agent_id = "aa_native_lc"
+    save_agent(
+        {
+            "id": agent_id,
+            "status": "running",
+            "symbols": ["NIFTY"],
+            "mandate_config": {"allowed_instruments": ["options"]},
+            "lifecycle": {"state": "IDLE", "last_transition_at": "2026-07-23T10:00:00Z"},
+        }
+    )
+
+    result = mcp_record_decision(
+        agent_id=agent_id,
+        decision="HOLD",
+        rationale="Wait for setup",
+        confidence=45,
+    )
+    assert result["status"] == "ok"
+
+    loaded = get_agent(agent_id)
+    assert loaded is not None
+    assert loaded["last_decision"]["decision"] == "HOLD"
+    assert loaded["decisions"]
+    assert loaded["lifecycle"]["state"] == "IDLE"

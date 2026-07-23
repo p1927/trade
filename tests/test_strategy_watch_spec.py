@@ -10,7 +10,7 @@ INTEGRATIONS = ROOT / "integrations"
 if str(INTEGRATIONS) not in sys.path:
     sys.path.insert(0, str(INTEGRATIONS))
 
-from trade_integrations.auto_paper.mandate_config import MandateConfig  # noqa: E402
+from trade_integrations.autonomous_agents.mandate_config import MandateConfig  # noqa: E402
 from trade_integrations.autonomous_agents.strategy_watch_spec import (  # noqa: E402
     build_watch_spec_for_strategy,
     format_watch_spec_summary,

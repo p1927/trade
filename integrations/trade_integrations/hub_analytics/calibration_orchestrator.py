@@ -67,13 +67,13 @@ def run_morning_hub_calibration(config: dict[str, Any] | None = None) -> dict[st
         summary["steps"]["fills_export"] = {"status": "error", "error": str(exc)}
 
     try:
-        from trade_integrations.auto_paper.outcome_ledger import (
+        from trade_integrations.autonomous_agents.outcome_ledger import (
             compute_execution_calibration_metrics,
-            compute_paper_calibration_metrics,
+            compute_agent_calibration_metrics,
         )
 
         summary["steps"]["strategy_calibration"] = {
-            "paper": compute_paper_calibration_metrics(),
+            "paper": compute_agent_calibration_metrics(),
             "execution": compute_execution_calibration_metrics(),
         }
     except Exception as exc:

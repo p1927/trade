@@ -165,9 +165,11 @@ def symbol_allowed_for_connector_market(symbol: str, market: MarketCode) -> tupl
         from trade_integrations.dataflows.symbol_registry.openalgo_registry import is_symbol_known_for_proposal
 
         if market == "IN":
+            detected = detect_market(sym)
+            if detected == Market.US and is_us_known_symbol(sym):
+                return False, f"{sym} is US-listed; cannot use the India connector."
             if is_symbol_known_for_proposal(sym):
                 return True, None
-            detected = detect_market(sym)
             if detected == Market.IN:
                 return True, None
             return False, f"{sym} is not an India symbol for the OpenAlgo connector."

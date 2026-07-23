@@ -10,14 +10,14 @@ from nautilus_openalgo_bridge.config import BridgeConfig, get_bridge_config
 
 
 def _load_base_openalgo_client():
-    """Load auto_paper OpenAlgoClient without importing trade_integrations package init."""
+    """Load autonomous_agents OpenAlgoClient without importing trade_integrations package init."""
     path = (
         Path(__file__).resolve().parents[1]
         / "trade_integrations"
-        / "auto_paper"
+        / "execution"
         / "openalgo_client.py"
     )
-    spec = importlib.util.spec_from_file_location("_auto_paper_openalgo_client", path)
+    spec = importlib.util.spec_from_file_location("_autonomous_agents_openalgo_client", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load OpenAlgo client from {path}")
     module = importlib.util.module_from_spec(spec)
@@ -29,7 +29,7 @@ _BaseOpenAlgoClient = _load_base_openalgo_client()
 
 
 class BridgeOpenAlgoClient(_BaseOpenAlgoClient):
-    """Extends auto_paper OpenAlgo client with quote endpoints."""
+    """Extends autonomous_agents OpenAlgo client with quote endpoints."""
 
     def _quote_port(self):
         adapter = getattr(self, "_quote_port_adapter", None)
@@ -70,13 +70,13 @@ class BridgeOpenAlgoClient(_BaseOpenAlgoClient):
         data = body.get("data")
         return data if isinstance(data, dict) else body
 
-    def place_order(self, order: dict[str, Any], *, strategy: str = "auto_paper") -> dict[str, Any]:
+    def place_order(self, order: dict[str, Any], *, strategy: str = "autonomous_agents") -> dict[str, Any]:
         payload = {"apikey": self.api_key, "strategy": strategy, **order}
         body = self._post("placeorder", payload, timeout=45)
         data = body.get("data") if isinstance(body.get("data"), dict) else body
         return data if isinstance(data, dict) else body
 
-    def cancel_order(self, order_id: str, *, strategy: str = "auto_paper") -> dict[str, Any]:
+    def cancel_order(self, order_id: str, *, strategy: str = "autonomous_agents") -> dict[str, Any]:
         body = self._post(
             "cancelorder",
             {"apikey": self.api_key, "strategy": strategy, "orderid": str(order_id)},

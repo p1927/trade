@@ -103,7 +103,7 @@ def agent_market_hours_only(agent_id: str | None) -> bool:
     if not agent_id:
         return True
     try:
-        from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+        from trade_integrations.autonomous_agents.mandate_config import mandate_config_from_agent
         from trade_integrations.autonomous_agents.store import get_agent
 
         agent = get_agent(agent_id) or {}

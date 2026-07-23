@@ -274,7 +274,7 @@ def test_commit_reuses_orchestrator_session(monkeypatch, tmp_path):
         event_bus = Bus()
 
     svc = FakeSvc()
-    monkeypatch.setattr(proposals, "start_auto_paper", lambda **k: None, raising=False)
+    monkeypatch.setattr(proposals, "propose_autonomous_agent", lambda **k: None, raising=False)
 
     result = proposals.commit_autonomous_agent(
         proposal_id=proposal_id,

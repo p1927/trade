@@ -29,7 +29,7 @@ def audit_ledger_path() -> Path:
     return get_hub_dir() / "_data" / "autonomous_agents" / _LEDGER
 
 
-def write_paper_action(
+def write_agent_audit(
     kind: PaperActionKind,
     *,
     outcome: str = "ok",
@@ -43,7 +43,7 @@ def write_paper_action(
         "at": datetime.now(timezone.utc).isoformat(),
         "mode": "paper",
         "detail": detail or {},
-        "paper_action": True,
+        "agent_audit": True,
     }
     path = audit_ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ def write_paper_action(
     return record
 
 
-def load_paper_action(audit_id: str) -> dict[str, Any] | None:
+def load_agent_audit(audit_id: str) -> dict[str, Any] | None:
     path = audit_ledger_path()
     if not path.is_file():
         return None

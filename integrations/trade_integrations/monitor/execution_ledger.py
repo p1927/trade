@@ -79,6 +79,7 @@ def record_execution(
     net_max_loss: float | None = None,
     execution_mode: str = "live",
     status: str = "open",
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Append a ledger entry for a successfully executed trade plan."""
     symbol = underlying.strip().upper()
@@ -97,6 +98,8 @@ def record_execution(
         "net_max_loss": net_max_loss,
         "execution_mode": execution_mode,
     }
+    if agent_id:
+        entry["agent_id"] = str(agent_id).strip()
     entries = load_ledger()
     entries.append(entry)
     save_ledger(entries)
@@ -156,7 +159,7 @@ def has_open_position_for_underlying(underlying: str) -> bool:
 
 def _append_outcome_on_close(entry: dict[str, Any]) -> None:
     try:
-        from trade_integrations.auto_paper.outcome_ledger import append_outcome
+        from trade_integrations.autonomous_agents.outcome_ledger import append_outcome
 
         pnl = entry.get("realized_pnl_inr")
         append_outcome(
@@ -241,6 +244,7 @@ def record_execution_from_widget(
     results: list[dict[str, Any]] | None,
     *,
     execution_mode: str = "live",
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Build and store a ledger entry from a trade widget and basket results."""
     widget_id = str(widget.get("widget_id") or "").strip()
@@ -249,6 +253,9 @@ def record_execution_from_widget(
         raise ValueError("widget must include widget_id and underlying")
 
     prediction = widget.get("prediction") or {}
+    resolved_agent_id = agent_id or str(
+        widget.get("autonomous_agent_id") or widget.get("agent_id") or ""
+    ).strip() or None
     return record_execution(
         widget_id=widget_id,
         underlying=underlying,
@@ -263,6 +270,7 @@ def record_execution_from_widget(
         plan_spot=widget.get("spot"),
         net_max_loss=_widget_net_max_loss(widget),
         execution_mode=execution_mode,
+        agent_id=resolved_agent_id,
     )
 
 

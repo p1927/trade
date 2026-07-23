@@ -103,7 +103,12 @@ def _autonomous_job_health(agent_id: str) -> str | None:
         return None
 
 
-def _scheduler_health_for_agent(agent: dict[str, Any], *, linked_paper: dict[str, Any]) -> str:
+def _scheduler_health_for_agent(
+    agent: dict[str, Any],
+    *,
+    linked_paper: dict[str, Any],
+    profile: Any | None = None,
+) -> str:
     bootstrap = str(agent.get("bootstrap_status") or "")
     if bootstrap == "failed":
         return "bootstrap_failed"
@@ -121,9 +126,10 @@ def _scheduler_health_for_agent(agent: dict[str, Any], *, linked_paper: dict[str
         return "initializing"
 
     try:
-        from trade_integrations.execution.profile import resolve_profile
+        if profile is None:
+            from trade_integrations.execution.profile import resolve_profile
 
-        profile = resolve_profile(agent=agent)
+            profile = resolve_profile(agent=agent)
     except Exception:
         profile = None
 
@@ -154,9 +160,9 @@ def _scheduler_health_for_agent(agent: dict[str, Any], *, linked_paper: dict[str
     if not last:
         return "stale"
     try:
-        from trade_integrations.auto_paper.config import get_auto_paper_config
+        from trade_integrations.autonomous_agents.trading_config import get_agent_trading_config
 
-        cfg = get_auto_paper_config()
+        cfg = get_agent_trading_config()
         age_min = _parse_iso_age_min(str(last))
         if age_min is None:
             return "stale"
@@ -193,16 +199,39 @@ def _nautilus_state_for_agent(agent: dict[str, Any]) -> str:
     return "expected"
 
 
-def _paper_runtime() -> dict[str, Any]:
+def _paper_runtime(agent: dict[str, Any] | None = None, *, authority: Any | None = None) -> dict[str, Any]:
     try:
-        from trade_integrations.auto_paper.mcp_actions import get_status
+        from trade_integrations.autonomous_agents.agent_status import get_agent_execution_status, load_openalgo_authority
 
-        return get_status()
+        agent_id = str((agent or {}).get("id") or "").strip() or None
+        resolved_authority = authority if authority is not None else load_openalgo_authority(agent=agent)
+        return get_agent_execution_status(agent_id=agent_id, agent=agent, authority=resolved_authority)
     except Exception as exc:
         return {"error": str(exc)}
 
 
-def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
+def _resolve_watch_path_for_agent(
+    *,
+    agent_id: str,
+    profile: Any | None,
+    nautilus_on: bool,
+    nautilus_alive: bool,
+    in_registry: bool,
+    nautilus_bound_agent: str | None,
+) -> str:
+    if profile is not None and profile.uses_nautilus_watch:
+        if not nautilus_on:
+            return "degraded"
+        bound = str(nautilus_bound_agent or "").strip()
+        if nautilus_alive and (in_registry or (bound and bound == agent_id)):
+            return "nautilus_detached"
+        if nautilus_alive:
+            return "nautilus_scheduler_poll"
+        return "degraded"
+    return "agent_native"
+
+
+def build_agent_runtime(agent: dict[str, Any], *, authority: Any | None = None) -> dict[str, Any]:
     """Trader brain state — distinct from HTTP infra health."""
     if str(agent.get("status") or "") == "draft":
         return {
@@ -217,14 +246,28 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
     mc = dict(agent.get("mandate_config") or {})
     alert_rules = dict(agent.get("alert_rules") or mc.get("alert_rules") or {})
 
-    try:
+    from trade_integrations.autonomous_agents.agent_status import (
+        get_agent_execution_status,
+        load_openalgo_authority,
+    )
+
+    authority = authority if authority is not None else load_openalgo_authority(agent=agent)
+    if authority.market_context is not None:
+        from trade_integrations.execution.profile import resolve_profile_from_context
+
+        try:
+            profile = resolve_profile_from_context(agent=agent, market_context=authority.market_context)
+        except Exception:
+            profile = None
+    else:
         from trade_integrations.execution.profile import resolve_profile
 
-        profile = resolve_profile(agent=agent)
-    except Exception:
-        profile = None
+        try:
+            profile = resolve_profile(agent=agent)
+        except Exception:
+            profile = None
 
-    paper = _paper_runtime()
+    paper = get_agent_execution_status(agent=agent, agent_id=agent_id or None, authority=authority)
     session = dict(paper.get("session") or {})
     linked = str(session.get("autonomous_agent_id") or "") == agent_id
 
@@ -250,23 +293,20 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
         pass
     watch_configured, position_tracked = _handoff_details(agent_id) if agent_id else (False, False)
 
-    if profile is not None and profile.uses_nautilus_watch:
-        if not nautilus_on:
-            watch_path = "degraded"
-        elif in_registry and nautilus_alive:
-            watch_path = "nautilus_detached"
-        elif in_registry:
-            watch_path = "nautilus_scheduler_poll"
-        elif nautilus_alive:
-            watch_path = "nautilus_scheduler_poll"
-        else:
-            watch_path = "nautilus_scheduler_poll"
-    elif linked and session.get("nautilus_bridge_mode"):
-        watch_path = "nautilus_bridge"
-    else:
-        watch_path = "legacy_auto_paper"
+    watch_path = _resolve_watch_path_for_agent(
+        agent_id=agent_id,
+        profile=profile,
+        nautilus_on=nautilus_on,
+        nautilus_alive=nautilus_alive,
+        in_registry=in_registry,
+        nautilus_bound_agent=nautilus_bound_agent,
+    )
 
-    scheduler_health = _scheduler_health_for_agent(agent, linked_paper=session if linked else {})
+    scheduler_health = _scheduler_health_for_agent(
+        agent,
+        linked_paper=session if linked else {},
+        profile=profile,
+    )
 
     return {
         "mandate_summary": {
@@ -303,23 +343,46 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
         "last_revision_at": agent.get("last_revision_at"),
         "last_bridge_alert_at": agent.get("last_bridge_alert_at"),
         "open_positions": paper.get("open_positions") if linked else None,
+        "execution_context": paper.get("execution_context"),
+        "analyze_mode": paper.get("analyze_mode"),
+        "watch_strategy": (agent.get("watch_spec") or {}).get("strategy") or (agent.get("thesis") or {}).get("strategy"),
+        "watch_spec_updated_at": agent.get("watch_spec_updated_at"),
     }
 
 
-def build_stack_health() -> dict[str, Any]:
+def build_stack_health(*, authority: Any | None = None) -> dict[str, Any]:
     """Infra vs trader summary for hub header."""
-    paper = _paper_runtime()
+    from trade_integrations.autonomous_agents.agent_status import load_openalgo_authority
+    from trade_integrations.autonomous_agents.store import list_agents
+
+    shared_authority = authority if authority is not None else load_openalgo_authority(agent=None)
+    running = [a for a in list_agents() if str(a.get("status") or "") == "running"]
+    anchor = running[0] if running else None
+    paper = _paper_runtime(anchor, authority=shared_authority)
     session = dict(paper.get("session") or {})
     agent_id = str(session.get("autonomous_agent_id") or "").strip()
 
     scheduler_health = paper.get("scheduler_health")
+    stack_profile = None
     if agent_id:
         try:
             from trade_integrations.autonomous_agents.store import get_agent
+            from trade_integrations.execution.profile import resolve_profile, resolve_profile_from_context
 
             agent = get_agent(agent_id)
             if agent:
-                scheduler_health = _scheduler_health_for_agent(agent, linked_paper=session)
+                if shared_authority.market_context is not None:
+                    stack_profile = resolve_profile_from_context(
+                        agent=agent,
+                        market_context=shared_authority.market_context,
+                    )
+                else:
+                    stack_profile = resolve_profile(agent=agent)
+                scheduler_health = _scheduler_health_for_agent(
+                    agent,
+                    linked_paper=session,
+                    profile=stack_profile,
+                )
         except Exception:
             pass
 
@@ -349,7 +412,7 @@ def build_stack_health() -> dict[str, Any]:
     }
 
 
-def enrich_agent(agent: dict[str, Any]) -> dict[str, Any]:
+def enrich_agent(agent: dict[str, Any], *, authority: Any | None = None) -> dict[str, Any]:
     out = dict(agent)
-    out["runtime"] = build_agent_runtime(agent)
+    out["runtime"] = build_agent_runtime(agent, authority=authority)
     return out

@@ -36,7 +36,7 @@ flowchart TB
   end
 
   subgraph trade [Trade stack]
-    Agents["Vibe / MCP / auto_paper / Nautilus"]
+    Agents["Vibe / MCP / autonomous_agents / Nautilus"]
     HubGate["hub_capture NO_LEARN gate"]
     Hub["reports/hub — untouched in sim"]
   end

@@ -1,27 +1,16 @@
-"""Bridge learning into autonomous agents — prefer agent JSON lifecycle over session store."""
+"""Bridge learning into autonomous agents — agent JSON is the source of truth."""
 
 from __future__ import annotations
 
 from typing import Any
 
 
-def _load_lifecycle_for_agent(agent: dict[str, Any], *, session: dict[str, Any] | None = None) -> dict[str, Any]:
+def _load_lifecycle_for_agent(agent: dict[str, Any]) -> dict[str, Any]:
     from trade_integrations.autonomous_agents.lifecycle import default_lifecycle, load_lifecycle
 
     lifecycle_raw = agent.get("lifecycle")
     if isinstance(lifecycle_raw, dict) and str(lifecycle_raw.get("state") or "").strip():
         return load_lifecycle({"lifecycle": lifecycle_raw})
-    if session is None:
-        agent_id = str(agent.get("id") or "").strip()
-        if agent_id:
-            try:
-                from trade_integrations.auto_paper.session_store import load_session
-
-                session = load_session(autonomous_agent_id=agent_id)
-            except Exception:
-                session = {}
-    if session:
-        return load_lifecycle(session)
     return default_lifecycle()
 
 
@@ -31,7 +20,6 @@ def _resolve_exit_strategy(
     lifecycle: dict[str, Any],
     agent: dict[str, Any],
 ) -> str | None:
-    """Best-effort strategy name after EXIT clears active_strategy."""
     from_decision = decision_entry.get("strategy")
     if from_decision:
         return str(from_decision).strip() or None
@@ -43,23 +31,13 @@ def _resolve_exit_strategy(
     return str(from_thesis).strip() if from_thesis else None
 
 
-def sync_agent_thesis_from_lifecycle(
-    agent: dict[str, Any],
-    *,
-    session: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Merge paper-session lifecycle fields into agent thesis for scorer + prompts."""
+def sync_agent_thesis_from_lifecycle(agent: dict[str, Any]) -> dict[str, Any]:
+    """Merge agent lifecycle fields into thesis for scorer + prompts."""
     agent_id = str(agent.get("id") or "").strip()
     if not agent_id:
         return agent
-    if session is None:
-        from trade_integrations.auto_paper.session_store import load_session
 
-        session = load_session(autonomous_agent_id=agent_id)
-
-    from trade_integrations.autonomous_agents.lifecycle import format_lifecycle_for_prompt
-
-    lifecycle = _load_lifecycle_for_agent(agent, session=session)
+    lifecycle = _load_lifecycle_for_agent(agent)
     thesis = dict(agent.get("thesis") or {})
 
     tried = list(lifecycle.get("tried_strategies") or [])
@@ -103,8 +81,12 @@ def append_agent_learning(
     return agent
 
 
+def _recent_decisions(agent: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(agent.get("decisions") or [])[-10:]
+
+
 def read_learning_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
-    """Read-only learning context for prompts — no session or agent persistence."""
+    """Read-only learning context for prompts."""
     import json
 
     agent_id = str(agent.get("id") or "").strip()
@@ -117,8 +99,7 @@ def read_learning_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
         return empty
 
     from trade_integrations.autonomous_agents.lifecycle import format_lifecycle_for_prompt
-    from trade_integrations.auto_paper.reflection import format_reflections_for_prompt
-    from trade_integrations.auto_paper.session_store import load_session
+    from trade_integrations.autonomous_agents.reflection import format_reflections_for_prompt
 
     parts: list[str] = []
     tried = list(empty["tried_strategies"])
@@ -140,14 +121,10 @@ def read_learning_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
     if reflection_block:
         parts.append(reflection_block)
 
-    try:
-        session = load_session(autonomous_agent_id=agent_id)
-    except Exception:
-        session = {}
-    decisions = list((session or {}).get("decisions") or [])[-5:]
+    decisions = _recent_decisions(agent)[-5:]
     if decisions:
         parts.append(
-            "## Recent session decisions\n```json\n"
+            "## Recent agent decisions\n```json\n"
             + json.dumps(decisions, indent=2, default=str)
             + "\n```\n"
         )
@@ -170,7 +147,6 @@ def read_learning_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
 
 
 def format_learning_context_for_prompt(*, agent: dict[str, Any]) -> str:
-    """Lifecycle, reflections, recent decisions, and per-agent learnings (read-only)."""
     return read_learning_snapshot(agent=agent)["prompt_text"]
 
 
@@ -178,21 +154,15 @@ def record_reflection_on_exit(
     *,
     agent: dict[str, Any],
     decision_entry: dict[str, Any],
-    session: dict[str, Any] | None = None,
 ) -> None:
     """Persist markdown reflection + structured learning row after EXIT."""
     agent_id = str(agent.get("id") or "").strip()
     if not agent_id:
         return
-    if session is None:
-        from trade_integrations.auto_paper.session_store import load_session
 
-        session = load_session(autonomous_agent_id=agent_id)
+    from trade_integrations.autonomous_agents.reflection import save_reflection
 
-    from trade_integrations.auto_paper.market_feedback import _session_pnl_block
-    from trade_integrations.auto_paper.reflection import save_reflection
-
-    lifecycle = _load_lifecycle_for_agent(agent, session=session)
+    lifecycle = _load_lifecycle_for_agent(agent)
     strategy = _resolve_exit_strategy(
         decision_entry=decision_entry,
         lifecycle=lifecycle,
@@ -208,14 +178,6 @@ def record_reflection_on_exit(
             pnl = float(raw_pnl)
         except (TypeError, ValueError):
             pnl = None
-    if pnl is None:
-        try:
-            pnl_block = _session_pnl_block(session, focus_ticker=str(symbol))
-            raw = pnl_block.get("day_pnl_inr")
-            if raw is not None:
-                pnl = float(raw)
-        except Exception:
-            pass
 
     summary = (
         f"Agent {agent_id} EXIT on {symbol}"
@@ -225,7 +187,7 @@ def record_reflection_on_exit(
     save_reflection(
         agent_id=agent_id,
         summary=summary,
-        decisions=list(session.get("decisions") or [])[-10:],
+        decisions=_recent_decisions(agent),
         pnl_inr=pnl,
     )
     append_agent_learning(
@@ -239,7 +201,6 @@ def record_reflection_on_exit(
 
 
 def _append_us_exit_learning(agent: dict[str, Any], *, decision_entry: dict[str, Any]) -> None:
-    """Track tried strategies on agent thesis for US agents (no auto_paper lifecycle)."""
     strategy = decision_entry.get("strategy") or (agent.get("thesis") or {}).get("strategy")
     symbol = decision_entry.get("ticker") or (agent.get("symbols") or ["SPY"])[0]
     rationale = str(decision_entry.get("rationale") or "")
@@ -269,12 +230,9 @@ def apply_exit_learning(
     from trade_integrations.execution.profile import resolve_profile
 
     profile = resolve_profile(agent=agent)
-    if profile.uses_openalgo_auto_paper:
-        from trade_integrations.auto_paper.session_store import load_session
-
-        session = load_session(autonomous_agent_id=str(agent.get("id") or ""))
-        sync_agent_thesis_from_lifecycle(agent, session=session)
-        record_reflection_on_exit(agent=agent, decision_entry=decision_entry, session=session)
+    if profile.uses_openalgo_paper:
+        sync_agent_thesis_from_lifecycle(agent)
+        record_reflection_on_exit(agent=agent, decision_entry=decision_entry)
     else:
         _append_us_exit_learning(agent, decision_entry=decision_entry)
     return agent

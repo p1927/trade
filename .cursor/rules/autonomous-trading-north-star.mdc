@@ -67,7 +67,7 @@ Lightweight **watch ticks** (5–10 min) run between full **research ticks** (60
 
 ## Learning over time (locked)
 
-Reuse [`auto_paper/`](integrations/trade_integrations/auto_paper/) — do not fork a parallel learning stack.
+Reuse [`autonomous_agents/`](integrations/trade_integrations/autonomous_agents/) — do not fork a parallel learning stack.
 
 1. **Record every closed trade** — `outcome_ledger` row with `agent_id`, strategy, net P&L, mandate snapshot (ENTER via basket, EXIT via bridge reconcile).
 2. **Learn at two levels** — (1) **global** ranker calibration from pooled outcomes (±0.05 after ≥3 closes per strategy); (2) **per-agent** `learnings[]` on agent JSON + lifecycle `tried_strategies` / plan-B from paper session.
@@ -112,7 +112,7 @@ Same Vibe session runtime. Autonomous sessions tagged `session_kind: autonomous_
 
 - **Paper first** — India market hours; live only after explicit user mandate + infra review.
 - **Consent** — agent creation via propose → confirmation card → commit; execution after confidence threshold (user can guide anytime in agent chat).
-- **Reuse** — `autonomous_agents/`, `auto_paper/`, `scheduled_research/`, OpenAlgo MCP, hub research, Nautilus bridge; no duplicate chat or execution paths.
+- **Reuse** — `autonomous_agents/`, `autonomous_agents/`, `scheduled_research/`, OpenAlgo MCP, hub research, Nautilus bridge; no duplicate chat or execution paths.
 - **Structured output** — thesis, watch_spec, ExecutionIntent, and hub artifacts must be JSON — not chat-only prose.
 - **Open source / free APIs** — same as options advisor; India via OpenAlgo.
 

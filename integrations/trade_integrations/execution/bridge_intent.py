@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent, mandate_config_from_session
+from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
 from trade_integrations.autonomous_agents.mandate_enforcer import assert_can_execute, assert_widget_allowed, MandateViolation
-from trade_integrations.auto_paper.session_store import load_session
 from trade_integrations.execution.profile import resolve_profile
 from trade_integrations.autonomous_agents.store import get_agent
 
@@ -166,20 +165,26 @@ def execute_widget_via_bridge(
     execution_mode = profile.mode
 
     mandate = mandate_config_from_agent(agent)
+    pseudo_session = {
+        "mandate_config": mandate.to_dict(),
+        "primary_ticker": (agent.get("symbols") or ["NIFTY"])[0],
+        "watchlist": list(agent.get("symbols") or ["NIFTY"]),
+        "autonomous_agent_id": agent_id,
+        "lifecycle": agent.get("lifecycle"),
+        "user_guidance": list(agent.get("user_guidance") or []),
+    }
     if profile.uses_nautilus_handoff:
         try:
             assert_widget_allowed(widget, mandate)
         except MandateViolation as exc:
             raise ValueError(str(exc)) from exc
     else:
-        session = load_session(autonomous_agent_id=agent_id)
-        mandate = mandate_config_from_session(session)
         try:
             assert_can_execute(
-                session,
+                pseudo_session,
                 mandate=mandate,
                 confidence=confidence,
-                require_active_session=bool(session.get("enabled")),
+                require_active_session=str(agent.get("status") or "") == "running",
             )
             assert_widget_allowed(widget, mandate)
         except MandateViolation as exc:
@@ -204,8 +209,11 @@ def execute_widget_via_bridge(
 
     action_enum = IntentAction.ADJUST if action.upper() == "ADJUST" else IntentAction.ENTER
     legs = [ExecutionLeg.from_dict(row) for row in raw_orders]
-    underlying = str(widget.get("underlying") or session.get("primary_ticker") or "NIFTY").upper()
-    strategy = str((widget.get("recommended") or {}).get("name") or "vibe_bridge")
+    underlying = str(widget.get("underlying") or pseudo_session.get("primary_ticker") or "NIFTY").upper()
+    from nautilus_openalgo_bridge.agent_scoping import strategy_tag_for_agent
+
+    display_strategy = str((widget.get("recommended") or {}).get("name") or "vibe_bridge")
+    order_strategy = strategy_tag_for_agent(agent_id)
 
     intent = ExecutionIntent(
         action=action_enum,
@@ -213,7 +221,7 @@ def execute_widget_via_bridge(
         rationale=rationale,
         confidence=int(confidence or 0),
         legs=legs,
-        strategy=strategy,
+        strategy=order_strategy,
         widget_id=widget_id,
         underlying=underlying,
     )
@@ -224,23 +232,19 @@ def execute_widget_via_bridge(
         raise RuntimeError(f"Bridge execution failed: {err}")
 
     from trade_integrations.monitor.execution_ledger import record_execution_from_widget
-    from trade_integrations.autonomous_agents.lifecycle import on_basket_executed
-    from trade_integrations.auto_paper.session_store import save_session
+    from trade_integrations.autonomous_agents.lifecycle import sync_agent_lifecycle_after_basket
     from trade_integrations.autonomous_agents.outcome_ledger import append_outcome
 
-    record_execution_from_widget(widget, result.get("results") or [result], execution_mode=execution_mode)
-    session = load_session(autonomous_agent_id=agent_id)
-    session["trades_today"] = int(session.get("trades_today") or 0) + 1
-    on_basket_executed(
-        session,
+    record_execution_from_widget(widget, result.get("results") or [result], execution_mode=execution_mode, agent_id=agent_id)
+    sync_agent_lifecycle_after_basket(
+        agent_id,
         widget_id=widget_id,
-        strategy=strategy,
+        strategy=display_strategy,
         underlying=underlying,
     )
-    save_session(session)
     append_outcome(
         symbol=underlying,
-        strategy=strategy,
+        strategy=display_strategy,
         action=action_enum.value,
         intent_source="nautilus_bridge",
         widget_id=widget_id,
@@ -253,7 +257,8 @@ def execute_widget_via_bridge(
         "execution_path": "nautilus_openalgo_bridge",
         "widget_id": widget_id,
         "underlying": underlying,
-        "strategy": strategy,
+        "strategy": display_strategy,
+        "order_strategy": order_strategy,
         "orders_placed": result.get("orders_placed") or len(legs),
         "results": result.get("results") or result,
         "postflight": result.get("postflight"),
@@ -270,6 +275,7 @@ def submit_exit_intent(
     """Queue EXIT intent for bridge processing (used when Vibe decides to flatten)."""
     from nautilus_openalgo_bridge.agent_scoping import default_exit_underlying
     from nautilus_openalgo_bridge.handoff import load_handoff
+    from nautilus_openalgo_bridge.agent_scoping import strategy_tag_for_agent
     from nautilus_openalgo_bridge.intent_queue import submit_intent
     from nautilus_openalgo_bridge.models import ExecutionIntent, IntentAction
 
@@ -280,7 +286,7 @@ def submit_exit_intent(
         rationale=rationale,
         underlying=default_exit_underlying(agent_id, explicit=underlying),
         legs=list(handoff.legs) if handoff and handoff.legs else [],
-        strategy="vibe_exit",
+        strategy=strategy_tag_for_agent(agent_id),
     )
     path = submit_intent(intent)
     from nautilus_openalgo_bridge.intent_queue import process_pending_intents

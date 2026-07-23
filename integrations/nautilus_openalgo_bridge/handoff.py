@@ -103,7 +103,7 @@ def build_handoff_shell_from_agent(
     watch_spec: WatchSpec | None = None,
 ) -> PositionHandoff:
     """Minimal handoff when watch rules are set before a basket entry."""
-    from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+    from trade_integrations.autonomous_agents.mandate_config import mandate_config_from_agent
 
     agent_id = str(agent.get("id") or "").strip()
     symbols = list(agent.get("symbols") or ["NIFTY"])
@@ -135,7 +135,7 @@ def build_handoff_shell_from_hub_agent(agent_id: str) -> PositionHandoff | None:
         return None
     agent = dict(agent)
     agent.setdefault("id", agent_id)
-    from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+    from trade_integrations.autonomous_agents.mandate_config import mandate_config_from_agent
 
     mc = mandate_config_from_agent(agent)
     raw_spec = load_agent_watch_spec(agent_id) or agent.get("watch_spec") or {}

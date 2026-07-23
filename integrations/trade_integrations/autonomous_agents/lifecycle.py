@@ -67,6 +67,33 @@ def save_lifecycle(session: dict[str, Any], lifecycle: dict[str, Any]) -> dict[s
     return session
 
 
+def load_agent_lifecycle(agent: dict[str, Any]) -> dict[str, Any]:
+    """Load lifecycle from agent JSON (preferred source of truth)."""
+    return load_lifecycle({"lifecycle": agent.get("lifecycle")})
+
+
+def apply_lifecycle_decision(
+    agent: dict[str, Any],
+    *,
+    decision: str,
+    rationale: str,
+    ticker: str | None = None,
+) -> dict[str, Any]:
+    """Apply decision transitions to agent.lifecycle (market-agnostic)."""
+    from trade_integrations.autonomous_agents.store import save_agent
+
+    session: dict[str, Any] = {
+        "primary_ticker": (ticker or (agent.get("symbols") or ["NIFTY"])[0]),
+        "watchlist": list(agent.get("symbols") or ["NIFTY"]),
+        "lifecycle": load_agent_lifecycle(agent),
+    }
+    updated = on_decision(session, decision=decision, rationale=rationale, ticker=ticker)
+    agent = dict(agent)
+    agent["lifecycle"] = load_lifecycle(updated)
+    save_agent(agent)
+    return agent
+
+
 def _transition(lifecycle: dict[str, Any], new_state: str, **extra: Any) -> dict[str, Any]:
     lifecycle = dict(lifecycle)
     lifecycle["state"] = new_state
@@ -256,6 +283,35 @@ def on_basket_executed(session: dict[str, Any], *, widget_id: str, strategy: str
     )
     save_lifecycle(session, lifecycle)
     return lifecycle
+
+
+def sync_agent_lifecycle_after_basket(
+    agent_id: str,
+    *,
+    widget_id: str,
+    strategy: str | None,
+    underlying: str | None,
+) -> None:
+    """Mirror session basket lifecycle onto agent JSON (bridge ENTER path)."""
+    from trade_integrations.autonomous_agents.store import load_agent, save_agent
+
+    agent = load_agent(agent_id)
+    if not agent:
+        return
+    pseudo: dict[str, Any] = {
+        "lifecycle": load_agent_lifecycle(agent),
+        "primary_ticker": (underlying or (agent.get("symbols") or ["NIFTY"])[0]),
+        "watchlist": list(agent.get("symbols") or ["NIFTY"]),
+    }
+    on_basket_executed(
+        pseudo,
+        widget_id=widget_id,
+        strategy=strategy,
+        underlying=underlying,
+    )
+    agent = dict(agent)
+    agent["lifecycle"] = load_lifecycle(pseudo)
+    save_agent(agent)
 
 
 def format_lifecycle_for_prompt(lifecycle: dict[str, Any]) -> str:

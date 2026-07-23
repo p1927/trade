@@ -150,12 +150,12 @@ def rank_strategies(
         except Exception:
             pass
         try:
-            from trade_integrations.auto_paper.outcome_ledger import (
+            from trade_integrations.autonomous_agents.outcome_ledger import (
                 execution_calibration_adjustment,
-                paper_strategy_calibration_adjustment,
+                agent_strategy_calibration_adjustment,
             )
 
-            score += paper_strategy_calibration_adjustment(cand.get("name"))
+            score += agent_strategy_calibration_adjustment(cand.get("name"))
             score += execution_calibration_adjustment(cand.get("name"))
         except Exception:
             pass

@@ -71,8 +71,8 @@ def get_bridge_config() -> BridgeConfig:
         redis_url=redis_raw or None,
         instance_id=os.getenv("NAUTILUS_INSTANCE_ID", "trade-watch-1").strip() or "trade-watch-1",
         paper_only=_env_bool("OPENALGO_PAPER_MODE", "true"),
-        market_open=os.getenv("AUTO_PAPER_MARKET_OPEN", "09:20"),
-        market_close=os.getenv("AUTO_PAPER_MARKET_CLOSE", "15:10"),
+        market_open=os.getenv("AUTONOMOUS_AGENT_TRADING_MARKET_OPEN", "09:20"),
+        market_close=os.getenv("AUTONOMOUS_AGENT_TRADING_MARKET_CLOSE", "15:10"),
     )
 
 

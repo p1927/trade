@@ -19,7 +19,7 @@
 **Status:** **Shipped** — global ranker + autonomous learning bridge via `agent_learning.py`.
 
 - `outcome_ledger.py`: metrics, per-strategy adjustment, reconcile on EXIT — **done**
-- `paper_strategy_calibration_adjustment(name)` in `strategy_ranker.py` — **done**
+- `agent_strategy_calibration_adjustment(name)` in `strategy_ranker.py` — **done**
 - `[trade_calibration]` in `hub_context.py` for agent turns — **done** (via session prefetch)
 - `agent_learning.py`: lifecycle + per-agent reflections + learnings in turns; EXIT hooks — **done**
 

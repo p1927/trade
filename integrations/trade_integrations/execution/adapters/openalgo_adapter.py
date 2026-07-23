@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from trade_integrations.auto_paper.openalgo_client import OpenAlgoClient
+from trade_integrations.execution.openalgo_client import OpenAlgoClient
 from trade_integrations.openalgo.market_context import MarketContext
 
 
 class OpenAlgoConnectorAdapter:
-    """India-path adapter wrapping auto_paper OpenAlgoClient and market_data helpers."""
+    """India-path adapter wrapping autonomous_agents OpenAlgoClient and market_data helpers."""
 
     def __init__(
         self,
@@ -43,6 +43,6 @@ class OpenAlgoConnectorAdapter:
         return self._client.get_position_book()
 
     def place_basket(self, legs: list[dict], **kwargs: Any) -> dict:
-        strategy = str(kwargs.get("strategy") or "auto_paper")
+        strategy = str(kwargs.get("strategy") or "autonomous_agents")
         results = self._client.place_basket(legs, strategy=strategy)
         return {"status": "success", "results": results}

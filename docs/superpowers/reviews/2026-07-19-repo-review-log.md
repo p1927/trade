@@ -293,9 +293,9 @@ Issue IDs: `R{segment}-{n}` (e.g. R1-01).
 
 ---
 
-## Segment 7: Autonomous agents, execution, monitor, auto_paper
+## Segment 7: Autonomous agents, execution, monitor, autonomous_agents
 
-**Scope:** `autonomous_agents/`, `execution/`, `monitor/`, `auto_paper/`, `trade_widgets/`. Merged M023–M033.
+**Scope:** `autonomous_agents/`, `execution/`, `monitor/`, `autonomous_agents/`, `trade_widgets/`. Merged M023–M033.
 
 ### Strengths
 
@@ -316,7 +316,7 @@ Issue IDs: `R{segment}-{n}` (e.g. R1-01).
 |----|------|-------|
 | R7-03 | M023–M033 | Session private API, timestamp rollback, revision debounce, prompt placeholders, bridge intent bugs, scheduler/prompt mismatch |
 | R7-04 | `infra_startup.py` | Early generic watch_spec before strategy rules |
-| R7-05 | `auto_paper/session_store.py` | Multi-agent session pointer collision |
+| R7-05 | `autonomous_agents/session_store.py` | Multi-agent session pointer collision |
 
 ### Test run evidence
 
@@ -416,7 +416,7 @@ Issue IDs: `R{segment}-{n}` (e.g. R1-01).
 | ID | Issue |
 |----|-------|
 | R10-01 | **No stack lifecycle tests** (segment 1) |
-| R10-02 | **Zero coverage:** `hub_analytics` (partial), `auto_paper` engine, `github_datasets`, `external_financial`, `history_ingest`, `panel_enrichment`, `throttled_http` |
+| R10-02 | **Zero coverage:** `hub_analytics` (partial), `autonomous_agents` engine, `github_datasets`, `external_financial`, `history_ingest`, `panel_enrichment`, `throttled_http` |
 | R10-03 | **7 confirmed failing tests** (this session): `test_nautilus_channel_feed`, `test_openalgo_adapter::test_unmapped_index_raises`, `test_company_research_fundamentals_filings_macro::test_dedupes_filings`, `test_company_research_fundamentals_filings_macro::test_yfinance_vix_and_nifty` (network/nselib), `test_index_pipeline_log::test_factor_catalog_covers_matrix_keys`, `test_index_factor_backfill`, `test_news_hub_bridge::test_ingest_reports_pipeline_paused_without_minimax` |
 | R10-04 | Full `tests/` suite **slow/hangs** on integration tests (~787 tests, >25min partial run) — needs per-test timeouts |
 | R10-05 | `trade_integrations` auto-applied on import — tests must use skip flag or accept global patches |
@@ -492,7 +492,7 @@ Issue IDs: `R{segment}-{n}` (e.g. R1-01).
 |----|------|-------|
 | R12-03 | `openalgo/symbols.py` vs `tradingagents/interface.py` | Duplicate `NoMarketDataError` classes — test/runtime drift |
 | R12-04 | `data_feed.py` vs channel design | Watch feed bypasses hub channel (R2-17 test) |
-| R12-05 | Dual ENTER paths | Bridge vs `auto_paper_direct` OpenAlgo |
+| R12-05 | Dual ENTER paths | Bridge vs `autonomous_agents_direct` OpenAlgo |
 | R12-06 | — | No integration tests for MCP vs bridge routing |
 
 ### Test run evidence

@@ -163,3 +163,29 @@ def test_reserve_bootstrap_structure_recovery_slot_respects_cooldown(tmp_path, m
     from trade_integrations.autonomous_agents.recovery import reserve_bootstrap_structure_recovery_slot
 
     assert reserve_bootstrap_structure_recovery_slot("aa_recover1", cooldown_s=300) is False
+
+
+def test_release_bootstrap_structure_recovery_slot_restores_budget(tmp_path, monkeypatch) -> None:
+    hub = tmp_path / "hub"
+    (hub / "_data" / "autonomous_agents").mkdir(parents=True)
+    monkeypatch.setattr("trade_integrations.context.hub.get_hub_dir", lambda: hub)
+
+    agent = {
+        "id": "aa_recover2",
+        "status": "running",
+        "bootstrap_status": "running",
+        "bootstrap_finalize_recovery_at": datetime.now(timezone.utc).isoformat(),
+        "bootstrap_finalize_recovery_count": 2,
+        "vibe_session_id": "sess2",
+    }
+    from trade_integrations.autonomous_agents.store import get_agent, save_agent
+
+    save_agent(agent)
+
+    from trade_integrations.autonomous_agents.recovery import release_bootstrap_structure_recovery_slot
+
+    release_bootstrap_structure_recovery_slot("aa_recover2")
+    updated = get_agent("aa_recover2")
+    assert updated is not None
+    assert updated.get("bootstrap_finalize_recovery_count") == 1
+    assert "bootstrap_finalize_recovery_at" not in updated

@@ -94,6 +94,23 @@ def test_finalize_bootstrap_requires_watch_spec(hub_tmp: Path, monkeypatch: pyte
     assert updated["bootstrap_status"] == "running"
 
 
+def test_finalize_bootstrap_hold_cash_string_strategy(hub_tmp: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.nautilus_watch.ensure_nautilus_watch_for_agent",
+        lambda *_a, **_k: None,
+    )
+    agent = _agent()
+    agent["last_decision"] = {"decision": "HOLD", "at": "2026-07-16T20:00:00+00:00"}
+    agent["thesis"] = {"strategy": "hold_cash", "confidence": 62}
+    agent["watch_spec"] = {
+        "rules": {"item": {"symbol": "NIFTY", "metric": "spot_move_pct", "threshold": 0.5}},
+    }
+    save_agent(agent)
+    assert finalize_bootstrap_if_ready("aa_boot") is True
+    updated = get_agent("aa_boot")
+    assert updated["bootstrap_status"] == "awaiting_plan_approval"
+
+
 def test_register_jobs_defers_research_while_bootstrap_pending(hub_tmp: Path):
     agent = _agent()
     agent["bootstrap_status"] = "pending"

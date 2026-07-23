@@ -24,7 +24,7 @@ def test_watch_spec_matches_levels_stop() -> None:
 @pytest.mark.unit
 def test_watch_spec_matches_hold_cash_target() -> None:
     from trade_integrations.autonomous_agents.strategy_watch_spec import build_watch_spec_for_strategy
-    from trade_integrations.auto_paper.mandate_config import MandateConfig
+    from trade_integrations.autonomous_agents.mandate_config import MandateConfig
 
     spec = build_watch_spec_for_strategy(
         strategy="hold_cash",

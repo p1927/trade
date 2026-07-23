@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Depends on [Phase 1](./2026-07-23-market-authority-phase-1-marketcontext.md) and [Phase 2](./2026-07-23-market-authority-phase-2-paper-gates.md).
 
-**Goal:** Single port interface for quotes, orders, positions, and market context. Migrate bridge, auto_paper, and autonomous agents off ad-hoc OpenAlgo/Alpaca clients.
+**Goal:** Single port interface for quotes, orders, positions, and market context. Migrate bridge, autonomous_agents, and autonomous agents off ad-hoc OpenAlgo/Alpaca clients.
 
 **Architecture:** Hexagonal port in `integrations/trade_integrations/execution/trading_port.py`. `OpenAlgoConnectorAdapter` implements IN path; `AlpacaConnectorAdapter` implements US path until Phase 4. Vibe MCP tools delegate to same port via thin HTTP or shared module.
 

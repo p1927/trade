@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _audit_payload(record: dict[str, Any]) -> dict[str, Any]:
-    return {"paper_action": record, "audit_id": record.get("audit_id")}
+    return {"agent_audit": record, "audit_id": record.get("audit_id")}
 
 
 def _orders_from_widget(widget: dict[str, Any], *, product: str) -> list[dict[str, Any]]:
@@ -140,7 +140,7 @@ def execute_basket(
     ensure_paper_execution_ready(client, env_paper_lock=paper_mode_env_enabled())
 
     results = client.place_basket(orders, strategy="autonomous_agent")
-    record_execution_from_widget(widget, results, execution_mode="paper")
+    record_execution_from_widget(widget, results, execution_mode="paper", agent_id=resolved_agent_id)
 
     if agent and resolved_agent_id:
         sync_agent_lifecycle_after_basket(

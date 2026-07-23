@@ -13,7 +13,7 @@ from trade_integrations.hub_storage.parquet_io import concat_dataframes
 from trade_integrations.context.hub import get_hub_dir
 
 _LEDGER_REL = Path("_data") / "autonomous_agents" / "outcomes.parquet"
-_LEGACY_LEDGER_REL = Path("_data") / "auto_paper" / "outcomes.parquet"
+_LEGACY_LEDGER_REL = Path("_data") / "autonomous_agents" / "legacy_outcomes.parquet"
 _MIN_SAMPLES = 3
 _MAX_ADJ = 0.05
 _EXECUTION_INTENT = "execution_ledger"
@@ -115,7 +115,7 @@ def _closed_rows(ledger: pd.DataFrame, *, intent_source: str | None = None) -> p
     return closed
 
 
-def _paper_ledger(ledger: pd.DataFrame) -> pd.DataFrame:
+def _agent_trading_ledger(ledger: pd.DataFrame) -> pd.DataFrame:
     if ledger.empty or "intent_source" not in ledger.columns:
         return ledger
     return ledger[ledger["intent_source"].astype(str) != _EXECUTION_INTENT]
@@ -126,7 +126,7 @@ def strategy_hit_rates(*, min_samples: int = _MIN_SAMPLES, intent_source: str | 
     if ledger.empty or "strategy" not in ledger.columns:
         return {}
     if intent_source is None:
-        ledger = _paper_ledger(ledger)
+        ledger = _agent_trading_ledger(ledger)
     closed = _closed_rows(ledger, intent_source=intent_source)
     if closed.empty:
         return {}
@@ -143,9 +143,9 @@ def execution_hit_rates(*, min_samples: int = _MIN_SAMPLES) -> dict[str, float]:
     return strategy_hit_rates(min_samples=min_samples, intent_source=_EXECUTION_INTENT)
 
 
-def compute_paper_calibration_metrics(*, min_samples: int = _MIN_SAMPLES) -> dict[str, Any]:
-    """Rolling calibration from auto-paper outcomes (excludes execution-ledger closes)."""
-    ledger = _paper_ledger(load_ledger())
+def compute_agent_calibration_metrics(*, min_samples: int = _MIN_SAMPLES) -> dict[str, Any]:
+    """Rolling calibration from autonomous-agent outcomes (excludes execution-ledger closes)."""
+    ledger = _agent_trading_ledger(load_ledger())
     rates = strategy_hit_rates(min_samples=min_samples)
     closed_count = 0
     if not ledger.empty and "net_pnl_inr" in ledger.columns:
@@ -195,8 +195,8 @@ def _calibration_adjustment_from_rates(strategy_name: str | None, rates: dict[st
     return 0.0
 
 
-def paper_strategy_calibration_adjustment(strategy_name: str | None) -> float:
-    """Per-strategy score nudge from auto-paper outcomes (±0.05 max)."""
+def agent_strategy_calibration_adjustment(strategy_name: str | None) -> float:
+    """Per-strategy score nudge from autonomous-agent outcomes (±0.05 max)."""
     return _calibration_adjustment_from_rates(strategy_name, strategy_hit_rates())
 
 

@@ -16,7 +16,7 @@ def evaluate_thesis_for_agent(
     """Return THESIS_BROKEN alert when mandate enables thesis_break and report fires."""
     try:
         from trade_integrations.autonomous_agents.store import get_agent
-        from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent
+        from trade_integrations.autonomous_agents.mandate_config import mandate_config_from_agent
         from trade_integrations.context.hub import load_options_research_json, load_index_research_json
         from trade_integrations.monitor.thesis_break import evaluate_thesis_break
     except ImportError:

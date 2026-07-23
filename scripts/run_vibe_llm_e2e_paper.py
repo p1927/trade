@@ -161,7 +161,7 @@ def main() -> int:
                 mandate=(
                     "Paper trade NIFTY options autonomously. On this first research turn: "
                     "load options research, pick ONE low-risk paper strategy (prefer ATM short straddle "
-                    "or iron fly with 1 lot), show charges, execute via execute_auto_paper_basket if "
+                    "or iron fly with 1 lot), show charges, execute via execute_autonomous_basket if "
                     "confidence ≥ threshold, then call set_agent_watch_spec with spot/VIX rules."
                 ),
                 mode="paper",
@@ -202,7 +202,7 @@ def main() -> int:
 
     # Reconcile stale execution ledger vs OpenAlgo positionbook
     try:
-        from trade_integrations.auto_paper.market_feedback import build_market_feedback
+        from trade_integrations.autonomous_agents.market_feedback import build_market_feedback
 
         fb = build_market_feedback(ticker=str(agent.get("symbols", ["NIFTY"])[0]))
         _log("ledger reconcile", f"open_positions={len(fb.get('open_positions') or [])}")
@@ -214,7 +214,7 @@ def main() -> int:
         "\n\n## E2E integration test (paper only)\n"
         "This is an automated integration run. You MUST:\n"
         "1. Call `get_autonomous_agent_status` and OpenAlgo MCP tools (browse/chain/widget).\n"
-        "2. If viable, enter a **1-lot** paper position via `execute_auto_paper_basket`.\n"
+        "2. If viable, enter a **1-lot** paper position via `execute_autonomous_basket`.\n"
         "3. Call `set_agent_watch_spec` with at least NIFTY spot_move_pct and INDIAVIX level rules.\n"
         "4. Call `record_autonomous_decision` with ENTER/HOLD and rationale.\n"
         "Do not ask the user for confirmation — paper mode only.\n"

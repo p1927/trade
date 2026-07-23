@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from trade_integrations.execution.profile import ExecutionProfile
 
 from trade_integrations.autonomous_agents.market import agent_execution_market
-from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent, primary_instrument_from_mandate
+from trade_integrations.autonomous_agents.mandate_config import mandate_config_from_agent, primary_instrument_from_mandate
 
 PrimaryInstrument = Literal["options", "equity"]
 ResearchAssetType = Literal["options", "stock", "index"]
@@ -93,11 +93,8 @@ def resolve_agent_routing(agent: dict[str, Any], *, mode: str | None = None) -> 
 
     profile = resolve_profile(agent=agent, mode=mode)
     mc = mandate_config_from_agent(agent)
-    market = agent_execution_market(agent)
-    constraints = dict(agent.get("constraints") or {})
-    agent_mode = str(mode or constraints.get("mode") or "paper").lower()
-    if agent_mode not in ("paper", "live"):
-        agent_mode = "paper"
+    market = profile.market
+    agent_mode = profile.mode
 
     trade_symbols = tuple(
         str(s).strip().upper() for s in (agent.get("symbols") or ["NIFTY"]) if str(s).strip()

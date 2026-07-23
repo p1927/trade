@@ -10,7 +10,7 @@ from trade_integrations.context.hub import get_hub_dir
 
 
 def reflections_dir(*, agent_id: str | None = None) -> Path:
-    root = get_hub_dir() / "_data" / "auto_paper" / "reflections"
+    root = get_hub_dir() / "_data" / "autonomous_agents" / "reflections"
     if agent_id:
         root = root / "".join(c for c in agent_id if c.isalnum() or c in "_-")
     root.mkdir(parents=True, exist_ok=True)
@@ -51,7 +51,7 @@ def load_recent_reflections(*, limit: int = 3, agent_id: str | None = None) -> l
     else:
         root = reflections_dir()
         paths = sorted(root.glob("*.md"), reverse=True)[:limit]
-        agent_root = get_hub_dir() / "_data" / "auto_paper" / "reflections"
+        agent_root = get_hub_dir() / "_data" / "autonomous_agents" / "reflections"
         if agent_root.is_dir():
             for sub in sorted(agent_root.iterdir()):
                 if sub.is_dir():

@@ -8,9 +8,8 @@ from datetime import datetime, time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from trade_integrations.auto_paper.config import get_auto_paper_config
-from trade_integrations.auto_paper.engine import is_market_session_open
-from trade_integrations.auto_paper.session_store import load_session, save_session
+from trade_integrations.autonomous_agents.trading_config import get_agent_trading_config
+from trade_integrations.autonomous_agents.market_hours import is_trading_session_open, minutes_to_session_close
 from trade_integrations.context.hub import load_options_research_json, load_stock_research_json
 from trade_integrations.monitor.doc_spot import resolve_doc_spot
 from trade_integrations.monitor.execution_ledger import (
@@ -32,14 +31,31 @@ def _parse_hhmm(value: str) -> time:
 
 
 def _minutes_to_session_close(cfg) -> int | None:
-    now = datetime.now(IST)
-    if now.weekday() >= 5:
-        return None
-    end = _parse_hhmm(cfg.market_close)
-    close_dt = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
-    if now.time() > end:
-        return 0
-    return max(0, int((close_dt - now).total_seconds() / 60))
+    return minutes_to_session_close(cfg)
+
+
+def _agent_state(agent: dict[str, Any]) -> dict[str, Any]:
+    """Mutable feedback state stored on agent JSON."""
+    state = dict(agent.get("market_feedback_state") or {})
+    constraints = dict(agent.get("constraints") or {})
+    if agent.get("budget_inr") is not None:
+        state.setdefault("budget_inr", agent.get("budget_inr"))
+    elif constraints.get("budget_inr") is not None:
+        state.setdefault("budget_inr", constraints.get("budget_inr"))
+    state.setdefault("primary_ticker", (agent.get("symbols") or ["NIFTY"])[0])
+    state.setdefault("watchlist", list(agent.get("symbols") or ["NIFTY"]))
+    return state
+
+
+def _persist_agent_state(agent_id: str, state: dict[str, Any]) -> None:
+    from trade_integrations.autonomous_agents.store import load_agent, save_agent
+
+    agent = load_agent(agent_id)
+    if not agent:
+        return
+    agent = dict(agent)
+    agent["market_feedback_state"] = state
+    save_agent(agent)
 
 
 def _session_pnl_block(session: dict[str, Any], *, focus_ticker: str | None = None) -> dict[str, Any]:
@@ -51,7 +67,7 @@ def _session_pnl_block(session: dict[str, Any], *, focus_ticker: str | None = No
 
             if detect_market(symbol) == Market.US:
                 return {
-                    "pnl_basis": "openalgo",
+                    "pnl_basis": "alpaca",
                     "note": "US symbols use OpenAlgo Alpaca plugin; INR sandbox P&L may not apply.",
                 }
         except Exception:
@@ -60,7 +76,7 @@ def _session_pnl_block(session: dict[str, Any], *, focus_ticker: str | None = No
     block: dict[str, Any] = {}
     budget_inr = session.get("budget_inr")
     try:
-        from trade_integrations.auto_paper.openalgo_client import OpenAlgoClient
+        from trade_integrations.execution.openalgo_client import OpenAlgoClient
 
         funds = OpenAlgoClient().get_funds()
         available = funds.get("availablecash") or funds.get("available_balance")
@@ -139,11 +155,21 @@ def _spot_drift_pct(plan_spot: float | None, live_spot: float | None) -> float |
     return round(abs(live_spot - plan_spot) / plan_spot * 100.0, 2)
 
 
-def build_market_feedback(*, ticker: str | None = None, kind: str = "options") -> dict[str, Any]:
+def build_market_feedback(
+    *,
+    ticker: str | None = None,
+    kind: str = "options",
+    agent_id: str | None = None,
+) -> dict[str, Any]:
     """Snapshot what changed in the market since the last agent turn."""
-    cfg = get_auto_paper_config()
-    session = load_session()
-    watchlist = session.get("watchlist") or list(cfg.watchlist)
+    cfg = get_agent_trading_config()
+    agent: dict[str, Any] = {}
+    if agent_id:
+        from trade_integrations.autonomous_agents.store import get_agent
+
+        agent = get_agent(agent_id) or {}
+    session = _agent_state(agent) if agent else {}
+    watchlist = session.get("watchlist") or list(cfg.watchlist) or list(agent.get("symbols") or ["NIFTY"])
     symbols = [str(t).strip().upper() for t in watchlist if str(t).strip()]
     focus = (ticker or session.get("primary_ticker") or symbols[0] if symbols else "NIFTY").upper()
 
@@ -233,13 +259,13 @@ def build_market_feedback(*, ticker: str | None = None, kind: str = "options") -
     feedback = {
         "generated_at": now_iso,
         "focus_ticker": focus,
-        "market_open": is_market_session_open(cfg),
+        "market_open": is_trading_session_open(market="IN"),
         "alerts": alerts,
         "requires_action": bool(alerts) or not positions_block,
         "tickers": tickers_block,
         "open_positions": positions_block,
         "deltas_since_last_turn": deltas,
-        "prior_turn_at": session.get("last_agent_turn_at"),
+        "prior_turn_at": agent.get("last_agent_turn_at") or session.get("last_agent_turn_at"),
         "summary": _feedback_summary(alerts, positions_block, tickers_block, focus),
     }
 
@@ -266,7 +292,8 @@ def build_market_feedback(*, ticker: str | None = None, kind: str = "options") -
         "tickers": {b["ticker"]: {"live_spot": b.get("live_spot")} for b in tickers_block},
     }
     session["last_market_feedback"] = feedback
-    save_session(session)
+    if agent_id:
+        _persist_agent_state(agent_id, session)
     return feedback
 
 
@@ -306,7 +333,7 @@ def build_agent_market_feedback(*, agent_id: str, ticker: str | None = None) -> 
     routing = resolve_agent_routing(agent)
     focus = ticker or (routing.trade_symbols[0] if routing.trade_symbols else "NIFTY")
     kind = "stock" if routing.primary_instrument == "equity" else "options"
-    feedback = build_market_feedback(ticker=focus, kind=kind)
+    feedback = build_market_feedback(ticker=focus, kind=kind, agent_id=agent_id)
     feedback["instrument_mode"] = routing.primary_instrument
     feedback["research_asset_type"] = routing.research_asset_type
     return feedback

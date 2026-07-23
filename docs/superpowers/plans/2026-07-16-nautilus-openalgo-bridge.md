@@ -68,7 +68,7 @@ trade/
 │       ├── __init__.py
 │       ├── config.py                         # env: hosts, symbols, redis
 │       ├── models.py                         # ExecutionIntent, WatchSpec, Handoff
-│       ├── openalgo_client.py                # reuse/wrap auto_paper client
+│       ├── openalgo_client.py                # reuse/wrap autonomous_agents client
 │       ├── data_feed.py                      # OpenAlgo → QuoteTick/Bar/custom data
 │       ├── instruments.py                    # NSE/NFO InstrumentProvider
 │       ├── watch_actor.py                    # Nautilus Actor: rules + signals
@@ -210,7 +210,7 @@ trade/
 - [ ] Subscribe to Nautilus signal `EXECUTE_INTENT` or read from intent queue file/Redis
 - [ ] Map `ExecutionIntent`:
   - `EXIT` → OpenAlgo `closeposition` or leg-wise sells via `basketorder`
-  - `ENTER` / `ADJUST` → delegate to existing `execute_auto_paper_basket` MCP pattern (legs JSON)
+  - `ENTER` / `ADJUST` → delegate to existing `execute_autonomous_basket` MCP pattern (legs JSON)
   - `HOLD` → log only via `record_autonomous_decision`
 - [ ] Pre-flight: `calculate_margin`, analyzer mode, market hours
 - [ ] Post-flight: reconcile `positionbook` → update agent `thesis` + Nautilus cache handoff
@@ -225,7 +225,7 @@ trade/
 
 ### Task 8: Vibe entry → Nautilus state
 
-**Files:** `handoff.py`, hook in `auto_paper/mcp_actions.py` or autonomous `record_autonomous_decision`
+**Files:** `handoff.py`, hook in `autonomous_agents/mcp_actions.py` or autonomous `record_autonomous_decision`
 
 - [ ] After successful Vibe/OpenAlgo entry basket → write `PositionHandoff` JSON:
   `{agent_id, widget_id, legs, entry_spot, stop_rules, watch_spec, created_at}`

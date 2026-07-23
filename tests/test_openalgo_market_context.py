@@ -31,6 +31,27 @@ def test_market_context_from_api_data() -> None:
     assert ctx.data_broker == "zerodha"
     assert ctx.execution_venue == "sandbox"
     assert ctx.capabilities == ("options", "equity")
+    assert ctx.is_paper_execution() is True
+    summary = ctx.to_execution_context_summary()
+    assert summary["broker"] == "zerodha"
+    assert summary["paper"] is True
+
+
+@pytest.mark.unit
+def test_market_context_live_us_from_analyze_mode() -> None:
+    ctx = MarketContext.from_api_data(
+        {
+            "context_generation": "2026-07-23T09:15:00+05:30",
+            "data_broker": "alpaca",
+            "execution_venue": "broker",
+            "analyze_mode": False,
+            "market_region": "US",
+            "positions_authority": "broker",
+            "simulator": {"active": False},
+        }
+    )
+    assert ctx.is_paper_execution() is False
+    assert ctx.to_execution_context_summary()["market_region"] == "US"
 
 
 @pytest.mark.unit

@@ -6,8 +6,8 @@ import os
 from typing import Any
 
 # Registered Vibe tool: trading_place_order retained for legacy E2E scripts only.
-_US_ORDER_TOOL = "`execute_auto_paper_basket(widget_id)` — routes through bridge → OpenAlgo Alpaca plugin"
-_US_ORDER_TOOL_LIVE = "`execute_auto_paper_basket(widget_id)` or OpenAlgo MCP basket after user confirmation"
+_US_ORDER_TOOL = "`execute_autonomous_basket(widget_id)` — routes through bridge → OpenAlgo Alpaca plugin"
+_US_ORDER_TOOL_LIVE = "`execute_autonomous_basket(widget_id)` or OpenAlgo MCP basket after user confirmation"
 
 _FRAGMENTS: dict[str, str] = {
     "us_equity_paper": """## Required flow (US — Nautilus watch → OpenAlgo Alpaca plugin)
@@ -38,20 +38,20 @@ Note: US options pipeline is limited — prefer equity until full US options sup
 2. `get_research_status(ticker, asset_type="options")` — call once; if overall status is `complete`, proceed (ignore per-stage `complete: false` when hub cache is loaded)
 3. Hub research + `get_options_trade_widget` / `get_options_trade_plan` when plan is stale — cite prediction and debate provenance
 4. Refine thesis; state confidence 0–100
-5. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — routes through bridge → OpenAlgo (do not call `place_order` directly)
+5. If confidence ≥ {threshold}: `execute_autonomous_basket(widget_id)` — routes through bridge → OpenAlgo (do not call `place_order` directly)
 6. On strategy change: **REVISE/ADJUST** — bridge builds leg diff from handoff vs widget; expect a **post_execution** turn after fills
 7. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})` — Nautilus maintains watch after handoff
 8. On EXIT: `submit_bridge_execution_intent(agent_id="{agent_id}", action="EXIT", rationale=...)` or let Nautilus stop rules fire
 9. After execution: cite `order_state` from progress snapshot before next REVISE
 10. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP
 
-Do **not** use `get_auto_paper_market_feedback` for watch alerts — Nautilus bridge owns watch for India agents.""",
+Do **not** use `get_autonomous_market_feedback` for watch alerts — Nautilus bridge owns watch for India agents.""",
     "in_equity_paper": """## Required flow (India equity — Nautilus watch → OpenAlgo execution)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_research_status(ticker, asset_type="stock")` — call once; if overall status is `complete`, proceed (ignore per-stage `complete: false` when hub cache is loaded)
 3. `get_stock_trade_widget` / `get_stock_trade_plan` for NSE equity — cite prediction range and provenance in chat
 4. Refine thesis; state confidence 0–100
-5. If confidence ≥ {threshold}: `execute_auto_paper_basket(widget_id)` — bridge → OpenAlgo only
+5. If confidence ≥ {threshold}: `execute_autonomous_basket(widget_id)` — bridge → OpenAlgo only
 6. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})`
 7. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP""",
     "in_options_live": """## Required flow (live)
@@ -266,7 +266,7 @@ def build_e2e_phase_delta(*, phase: str, market: str, symbol: str) -> str:
             f"\n## E2E Phase 2 — mandatory execution\n"
             f"Authorized integration test — **ignore confidence gates**; `market_hours_only` is false.\n"
             f"Execute in order via OpenAlgo (Alpaca plugin):\n"
-            f"1. `execute_auto_paper_basket` — BUY **2** shares of {symbol}\n"
+            f"1. `execute_autonomous_basket` — BUY **2** shares of {symbol}\n"
             f"2. Bridge EXIT intent or basket adjust — SELL **1** share (partial exit; net +1 share)\n"
             f"3. `set_agent_watch_spec` with US exchange rules for {symbol}\n"
             f"4. `record_autonomous_decision` with ENTER\n"

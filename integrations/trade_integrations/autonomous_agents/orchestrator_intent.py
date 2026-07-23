@@ -243,6 +243,20 @@ def _infer_mandate(text: str, symbols: list[str]) -> str:
     return "; ".join(parts) + "."
 
 
+def _symbol_proposable_for_auto_propose(symbol: str) -> bool:
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return False
+    if is_symbol_known_for_proposal(sym) or sym in {"SPY", "QQQ", "NVDA", "AAPL"}:
+        return True
+    try:
+        from trade_integrations.dataflows.company_research.market import Market, detect_market
+
+        return detect_market(sym) == Market.IN
+    except Exception:
+        return False
+
+
 def build_auto_propose_kwargs(
     *,
     user_message: str,
@@ -280,7 +294,7 @@ def build_auto_propose_kwargs(
     if not symbols:
         return None
 
-    if not any(is_symbol_known_for_proposal(str(s)) or str(s).upper() in {"SPY", "QQQ", "NVDA", "AAPL"} for s in symbols):
+    if not all(_symbol_proposable_for_auto_propose(str(s)) for s in symbols):
         from trade_integrations.autonomous_agents.market import symbol_execution_market
 
         if not all(symbol_execution_market(str(s)) == "US" for s in symbols):

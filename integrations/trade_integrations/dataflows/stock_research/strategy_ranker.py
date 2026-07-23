@@ -61,16 +61,16 @@ def rank_stock_strategies(
     for name in names:
         score, tier, rationale = _score_candidate(name, signals)
         try:
-            from trade_integrations.auto_paper.outcome_ledger import (
+            from trade_integrations.autonomous_agents.outcome_ledger import (
                 execution_calibration_adjustment,
-                paper_strategy_calibration_adjustment,
+                agent_strategy_calibration_adjustment,
             )
 
             score = round(
                 min(
                     max(
                         score
-                        + paper_strategy_calibration_adjustment(name)
+                        + agent_strategy_calibration_adjustment(name)
                         + execution_calibration_adjustment(name),
                         0.2,
                     ),

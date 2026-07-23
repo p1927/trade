@@ -25,8 +25,8 @@
 | Caller | Path today | Hub channel? | Issue |
 |--------|------------|--------------|-------|
 | `dataflows/openalgo.py` | `_openalgo_post` (requests) | Partial (`fetch_option_chain`, `fetch_openalgo_quote`) | Duplicate HTTP layer |
-| `auto_paper/openalgo_client.py` | `OpenAlgoClient._post` | No | Second HTTP layer |
-| `nautilus_openalgo_bridge/openalgo_client.py` | extends auto_paper | No | Third HTTP layer for quotes |
+| `autonomous_agents/openalgo_client.py` | `OpenAlgoClient._post` | No | Second HTTP layer |
+| `nautilus_openalgo_bridge/openalgo_client.py` | extends autonomous_agents | No | Third HTTP layer for quotes |
 | MCP `get_options_browse` | hub channel → `_fetch_option_chain_raw` | Yes | Good |
 | MCP `get_option_chain` | pip SDK `client.optionchain()` | **No** | Bypasses channel |
 | MCP `get_quote` / `get_multi_quotes` | pip SDK direct | **No** | Bypasses channel |
@@ -76,7 +76,7 @@ OpenAlgo REST /api/v1/*  →  broker session (INDmoney / …)
 | Create | `integrations/trade_integrations/openalgo/freshness.py` | `FreshnessPolicy`, TTL helpers, L1 cache |
 | Modify | `integrations/trade_integrations/hub_capture/channel.py` | Policy-aware reads, `get_multi_quotes`, `get_history` |
 | Modify | `integrations/trade_integrations/dataflows/openalgo.py` | Thin re-exports (TradingAgents compat) |
-| Modify | `integrations/trade_integrations/auto_paper/openalgo_client.py` | Delegate `_post` to `rest_client` |
+| Modify | `integrations/trade_integrations/autonomous_agents/openalgo_client.py` | Delegate `_post` to `rest_client` |
 | Modify | `integrations/nautilus_openalgo_bridge/data_feed.py` | Poll via channel `get_multi_quotes(WATCH)` |
 | Modify | `openalgo/mcp/mcpserver.py` | Route market-data tools through channel |
 | Modify | `integrations/trade_integrations/dataflows/options_research/sources/chain_openalgo.py` | Remove inline nselib; rely on market_data |
@@ -92,7 +92,7 @@ OpenAlgo REST /api/v1/*  →  broker session (INDmoney / …)
 **Files:**
 - Create: `integrations/trade_integrations/openalgo/rest_client.py`
 - Create: `integrations/trade_integrations/openalgo/__init__.py`
-- Modify: `integrations/trade_integrations/auto_paper/openalgo_client.py`
+- Modify: `integrations/trade_integrations/autonomous_agents/openalgo_client.py`
 - Test: `tests/test_openalgo_rest_client.py`
 
 **Interfaces:**
@@ -128,12 +128,12 @@ Expected: FAIL — module not found
 
 - [ ] **Step 3: Implement `rest_client.py`**
 
-Move logic from `auto_paper/openalgo_client.py` `_post` (retries on 502/503/504, invalid_api_key handling) and from `dataflows/openalgo.py` `_openalgo_settings` into one class. Merge error behavior: bridge raises `RuntimeError`; dataflows layer will map to `NoMarketDataError` in Task 2.
+Move logic from `autonomous_agents/openalgo_client.py` `_post` (retries on 502/503/504, invalid_api_key handling) and from `dataflows/openalgo.py` `_openalgo_settings` into one class. Merge error behavior: bridge raises `RuntimeError`; dataflows layer will map to `NoMarketDataError` in Task 2.
 
 - [ ] **Step 4: Make `OpenAlgoClient._post` delegate**
 
 ```python
-# auto_paper/openalgo_client.py
+# autonomous_agents/openalgo_client.py
 from trade_integrations.openalgo.rest_client import get_rest_client
 
 def _post(self, path, payload, *, timeout=30):
@@ -144,13 +144,13 @@ def _post(self, path, payload, *, timeout=30):
 
 - [ ] **Step 5: Run tests**
 
-Run: `pytest tests/test_openalgo_rest_client.py tests/test_auto_paper.py -v -q` (or nearest existing auto_paper tests)
+Run: `pytest tests/test_openalgo_rest_client.py tests/test_autonomous_agents.py -v -q` (or nearest existing autonomous_agents tests)
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add integrations/trade_integrations/openalgo/ integrations/trade_integrations/auto_paper/openalgo_client.py tests/test_openalgo_rest_client.py
+git add integrations/trade_integrations/openalgo/ integrations/trade_integrations/autonomous_agents/openalgo_client.py tests/test_openalgo_rest_client.py
 git commit -m "refactor(openalgo): add canonical REST client"
 ```
 
@@ -481,7 +481,7 @@ git commit -m "docs: unified openalgo channel env and skill notes"
 
 ## Success criteria
 
-- [ ] One `rest_client.post` implementation used by auto_paper, bridge, and market_data
+- [ ] One `rest_client.post` implementation used by autonomous_agents, bridge, and market_data
 - [ ] Zero `_openalgo_post` outside `trade_integrations/openalgo/`
 - [ ] MCP `get_option_chain`, `get_quote`, `get_multi_quotes`, `get_options_browse` all use hub channel
 - [ ] Nautilus `OpenAlgoQuoteFeed` uses channel WATCH policy

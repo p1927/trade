@@ -12,13 +12,13 @@ INTEGRATIONS = ROOT / "integrations"
 if str(INTEGRATIONS) not in sys.path:
     sys.path.insert(0, str(INTEGRATIONS))
 
-from trade_integrations.auto_paper.mandate_config import (  # noqa: E402
+from trade_integrations.autonomous_agents.mandate_config import (  # noqa: E402
     MandateConfig,
     parse_mandate_from_text,
     scheduled_actions_for,
     to_watch_spec,
 )
-from trade_integrations.auto_paper.mandate_enforcer import (  # noqa: E402
+from trade_integrations.autonomous_agents.mandate_enforcer import (  # noqa: E402
     MandateViolation,
     assert_can_execute,
     validate_decision,
