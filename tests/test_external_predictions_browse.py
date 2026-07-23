@@ -264,3 +264,80 @@ def test_refresh_source_uses_browse_when_entry_urls_exist(
 def test_browse_disabled_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXTERNAL_PREDICTIONS_BROWSE_DISABLED", "1")
     assert browse_enabled_for_source(_browse_source()) is False
+
+
+def test_approve_path_after_exploratory_refresh(hub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.path_store import (
+        approve_path,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.refresh import (
+        refresh_source,
+    )
+
+    seed_registry_if_missing()
+    registry = load_registry()
+    src = next(s for s in registry if s.id == "moneycontrol")
+    src.entry_urls = ["https://www.moneycontrol.com/markets"]
+    from trade_integrations.dataflows.index_research.external_predictions import source_registry
+
+    source_registry.save_registry(registry)
+
+    browse_url = "https://www.moneycontrol.com/news/nifty-browse.html"
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.run_exploratory_browse",
+        lambda *args, **kwargs: BrowseResult(
+            success=True,
+            trace=NavigationTrace(
+                steps=[NavigationStep(action="goto", url=browse_url)],
+                final_url=browse_url,
+                approved_by="auto",
+            ),
+            url=browse_url,
+            title="Browse article",
+            markdown=_FORECAST_MD,
+            steps_taken=1,
+        ),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.try_fast_path_then_exploratory",
+        lambda source, *, horizon_days, exploratory_rows, pipeline=None: (
+            None,
+            exploratory_rows,
+            exploratory_rows,
+        ),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh._fetch_spot",
+        lambda _sym, pipeline=None: 24000.0,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.filter_markdown_for_extraction",
+        lambda markdown, *args, **kwargs: markdown,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.extract_forecast",
+        lambda **kwargs: ExternalPredictionRecord(
+            source_id=kwargs["source"].id,
+            fetch_status="ok",
+            target=ExternalPredictionTarget(mid=26500.0),
+        ),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.pick_best_crawl_result",
+        lambda rows, *args, **kwargs: rows[0] if rows else None,
+    )
+
+    record = refresh_source(src.id, symbol="NIFTY", horizon_days=14, crawl_group={src.id: []})
+    assert record.fetch_status == "ok"
+
+    before = get_effective_path(next(s for s in load_registry() if s.id == "moneycontrol"), horizon_days=14)
+    assert before is not None
+    assert before.approved_by == "auto"
+
+    promoted = approve_path("moneycontrol", horizon_days=14)
+    assert promoted is not None
+    assert promoted.approved_by == "user"
+
+    after = get_effective_path(next(s for s in load_registry() if s.id == "moneycontrol"), horizon_days=14)
+    assert after is not None
+    assert after.approved_by == "user"

@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.test_external_predictions import _patch_refresh_batch
 from trade_integrations.dataflows.crawl4ai_client import CrawlPageResult
 from trade_integrations.dataflows.index_research.external_predictions.models import (
     ExternalPredictionRecord,
@@ -35,6 +34,22 @@ def hub_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     hub.mkdir()
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(hub))
     return hub
+
+
+def _patch_refresh_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Avoid network discovery/crawl during refresh batch tests."""
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.discover_sources_parallel",
+        lambda sources, **kwargs: {src.id: [] for src in sources},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.crawl_sources_parallel",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.financial_expert_context.build_and_save_expert_context",
+        lambda **_k: {},
+    )
 
 
 def test_navigation_trace_round_trip() -> None:
