@@ -205,10 +205,35 @@ class ReplayService:
             time.sleep(0.25)
 
 
+def _maybe_hydrate_sim_env() -> None:
+    """Load UI-persisted sim settings when running inside OpenAlgo."""
+    try:
+        from broker.stock_simulator.api._trade_path import hydrate_simulator_env_from_db
+
+        hydrate_simulator_env_from_db()
+    except Exception:
+        pass
+
+
+def _config_changed(existing: SimConfig, fresh: SimConfig) -> bool:
+    return (
+        existing.mode != fresh.mode
+        or existing.replay_date != fresh.replay_date
+        or existing.replay_time != fresh.replay_time
+        or existing.speed != fresh.speed
+        or existing.loop != fresh.loop
+        or existing.eval_mode != fresh.eval_mode
+        or existing.data_root != fresh.data_root
+    )
+
+
 def get_replay_service(*, reload: bool = False) -> ReplayService:
     global _service
     with _lock:
+        _maybe_hydrate_sim_env()
         config = load_sim_config()
+        if _service is not None and not reload and _config_changed(_service.config, config):
+            reload = True
         if _service is None or reload:
             if _service is not None:
                 _service.stop()

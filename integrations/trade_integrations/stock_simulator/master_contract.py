@@ -182,7 +182,7 @@ def _option_rows_for_underlying(
         expiry = _parse_expiry_stem(path.stem)
         if expiry is None:
             continue
-        legs = _strikes_on_day(path, replay_day)
+        legs = _all_strikes_in_file(path)
         if not legs:
             continue
         expiry_col = format_expiry_column(expiry)
@@ -206,17 +206,15 @@ def _option_rows_for_underlying(
     return rows
 
 
-def _strikes_on_day(path: Path, replay_day: str) -> set[tuple[float, str]]:
+def _all_strikes_in_file(path: Path) -> set[tuple[float, str]]:
+    """All unique (strike, CE|PE) legs in an expiry parquet — full chain ladder."""
     if not path.is_file():
         return set()
-    raw = pd.read_parquet(path, columns=["strike", "option_type", "trading_day"])
+    raw = pd.read_parquet(path, columns=["strike", "option_type"])
     if raw.empty:
         return set()
-    day_frame = raw[raw["trading_day"].astype(str) == replay_day]
-    if day_frame.empty:
-        return set()
     out: set[tuple[float, str]] = set()
-    for _, row in day_frame.drop_duplicates(subset=["strike", "option_type"]).iterrows():
+    for _, row in raw.drop_duplicates(subset=["strike", "option_type"]).iterrows():
         strike = float(row["strike"])
         opt_type = str(row["option_type"]).upper()
         if opt_type in {"CE", "PE"}:

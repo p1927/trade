@@ -90,23 +90,22 @@ class OptionsReplayStore:
         if latest.empty:
             return None
 
-        strikes = sorted(int(s) for s in latest["strike"].unique())
+        strikes = sorted(float(s) for s in latest["strike"].unique())
         if not strikes:
             return None
         atm = min(strikes, key=lambda s: abs(s - spot))
-        half = max(1, strike_count // 2)
         atm_idx = strikes.index(atm)
-        lo = max(0, atm_idx - half)
-        hi = min(len(strikes), lo + strike_count)
-        lo = max(0, hi - strike_count)
+        # OpenAlgo: strike_count strikes above and below ATM (inclusive window).
+        lo = max(0, atm_idx - strike_count)
+        hi = min(len(strikes), atm_idx + strike_count + 1)
         selected = strikes[lo:hi]
 
         ce_by_strike = {
-            int(row["strike"]): row
+            float(row["strike"]): row
             for _, row in latest[latest["option_type"] == "CE"].iterrows()
         }
         pe_by_strike = {
-            int(row["strike"]): row
+            float(row["strike"]): row
             for _, row in latest[latest["option_type"] == "PE"].iterrows()
         }
 
@@ -176,15 +175,21 @@ class OptionsReplayStore:
         sim_ist = sim_ts.astimezone(IST)
         day = sim_ist.date().isoformat()
         cutoff = pd.Timestamp(sim_ist)
-        day_frame = frame[
-            (frame["trading_day"] == day)
-            & (frame["timestamp"] <= cutoff)
-            & (frame["strike"] == parsed["strike"])
+        leg_frame = frame[
+            (frame["strike"] == parsed["strike"])
             & (frame["option_type"] == parsed["option_type"])
         ]
-        if day_frame.empty:
+        if leg_frame.empty:
             return None
-        hit = day_frame.sort_values("timestamp").iloc[-1]
+        day_frame = leg_frame[(leg_frame["trading_day"] == day) & (leg_frame["timestamp"] <= cutoff)]
+        if day_frame.empty:
+            # Before open or sparse day — last bar at or before sim_ts on any prior session.
+            prior = leg_frame[leg_frame["timestamp"] <= cutoff]
+            if prior.empty:
+                return None
+            hit = prior.sort_values("timestamp").iloc[-1]
+        else:
+            hit = day_frame.sort_values("timestamp").iloc[-1]
         ltp = float(hit["close"])
         return {
             "open": float(hit["open"]),
@@ -197,6 +202,96 @@ class OptionsReplayStore:
             "prev_close": ltp,
             "bar_ts": pd.Timestamp(hit["timestamp"]).isoformat(),
         }
+
+    def history_bars(
+        self,
+        openalgo_symbol: str,
+        exchange: str,
+        start: str,
+        end: str,
+        *,
+        bar_minutes: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Intraday OHLCV (+ OI) for an OpenAlgo-format option symbol."""
+        from trade_integrations.stock_simulator.master_contract import parse_openalgo_option_symbol
+
+        parsed = parse_openalgo_option_symbol(openalgo_symbol)
+        if parsed is None:
+            return []
+
+        slug = parsed["base"]
+        opt_dir = options_dir(self.data_root, slug)
+        expiry_iso = parsed["expiry"].isoformat()
+        path = opt_dir / f"{expiry_iso}.parquet"
+        if not path.is_file():
+            return []
+
+        frame = self._load_expiry(path)
+        if frame.empty:
+            return []
+
+        leg = frame[
+            (frame["strike"] == parsed["strike"])
+            & (frame["option_type"] == parsed["option_type"])
+            & (frame["trading_day"] >= start)
+            & (frame["trading_day"] <= end)
+        ]
+        if leg.empty:
+            return []
+
+        if bar_minutes >= 1440:
+            buckets = (
+                leg.groupby("trading_day", as_index=False)
+                .agg(
+                    open=("open", "first"),
+                    high=("high", "max"),
+                    low=("low", "min"),
+                    close=("close", "last"),
+                    volume=("volume", "sum"),
+                    open_interest=("open_interest", "last"),
+                    timestamp=("timestamp", "last"),
+                )
+            )
+        elif bar_minutes <= 1:
+            buckets = leg.copy()
+            buckets["bucket"] = buckets["timestamp"]
+        else:
+            leg = leg.copy()
+            leg["bucket"] = leg["timestamp"].dt.floor(f"{bar_minutes}min")
+            buckets = (
+                leg.groupby(["trading_day", "bucket"], as_index=False)
+                .agg(
+                    open=("open", "first"),
+                    high=("high", "max"),
+                    low=("low", "min"),
+                    close=("close", "last"),
+                    volume=("volume", "sum"),
+                    open_interest=("open_interest", "last"),
+                    timestamp=("timestamp", "last"),
+                )
+            )
+
+        rows: list[dict[str, Any]] = []
+        for _, hit in buckets.sort_values("timestamp").iterrows():
+            vol = hit.get("volume")
+            oi = hit.get("open_interest")
+            ts_val = (
+                str(hit["trading_day"])
+                if bar_minutes >= 1440 and "trading_day" in hit
+                else pd.Timestamp(hit["timestamp"]).isoformat()
+            )
+            rows.append(
+                {
+                    "timestamp": ts_val,
+                    "open": float(hit["open"]),
+                    "high": float(hit["high"]),
+                    "low": float(hit["low"]),
+                    "close": float(hit["close"]),
+                    "volume": int(vol) if vol is not None and pd.notna(vol) else 0,
+                    "oi": int(oi) if oi is not None and pd.notna(oi) else 0,
+                }
+            )
+        return rows
 
     def _pick_expiry_file(
         self,

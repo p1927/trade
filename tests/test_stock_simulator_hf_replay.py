@@ -60,7 +60,7 @@ def test_options_replay_store_real_oi():
     )
     assert chain is not None
     assert chain["source"] == "hf_replay"
-    assert len(chain["chain"]) == 5
+    assert len(chain["chain"]) == 11  # 5 each side of ATM + ATM
     assert chain["total_call_oi"] > 0 or chain["total_put_oi"] > 0
     atm = chain["chain"][len(chain["chain"]) // 2]
     assert atm["ce_ltp"] >= 0
@@ -74,7 +74,7 @@ def test_replay_service_banknifty_option_chain_uses_hf():
     chain = svc.get_option_chain("BANKNIFTY", "NSE_INDEX", strike_count=7)
     assert chain["source"] == "hf_replay"
     assert chain["underlying"] == "BANKNIFTY"
-    assert len(chain["chain"]) == 7
+    assert len(chain["chain"]) == 15  # 7 each side + ATM
     assert chain["simulated"] is True
 
 
@@ -94,3 +94,39 @@ def test_replay_service_multiquotes_banknifty():
     assert "data" in rows[0]
     assert rows[0]["data"]["ltp"] > 0
     assert rows[0]["data"]["source"] == "stock_simulator"
+
+
+def test_synthesizer_accepts_openalgo_expiry_format():
+    from datetime import datetime
+    from trade_integrations.stock_simulator.options.synthesizer import OptionsSynthesizer
+
+    synth = OptionsSynthesizer()
+    ts = datetime(2024, 4, 15, 10, 30, tzinfo=IST)
+    chain = synth.build_chain(
+        underlying="NIFTY",
+        exchange="NSE_INDEX",
+        spot=22000.0,
+        sim_ts=ts,
+        expiry_date="25APR24",
+        strike_count=3,
+    )
+    assert chain["expiry_date"] == "2024-04-25"
+    assert len(chain["chain"]) == 7  # 3 each side + ATM
+    assert chain["chain"][0]["ce_ltp"] >= 0
+
+
+def test_chain_at_strike_count_openalgo_semantics():
+    from trade_integrations.stock_simulator.options.replay_store import OptionsReplayStore
+
+    store = OptionsReplayStore(REPO / "data/nse/historic_data")
+    ts = datetime(2024, 4, 15, 10, 30, tzinfo=IST)
+    chain = store.chain_at(
+        underlying="NIFTY",
+        exchange="NSE_INDEX",
+        spot=22365.0,
+        sim_ts=ts,
+        expiry_date="18APR24",
+        strike_count=2,
+    )
+    assert chain is not None
+    assert len(chain["chain"]) == 5

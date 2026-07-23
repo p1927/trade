@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from trade_integrations.stock_simulator.options.replay_store import _expiry_to_file_stem
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -37,6 +39,19 @@ def _next_weekly_expiry(sim_ts: datetime) -> str:
     return expiry.isoformat()
 
 
+def _parse_expiry_iso(expiry_date: str | None, sim_ts: datetime) -> str:
+    """Resolve OpenAlgo DDMMMYY / ISO expiry to YYYY-MM-DD."""
+    if not expiry_date:
+        return _next_weekly_expiry(sim_ts)
+    stem = _expiry_to_file_stem(expiry_date)
+    if stem:
+        return stem
+    try:
+        return date.fromisoformat(expiry_date[:10]).isoformat()
+    except ValueError:
+        return _next_weekly_expiry(sim_ts)
+
+
 class OptionsSynthesizer:
     def __init__(self, *, default_vol: float = 0.14) -> None:
         self.default_vol = default_vol
@@ -51,12 +66,13 @@ class OptionsSynthesizer:
         expiry_date: str | None = None,
         strike_count: int = 10,
     ) -> dict[str, Any]:
-        expiry = expiry_date or _next_weekly_expiry(sim_ts)
+        expiry = _parse_expiry_iso(expiry_date, sim_ts)
         expiry_dt = datetime.strptime(expiry[:10], "%Y-%m-%d").replace(tzinfo=IST, hour=15, minute=30)
         t_years = max(1 / 365, (expiry_dt - sim_ts.astimezone(IST)).total_seconds() / (365 * 24 * 3600))
         step = 100.0 if spot >= 20000 else (50.0 if spot >= 10000 else 100.0)
         atm = round(spot / step) * step
-        strikes = [atm + (i - strike_count // 2) * step for i in range(strike_count)]
+        # OpenAlgo strike_count = strikes each side of ATM (inclusive), not total count.
+        strikes = [atm + (i - strike_count) * step for i in range(2 * strike_count + 1)]
         legs: list[dict[str, Any]] = []
         total_ce_oi = 0.0
         total_pe_oi = 0.0

@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from trade_integrations.stock_simulator.master_contract import (
+    _all_strikes_in_file,
     build_symtoken_rows,
     openalgo_option_symbol,
     parse_openalgo_option_symbol,
 )
+from trade_integrations.stock_simulator.hf_paths import options_dir
 
 REPO = Path(__file__).resolve().parents[1]
 DATA_ROOT = REPO / "data/nse/historic_data"
@@ -30,6 +32,24 @@ def test_parse_openalgo_option_symbol_roundtrip():
     assert parsed["base"] == "BANKNIFTY"
     assert parsed["strike"] == 48000
     assert parsed["option_type"] == "PE"
+
+
+@pytest.mark.skipif(not HF_ROOT.is_dir(), reason="HF replay data not present")
+def test_all_strikes_in_file_covers_full_parquet_ladder():
+    opt_dir = options_dir(DATA_ROOT, "NIFTY")
+    paths = sorted(opt_dir.glob("*.parquet"), key=lambda p: p.stem)
+    assert paths
+    path = paths[0]
+    full = _all_strikes_in_file(path)
+    raw = __import__("pandas").read_parquet(path, columns=["strike", "option_type", "trading_day"])
+    day_only = {
+        (float(r["strike"]), str(r["option_type"]).upper())
+        for _, r in raw[raw["trading_day"].astype(str) == "2024-04-15"]
+        .drop_duplicates(subset=["strike", "option_type"])
+        .iterrows()
+        if str(r["option_type"]).upper() in {"CE", "PE"}
+    }
+    assert len(full) >= len(day_only)
 
 
 @pytest.mark.skipif(not HF_ROOT.is_dir(), reason="HF replay data not present")

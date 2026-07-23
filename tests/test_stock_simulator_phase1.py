@@ -85,7 +85,7 @@ def test_options_synthesizer_chain():
         strike_count=5,
     )
     assert chain["simulated"] is True
-    assert len(chain["chain"]) == 5
+    assert len(chain["chain"]) == 2 * 5 + 1
     assert chain["underlying_ltp"] == 14500.0
 
 
@@ -108,3 +108,15 @@ def test_stepped_advance_after_watch_helper():
     step = maybe_advance_sim_after_watch(minutes=5)
     assert step is not None
     assert svc.sim_now() > before
+
+
+def test_replay_service_reloads_on_env_change(monkeypatch):
+    from trade_integrations.stock_simulator.replay import get_replay_service
+
+    monkeypatch.setenv("NSE_REPLAY_TIME", "09:15")
+    svc_a = get_replay_service(reload=True)
+    assert svc_a.config.replay_time == "09:15"
+
+    monkeypatch.setenv("NSE_REPLAY_TIME", "10:30")
+    svc_b = get_replay_service(reload=False)
+    assert svc_b.config.replay_time == "10:30"
