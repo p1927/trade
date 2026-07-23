@@ -14,6 +14,11 @@ from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_f
     resolve_source_urls,
     source_keywords,
 )
+from trade_integrations.dataflows.index_research.external_predictions.browse_agent import (
+    browse_enabled_for_source,
+    browse_result_to_crawl_row,
+    run_exploratory_browse,
+)
 from trade_integrations.dataflows.index_research.external_predictions.financial_expert_agent import (
     extract_forecast,
 )
@@ -35,6 +40,7 @@ from trade_integrations.dataflows.index_research.external_predictions.models imp
     ExternalPredictionRecord,
     ExternalPredictionSnapshot,
     ExternalPredictionSource,
+    NavigationStep,
     utc_now_iso,
 )
 from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
@@ -201,6 +207,7 @@ def _record_from_crawl_group(
     source_total: int | None = None,
     navigation_mode: str = "exploratory",
     fetch_method: str = "crawl4ai",
+    navigation_steps: list[NavigationStep] | None = None,
 ) -> ExternalPredictionRecord:
     sym = symbol.upper()
     prefix = ""
@@ -287,6 +294,7 @@ def _record_from_crawl_group(
             src.id,
             horizon_days=horizon_days,
             url=url,
+            steps=navigation_steps,
             pipeline=pipeline,
         )
     if record.fetch_status == "ok":
@@ -370,6 +378,31 @@ def refresh_source(
     used_fast = replay_result is not None and replay_result.success
     navigation_mode = "fast" if used_fast else "exploratory"
     fetch_method = "path_replay" if used_fast else "crawl4ai"
+    navigation_steps: list[NavigationStep] | None = None
+
+    if not used_fast and browse_enabled_for_source(src):
+        browse = run_exploratory_browse(
+            src,
+            horizon_days=horizon_days,
+            pipeline=pipeline,
+        )
+        if browse.success and browse.url:
+            rows = [browse_result_to_crawl_row(browse)]
+            navigation_steps = list(browse.trace.steps)
+            fetch_method = "browse_agent"
+            if pipeline:
+                pipeline.info(
+                    "browse",
+                    f"Exploratory browse succeeded in {browse.steps_taken} step(s)",
+                    source_id=source_id,
+                    url=browse.url[:120],
+                )
+        elif pipeline and browse.error_message:
+            pipeline.warn(
+                "browse",
+                f"Exploratory browse did not find forecast — using crawl batch ({browse.error_message})",
+                source_id=source_id,
+            )
 
     try:
         record = _record_from_crawl_group(
@@ -383,6 +416,7 @@ def refresh_source(
             source_total=source_total,
             navigation_mode=navigation_mode,
             fetch_method=fetch_method,
+            navigation_steps=navigation_steps,
         )
         if used_fast and record.fetch_status != "ok":
             if exploratory_backup:
@@ -406,6 +440,7 @@ def refresh_source(
                     source_total=source_total,
                     navigation_mode=navigation_mode,
                     fetch_method=fetch_method,
+                    navigation_steps=None,
                 )
         elif used_fast and record.fetch_status == "ok":
             touch_path_success(src.id, horizon_days=horizon_days)
