@@ -2,7 +2,7 @@
 
 **Goal:** SearXNG + web search parallel discovery; fast-path replay + exploratory fallback; auto-save paths; parse retry; `horizon_match` flag.
 
-**Type:** implement | **Depends on:** Phase 1
+**Type:** implement | **Depends on:** Phase 1 | **Status:** **Done**
 
 ### Task 1: Wire `fetcher.py` SearXNG into refresh
 ### Task 2: `NavigationTrace` model + path store per `(source_id, horizon_days)`

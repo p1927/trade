@@ -4,9 +4,7 @@
 
 **Goal:** Remove scheduled cron refresh; load cached snapshot on tab open; stream per-source results via SSE `source_complete`; summary header on Miscellaneous tab.
 
-**Type:** refactor + cleanup
-
-**Depends on:** —
+**Status:** **Done** | **Type:** refactor + cleanup | **Depends on:** —
 
 ## Global Constraints
 

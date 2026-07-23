@@ -4,7 +4,9 @@
 **Status:** **Superseded** by `2026-07-17-hub-distilled-news-entity-design.md`  
 **Scope:** Daily compaction of verified news SSOT; moderate semantic dedup with summary similarity
 
-> This document is retained for reference. The approved approach is **Distilled News Events** with staging queue + async distillation — see the superseding spec and implementation plan `docs/superpowers/plans/2026-07-17-hub-distilled-news-entity.md`.
+> This document is retained for reference. The approved approach is **Distilled News Events** with staging queue + async distillation — see the superseding spec and plans:
+> - `docs/superpowers/plans/2026-07-17-hub-distilled-news-entity.md` (Tasks 1–10 **Done**)
+> - `docs/superpowers/plans/2026-07-23-hub-news-resolver-dedup-index.md` (resolver/dedup **Done**)
 
 ---
 

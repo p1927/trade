@@ -10,6 +10,27 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-17-hub-distilled-news-entity-design.md`
 
+**Extended by:** [2026-07-23-hub-news-resolver-dedup-index.md](./2026-07-23-hub-news-resolver-dedup-index.md) (resolver T0–T4, index, club merge, post-upsert safety)
+
+## Program status (2026-07-23)
+
+| Task | Scope | Status |
+|------|--------|--------|
+| 1 | Models + staging store | **Done** — `news_event_models.py`, `news_staging_store.py` |
+| 2 | Distilled events store | **Done** — `news_events_store.py`, `events.parquet` SSOT |
+| 3 | Summary similarity + matching | **Done** — `news_dedup.py`, `news_event_matching.py` |
+| 4 | LLM distillation core | **Done** — `news_distillation.py` |
+| 5 | Distillation agent worker | **Done** — `news_entity_worker.py` |
+| 6 | Ingest → staging fast path | **Done** — `news_hub_bridge/_ingest.py` |
+| 7 | Bridge union read | **Done** — `news_hub_bridge` union path |
+| 8 | Daily cron + ops scripts | **Done** — `index_jobs.py`, staging CLI |
+| 9 | Backfill `records.parquet` → events | **Done** — `migrate_hub_news_records_once.py` |
+| 10 | Daily event compaction | **Done** — two-signal merge in entity worker |
+
+**Verification:** see resolver index pytest scope (57 passed, 2026-07-23).
+
+**Remaining (UX / prediction panel, not entity core):** News Impact timeline UI, `hub_empty` status — see [prediction Phase 2 plan](./2026-07-17-prediction-phase2-hub-news.md).
+
 ## Global Constraints
 
 - All app reads/writes go through `trade_integrations.dataflows.news_hub_bridge` — not direct store imports.
@@ -425,9 +446,6 @@ git commit -m "feat(hub-news): compact duplicate distilled events daily"
 
 Plan complete and saved to `docs/superpowers/plans/2026-07-17-hub-distilled-news-entity.md`.
 
-**Two execution options:**
+**Status (2026-07-23):** Tasks 1–10 **implemented**. Resolver/dedup phases −1–4 documented in [2026-07-23-hub-news-resolver-dedup-index.md](./2026-07-23-hub-news-resolver-dedup-index.md).
 
-1. **Subagent-Driven (recommended)** — one implementer subagent per task, review between tasks
-2. **Inline Execution** — execute tasks in this session with checkpoints
-
-Which approach do you want?
+**Remaining:** Prediction-panel UX items only (timeline UI, `hub_empty`) — not entity core.

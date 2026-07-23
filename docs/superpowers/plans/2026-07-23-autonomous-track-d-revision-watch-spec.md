@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python, existing `strategy_watch_spec`, `mcp_set_watch_spec` handoff path.
 
+**Status:** **Done** (shipped with autonomous agents work; verified 2026-07-23)
+
 ## Global Constraints
 
 - OpenAlgo remains sole IN execution authority; Nautilus owns watch rules.
@@ -18,21 +20,23 @@
 
 ### Task 1: revision_watch_spec module
 
-- [ ] Add `revision_watch_spec.py` with level extraction, `watch_spec_matches_levels`, `maybe_sync_watch_spec_on_revision`
-- [ ] Unit tests for match/mismatch and auto-sync
+- [x] Add `revision_watch_spec.py` with level extraction, `watch_spec_matches_levels`, `maybe_sync_watch_spec_on_revision`
+- [x] Unit tests for match/mismatch and auto-sync — `tests/test_revision_watch_spec.py`
 
 ### Task 2: Wire record_autonomous_decision
 
-- [ ] Accept optional `stop`, `target`, `spot` on decision
-- [ ] Call `maybe_sync_watch_spec_on_revision` on REVISE/ADJUST (IN + US paths)
-- [ ] Return `watch_spec_sync` in MCP response
+- [x] Accept optional `stop`, `target`, `spot` on decision
+- [x] Call `maybe_sync_watch_spec_on_revision` on REVISE/ADJUST (IN + US paths) — `mcp_actions.py`
+- [x] Return `watch_spec_sync` in MCP response
 
 ### Task 3: Prompt enforcement
 
-- [ ] Extend `strategy_revision` prompt footer in `turns.py` with mandatory watch_spec update rule
+- [x] Extend `strategy_revision` prompt footer in `turns.py` with mandatory watch_spec update rule
 
 ### Verify
 
 ```bash
 pytest tests/test_revision_watch_spec.py tests/test_autonomous_turns.py tests/test_autonomous_mcp_actions.py -q
 ```
+
+**Gate:** `test_revision_watch_spec.py` passes (verified 2026-07-23).

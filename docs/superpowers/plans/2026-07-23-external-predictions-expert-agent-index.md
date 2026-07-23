@@ -6,6 +6,8 @@
 
 **Design spec:** [2026-07-23-external-predictions-expert-agent-design.md](../specs/2026-07-23-external-predictions-expert-agent-design.md)
 
+**Shipped in:** `7321e7f` | **Last verified:** 2026-07-23 (`68 passed` expert + resolver smoke scope)
+
 ## Phase map
 
 | Phase | Plan file | Type | Depends on | Status |

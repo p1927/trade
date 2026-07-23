@@ -1,7 +1,7 @@
 # External Predictions Financial Expert Agent — Design Spec
 
 **Date:** 2026-07-23  
-**Status:** Approved for implementation  
+**Status:** Approved — **implemented** (Phases 0–4 + 5 remediation; see [expert-agent index](../plans/2026-07-23-external-predictions-expert-agent-index.md))  
 **Surface:** Vibe Trading `/prediction` → Miscellaneous (external-predictions)
 
 ## Goal

@@ -2,7 +2,7 @@
 
 **Goal:** Build `financial_expert_context.py` + `nifty_expert_brief.md`; persist `expert_context.json` on refresh start.
 
-**Type:** implement | **Depends on:** Phase 0
+**Type:** implement | **Depends on:** Phase 0 | **Status:** **Done**
 
 See [design spec](../specs/2026-07-23-external-predictions-expert-agent-design.md).
 

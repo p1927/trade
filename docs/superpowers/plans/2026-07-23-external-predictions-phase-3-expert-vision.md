@@ -2,7 +2,7 @@
 
 **Goal:** `financial_expert_agent.py`, screenshot resize 512/1024, vision cross-check, thumbnail on cards.
 
-**Type:** implement | **Depends on:** Phase 2
+**Type:** implement | **Depends on:** Phase 2 | **Status:** **Done**
 
 ### Task 1: `screenshot_utils.py` resize for M3
 ### Task 2: Crawl4AI full-page screenshot capture

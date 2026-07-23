@@ -2,7 +2,7 @@
 
 **Goal:** Bounded Playwright browse (max 8 steps); enhanced Add Site form with entry URLs; user Approve path.
 
-**Type:** implement | **Depends on:** Phase 3
+**Type:** implement | **Depends on:** Phase 3 | **Status:** **Done**
 
 ### Task 1: `browse_agent.py` exploratory loop
 ### Task 2: Auto-save path on success; user approve API

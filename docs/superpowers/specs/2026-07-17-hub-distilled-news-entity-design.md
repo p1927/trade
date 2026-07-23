@@ -1,7 +1,7 @@
 # Hub Distilled News Entity — Design Spec
 
 **Date:** 2026-07-17  
-**Status:** Approved direction — supersedes `2026-07-17-hub-news-deduplication-design.md`  
+**Status:** Approved — base entity pipeline **Done**; resolver/dedup extension **Done** (see [hub-news-resolver-dedup index](../plans/2026-07-23-hub-news-resolver-dedup-index.md))  
 **Scope:** Hub architecture for curated news events, async enrichment queue, and evolving timelines
 
 ---

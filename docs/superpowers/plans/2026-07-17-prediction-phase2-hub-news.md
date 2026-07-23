@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Last inventory:** 2026-07-17 — after local commits `c070e1d..3410d84` (10 commits ahead of `origin/main`).
+> **Last inventory:** 2026-07-23 — entity SSOT + resolver dedup shipped in `7321e7f`; see [hub-news-resolver-dedup index](./2026-07-23-hub-news-resolver-dedup-index.md).
 
 **Goal:** Make the Prediction tab’s headlines and news impact **read from hub SSOT only** on normal Run and live poll; **ingest fresh news into hub only when the user checks “Refresh all 50 constituents”**; eliminate duplicate live-fetch paths that cause rate limits and empty News Impact panels.
 
@@ -10,9 +10,10 @@
 
 **Tech Stack:** Python 3.12+, `news_hub_bridge`, `news_staging_store`, `news_entity_worker`, `news_impact_engine`, FastAPI `/index-prediction/*`, React Prediction tab.
 
-**Related specs/plans:**
+**Related plans:**
 - `docs/superpowers/specs/2026-07-17-hub-distilled-news-entity-design.md`
-- `docs/superpowers/plans/2026-07-17-hub-distilled-news-entity.md` (Phase 3 — partial)
+- `docs/superpowers/plans/2026-07-17-hub-distilled-news-entity.md` (Tasks 1–10 **Done**)
+- `docs/superpowers/plans/2026-07-23-hub-news-resolver-dedup-index.md` (resolver **Done**)
 - `docs/superpowers/plans/2026-07-16-prediction-news-impact-panel.md` (UI contract)
 
 ## Global Constraints
@@ -85,37 +86,43 @@ c070e1d feat(company-research): gate tiered APIs during Nifty-50 batch
 | API staging endpoint | `trade_routes.py` | `process_staging_batch` for ops |
 | Tests | `test_fetch_policy`, `test_index_light_refresh_pipeline_log`, `test_news_hub_bridge`, etc. | 13+ targeted tests pass |
 
-### ⚠️ Partial — works but not aligned with Phase 2 contract
+### ⚠️ Partial — prediction panel contract (not entity/resolver)
 
 | Gap | Current behavior | Target |
 |-----|------------------|--------|
-| Constituent news → hub on refresh-all-50 | `constituent_news_ingest.py` wired in `batch_constituents._research_one` | ✅ Shipped |
-| `headlines_for_day` fallback | Still calls `collect_headlines_for_day` (aggregator/tiered) when hub empty | Task 2: return `hub_empty`; no live collect on normal paths |
-| News Impact GET auto-refresh | `trade_routes.py` calls `refresh_news_impact(refresh_ingest=False)` when resolve empty | OK if ingest false; verify no hidden tiered fetch in `build_news_impact_snapshot` |
-| Constituent news factors | From cached `company_research` doc, not hub union | Document staleness; optional Phase 2b hub read |
-| Entity pipeline default | `HUB_NEWS_ENTITY_PIPELINE` defaults **on** (`news_staging_store.py`) | Document; consider default **off** until Phase 2 Task 1 ships |
-| Normal run prerequisite | Requires existing index doc with constituent signals | First-time user must run refresh-all-50 once — surface clearly in UI |
+| `headlines_for_day` fallback | Still calls `collect_headlines_for_day` when hub empty on some paths | Return `hub_empty`; no live collect on normal run |
+| News Impact GET auto-refresh | `refresh_news_impact(refresh_ingest=False)` when resolve empty | OK if ingest false; verify no hidden tiered fetch |
+| Constituent news factors | From cached `company_research` doc, not hub union | Optional Phase 2b hub read |
+| Normal run prerequisite | Requires prior refresh-all-50 for constituent signals | Surface clearly in UI |
 
-### ❌ Not started (Phase 2 remaining)
-
-| Item | Planned file / work |
-|------|---------------------|
-| `constituent_news_ingest.py` | ✅ `maybe_ingest_constituent_news` on refresh-all-50 |
-| `tests/test_constituent_news_ingest.py` | ✅ |
-| Hub-read-only guard tests | Block `collect_headlines_for_day` on normal `run_index_research` |
-| `hub_empty` status in API + panel | Distinct from generic empty items |
-| `constituent_news_as_of` on index doc | Pipeline log / UI freshness hint |
-| `.env.example` docs | `INDEX_RESEARCH_MAX_WORKERS`, `HUB_NEWS_ENTITY_PIPELINE`, `INDEX_MONITOR_MACRO_DRIFT_PCT` |
-
-### ❌ Not started (Phase 3 — see distilled entity plan)
+### ❌ Remaining (Phase 2 tasks)
 
 | Item | Status |
 |------|--------|
-| `news_events_store.py` / `news_event_models.py` | Not created — still using `verified_news_store.records.parquet` |
-| Separate `events.parquet` SSOT | Spec only |
-| Backfill script `records.parquet` → events | Not created |
+| Hub-read-only guard tests | Not started |
+| `hub_empty` status in API + panel | Not started |
+| `constituent_news_as_of` on index doc | Not started |
+| `.env.example` docs for index workers | Partial |
+
+### ✅ Shipped (Phase 3 entity SSOT — 2026-07-23)
+
+| Item | Status |
+|------|--------|
+| `news_events_store.py` / `news_event_models.py` | **Done** |
+| `events.parquet` SSOT + `event_index.parquet` | **Done** — see resolver dedup index |
+| Backfill `records.parquet` → events | **Done** — `scripts/migrate_hub_news_records_once.py` |
+| Unified resolver + club merge + post-upsert safety | **Done** — `news_resolver.py`, `news_event_clubbing.py`, `news_post_upsert_safety.py` |
+
+### ❌ Remaining (Phase 2/3 UX — not blocking resolver)
+
+| Item | Status |
+|------|--------|
 | News Impact UI timeline + references expandable | Not started |
-| Debounced 2-min market-hours worker | Partial — `schedule_staging_processing` thread exists; no market-hours gate |
+| `hub_empty` status in API + panel | Not started |
+| `constituent_news_as_of` on index doc | Not started |
+| Hub-read-only guard tests (block live collect on normal run) | Not started |
+| Debounced market-hours-only staging worker | Partial — `schedule_staging_processing` exists; no market-hours gate |
+| `headlines_for_day` tiered fallback when hub empty | Partial — still live-collects on some paths |
 
 ---
 
