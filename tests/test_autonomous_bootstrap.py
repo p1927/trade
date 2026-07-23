@@ -57,7 +57,7 @@ def test_finalize_bootstrap_requires_last_decision(hub_tmp: Path):
     assert agent["bootstrap_status"] == "running"
 
 
-def test_finalize_bootstrap_auto_approves_and_activates_watch(hub_tmp: Path, monkeypatch: pytest.MonkeyPatch):
+def test_finalize_bootstrap_enters_awaiting_plan_approval(hub_tmp: Path, monkeypatch: pytest.MonkeyPatch):
     watch_calls: list[str] = []
     monkeypatch.setattr(
         "trade_integrations.autonomous_agents.nautilus_watch.ensure_nautilus_watch_for_agent",
@@ -74,11 +74,10 @@ def test_finalize_bootstrap_auto_approves_and_activates_watch(hub_tmp: Path, mon
     save_agent(agent)
     assert finalize_bootstrap_if_ready("aa_boot") is True
     updated = get_agent("aa_boot")
-    assert updated["bootstrap_status"] == "done"
-    assert updated.get("plan_approved_at")
-    assert not updated.get("plan_approval_required")
-    assert updated.get("bootstrap_completed_at")
-    assert watch_calls == ["aa_boot"]
+    assert updated["bootstrap_status"] == "awaiting_plan_approval"
+    assert updated.get("plan_approval_required") is True
+    assert not updated.get("plan_approved_at")
+    assert watch_calls == []
 
 
 def test_finalize_bootstrap_requires_watch_spec(hub_tmp: Path, monkeypatch: pytest.MonkeyPatch):

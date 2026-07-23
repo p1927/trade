@@ -81,21 +81,18 @@ Agent record after bootstrap:
 
 ---
 
-## 2. Initial plan approval gate (new)
+## 2. Initial plan approval gate (shipped — widget-first)
 
-**Files:** New API route in [`autonomous_routes.py`](../../vibetrading/agent/src/api/autonomous_routes.py), new UI in [`Autonomous.tsx`](../../vibetrading/frontend/src/pages/Autonomous.tsx)
+**Files:** [`plan_approval.py`](../../integrations/trade_integrations/autonomous_agents/plan_approval.py), [`autonomous_routes.py`](../../vibetrading/agent/src/api/autonomous_routes.py), [`TradePlanWidgetCard.tsx`](../../vibetrading/frontend/src/components/chat/TradePlanWidgetCard.tsx)
 
-After bootstrap completes, show a **Plan Approval card** in the agent session (alongside trade plan + watchers):
+After bootstrap completes, agent enters `bootstrap_status: "awaiting_plan_approval"`. The **trade plan widget** shows **Approve / Reject** (not a separate banner). `set_agent_watch_spec` persists rules but **defers** Nautilus handoff until approve.
 
-- Summary: recommended strategy, confidence, watchers list
-- Actions: **Approve & start watching** | **Reject / revise in chat**
-- On approve:
-  - `bootstrap_status → "done"`, `plan_approved_at` timestamp
-  - Ensure Nautilus handoff synced; watch process bound
-  - Agent fully autonomous — no further plan confirmations required
-- On reject: user message → optional manual revision turn (not automatic)
+- On approve: `plan_approved_at`, `bootstrap_status → done`, activate watch + handoff
+- On reject: `plan_rejected` — user revises in chat
+- Watcher-driven revisions: informational widget only (no re-approval)
+- User-driven new widget after autonomy: `request_plan_reapproval`
 
-Until approved, Nautilus may evaluate but **must not** dispatch `strategy_revision` or auto-execute (gate in [`vibe_trigger.py`](../../integrations/nautilus_openalgo_bridge/vibe_trigger.py) + [`watch.py`](../../integrations/trade_integrations/autonomous_agents/watch.py)).
+Until approved, Nautilus must not dispatch revision turns ([`vibe_trigger.py`](../../integrations/nautilus_openalgo_bridge/vibe_trigger.py) + [`watch.py`](../../integrations/trade_integrations/autonomous_agents/watch.py)).
 
 ---
 
