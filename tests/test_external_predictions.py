@@ -309,6 +309,56 @@ def test_rebuild_snapshot_includes_refresh_rollup(hub_dir: Path) -> None:
     assert payload["had_errors"] is True
 
 
+def test_validate_user_source_request_requires_domain_and_entry_urls() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.source_validation import (
+        validate_user_source_request,
+    )
+
+    _, _, err = validate_user_source_request(display_name="", domains=[], entry_urls=[])
+    assert err == "display_name is required"
+
+    _, _, err = validate_user_source_request(
+        display_name="Example",
+        domains=[],
+        entry_urls=["https://example.com/markets"],
+    )
+    assert err == "at least one domain is required"
+
+    domains, urls, err = validate_user_source_request(
+        display_name="Example",
+        domains=["example.com"],
+        entry_urls=["https://example.com/markets"],
+    )
+    assert err is None
+    assert domains == ["example.com"]
+    assert urls == ["https://example.com/markets"]
+
+    _, _, err = validate_user_source_request(
+        display_name="Example",
+        domains=["example.com"],
+        entry_urls=["https://other.com/markets"],
+    )
+    assert "must match" in (err or "")
+
+
+def test_add_source_to_watchlist_persists_entry_urls(hub_dir: Path) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
+        add_source_to_watchlist,
+        get_source,
+    )
+
+    seed_registry_if_missing()
+    src = add_source_to_watchlist(
+        display_name="Custom Research",
+        domains=["custom.example.com"],
+        entry_urls=["https://custom.example.com/markets"],
+        added_by="user",
+    )
+    loaded = get_source(src.id)
+    assert loaded is not None
+    assert loaded.entry_urls == ["https://custom.example.com/markets"]
+
+
 def test_append_source_complete_writes_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _ensure_vibetrading_agent_on_path()
     jobs_root = tmp_path / "log" / "external_predictions_jobs"

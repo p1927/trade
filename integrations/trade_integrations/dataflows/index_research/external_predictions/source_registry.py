@@ -245,6 +245,7 @@ def add_source_to_watchlist(
     display_name: str,
     domains: list[str] | None = None,
     search_queries: list[str] | None = None,
+    entry_urls: list[str] | None = None,
     kind: str = "media",
     added_by: str = "user",
 ) -> ExternalPredictionSource:
@@ -255,6 +256,8 @@ def add_source_to_watchlist(
         existing.watchlisted = True
         if domains:
             existing.domains = list(dict.fromkeys(existing.domains + domains))
+        if entry_urls:
+            existing.entry_urls = list(dict.fromkeys(list(existing.entry_urls or []) + entry_urls))
         if search_queries:
             merged = list(dict.fromkeys(existing.search_queries + search_queries))
             existing.search_queries = merged
@@ -272,6 +275,7 @@ def add_source_to_watchlist(
             f"{display_name} Nifty 50 forecast {{year}}",
         ]),
         domains=list(domains or []),
+        entry_urls=list(entry_urls or []),
         watchlisted=True,
         discovered_at=utc_now_iso() if src_added == "discover" else None,
         added_by=src_added,  # type: ignore[arg-type]
