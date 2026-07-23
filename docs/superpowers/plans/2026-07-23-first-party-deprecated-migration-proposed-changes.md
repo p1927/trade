@@ -133,7 +133,7 @@ Track via submodule merges, not Trade migration phases:
 
 | Step | Action |
 |------|--------|
-| 1 | Run `scripts/migrate_hub_news_records_once.py --apply` on dev hub; verify `legacy_remaining=0` |
+| 1 | Run `ensure_hub_news_migrations()` on dev hub; verify `legacy_remaining=0` (**one-time scripts removed post-cutover**) |
 | 2 | Migrate bridge/resolver callers off `distilled_event_to_headline_dict` / `list_verified_records_from_events` to native event reads |
 | 3 | Remove `HUB_NEWS_LEGACY_INGEST` branch and `is_legacy_ingest_enabled()` |
 | 4 | Drop `news_verified_records_legacy` from hub status after UI/API consumers updated |
@@ -149,9 +149,9 @@ Track via submodule merges, not Trade migration phases:
 
 | Change | Action |
 |--------|--------|
-| M-5 | One-time script: backfill remaining `orchestrator.json` orphans → draft agents; then remove `get_orchestrator_meta` / `backfill_orphan_orchestrator_session` from hot path |
-| M-6 | Script or admin job: normalize plan-approval widget on all hub agents; remove `normalize_legacy_plan_approval` lazy path |
-| M-7 | Run registry migration for all agents; remove `migrate_agent_watch_spec_to_registry` calls from `nautilus_watch.py` / `proposals.py` |
+| M-5 | **Done** — orphan backfill removed; draft agents created via orchestrator session API only |
+| M-6 | Script or admin job: normalize plan-approval widget on all hub agents; **Done** — lazy `ensure_plan_approval_record` removed |
+| M-7 | **Done** — registry migration on plan approval + infra heal; per-agent `migrate_agent_watch_spec_to_registry` retained at activation |
 | M-9 | Run `migrate_legacy_sources_layout` once on hub wiki roots; keep idempotent call in bootstrap or remove after gate |
 
 **Design fit:** Draft agent + watch registry match autonomous spec; no singleton orchestrator pointer.

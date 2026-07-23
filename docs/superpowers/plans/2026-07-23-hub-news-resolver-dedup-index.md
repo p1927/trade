@@ -13,7 +13,7 @@
 | Phase | Scope | Key modules | Status |
 |-------|--------|-------------|--------|
 | −1 | LLM-Wiki probe + ingest gate | `hub_wiki/probe.py`, `_ingest.py`, `hub_status`, ingest UI pause | **Done** |
-| 0 | Retire `records.parquet` primary path | `migrate_hub_news_records_once.py`, `news_migrations.py` | **Done** |
+| 0 | Retire `records.parquet` primary path | `news_migrations.ensure_hub_news_migrations`, `news_migrations.py` | **Done** |
 | 1 | `event_index.parquet` materializer | `news_event_index.py`, hooks in `news_events_store.py` | **Done** |
 | 1b–2 | Unified resolver T0–T4 | `news_resolver.py`, staging TTL, `attach_refs_to_event` | **Done** |
 | 2b | Two-signal club merge | `news_event_clubbing.py`, compaction + post-upsert wiring | **Done** |

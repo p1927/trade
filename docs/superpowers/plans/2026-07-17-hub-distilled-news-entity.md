@@ -24,7 +24,7 @@
 | 6 | Ingest → staging fast path | **Done** — `news_hub_bridge/_ingest.py` |
 | 7 | Bridge union read | **Done** — `news_hub_bridge` union path |
 | 8 | Daily cron + ops scripts | **Done** — `index_jobs.py`, staging CLI |
-| 9 | Backfill `records.parquet` → events | **Done** — `migrate_hub_news_records_once.py` |
+| 9 | Backfill `records.parquet` → events | **Done** — `ensure_hub_news_migrations()` |
 | 10 | Daily event compaction | **Done** — two-signal merge in entity worker |
 
 **Verification:** see resolver index pytest scope (57 passed, 2026-07-23).

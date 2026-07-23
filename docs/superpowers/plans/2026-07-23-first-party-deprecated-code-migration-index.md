@@ -104,11 +104,11 @@ Legend: **Cat** = category | **Target** = replacement authority | **Diff** = eas
 
 | ID | File | Cat | Target | Commit | Diff |
 |----|------|-----|--------|--------|------|
-| M-1 | [`news_migrations.py`](../../integrations/trade_integrations/hub_storage/news_migrations.py) + [`migrate_hub_news_records_once.py`](../../scripts/migrate_hub_news_records_once.py) | **data cutover** | `events.parquet` SSOT | `ec88e69d38ce`, `7321e7ffad92` | hard |
+| M-1 | [`news_migrations.py`](../../integrations/trade_integrations/hub_storage/news_migrations.py) `ensure_hub_news_migrations` | **data cutover** | `events.parquet` SSOT | **Done** — one-time script removed |
 | M-2 | [`news_events_store.py`](../../integrations/trade_integrations/hub_storage/news_events_store.py) legacy record adapters | compat shim | Native event shape | `ec88e69d38ce` | hard |
 | M-3 | [`verified_news_store.py`](../../integrations/trade_integrations/hub_storage/verified_news_store.py) `iter_legacy_verified_records` | migration-only | Events queries | `ec88e69d38ce` | medium |
 | M-4 | [`news_staging_store.py`](../../integrations/trade_integrations/hub_storage/news_staging_store.py) `HUB_NEWS_LEGACY_INGEST` | flag-gated | Entity pipeline + staging | `174a8af2a6c1` | medium |
-| M-5 | [`store.py:395`](../../integrations/trade_integrations/autonomous_agents/store.py) `backfill_orphan_orchestrator_session` | migrate | Draft-agent model (no `orchestrator.json`) | `24b377274898` | medium |
+| M-5 | [`store.py`](../../integrations/trade_integrations/autonomous_agents/store.py) orphan backfill | migrate | Draft-agent model (no `orchestrator.json`) | **Done** |
 | M-6 | [`plan_approval.py:236`](../../integrations/trade_integrations/autonomous_agents/plan_approval.py) `normalize_legacy_plan_approval` | lazy backfill | New plan-approval widget | `92f9da69c128` | medium |
 | M-7 | [`watch_registry/store.py`](../../integrations/trade_integrations/watch_registry/store.py) `migrate_agent_watch_spec_to_registry` | cutover helper | Registry-only watches | `c7baf0fad411` | medium |
 | M-8 | [`outcome_ledger.py`](../../integrations/trade_integrations/autonomous_agents/outcome_ledger.py) `legacy_outcomes.parquet` | self-migrate | `outcomes.parquet` | `b79326040cc1` | easy |

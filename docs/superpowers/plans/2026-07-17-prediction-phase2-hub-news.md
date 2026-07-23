@@ -110,7 +110,7 @@ c070e1d feat(company-research): gate tiered APIs during Nifty-50 batch
 |------|--------|
 | `news_events_store.py` / `news_event_models.py` | **Done** |
 | `events.parquet` SSOT + `event_index.parquet` | **Done** — see resolver dedup index |
-| Backfill `records.parquet` → events | **Done** — `scripts/migrate_hub_news_records_once.py` |
+| Backfill `records.parquet` → events | **Done** — `ensure_hub_news_migrations()` |
 | Unified resolver + club merge + post-upsert safety | **Done** — `news_resolver.py`, `news_event_clubbing.py`, `news_post_upsert_safety.py` |
 
 ### ❌ Remaining (Phase 2/3 UX — not blocking resolver)
