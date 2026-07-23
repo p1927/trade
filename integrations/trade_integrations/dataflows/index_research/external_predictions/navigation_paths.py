@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from trade_integrations.dataflows.crawl4ai_client import CrawlPageResult, crawl_urls_parallel_sync
 from trade_integrations.dataflows.index_research.external_predictions.models import (
@@ -33,6 +33,7 @@ class ReplayResult:
     elapsed_ms: int = 0
     mode: str = "exploratory"
     error_message: str = ""
+    metadata: dict = field(default_factory=dict)
 
 
 def resolve_replay_url(trace: NavigationTrace) -> str:
@@ -94,6 +95,7 @@ def replay_navigation_path(
         markdown=row.markdown,
         elapsed_ms=row.elapsed_ms,
         mode="fast",
+        metadata=dict(row.metadata or {}),
     )
 
 
@@ -129,6 +131,7 @@ def try_fast_path_then_exploratory(
             title=replay.title,
             markdown=replay.markdown,
             elapsed_ms=float(replay.elapsed_ms),
+            metadata=dict(replay.metadata or {}),
         )
         return replay, [(replay.url, synthetic)], exploratory_backup
 

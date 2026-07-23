@@ -12,8 +12,8 @@
 |-------|-----------|------|------------|--------|
 | 0 | [2026-07-23-external-predictions-phase-0-refactor.md](./2026-07-23-external-predictions-phase-0-refactor.md) | refactor + cleanup | — | **Done** |
 | 1 | [2026-07-23-external-predictions-phase-1-expert-context.md](./2026-07-23-external-predictions-phase-1-expert-context.md) | implement | Phase 0 | **Done** (foundation) |
-| 2 | [2026-07-23-external-predictions-phase-2-discovery-paths.md](./2026-07-23-external-predictions-phase-2-discovery-paths.md) | implement | Phase 1 | Not started |
-| 3 | [2026-07-23-external-predictions-phase-3-expert-vision.md](./2026-07-23-external-predictions-phase-3-expert-vision.md) | implement | Phase 2 | Not started |
+| 2 | [2026-07-23-external-predictions-phase-2-discovery-paths.md](./2026-07-23-external-predictions-phase-2-discovery-paths.md) | implement | Phase 1 | **Done** |
+| 3 | [2026-07-23-external-predictions-phase-3-expert-vision.md](./2026-07-23-external-predictions-phase-3-expert-vision.md) | implement | Phase 2 | **Done** (pending commit) |
 | 4 | [2026-07-23-external-predictions-phase-4-browse-sources-ui.md](./2026-07-23-external-predictions-phase-4-browse-sources-ui.md) | implement | Phase 3 | Not started |
 
 ## Global constraints (all phases)

@@ -14,8 +14,12 @@ from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_f
     resolve_source_urls,
     source_keywords,
 )
-from trade_integrations.dataflows.index_research.external_predictions.extractor import (
-    extract_prediction_from_text,
+from trade_integrations.dataflows.index_research.external_predictions.financial_expert_agent import (
+    extract_forecast,
+)
+from trade_integrations.dataflows.index_research.external_predictions.screenshot_utils import (
+    ScreenshotArtifacts,
+    persist_screenshot_b64,
 )
 from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
     discover_sources_parallel,
@@ -131,6 +135,7 @@ def _extract_from_crawl(
     url: str,
     title: str,
     markdown: str,
+    screenshot_b64: str | None = None,
     pipeline: PipelineLogger | None = None,
 ) -> ExternalPredictionRecord:
     keywords = source_keywords(src, horizon_days=horizon_days)
@@ -140,9 +145,37 @@ def _extract_from_crawl(
         horizon_days=horizon_days,
     )
     snippet = "\n".join(body.splitlines()[:12])
+    artifacts: ScreenshotArtifacts | None = None
+    if screenshot_b64:
+        try:
+            artifacts = persist_screenshot_b64(
+                symbol=symbol.upper(),
+                source_id=src.id,
+                screenshot_b64=screenshot_b64,
+            )
+            if artifacts is None:
+                if pipeline:
+                    pipeline.warn(
+                        "screenshot",
+                        "Screenshot payload present but decode/persist failed",
+                        source_id=src.id,
+                    )
+            elif pipeline:
+                pipeline.info(
+                    "screenshot",
+                    "Saved page screenshot artifacts",
+                    source_id=src.id,
+                    run_id=artifacts.run_id,
+                    tiles=len(artifacts.m3_paths),
+                )
+        except Exception as exc:
+            if pipeline:
+                pipeline.warn("screenshot", f"Screenshot persist failed: {exc}", source_id=src.id)
+            logger.debug("screenshot persist failed for %s: %s", src.id, exc)
+
     if pipeline:
-        pipeline.info("extract", "Running LLM / regex extraction", source_id=src.id, url=url)
-    return extract_prediction_from_text(
+        pipeline.info("extract", "Running expert agent extraction", source_id=src.id, url=url)
+    return extract_forecast(
         source=src,
         horizon_days=horizon_days,
         spot=spot_val,
@@ -151,6 +184,7 @@ def _extract_from_crawl(
         snippet=snippet,
         body=body,
         symbol=symbol,
+        screenshot_artifacts=artifacts,
         pipeline=pipeline,
     )
 
@@ -165,6 +199,8 @@ def _record_from_crawl_group(
     pipeline: PipelineLogger | None = None,
     source_index: int | None = None,
     source_total: int | None = None,
+    navigation_mode: str = "exploratory",
+    fetch_method: str = "crawl4ai",
 ) -> ExternalPredictionRecord:
     sym = symbol.upper()
     prefix = ""
@@ -220,6 +256,11 @@ def _record_from_crawl_group(
         return record
 
     url, crawl = best
+    screenshot_b64 = None
+    if isinstance(crawl.metadata, dict):
+        raw = crawl.metadata.get("screenshot_b64")
+        if raw:
+            screenshot_b64 = str(raw)
     record = _extract_from_crawl(
         src,
         symbol=sym,
@@ -228,16 +269,16 @@ def _record_from_crawl_group(
         url=url,
         title=crawl.title,
         markdown=crawl.markdown,
+        screenshot_b64=screenshot_b64,
         pipeline=pipeline,
     )
     record.as_of = utc_now_iso()[:10]
     record.spot_at_fetch = spot_val
-    navigation_mode = str(record.provenance.get("navigation_mode") or "exploratory")
     record.provenance = {
         **dict(record.provenance or {}),
         "url": url,
         "title": crawl.title or record.provenance.get("title", ""),
-        "fetch_method": "crawl4ai",
+        "fetch_method": fetch_method,
         "navigation_mode": navigation_mode,
         "elapsed_ms": crawl.elapsed_ms,
     }
@@ -328,6 +369,7 @@ def refresh_source(
     )
     used_fast = replay_result is not None and replay_result.success
     navigation_mode = "fast" if used_fast else "exploratory"
+    fetch_method = "path_replay" if used_fast else "crawl4ai"
 
     try:
         record = _record_from_crawl_group(
@@ -339,6 +381,8 @@ def refresh_source(
             pipeline=pipeline,
             source_index=source_index,
             source_total=source_total,
+            navigation_mode=navigation_mode,
+            fetch_method=fetch_method,
         )
         if used_fast and record.fetch_status != "ok":
             if exploratory_backup:
@@ -350,6 +394,7 @@ def refresh_source(
                         error=record.error_message or "not_found",
                     )
                 navigation_mode = "exploratory"
+                fetch_method = "crawl4ai"
                 record = _record_from_crawl_group(
                     src,
                     exploratory_backup,
@@ -359,17 +404,16 @@ def refresh_source(
                     pipeline=pipeline,
                     source_index=source_index,
                     source_total=source_total,
+                    navigation_mode=navigation_mode,
+                    fetch_method=fetch_method,
                 )
-            else:
-                navigation_mode = "exploratory"
         elif used_fast and record.fetch_status == "ok":
             touch_path_success(src.id, horizon_days=horizon_days)
-        if navigation_mode == "fast" and record.fetch_status == "ok":
-            record.provenance = {
-                **dict(record.provenance or {}),
-                "navigation_mode": "fast",
-                "fetch_method": "path_replay",
-            }
+        record.provenance = {
+            **dict(record.provenance or {}),
+            "navigation_mode": navigation_mode,
+            "fetch_method": fetch_method,
+        }
         return record
     except Exception as exc:
         logger.warning("refresh failed for %s: %s", source_id, exc)
@@ -503,8 +547,15 @@ def refresh_all_external_predictions(
         batch = crawl4ai_queue_stats().get("last_batch") or {}
         pipeline.info(
             "refresh",
-            f"Refresh complete — {ok_count}/{len(snapshot.predictions)} sources with forecasts",
+            (
+                f"Refresh complete — {ok_count}/{len(snapshot.predictions)} sources with forecasts"
+                f" ({snapshot.sources_error} errors, {snapshot.sources_not_found} not found)"
+            ),
             fetched_at=snapshot.fetched_at,
             crawl_elapsed_ms=batch.get("elapsed_ms"),
+            sources_ok=snapshot.sources_ok,
+            sources_error=snapshot.sources_error,
+            sources_not_found=snapshot.sources_not_found,
+            had_errors=snapshot.had_errors,
         )
     return snapshot

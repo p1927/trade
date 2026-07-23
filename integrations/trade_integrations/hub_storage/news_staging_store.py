@@ -591,25 +591,51 @@ def rule_fallback_distillation_enabled() -> bool:
 
 
 def pipeline_pause_status(*, ticker: str | None = None) -> dict[str, Any]:
-    """Return whether entity distillation is paused and why."""
+    """Return whether entity distillation / ingest is paused and why."""
     pending = staging_queue_detail(ticker=ticker)
+    base: dict[str, Any] = {
+        "minimax_configured": minimax_configured(),
+        "rule_fallback_enabled": rule_fallback_distillation_enabled(),
+        "pending": pending,
+        "llm_wiki_ok": True,
+        "llm_wiki_required": False,
+    }
+
     if not is_entity_pipeline_enabled():
         return {
+            **base,
             "pipeline_paused": False,
             "pause_reason": "",
-            "minimax_configured": minimax_configured(),
-            "rule_fallback_enabled": rule_fallback_distillation_enabled(),
-            "pending": pending,
         }
+
+    try:
+        from trade_integrations.dataflows.hub_wiki.probe import (
+            ingest_blocked_by_wiki,
+            llm_wiki_required_for_hub_news,
+        )
+
+        base["llm_wiki_required"] = llm_wiki_required_for_hub_news()
+        wiki_block = ingest_blocked_by_wiki()
+        if wiki_block:
+            return {
+                **base,
+                "pipeline_paused": True,
+                "pause_reason": str(wiki_block.get("reason") or "llm_wiki_unavailable"),
+                "user_message": str(wiki_block.get("user_message") or ""),
+                "llm_wiki_ok": False,
+                "llm_wiki": wiki_block.get("llm_wiki") or {},
+            }
+    except Exception as exc:
+        logger.debug("wiki pause check skipped: %s", exc)
+
     if minimax_configured() or rule_fallback_distillation_enabled():
         return {
+            **base,
             "pipeline_paused": False,
             "pause_reason": "",
-            "minimax_configured": minimax_configured(),
-            "rule_fallback_enabled": rule_fallback_distillation_enabled(),
-            "pending": pending,
         }
     return {
+        **base,
         "pipeline_paused": True,
         "pause_reason": (
             "MINIMAX_API_KEY is not configured and rule-fallback distillation is disabled. "

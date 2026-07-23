@@ -311,6 +311,28 @@ def run_hub_news_ingest(
     )
 
     check_pipeline_cancel()
+    from trade_integrations.dataflows.hub_wiki.probe import check_ingest_allowed
+
+    wiki_gate = check_ingest_allowed()
+    if wiki_gate.get("blocked"):
+        logger.error(
+            "hub news ingest blocked: %s (%s)",
+            wiki_gate.get("reason"),
+            wiki_gate.get("detail"),
+        )
+        return {
+            "ticker": ticker.strip().upper(),
+            "mode": (mode or "full").strip().lower(),
+            "blocked": True,
+            "pipeline_paused": True,
+            "pause_reason": str(wiki_gate.get("reason") or "llm_wiki_unavailable"),
+            "user_message": str(wiki_gate.get("user_message") or ""),
+            "llm_wiki": wiki_gate.get("llm_wiki") or {},
+            "sources": {},
+            "totals": {"queued": 0, "ingested": 0, "verified": 0, "created": 0, "updated": 0, "error": 1},
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     cfg = load_news_pipeline_config()
     sym = ticker.strip().upper()
     ingest_mode = (mode or "full").strip().lower()

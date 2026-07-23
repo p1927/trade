@@ -159,6 +159,7 @@ def ingest_rows_to_hub(
     if not rows:
         return {"ingested": 0, "cache_hits": 0, "verified": 0}
     try:
+        from trade_integrations.dataflows.hub_wiki.probe import check_ingest_allowed
         from trade_integrations.dataflows.index_research.news_dedup import merge_raw_headlines
         from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headline_rows
         from trade_integrations.hub_storage.news_staging_store import (
@@ -168,6 +169,20 @@ def ingest_rows_to_hub(
             pipeline_pause_status,
             staging_backpressure_active,
         )
+
+        wiki_gate = check_ingest_allowed()
+        if wiki_gate.get("blocked"):
+            return {
+                "ingested": 0,
+                "queued": 0,
+                "cache_hits": 0,
+                "verified": 0,
+                "blocked": True,
+                "pipeline_paused": True,
+                "pause_reason": str(wiki_gate.get("reason") or "llm_wiki_unavailable"),
+                "user_message": str(wiki_gate.get("user_message") or ""),
+                "llm_wiki": wiki_gate.get("llm_wiki") or {},
+            }
 
         hub_sym = hub_ticker_for_symbol(ticker)
         merged = merge_raw_headlines([r for r in rows if str(r.get("title") or "").strip()], ticker=hub_sym)
@@ -188,6 +203,19 @@ def ingest_rows_to_hub(
         from trade_integrations.dataflows.index_research.news_tags import build_article_tags
 
         pause = pipeline_pause_status(ticker=hub_sym)
+        if pause.get("pipeline_paused") and str(pause.get("pause_reason") or "") == "llm_wiki_unavailable":
+            return {
+                "ingested": 0,
+                "queued": 0,
+                "cache_hits": 0,
+                "verified": 0,
+                "blocked": True,
+                "pipeline_paused": True,
+                "pause_reason": str(pause.get("pause_reason") or ""),
+                "user_message": str(pause.get("user_message") or ""),
+                "llm_wiki": pause.get("llm_wiki") or {},
+            }
+
         backpressure_active, backlog = staging_backpressure_active(ticker=hub_sym)
         if backpressure_active:
             pending = pause.get("pending") or {}

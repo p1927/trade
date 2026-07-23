@@ -40,6 +40,19 @@ def cache_ttl_hours() -> int:
         return _DEFAULT_TTL_HOURS
 
 
+def rollup_refresh_status(predictions: list[ExternalPredictionRecord]) -> dict[str, int | bool]:
+    """Aggregate per-source fetch_status counts for batch refresh rollups."""
+    ok = sum(1 for p in predictions if p.fetch_status == "ok")
+    err = sum(1 for p in predictions if p.fetch_status == "error")
+    not_found = sum(1 for p in predictions if p.fetch_status == "not_found")
+    return {
+        "sources_ok": ok,
+        "sources_error": err,
+        "sources_not_found": not_found,
+        "had_errors": err > 0 or not_found > 0,
+    }
+
+
 def _parse_iso(ts: str) -> datetime | None:
     if not ts:
         return None
@@ -128,6 +141,7 @@ def rebuild_snapshot(
             )
     ts = utc_now_iso() if fetched_at is None else fetched_at
     ttl = cache_ttl_hours()
+    rollup = rollup_refresh_status(predictions)
     snapshot = ExternalPredictionSnapshot(
         symbol=sym,
         horizon_days=horizon_days,
@@ -137,6 +151,10 @@ def rebuild_snapshot(
         sources=sources,
         predictions=predictions,
         internal_forecast=internal_forecast,
+        sources_ok=int(rollup["sources_ok"]),
+        sources_error=int(rollup["sources_error"]),
+        sources_not_found=int(rollup["sources_not_found"]),
+        had_errors=bool(rollup["had_errors"]),
     )
     save_snapshot(snapshot)
     return snapshot

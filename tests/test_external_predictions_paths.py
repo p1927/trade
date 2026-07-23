@@ -171,6 +171,49 @@ def test_try_fast_path_fallback_on_replay_failure(hub_dir: Path, monkeypatch: py
     assert get_effective_path(stale_src, horizon_days=14) is None
 
 
+def test_try_fast_path_forwards_replay_metadata(hub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.navigation_paths import (
+        ReplayResult,
+        try_fast_path_then_exploratory,
+    )
+
+    seed_registry_if_missing()
+    save_auto_path(
+        "moneycontrol",
+        horizon_days=14,
+        final_url="https://www.moneycontrol.com/news/nifty-target-25000-123.html",
+    )
+    src = next(s for s in load_registry() if s.id == "moneycontrol")
+    exploratory = [
+        (
+            "https://www.moneycontrol.com/news/nifty-target-24800-456.html",
+            CrawlPageResult(url="https://www.moneycontrol.com/news/nifty-target-24800-456.html", success=True),
+        )
+    ]
+    replay = ReplayResult(
+        success=True,
+        url="https://www.moneycontrol.com/news/nifty-target-25000-123.html",
+        title="Nifty target",
+        markdown="Nifty 50 target 25000",
+        elapsed_ms=42,
+        metadata={"screenshot_b64": "abc123"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.navigation_paths.replay_navigation_path",
+        lambda *args, **kwargs: replay,
+    )
+
+    _, rows, backup = try_fast_path_then_exploratory(
+        src,
+        horizon_days=14,
+        exploratory_rows=exploratory,
+    )
+    assert len(rows) == 1
+    _, crawl = rows[0]
+    assert crawl.metadata.get("screenshot_b64") == "abc123"
+    assert backup == exploratory
+
+
 def test_refresh_wires_parallel_discovery(hub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from trade_integrations.dataflows.index_research.external_predictions.refresh import (
         refresh_all_external_predictions,

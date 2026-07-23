@@ -129,12 +129,13 @@ def _browser_config() -> Any:
     )
 
 
-def _run_config(*, score_links: bool = False) -> Any:
+def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
     from crawl4ai import CacheMode, CrawlerRunConfig
 
     kwargs: dict[str, Any] = {
         "cache_mode": CacheMode.BYPASS,
         "word_count_threshold": 5,
+        "screenshot": screenshot,
     }
     if score_links:
         try:
@@ -180,12 +181,22 @@ def _serialize_native_links(links_obj: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def _screenshots_enabled() -> bool:
+    return os.environ.get("EXTERNAL_PREDICTIONS_SCREENSHOTS", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 async def crawl_urls_parallel(
     urls: list[str],
     *,
     max_parallel: int | None = None,
     pipeline: Any | None = None,
     score_links: bool = False,
+    capture_screenshot: bool | None = None,
 ) -> list[CrawlPageResult]:
     """Fetch URLs concurrently via one shared AsyncWebCrawler process."""
     from trade_integrations.dataflows import source_availability
@@ -207,6 +218,7 @@ async def crawl_urls_parallel(
         return [CrawlPageResult(url=u, success=False, error_message=msg) for u in cleaned]
 
     parallel = max_parallel or _max_parallel()
+    want_screenshot = _screenshots_enabled() if capture_screenshot is None else capture_screenshot
     if pipeline:
         pipeline.info(
             "crawl4ai",
@@ -233,7 +245,10 @@ async def crawl_urls_parallel(
                     pipeline.info("crawl4ai", f"Fetching {url[:100]}", url=url)
                 try:
                     async with semaphore:
-                        result = await crawler.arun(url=url, config=_run_config(score_links=score_links))
+                        result = await crawler.arun(
+                            url=url,
+                            config=_run_config(score_links=score_links, screenshot=want_screenshot),
+                        )
                     elapsed_ms = (time.time() - started) * 1000.0
                     if result.success:
                         markdown = str(getattr(result, "markdown", "") or "")
@@ -242,6 +257,9 @@ async def crawl_urls_parallel(
                         native_links = _serialize_native_links(getattr(result, "links", None))
                         if native_links:
                             metadata["links"] = native_links
+                        screenshot = getattr(result, "screenshot", None)
+                        if screenshot:
+                            metadata["screenshot_b64"] = str(screenshot)
                         if metadata:
                             title = str(metadata.get("title") or "")
                         if pipeline:
@@ -332,6 +350,7 @@ def crawl_urls_parallel_sync(
     max_parallel: int | None = None,
     pipeline: Any | None = None,
     score_links: bool = False,
+    capture_screenshot: bool | None = None,
 ) -> list[CrawlPageResult]:
     """Sync wrapper for refresh workers running outside an event loop."""
     return asyncio.run(
@@ -340,6 +359,7 @@ def crawl_urls_parallel_sync(
             max_parallel=max_parallel,
             pipeline=pipeline,
             score_links=score_links,
+            capture_screenshot=capture_screenshot,
         )
     )
 

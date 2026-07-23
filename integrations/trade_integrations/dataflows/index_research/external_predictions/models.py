@@ -294,6 +294,10 @@ class ExternalPredictionSnapshot:
     sources: list[ExternalPredictionSource] = field(default_factory=list)
     predictions: list[ExternalPredictionRecord] = field(default_factory=list)
     internal_forecast: dict[str, Any] | None = None
+    sources_ok: int = 0
+    sources_error: int = 0
+    sources_not_found: int = 0
+    had_errors: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -307,6 +311,10 @@ class ExternalPredictionSnapshot:
         }
         if self.internal_forecast:
             payload["internal_forecast"] = dict(self.internal_forecast)
+        payload["sources_ok"] = self.sources_ok
+        payload["sources_error"] = self.sources_error
+        payload["sources_not_found"] = self.sources_not_found
+        payload["had_errors"] = self.had_errors
         return payload
 
     @classmethod
@@ -333,6 +341,10 @@ class ExternalPredictionSnapshot:
             sources=sources,
             predictions=predictions,
             internal_forecast=dict(internal) if isinstance(internal, dict) else None,
+            sources_ok=int(data.get("sources_ok") or 0),
+            sources_error=int(data.get("sources_error") or 0),
+            sources_not_found=int(data.get("sources_not_found") or 0),
+            had_errors=bool(data.get("had_errors", False)),
         )
 
     @classmethod
