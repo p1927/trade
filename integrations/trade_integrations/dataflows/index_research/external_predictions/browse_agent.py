@@ -56,22 +56,21 @@ class BrowseResult:
 
 
 def has_browse_entry_urls(source: ExternalPredictionSource) -> bool:
-    """True when the source has entry URLs or landing URLs for exploratory browse."""
-    if any(str(url or "").strip() for url in (source.entry_urls or [])):
-        return True
-    return any(str(url or "").strip() for url in (source.landing_urls or []))
+    """True when the source has user-configured entry URLs for exploratory browse."""
+    return any(str(url or "").strip() for url in (source.entry_urls or []))
 
 
 def resolve_browse_entry_urls(
     source: ExternalPredictionSource,
     *,
     horizon_days: int = 14,
+    include_landing_fallback: bool = False,
 ) -> list[str]:
     """Return allowlisted, formatted entry URLs for exploratory browse."""
     urls: list[str] = []
     seen: set[str] = set()
     raw_entries = list(source.entry_urls or [])
-    if not raw_entries:
+    if not raw_entries and include_landing_fallback:
         raw_entries = list(source.landing_urls or [])[:1]
     for raw in raw_entries:
         url = _format_entry_url(str(raw or "").strip(), horizon_days=horizon_days)
@@ -248,6 +247,8 @@ def _pick_next_url(
             continue
         if not is_allowed_listing_url(url).allowed:
             continue
+        if not link_has_forecast_signal(f"{title} {url}"):
+            continue
         scored.append((link_score(title, url, native_score=native_score), url, title))
     scored.sort(key=lambda item: item[0], reverse=True)
     if scored:
@@ -282,6 +283,7 @@ def run_exploratory_browse(
     pipeline: PipelineLogger | None = None,
     crawl_one: CrawlOneFn | None = None,
     max_steps: int | None = None,
+    include_landing_fallback: bool = False,
 ) -> BrowseResult:
     """
     Bounded browse loop starting from ``entry_urls``.
@@ -291,7 +293,11 @@ def run_exploratory_browse(
     compatible with path auto-save and refresh extraction.
     """
     step_limit = max(1, min(int(max_steps or MAX_BROWSE_STEPS), MAX_BROWSE_STEPS))
-    entry_urls = resolve_browse_entry_urls(source, horizon_days=horizon_days)
+    entry_urls = resolve_browse_entry_urls(
+        source,
+        horizon_days=horizon_days,
+        include_landing_fallback=include_landing_fallback,
+    )
     empty_trace = NavigationTrace(steps=[], final_url="", created_at=utc_now_iso())
     if not entry_urls:
         return BrowseResult(

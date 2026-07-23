@@ -117,13 +117,23 @@ def test_run_exploratory_browse_respects_max_steps() -> None:
     def _crawl(url: str, score_links: bool) -> CrawlPageResult:
         step["n"] += 1
         n = step["n"]
-        next_url = f"https://example.com/markets/page/{n + 1}"
+        next_url = f"https://example.com/markets/nifty-50-outlook/page/{n + 1}"
         return CrawlPageResult(
             url=url,
             success=True,
             title=f"Page {n}",
-            markdown=f"Markets listing page {n}\n[Next]({next_url})",
-            metadata={"links": [{"href": next_url, "text": "Next"}]},
+            markdown=(
+                f"Markets listing page {n}\n"
+                f"[Nifty 50 weekly outlook]({next_url})"
+            ),
+            metadata={
+                "links": [
+                    {
+                        "href": next_url,
+                        "text": "Nifty 50 weekly outlook",
+                    }
+                ]
+            },
         )
 
     result = run_exploratory_browse(

@@ -216,18 +216,33 @@ def test_resolve_source_urls_includes_landing_and_curated() -> None:
     )
 
 
-def test_browse_enabled_from_landing_urls_when_entry_empty() -> None:
+def test_browse_enabled_from_entry_urls_only() -> None:
     from trade_integrations.dataflows.index_research.external_predictions.browse_agent import (
         browse_enabled_for_source,
         resolve_browse_entry_urls,
     )
+
+    with_landing_only = ExternalPredictionSource(
+        id="equitylogy",
+        display_name="EquityLogy",
+        domains=["equitylogy.in"],
+        landing_urls=["https://equitylogy.in/market/nifty/"],
+        entry_urls=[],
+    )
+    assert not browse_enabled_for_source(with_landing_only)
+    assert resolve_browse_entry_urls(with_landing_only, horizon_days=14) == []
+    assert resolve_browse_entry_urls(
+        with_landing_only,
+        horizon_days=14,
+        include_landing_fallback=True,
+    ) == ["https://equitylogy.in/market/nifty/"]
 
     source = ExternalPredictionSource(
         id="choice_india",
         display_name="Choice India",
         domains=["choiceindia.com"],
         landing_urls=["https://choiceindia.com/blog"],
-        entry_urls=[],
+        entry_urls=["https://choiceindia.com/blog"],
     )
     assert browse_enabled_for_source(source)
     entries = resolve_browse_entry_urls(source, horizon_days=14)

@@ -448,29 +448,40 @@ def refresh_source(
     fetch_method = "path_replay" if used_fast else "crawl4ai"
     navigation_steps: list[NavigationStep] | None = None
 
-    if not used_fast and browse_enabled_for_source(src):
-        browse = run_exploratory_browse(
-            src,
-            horizon_days=horizon_days,
-            pipeline=pipeline,
-        )
-        if browse.success and browse.url:
-            rows = [browse_result_to_crawl_row(browse)]
-            navigation_steps = list(browse.trace.steps)
-            fetch_method = "browse_agent"
-            if pipeline:
-                pipeline.info(
-                    "browse",
-                    f"Exploratory browse succeeded in {browse.steps_taken} step(s)",
-                    source_id=source_id,
-                    url=browse.url[:120],
-                )
-        elif pipeline and browse.error_message:
-            pipeline.warn(
-                "browse",
-                f"Exploratory browse did not find forecast — using crawl batch ({browse.error_message})",
-                source_id=source_id,
+    if not used_fast:
+        browse_from_landing = False
+        if not browse_enabled_for_source(src):
+            preview_best = pick_best_crawl_result(
+                rows,
+                source_keywords(src, horizon_days=horizon_days),
+                horizon_days=horizon_days,
+                pipeline=None,
             )
+            browse_from_landing = preview_best is None and bool(src.landing_urls)
+        if browse_enabled_for_source(src) or browse_from_landing:
+            browse = run_exploratory_browse(
+                src,
+                horizon_days=horizon_days,
+                pipeline=pipeline,
+                include_landing_fallback=browse_from_landing,
+            )
+            if browse.success and browse.url:
+                rows = [browse_result_to_crawl_row(browse)]
+                navigation_steps = list(browse.trace.steps)
+                fetch_method = "browse_agent"
+                if pipeline:
+                    pipeline.info(
+                        "browse",
+                        f"Exploratory browse succeeded in {browse.steps_taken} step(s)",
+                        source_id=source_id,
+                        url=browse.url[:120],
+                    )
+            elif pipeline and browse.error_message:
+                pipeline.warn(
+                    "browse",
+                    f"Exploratory browse did not find forecast — using crawl batch ({browse.error_message})",
+                    source_id=source_id,
+                )
 
     try:
         record = _record_from_crawl_group(
