@@ -31,30 +31,35 @@ _BaseOpenAlgoClient = _load_base_openalgo_client()
 class BridgeOpenAlgoClient(_BaseOpenAlgoClient):
     """Extends auto_paper OpenAlgo client with quote endpoints."""
 
+    def _quote_port(self):
+        adapter = getattr(self, "_quote_port_adapter", None)
+        if adapter is None:
+            from trade_integrations.execution.adapters.openalgo_adapter import OpenAlgoConnectorAdapter
+
+            adapter = OpenAlgoConnectorAdapter(client=self)
+            self._quote_port_adapter = adapter
+        return adapter
+
     def get_quote(self, symbol: str, *, exchange: str = "NSE") -> dict[str, Any]:
-        """Single quote via REST. Deprecated for market data — use hub channel instead."""
-        body = self._post(
-            "quotes",
-            {"apikey": self.api_key, "symbol": symbol.upper(), "exchange": exchange.upper()},
-            timeout=15,
-        )
-        data = body.get("data")
-        return data if isinstance(data, dict) else body
+        """Single quote via TradingConnectorPort (OpenAlgo adapter)."""
+        quote = self._quote_port().quote(symbol, exchange=exchange)
+        return quote if isinstance(quote, dict) else {}
 
     def get_multi_quotes(self, symbols: list[dict[str, str]]) -> dict[str, Any]:
-        """Batch quotes via REST. Deprecated for market data — use hub channel ``get_multi_quotes``."""
+        """Batch quotes via TradingConnectorPort (OpenAlgo adapter)."""
         normalized = [
             {"symbol": row["symbol"].upper(), "exchange": row["exchange"].upper()}
             for row in symbols
             if isinstance(row, dict) and row.get("symbol") and row.get("exchange")
         ]
-        body = self._post(
-            "multiquotes",
-            {"apikey": self.api_key, "symbols": normalized},
-            timeout=20,
-        )
-        data = body.get("data")
-        return data if isinstance(data, dict) else body
+        batch = self._quote_port().quotes_batch(normalized)
+        quotes: list[dict[str, Any]] = []
+        for req in normalized:
+            key = f"{req['symbol']}@{req['exchange']}"
+            row = batch.get(key)
+            if isinstance(row, dict):
+                quotes.append({**row, "symbol": req["symbol"], "exchange": req["exchange"]})
+        return {"quotes": quotes}
 
     def get_symbol_info(self, symbol: str, *, exchange: str = "NFO") -> dict[str, Any]:
         body = self._post(

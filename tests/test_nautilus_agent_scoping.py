@@ -13,6 +13,7 @@ if str(INTEGRATIONS) not in sys.path:
     sys.path.insert(0, str(INTEGRATIONS))
 
 from nautilus_openalgo_bridge.agent_scoping import (  # noqa: E402
+    default_exit_underlying,
     filter_positions_for_agent,
     strategy_tag_for_agent,
 )
@@ -71,3 +72,8 @@ def test_two_agents_isolated_pnl(hub_tmp: Path):
     pnl_b = total_unrealized_pnl(filter_positions_for_agent(book, "aa_b"))
     assert pnl_a == -100
     assert pnl_b == -200
+
+
+def test_default_exit_underlying_uses_agent_symbol_without_handoff(hub_tmp: Path):
+    _save_agent(hub_tmp, "aa_spy", ["SPY"])
+    assert default_exit_underlying("aa_spy") == "SPY"

@@ -1,4 +1,4 @@
-"""Bootstrap Nautilus TradingNode for OpenAlgo + Alpaca watch bridge."""
+"""Bootstrap Nautilus TradingNode for OpenAlgo watch bridge."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ try:
     from nautilus_trader.live.node import TradingNode
     from nautilus_trader.model.identifiers import TraderId
 
-    from nautilus_openalgo_bridge.nautilus_config import AlpacaDataClientConfig, OpenAlgoDataClientConfig
+    from nautilus_openalgo_bridge.nautilus_config import OpenAlgoDataClientConfig
 
     NAUTILUS_AVAILABLE = True
 except ImportError as exc:
@@ -156,6 +156,9 @@ def build_trading_node_config(
         _ensure_handoffs_for_agents(ids)
 
     in_symbols, us_symbols = _collect_watch_symbols(ids, cfg)
+    if us_symbols:
+        in_symbols = list(dict.fromkeys([*in_symbols, *us_symbols]))
+        us_symbols = []
 
     actors: list[ImportableActorConfig] = []
     for aid in ids or [None]:
@@ -242,11 +245,6 @@ def build_trading_node_config(
             poll_interval_ms=cfg.quote_poll_ms,
             watch_symbols=in_symbols,
         )
-    if us_symbols:
-        data_clients["ALPACA"] = AlpacaDataClientConfig(
-            poll_interval_ms=cfg.quote_poll_ms,
-            watch_symbols=us_symbols,
-        )
 
     return TradingNodeConfig(
         trader_id=trader_id,
@@ -300,13 +298,11 @@ def run_trading_node(
         trigger_vibe=trigger_vibe,
         bridge=cfg,
     )
-    from nautilus_openalgo_bridge.factories import AlpacaLiveDataClientFactory, OpenAlgoLiveDataClientFactory
+    from nautilus_openalgo_bridge.factories import OpenAlgoLiveDataClientFactory
 
     node = TradingNode(config=node_config)
     if "OPENALGO" in node_config.data_clients:
         node.add_data_client_factory("OPENALGO", OpenAlgoLiveDataClientFactory)
-    if "ALPACA" in node_config.data_clients:
-        node.add_data_client_factory("ALPACA", AlpacaLiveDataClientFactory)
     node.build()
     logger.info(
         "Starting Nautilus TradingNode (agents=%s redis=%s)",

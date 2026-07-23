@@ -43,6 +43,19 @@ def save_handoff(handoff: PositionHandoff) -> PositionHandoff:
     return handoff
 
 
+def stamp_handoff_context_generation(agent_id: str, context_generation: str) -> PositionHandoff | None:
+    """Persist market context generation on the bridge handoff (create shell if needed)."""
+    agent_id = str(agent_id or "").strip()
+    generation = str(context_generation or "").strip()
+    if not agent_id or not generation:
+        return None
+    handoff = load_handoff(agent_id) or ensure_handoff_for_agent(agent_id)
+    if handoff is None:
+        return None
+    handoff.context_generation = generation
+    return save_handoff(handoff)
+
+
 def load_handoff(agent_id: str) -> PositionHandoff | None:
     path = handoff_path(agent_id)
     if not path.is_file():

@@ -22,8 +22,9 @@ from nautilus_openalgo_bridge.instrument_provider import OpenAlgoInstrumentProvi
 from nautilus_openalgo_bridge.nautilus_config import OpenAlgoDataClientConfig
 from nautilus_openalgo_bridge.nautilus_instruments import (
     build_index_instrument,
+    build_us_equity_instrument,
+    is_us_watch_symbol,
     quote_snapshot_to_tick,
-    watch_symbol_to_instrument_id,
 )
 
 
@@ -61,7 +62,11 @@ class OpenAlgoLiveDataClient(LiveMarketDataClient):
     async def _connect(self) -> None:
         symbols = tuple(self._cfg.watch_symbols or ())
         for symbol in symbols:
-            instrument = build_index_instrument(symbol)
+            instrument = (
+                build_us_equity_instrument(symbol)
+                if is_us_watch_symbol(symbol)
+                else build_index_instrument(symbol)
+            )
             self._symbol_by_instrument[instrument.id] = normalize_symbol(symbol)
             self._handle_data(instrument)
         self._poll_active = True
@@ -92,11 +97,11 @@ class OpenAlgoLiveDataClient(LiveMarketDataClient):
         self._quote_subs.discard(command.instrument_id)
 
     async def _poll_loop(self) -> None:
-        from nautilus_openalgo_bridge.market_hours import closed_market_poll_interval_sec, is_in_market_session_open
+        from nautilus_openalgo_bridge.market_hours import any_trading_market_open, closed_market_poll_interval_sec
 
         interval = max(0.5, self._cfg.poll_interval_ms / 1000.0)
         while self._poll_active:
-            if not is_in_market_session_open():
+            if not any_trading_market_open():
                 await asyncio.sleep(closed_market_poll_interval_sec())
                 continue
             if self._quote_subs:
@@ -123,7 +128,3 @@ class OpenAlgoLiveDataClient(LiveMarketDataClient):
 
 def normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
-
-
-def instrument_id_for_watch_symbol(symbol: str) -> InstrumentId:
-    return watch_symbol_to_instrument_id(symbol)

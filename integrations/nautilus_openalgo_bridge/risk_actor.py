@@ -96,39 +96,7 @@ class RiskActor(Actor):
             self._publish_halt(f"insufficient funds available ₹{available:,.0f}")
 
     def _poll_us_risk(self) -> None:
-        from trade_integrations.dataflows.alpaca import list_alpaca_positions
-
-        rows = list_alpaca_positions()
-        open_count = len([r for r in rows if float(r.get("qty") or 0) != 0])
-        if open_count > self._max_positions:
-            self._publish_halt(f"max_open_positions breached ({open_count}>{self._max_positions})")
-            return
-
-        total_pnl = 0.0
-        found = False
-        for row in rows:
-            raw = row.get("unrealized_pl")
-            if raw is None:
-                continue
-            try:
-                total_pnl += float(raw)
-                found = True
-            except (TypeError, ValueError):
-                continue
-        if found and total_pnl <= -abs(self._us_max_loss()):
-            self._publish_halt(f"max_daily_loss breached P&L ${total_pnl:,.2f}")
-
-    def _us_max_loss(self) -> float:
-        if self._agent_id:
-            from nautilus_openalgo_bridge.agent_limits import agent_constraints
-
-            constraints = agent_constraints(self._agent_id)
-            raw = constraints.get("max_daily_loss_usd") or constraints.get("max_daily_loss")
-            try:
-                return float(raw)
-            except (TypeError, ValueError):
-                pass
-        return self._max_loss
+        self._poll_in_risk()
 
     def _publish_halt(self, message: str) -> None:
         self._halted = True

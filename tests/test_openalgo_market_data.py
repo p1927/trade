@@ -164,3 +164,5 @@ def test_resolve_openalgo_symbol_from_symbols_module():
 
     assert resolve_openalgo_symbol("RELIANCE.NS") == ("RELIANCE", "NSE")
     assert resolve_openalgo_symbol("^NSEI") == ("NIFTY", "NSE_INDEX")
+    assert resolve_openalgo_symbol("AAPL") == ("AAPL", "NASDAQ")
+    assert resolve_openalgo_symbol("SPY") == ("SPY", "NASDAQ")

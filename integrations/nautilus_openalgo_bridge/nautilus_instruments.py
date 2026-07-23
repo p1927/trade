@@ -19,9 +19,24 @@ PRICE_PRECISION = 2
 US_PRICE_PRECISION = 4
 
 
+def is_us_watch_symbol(symbol: str) -> bool:
+    try:
+        from trade_integrations.dataflows.company_research.market import Market, detect_market
+
+        return detect_market(normalize_watch_symbol(symbol)) == Market.US
+    except Exception:
+        return False
+
+
 def watch_symbol_to_instrument_id(symbol: str) -> InstrumentId:
     key = normalize_watch_symbol(symbol)
     return InstrumentId.from_str(f"{key}.{VENUE_NSE}")
+
+
+def instrument_id_for_watch_symbol(symbol: str) -> InstrumentId:
+    if is_us_watch_symbol(symbol):
+        return us_symbol_to_instrument_id(symbol)
+    return watch_symbol_to_instrument_id(symbol)
 
 
 def build_index_instrument(symbol: str) -> IndexInstrument:
@@ -46,8 +61,10 @@ def quote_snapshot_to_tick(
     *,
     instrument_id: InstrumentId | None = None,
 ) -> QuoteTick:
-    iid = instrument_id or watch_symbol_to_instrument_id(snap.symbol)
-    price = Price.from_str(f"{snap.ltp:.{PRICE_PRECISION}f}")
+    iid = instrument_id or instrument_id_for_watch_symbol(snap.symbol)
+    venue = str(getattr(iid, "venue", "") or "")
+    precision = US_PRICE_PRECISION if venue == VENUE_US else PRICE_PRECISION
+    price = Price.from_str(f"{snap.ltp:.{precision}f}")
     qty = Quantity.from_int(1)
     try:
         from nautilus_trader.core.datetime import dt_to_unix_nanos

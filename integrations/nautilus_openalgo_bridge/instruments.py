@@ -37,14 +37,19 @@ def normalize_watch_symbol(symbol: str) -> str:
 
 def resolve_openalgo_symbol(symbol: str) -> tuple[str, str]:
     """Return (symbol, exchange) for OpenAlgo multiquotes."""
-    key = normalize_watch_symbol(symbol)
-    if key in WATCH_SYMBOL_MAP:
-        return WATCH_SYMBOL_MAP[key]
-    if key.endswith((".NS", ".BO")):
-        base = key.rsplit(".", 1)[0]
-        exchange = "NSE" if key.endswith(".NS") else "BSE"
-        return base, exchange
-    return key, "NSE"
+    try:
+        from trade_integrations.openalgo.symbols import resolve_openalgo_symbol as _resolve_trade
+
+        return _resolve_trade(symbol)
+    except Exception:
+        key = normalize_watch_symbol(symbol)
+        if key in WATCH_SYMBOL_MAP:
+            return WATCH_SYMBOL_MAP[key]
+        if key.endswith((".NS", ".BO")):
+            base = key.rsplit(".", 1)[0]
+            exchange = "NSE" if key.endswith(".NS") else "BSE"
+            return base, exchange
+        return key, "NSE"
 
 
 def multiquote_requests(symbols: list[str]) -> list[dict[str, str]]:

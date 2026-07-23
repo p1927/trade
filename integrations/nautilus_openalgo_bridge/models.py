@@ -300,10 +300,11 @@ class PositionHandoff:
     watch_spec: WatchSpec = field(default_factory=WatchSpec)
     stop_rules: StopRules = field(default_factory=StopRules)
     vibe_session_id: str | None = None
+    context_generation: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "agent_id": self.agent_id,
             "widget_id": self.widget_id,
             "underlying": self.underlying,
@@ -314,6 +315,9 @@ class PositionHandoff:
             "vibe_session_id": self.vibe_session_id,
             "created_at": self.created_at,
         }
+        if self.context_generation is not None:
+            payload["context_generation"] = self.context_generation
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> PositionHandoff:
@@ -337,5 +341,8 @@ class PositionHandoff:
             watch_spec=watch_spec,
             stop_rules=stop_rules,
             vibe_session_id=(str(payload["vibe_session_id"]) if payload.get("vibe_session_id") else None),
+            context_generation=(
+                str(payload["context_generation"]) if payload.get("context_generation") else None
+            ),
             created_at=str(payload.get("created_at") or datetime.now(timezone.utc).isoformat()),
         )

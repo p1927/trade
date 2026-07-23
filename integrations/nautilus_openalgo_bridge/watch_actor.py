@@ -179,25 +179,6 @@ class WatchActor(Actor):
     def _position_pnl(self) -> float | None:
         if not self._agent_id:
             return None
-        if self._market == "US":
-            try:
-                from trade_integrations.dataflows.alpaca import list_alpaca_positions
-
-                rows = list_alpaca_positions()
-                total = 0.0
-                found = False
-                for row in rows:
-                    raw = row.get("unrealized_pl") or row.get("unrealized_plpc")
-                    if raw is None:
-                        continue
-                    try:
-                        total += float(raw)
-                        found = True
-                    except (TypeError, ValueError):
-                        continue
-                return total if found else None
-            except Exception:
-                return None
         try:
             from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
             from nautilus_openalgo_bridge.agent_scoping import filter_positions_for_agent

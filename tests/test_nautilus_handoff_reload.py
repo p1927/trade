@@ -14,7 +14,7 @@ INTEGRATIONS = ROOT / "integrations"
 if str(INTEGRATIONS) not in sys.path:
     sys.path.insert(0, str(INTEGRATIONS))
 
-from nautilus_openalgo_bridge.handoff import save_handoff  # noqa: E402
+from nautilus_openalgo_bridge.handoff import load_handoff, save_handoff, stamp_handoff_context_generation  # noqa: E402
 from nautilus_openalgo_bridge.models import PositionHandoff, WatchRule, WatchSpec  # noqa: E402
 from nautilus_openalgo_bridge.runtime.poll_loop import maybe_reload_watch_spec  # noqa: E402
 from trade_integrations.autonomous_agents.store import save_agent  # noqa: E402
@@ -95,3 +95,21 @@ def test_no_reload_when_mtime_unchanged(hub_tmp: Path):
     out_spec, out_mt, _ = maybe_reload_watch_spec(agent_id, spec, last_handoff_mtime=mt, last_agent_mtime=mt)
     assert out_spec is spec
     assert out_mt == mt
+
+
+def test_stamp_handoff_context_generation(hub_tmp: Path):
+    agent_id = "aa_ctx"
+    save_agent(
+        {
+            "id": agent_id,
+            "symbols": ["NIFTY"],
+            "watch_spec": {"rules": [{"symbol": "NIFTY", "metric": "spot_move_pct", "threshold": 0.5}]},
+        }
+    )
+    generation = "2026-07-23T09:15:00+05:30"
+    handoff = stamp_handoff_context_generation(agent_id, generation)
+    assert handoff is not None
+    assert handoff.context_generation == generation
+    loaded = load_handoff(agent_id)
+    assert loaded is not None
+    assert loaded.context_generation == generation

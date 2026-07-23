@@ -23,6 +23,7 @@ def _parse_symbols(raw: str) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class BridgeConfig:
     watch_enabled: bool = False
+    watch_feed_mode: str = "rest"
     openalgo_host: str = "http://127.0.0.1:5001"
     openalgo_api_key: str = ""
     vibe_backend_url: str = "http://127.0.0.1:8899"
@@ -55,8 +56,12 @@ def get_bridge_config() -> BridgeConfig:
         vibe_url = os.getenv("VIBE_BACKEND_URL", "").rstrip("/")
         redis_default = os.getenv("NAUTILUS_REDIS_URL", "").strip()
     redis_raw = os.getenv("NAUTILUS_REDIS_URL", redis_default).strip()
+    feed_mode = os.getenv("WATCH_FEED_MODE", "rest").strip().lower()
+    if feed_mode not in ("ws", "rest"):
+        feed_mode = "rest"
     return BridgeConfig(
         watch_enabled=_env_bool("NAUTILUS_WATCH_ENABLE", "true"),
+        watch_feed_mode=feed_mode,
         openalgo_host=host,
         openalgo_api_key=api_key,
         vibe_backend_url=vibe_url,

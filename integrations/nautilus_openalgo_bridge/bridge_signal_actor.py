@@ -10,8 +10,8 @@ from nautilus_trader.common.actor import Actor
 from nautilus_trader.common.config import ActorConfig
 
 from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours
-from nautilus_openalgo_bridge.market_hours import agent_market, is_market_open_for_market
-from nautilus_openalgo_bridge.handoff import load_handoff
+from nautilus_openalgo_bridge.market_hours import is_agent_watch_session_open
+from nautilus_openalgo_bridge.agent_scoping import default_exit_underlying
 from nautilus_openalgo_bridge.intent_queue import process_pending_intents
 from nautilus_openalgo_bridge.models import BridgeSignal, WatchAlert, WatchRule
 from nautilus_openalgo_bridge.risk_state import is_trading_halted, set_trading_halt
@@ -72,18 +72,14 @@ class BridgeSignalActor(Actor):
         if name == SIGNAL_REVIEW:
             if not self._trigger_vibe or not payload.get("trigger_vibe", True):
                 return
-            if not allow_vibe_alert_outside_market_hours() and not is_market_open_for_market(
-                agent_market(agent_id),
-            ):
+            if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
                 self.log.info("skip Vibe dispatch — outside market hours")
                 return
             self._dispatch_vibe_alert(agent_id, payload)
         elif name == SIGNAL_THESIS:
             if not self._trigger_vibe:
                 return
-            if not allow_vibe_alert_outside_market_hours() and not is_market_open_for_market(
-                agent_market(agent_id),
-            ):
+            if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
                 self.log.info("skip thesis dispatch — outside market hours")
                 return
             self._dispatch_thesis_alert(agent_id, payload)
@@ -129,10 +125,14 @@ class BridgeSignalActor(Actor):
     def _dispatch_vibe_alert(self, agent_id: str, payload: dict[str, Any]) -> None:
         from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
 
+        symbol = default_exit_underlying(
+            agent_id,
+            explicit=str(payload.get("symbol") or "").strip() or None,
+        )
         alert = WatchAlert(
             signal=BridgeSignal.REVIEW_NEEDED,
-            rule=WatchRule(symbol=str(payload.get("symbol") or "NIFTY"), metric="spot_move_pct", threshold=0),
-            symbol=str(payload.get("symbol") or "NIFTY"),
+            rule=WatchRule(symbol=symbol, metric="spot_move_pct", threshold=0),
+            symbol=symbol,
             message=str(payload.get("message") or "watch alert"),
             ltp=float(payload["ltp"]) if payload.get("ltp") is not None else None,
         )
@@ -146,10 +146,14 @@ class BridgeSignalActor(Actor):
     def _dispatch_thesis_alert(self, agent_id: str, payload: dict[str, Any]) -> None:
         from nautilus_openalgo_bridge.vibe_trigger import dispatch_thesis_alert_sync
 
+        symbol = default_exit_underlying(
+            agent_id,
+            explicit=str(payload.get("symbol") or "").strip() or None,
+        )
         alert = WatchAlert(
             signal=BridgeSignal.THESIS_BROKEN,
-            rule=WatchRule(symbol=str(payload.get("symbol") or "NIFTY"), metric="spot_move_pct", threshold=0),
-            symbol=str(payload.get("symbol") or "NIFTY"),
+            rule=WatchRule(symbol=symbol, metric="spot_move_pct", threshold=0),
+            symbol=symbol,
             message=str(payload.get("message") or "thesis break"),
             ltp=float(payload["ltp"]) if payload.get("ltp") is not None else None,
         )
@@ -160,20 +164,20 @@ class BridgeSignalActor(Actor):
             self.log.error(f"Thesis dispatch failed: {exc}")
 
     def _dispatch_exit(self, agent_id: str, payload: dict[str, Any]) -> None:
+        from nautilus_openalgo_bridge.agent_scoping import default_exit_underlying
         from nautilus_openalgo_bridge.signal_actions import dispatch_exit_intent
 
-        handoff = load_handoff(agent_id)
         alert = WatchAlert(
             signal=BridgeSignal.EXIT_NOW,
             rule=None,
-            symbol=str(payload.get("symbol") or (handoff.underlying if handoff else "NIFTY")),
+            symbol=str(payload.get("symbol") or default_exit_underlying(agent_id)),
             message=str(payload.get("message") or payload.get("value") or "exit"),
         )
         try:
             result = dispatch_exit_intent(
                 agent_id,
                 alert,
-                underlying=handoff.underlying if handoff else None,
+                underlying=str(payload.get("symbol") or "").strip() or None,
             )
             self.log.info(f"EXIT intent: {result.get('status')}")
         except Exception as exc:

@@ -23,6 +23,7 @@ from nautilus_openalgo_bridge.models import (  # noqa: E402
 from nautilus_openalgo_bridge.vibe_trigger import (  # noqa: E402
     build_alert_turn_prompt,
     build_bridge_alert_block,
+    dispatch_thesis_alert_sync,
     dispatch_watch_alert_sync,
 )
 
@@ -131,6 +132,20 @@ def test_dispatch_watch_alert_sync_error_clears_streaming(mock_client_factory, m
 
 
 @patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
+def test_dispatch_runs_when_bootstrap_done(mock_get_agent):
+    mock_get_agent.return_value = {
+        "id": "aa_test",
+        "status": "running",
+        "vibe_session_id": "s1",
+        "bootstrap_status": "done",
+        "plan_approved_at": "2026-07-01T00:00:00+00:00",
+    }
+    from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+    assert is_plan_approved(mock_get_agent.return_value) is True
+
+
+@patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
 def test_dispatch_skips_when_plan_not_approved(mock_get_agent):
     mock_get_agent.return_value = {
         "id": "aa_test",
@@ -189,3 +204,38 @@ def test_dispatch_skips_within_skip_if_unchanged_gate(mock_client_factory, mock_
     assert result.get("reason") == "skip_if_unchanged_gate"
     mock_client_factory.assert_not_called()
     mock_save.assert_not_called()
+
+
+@patch("trade_integrations.watch_registry.store.record_owner_alert_fired")
+@patch("nautilus_openalgo_bridge.vibe_trigger.get_agent")
+@patch("nautilus_openalgo_bridge.vibe_trigger.save_agent")
+@patch("nautilus_openalgo_bridge.vibe_trigger.make_vibe_message_client")
+def test_dispatch_thesis_alert_records_watch_fired(
+    mock_client_factory, mock_save, mock_get_agent, mock_record_fired
+):
+    agent = {
+        "id": "aa_test",
+        "status": "running",
+        "vibe_session_id": "sess123",
+        "streaming": False,
+        "plan_approved_at": "2026-07-01T00:00:00+00:00",
+    }
+    mock_get_agent.side_effect = lambda _id: dict(agent)
+
+    async def _caller(session_id: str, content: str) -> dict:
+        assert session_id == "sess123"
+        assert "Thesis broken" in content or "thesis" in content.lower()
+        return {"status": "accepted"}
+
+    mock_client_factory.return_value = _caller
+    mock_record_fired.return_value = ["watch1"]
+
+    alert = WatchAlert(
+        signal=BridgeSignal.THESIS_BROKEN,
+        rule=None,
+        symbol="NIFTY",
+        message="thesis break",
+    )
+    result = dispatch_thesis_alert_sync("aa_test", alert)
+    assert result["status"] == "dispatched"
+    mock_record_fired.assert_called_once_with("aa_test", "thesis break", symbol="NIFTY")

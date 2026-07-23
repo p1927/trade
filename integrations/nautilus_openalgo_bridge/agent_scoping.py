@@ -43,6 +43,29 @@ def agent_symbol_universe(agent_id: str) -> set[str]:
     return {s for s in symbols if s}
 
 
+def default_exit_underlying(agent_id: str, *, explicit: str | None = None) -> str:
+    """Resolve EXIT underlying from explicit value, handoff, or agent symbols."""
+    if explicit and str(explicit).strip():
+        return normalize_watch_symbol(str(explicit))
+    handoff = load_handoff(agent_id)
+    if handoff and handoff.underlying:
+        return normalize_watch_symbol(handoff.underlying)
+    agent = load_agent_json(agent_id) or {}
+    syms = [
+        normalize_watch_symbol(str(s))
+        for s in (agent.get("symbols") or [])
+        if str(s).strip()
+    ]
+    if syms:
+        return syms[0]
+    try:
+        from nautilus_openalgo_bridge.market_hours import agent_market
+
+        return "SPY" if agent_market(agent_id) == "US" else "NIFTY"
+    except Exception:
+        return "NIFTY"
+
+
 def filter_positions_for_agent(rows: list[dict[str, Any]], agent_id: str) -> list[dict[str, Any]]:
     """Filter OpenAlgo position rows to one autonomous agent."""
     open_rows = open_positions_from_book(rows)
@@ -103,13 +126,5 @@ def resolve_exit_legs_for_agent(
     if explicit_legs:
         return list(explicit_legs)
     scoped = filter_positions_for_agent(position_rows, agent_id)
-    ul = str(underlying or "").strip().upper()
-    if not ul:
-        handoff = load_handoff(agent_id)
-        if handoff:
-            ul = handoff.underlying.upper()
-        else:
-            agent = load_agent_json(agent_id) or {}
-            syms = agent.get("symbols") or ["NIFTY"]
-            ul = str(syms[0]).upper()
+    ul = default_exit_underlying(agent_id, explicit=underlying)
     return closing_legs_from_positions(scoped, underlying=ul)

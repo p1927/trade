@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nautilus_openalgo_bridge.config import get_bridge_config, is_bridge_market_open, is_watch_enabled
 from nautilus_openalgo_bridge.data_feed import OpenAlgoQuoteFeed
@@ -18,7 +18,14 @@ from nautilus_openalgo_bridge.stop_eval import evaluate_stop_rules
 from nautilus_openalgo_bridge.thesis_eval import evaluate_thesis_for_agent
 from nautilus_openalgo_bridge.watch_eval import evaluate_watch_spec
 
+if TYPE_CHECKING:
+    from nautilus_openalgo_bridge.ws_feed import OpenAlgoWsWatchFeed
+
 logger = logging.getLogger(__name__)
+
+_ws_feed: Any | None = None
+_ws_feed_lock = __import__("threading").Lock()
+_ws_feed_generation: str | None = None
 
 
 def _agent_mtime(agent_id: str) -> float | None:
@@ -75,23 +82,22 @@ def _dispatch_alerts(
     if not trigger_vibe:
         return dispatch_results
     from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours
-    from nautilus_openalgo_bridge.market_hours import agent_market, is_market_open_for_market
+    from nautilus_openalgo_bridge.market_hours import is_agent_watch_session_open
     from nautilus_openalgo_bridge.signal_actions import dispatch_exit_intent
     from nautilus_openalgo_bridge.vibe_trigger import dispatch_thesis_alert_sync, dispatch_watch_alert_sync
 
-    agent_market_code = (market or agent_market(agent_id)).upper()
     outside_hours = not allow_vibe_alert_outside_market_hours()
 
     for alert in alerts:
         if alert.signal == BridgeSignal.EXIT_NOW:
             dispatch_results.append(dispatch_exit_intent(agent_id, alert))
         elif alert.signal == BridgeSignal.THESIS_BROKEN:
-            if outside_hours and not is_market_open_for_market(agent_market_code):
+            if outside_hours and not is_agent_watch_session_open(agent_id):
                 dispatch_results.append({"status": "skipped", "reason": "outside_market_hours"})
                 continue
             dispatch_results.append(dispatch_thesis_alert_sync(agent_id, alert, quotes=quotes))
         elif alert.signal == BridgeSignal.REVIEW_NEEDED:
-            if outside_hours and not is_market_open_for_market(agent_market_code):
+            if outside_hours and not is_agent_watch_session_open(agent_id):
                 dispatch_results.append({"status": "skipped", "reason": "outside_market_hours"})
                 continue
             dispatch_results.append(dispatch_watch_alert_sync(agent_id, alert, quotes=quotes))
@@ -127,6 +133,71 @@ def _resolve_poll_symbols(agent_id: str | None) -> list[str]:
         return []
 
 
+def _close_ws_feed() -> None:
+    global _ws_feed, _ws_feed_generation
+    with _ws_feed_lock:
+        feed = _ws_feed
+        _ws_feed = None
+        _ws_feed_generation = None
+    if feed is not None:
+        try:
+            feed.close()
+        except Exception:
+            logger.debug("WS watch feed close failed", exc_info=True)
+
+
+def _get_ws_feed(context_generation: str | None) -> OpenAlgoWsWatchFeed:
+    global _ws_feed, _ws_feed_generation
+    from nautilus_openalgo_bridge.ws_feed import OpenAlgoWsWatchFeed
+
+    generation = str(context_generation or "").strip()
+    stale = None
+    with _ws_feed_lock:
+        if _ws_feed is not None and _ws_feed_generation != generation:
+            stale = _ws_feed
+            _ws_feed = None
+            _ws_feed_generation = None
+        if _ws_feed is None:
+            _ws_feed = OpenAlgoWsWatchFeed(context_generation=generation)
+            _ws_feed_generation = generation or None
+        feed = _ws_feed
+    if stale is not None:
+        try:
+            stale.close()
+        except Exception:
+            logger.debug("WS watch feed recycle failed", exc_info=True)
+    return feed
+
+
+def _poll_quotes(
+    symbols: list[str],
+    *,
+    context_generation: str | None = None,
+    rest_feed: OpenAlgoQuoteFeed | None = None,
+) -> dict:
+    """Poll quotes via WS when configured, with REST fallback on empty or error."""
+    cfg = get_bridge_config()
+    if cfg.watch_feed_mode != "ws" or not symbols:
+        feed = rest_feed or OpenAlgoQuoteFeed()
+        return feed.poll(symbols)
+
+    from nautilus_openalgo_bridge.ws_feed import OpenAlgoWsWatchFeed, ticks_to_quote_snapshots
+
+    ws_feed: OpenAlgoWsWatchFeed | None = None
+    try:
+        ws_feed = _get_ws_feed(context_generation)
+        ws_feed.subscribe(symbols)
+        ticks = ws_feed.poll_ticks()
+        if ticks:
+            return ticks_to_quote_snapshots(ticks)
+    except Exception:
+        logger.debug("WS watch feed poll failed; falling back to REST", exc_info=True)
+        _close_ws_feed()
+
+    feed = rest_feed or OpenAlgoQuoteFeed()
+    return feed.poll(symbols)
+
+
 def _run_once_impl(
     *,
     agent_id: str | None = None,
@@ -135,13 +206,12 @@ def _run_once_impl(
     process_intents: bool = False,
 ) -> dict[str, Any]:
     cfg = get_bridge_config()
-    feed = OpenAlgoQuoteFeed()
     spec = _resolve_watch_spec(agent_id)
     poll_symbols = _resolve_poll_symbols(agent_id)
-    quotes = feed.poll(poll_symbols)
-    alerts = evaluate_watch_spec(spec, quotes, baselines=baselines or {})
-
     handoff = load_handoff(agent_id) if agent_id else None
+    context_generation = handoff.context_generation if handoff else None
+    quotes = _poll_quotes(poll_symbols, context_generation=context_generation)
+    alerts = evaluate_watch_spec(spec, quotes, baselines=baselines or {})
     if handoff:
         try:
             client = get_openalgo_client(cfg)
@@ -150,6 +220,12 @@ def _run_once_impl(
             stop_alert = evaluate_stop_rules(handoff, quotes, unrealized_pnl_inr=pnl, config=cfg)
             if stop_alert is not None:
                 alerts.insert(0, stop_alert)
+            if agent_id:
+                from nautilus_openalgo_bridge.reconcile import maybe_reconcile_handoff_mismatch
+
+                mismatch_alert = maybe_reconcile_handoff_mismatch(agent_id, client=client)
+                if mismatch_alert is not None:
+                    alerts.append(mismatch_alert)
         except RuntimeError as exc:
             logger.debug("stop rule eval skipped: %s", exc)
 
@@ -192,7 +268,6 @@ def _run_once_impl(
             alerts,
             quotes=quotes,
             trigger_vibe=bool(trigger_vibe and agent_id),
-            market="IN",
         )
         if agent_id
         else []
@@ -213,73 +288,13 @@ def run_once_alpaca(
     trigger_vibe: bool = False,
     process_intents: bool = False,
 ) -> dict[str, Any]:
-    from nautilus_openalgo_bridge.alpaca_quote_feed import AlpacaQuoteFeed
-
-    _ = process_intents
-    cfg = get_bridge_config()
-    feed = AlpacaQuoteFeed()
-    spec = _resolve_watch_spec(agent_id)
-    symbols = _resolve_poll_symbols(agent_id)
-    if not symbols:
-        return {
-            "quotes": {},
-            "alerts": [],
-            "dispatches": [],
-            "intents_processed": [],
-        }
-    quotes = feed.poll(symbols)
-    alerts = evaluate_watch_spec(spec, quotes, baselines=baselines or {})
-
-    handoff = load_handoff(agent_id) if agent_id else None
-    if handoff:
-        try:
-            from trade_integrations.dataflows.alpaca import list_alpaca_positions
-
-            rows = list_alpaca_positions()
-            pnl = 0.0
-            found = False
-            for row in rows:
-                raw = row.get("unrealized_pl")
-                if raw is None:
-                    continue
-                pnl += float(raw)
-                found = True
-            stop_alert = evaluate_stop_rules(
-                handoff,
-                quotes,
-                unrealized_pnl_inr=pnl if found else None,
-                config=cfg,
-            )
-            if stop_alert is not None:
-                alerts.insert(0, stop_alert)
-        except Exception as exc:
-            logger.debug("US stop rule eval skipped: %s", exc)
-
-    if agent_id:
-        focus = symbols[0] if symbols else "SPY"
-        quote = quotes.get(focus)
-        thesis_alert = evaluate_thesis_for_agent(agent_id, live_spot=quote.ltp if quote else None)
-        if thesis_alert is not None:
-            alerts.insert(0, thesis_alert)
-
-    dispatch_results = (
-        _dispatch_alerts(
-            agent_id,
-            alerts,
-            quotes=quotes,
-            trigger_vibe=bool(trigger_vibe and agent_id),
-            market="US",
-        )
-        if agent_id
-        else []
+    """Deprecated alias — US watch uses OpenAlgo via ``run_once``."""
+    return run_once(
+        agent_id=agent_id,
+        baselines=baselines,
+        trigger_vibe=trigger_vibe,
+        process_intents=process_intents,
     )
-
-    return {
-        "quotes": {k: v.to_dict() for k, v in quotes.items()},
-        "alerts": [a.to_dict() for a in alerts],
-        "dispatches": dispatch_results,
-        "intents_processed": [],
-    }
 
 
 def _poll_loop_market(agent_id: str | None) -> str:
@@ -327,7 +342,7 @@ def run_poll_loop(
             logger.error("Vibe backend unreachable at %s", cfg.vibe_backend_url)
             return 1
 
-    feed = OpenAlgoQuoteFeed()
+    rest_feed = OpenAlgoQuoteFeed()
     spec = _resolve_watch_spec(agent_id)
     baselines: dict[str, float] = {}
     last_alert_at: dict[str, float] = {}
@@ -369,12 +384,18 @@ def run_poll_loop(
             except RuntimeError as exc:
                 logger.debug("intent queue tick skipped: %s", exc)
 
-        quotes = feed.poll(_resolve_poll_symbols(agent_id))
+        poll_symbols = _resolve_poll_symbols(agent_id)
+        handoff = load_handoff(agent_id) if agent_id else None
+        context_generation = handoff.context_generation if handoff else None
+        quotes = _poll_quotes(
+            poll_symbols,
+            context_generation=context_generation,
+            rest_feed=rest_feed,
+        )
         for symbol, snap in quotes.items():
             baselines.setdefault(symbol, snap.ltp)
 
         alerts = evaluate_watch_spec(spec, quotes, baselines=baselines)
-        handoff = load_handoff(agent_id) if agent_id else None
         if handoff:
             try:
                 client = get_openalgo_client(cfg)
@@ -406,8 +427,12 @@ def run_poll_loop(
             if not trigger_vibe or not agent_id:
                 continue
             if alert.signal == BridgeSignal.THESIS_BROKEN:
+                from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours
+                from nautilus_openalgo_bridge.market_hours import is_agent_watch_session_open
                 from nautilus_openalgo_bridge.vibe_trigger import dispatch_thesis_alert_sync
 
+                if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
+                    continue
                 result = dispatch_thesis_alert_sync(agent_id, alert, quotes=quotes)
                 if result.get("status") == "dispatched":
                     last_vibe_dispatch_at = now
@@ -417,7 +442,10 @@ def run_poll_loop(
                 continue
             if spec.gate and (now - last_vibe_dispatch_at) < gate_minutes * 60:
                 continue
-            if not is_bridge_market_open(cfg):
+            from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours
+            from nautilus_openalgo_bridge.market_hours import is_agent_watch_session_open
+
+            if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
                 continue
             from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
 

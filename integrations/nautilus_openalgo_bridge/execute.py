@@ -11,7 +11,12 @@ from nautilus_openalgo_bridge.models import ExecutionIntent, IntentAction
 from nautilus_openalgo_bridge.openalgo_client import BridgeOpenAlgoClient, get_openalgo_client
 from nautilus_openalgo_bridge.orders import leg_to_openalgo_order, legs_to_openalgo_orders
 from nautilus_openalgo_bridge.preflight import run_preflight
-from nautilus_openalgo_bridge.reconcile import open_positions_from_book, reconcile_after_intent, total_unrealized_pnl
+from nautilus_openalgo_bridge.reconcile import (
+    open_positions_from_book,
+    reconcile_after_intent,
+    snapshot_agent_positions,
+    total_unrealized_pnl,
+)
 
 __all__ = ["execute_intent", "process_intent_file", "leg_to_openalgo_order", "legs_to_openalgo_orders"]
 
@@ -56,6 +61,8 @@ def execute_intent(
             archive_intent(intent, payload)
         reconcile_after_intent(intent, client=oa, execution_result=payload)
         return payload
+
+    pre_snapshot = snapshot_agent_positions(str(intent.agent_id or ""), client=oa) if intent.agent_id else None
 
     if not skip_preflight:
         preflight = run_preflight(intent, oa, cfg)
@@ -121,7 +128,12 @@ def execute_intent(
                 clear_agent_position_state(intent.agent_id)
             except Exception:
                 logger.debug("handoff clear on EXIT skipped", exc_info=True)
-        postflight = reconcile_after_intent(intent, client=oa, execution_result=payload)
+        postflight = reconcile_after_intent(
+            intent,
+            client=oa,
+            execution_result=payload,
+            pre_snapshot=pre_snapshot,
+        )
         payload["postflight"] = postflight
         realized_pnl = _exit_realized_pnl_from_reconcile(pre_exit_pnl, postflight)
         try:
@@ -166,7 +178,12 @@ def execute_intent(
             "underlying": intent.underlying,
             "widget_id": intent.widget_id,
         }
-        postflight = reconcile_after_intent(intent, client=oa, execution_result=payload)
+        postflight = reconcile_after_intent(
+            intent,
+            client=oa,
+            execution_result=payload,
+            pre_snapshot=pre_snapshot,
+        )
         payload["postflight"] = postflight
         if persist:
             archive_intent(intent, payload)

@@ -68,6 +68,9 @@ def test_build_trading_node_config_multi_agent(hub_tmp: Path, monkeypatch: pytes
 
     cfg = build_trading_node_config(agent_ids=["aa_in", "aa_us"])
     assert "OPENALGO" in cfg.data_clients
-    assert "ALPACA" in cfg.data_clients
+    assert "ALPACA" not in cfg.data_clients
+    openalgo_symbols = tuple(cfg.data_clients["OPENALGO"].watch_symbols or ())
+    assert "NIFTY" in openalgo_symbols
+    assert "SPY" in openalgo_symbols
     # 2 × (Watch + BridgeSignal) + 2 × RiskActor
     assert len(cfg.actors) == 6

@@ -31,6 +31,30 @@ def is_us_market_session_open(*, now: datetime | None = None) -> bool:
     return _US_RTH_OPEN <= current <= _US_RTH_CLOSE
 
 
+def is_us_exit_window_open(*, now: datetime | None = None) -> bool:
+    """US RTH plus 20-minute grace after close (mirrors India exit window)."""
+    from datetime import timedelta
+
+    now = (now or datetime.now(US_EAST)).astimezone(US_EAST)
+    if now.weekday() >= 5:
+        return False
+    if is_us_market_session_open(now=now):
+        return True
+    close_dt = datetime.combine(now.date(), _US_RTH_CLOSE, tzinfo=US_EAST)
+    grace_end = close_dt + timedelta(minutes=20)
+    return close_dt.time() < now.time() <= grace_end.time()
+
+
+def is_exit_window_open_for_agent(agent_id: str | None, *, now: datetime | None = None) -> bool:
+    """Market-aware EXIT window for autonomous agents (IN IST + grace, US ET + grace)."""
+    market = agent_market(agent_id)
+    if market == "US":
+        return is_us_exit_window_open(now=now)
+    from nautilus_openalgo_bridge.config import get_bridge_config, is_bridge_exit_window_open
+
+    return is_bridge_exit_window_open(get_bridge_config(), now=now)
+
+
 def is_in_market_session_open(*, now: datetime | None = None) -> bool:
     """India NSE intraday window from bridge config."""
     try:
