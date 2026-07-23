@@ -19,6 +19,7 @@ from trade_integrations.dataflows.hub_wiki.config import (
     get_llm_wiki_project_dir,
     llm_wiki_news_sources_dir,
 )
+from trade_integrations.dataflows.hub_wiki.frontmatter import read_frontmatter
 from trade_integrations.dataflows.index_research.news_dedup import publish_day_from_value
 from trade_integrations.dataflows.index_research.news_event_matching import (
     find_matching_event,
@@ -170,39 +171,28 @@ def _md_path(news_dir: Path, slug: str) -> Path | None:
 
 
 def build_source_event_index(*, news_dir: Path | None = None) -> dict[str, dict[str, Any]]:
-    """Scan raw/sources/news/*.json sidecars into event_id → enrichment map."""
+    """Scan raw/sources/news/*.md frontmatter into event_id → enrichment map."""
     root = news_dir or llm_wiki_news_sources_dir()
     by_event_id: dict[str, dict[str, Any]] = {}
     by_slug: dict[str, str] = {}
     if not root.is_dir():
         return {"by_event_id": by_event_id, "by_slug": by_slug, "news_dir": str(root)}
 
-    for json_path in root.glob("*.json"):
-        slug = json_path.stem
+    for md_path in root.glob("*.md"):
+        slug = md_path.stem
         if not _safe_news_slug(slug):
             continue
-        try:
-            payload = json.loads(json_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        event_id = str(payload.get("event_id") or "").strip()
-        if not event_id:
-            md_path = root / f"{slug}.md"
-            event_id = _parse_frontmatter_event_id(md_path) or ""
+        fm = read_frontmatter(md_path)
+        event_id = str(fm.get("event_id") or _parse_frontmatter_event_id(md_path) or "").strip()
         if not event_id:
             continue
         entry = {
             "event_id": event_id,
             "slug": slug,
-            "title": str(payload.get("title") or ""),
-            "publish_day": str(payload.get("publish_day") or ""),
-            "content_fingerprint": str(payload.get("content_fingerprint") or ""),
-            "references": list(payload.get("references") or []),
-            "timeline": list(payload.get("timeline") or []),
-            "json_path": str(json_path),
-            "md_path": str(root / f"{slug}.md"),
+            "title": str(fm.get("title") or ""),
+            "publish_day": str(fm.get("publish_day") or ""),
+            "content_fingerprint": str(fm.get("content_fingerprint") or ""),
+            "md_path": str(md_path),
         }
         by_event_id[event_id] = entry
         by_slug[slug] = event_id
@@ -246,15 +236,6 @@ def resolve_hit_to_event_id(
         return by_slug[slug]
 
     if slug:
-        json_path = _sidecar_path(news_dir, slug)
-        if json_path and json_path.is_file():
-            try:
-                payload = json.loads(json_path.read_text(encoding="utf-8"))
-                eid = str(payload.get("event_id") or "").strip()
-                if eid:
-                    return eid
-            except (OSError, json.JSONDecodeError):
-                pass
         md_path = _md_path(news_dir, slug)
         if md_path:
             eid = _parse_frontmatter_event_id(md_path)
@@ -286,6 +267,12 @@ def resolved_event_metadata(event_id: str, index: dict[str, Any]) -> dict[str, A
                 str(headline.get("published_at") or "")
             )
         entry["headline"] = headline
+        structured = stored.get("structured_summary") if isinstance(stored.get("structured_summary"), dict) else {}
+        meta = structured.get("event_meta") if isinstance(structured.get("event_meta"), dict) else {}
+        if not entry.get("references"):
+            entry["references"] = list(meta.get("references") or stored.get("references") or [])
+        if not entry.get("timeline"):
+            entry["timeline"] = list(meta.get("timeline") or stored.get("timeline") or [])
 
     return entry
 

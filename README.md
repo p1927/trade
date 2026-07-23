@@ -163,8 +163,8 @@ When the probe fails, `trade status` shows `✗ LLM-Wiki not running` and hub ne
 **Cutover checklist (existing hub data):**
 
 ```bash
-# 1. Audit SSOT vs wiki source exports
-python scripts/audit_hub_wiki_sync.py --migrate-legacy
+# 1. Audit SSOT vs wiki source exports (remove legacy layout if present)
+python scripts/audit_hub_wiki_sync.py --cleanup-legacy
 
 # 2. Backfill missing raw/sources/news/ from events.parquet
 python scripts/backfill_hub_wiki_sources.py

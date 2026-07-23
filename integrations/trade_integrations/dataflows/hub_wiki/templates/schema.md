@@ -28,6 +28,7 @@ compiled_at: ISO8601
 processing_version: 1
 source_count: 8
 linked_factors: [oil_brent, fii_net_5d]
+content_fingerprint: title|body|v1
 gap_kind: conflicts   # research exports only
 ---
 ```
@@ -35,7 +36,8 @@ gap_kind: conflicts   # research exports only
 ## Rules
 
 - Wiki pages are **derived** from `events.parquet` — regenerate, never authoritative over SSOT.
-- Trade exports to `raw/sources/news/` and `raw/sources/research/` only; LLM Wiki ingest builds searchable `wiki/` pages.
+- Trade exports **markdown only** to `raw/sources/news/` and `raw/sources/research/` (no JSON sidecars); LLM Wiki ingest builds searchable `wiki/` pages.
+- `content_fingerprint` in frontmatter supports skip-if-unchanged export and audit sync checks.
 - Map `linked_factors` to `[[entity-slug]]` / `[[concept-slug]]` wikilinks on ingest.
 - Impact numbers come from `event_outcomes` ledger, not free-form LLM prose.
 - Outliers stay in a **Conflicts** section; do not delete dissenting sources.

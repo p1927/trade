@@ -11,10 +11,8 @@ from typing import Any
 
 from trade_integrations.dataflows.hub_wiki.bootstrap import ensure_llm_wiki_project
 from trade_integrations.dataflows.hub_wiki.client import trigger_sources_rescan
-from trade_integrations.dataflows.hub_wiki.config import (
-    llm_wiki_events_dir,
-    llm_wiki_news_sources_dir,
-)
+from trade_integrations.dataflows.hub_wiki.config import llm_wiki_news_sources_dir
+from trade_integrations.dataflows.hub_wiki.frontmatter import frontmatter_field, read_frontmatter
 
 
 def wiki_compile_enabled() -> bool:
@@ -27,8 +25,11 @@ def wiki_backfill_enabled() -> bool:
 
 def event_content_fingerprint(event: dict[str, Any]) -> str:
     """Stable hash for skip-if-unchanged wiki exports."""
-    title = str(event.get("title") or "").strip()
-    body = str(event.get("content") or event.get("content_summary") or "").strip()
+    def _norm(text: Any) -> str:
+        return str(text or "").strip().replace("\n", " ")
+
+    title = _norm(event.get("title"))
+    body = _norm(event.get("content") or event.get("content_summary"))
     version = int(event.get("processing_version") or 1)
     return f"{title}|{body}|v{version}"
 
@@ -38,15 +39,25 @@ def _slug(text: str, *, max_len: int = 64) -> str:
     return (slug or "event")[:max_len]
 
 
+def _event_id_slug_suffix(event_id: str) -> str:
+    raw = (event_id or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("url:"):
+        return _slug(raw[-12:], max_len=16)
+    compact = re.sub(r"[^a-z0-9]+", "", raw.lower())
+    tail = compact[-12:] or compact[:12]
+    return _slug(tail, max_len=16)
+
+
 def event_slug(event: dict[str, Any]) -> str:
     event_id = str(event.get("event_id") or "").strip()
     title = str(event.get("title") or "event")
-    slug = _slug(title)
-    if event_id.startswith("url:"):
-        return _slug(f"{slug}-{event_id[-12:]}")
-    if event_id:
-        return _slug(f"{slug}-{event_id[:8]}")
-    return slug
+    suffix = _event_id_slug_suffix(event_id)
+    if suffix:
+        title_slug = _slug(title, max_len=48)
+        return _slug(f"{title_slug}-{suffix}", max_len=64)
+    return _slug(title, max_len=64)
 
 
 def _now_iso() -> str:
@@ -93,6 +104,7 @@ def render_event_source(event: dict[str, Any], *, source_rel_path: str) -> str:
         f"source_count: {int(meta.get('ref_count') or len(refs) or 1)}",
         f"linked_factors: {_yaml_value(factors)}",
         f"publish_day: {_yaml_value(event.get('publish_day') or '')}",
+        f"content_fingerprint: {_yaml_value(event_content_fingerprint(event))}",
         "---",
         "",
         f"# {title}",
@@ -141,24 +153,6 @@ def render_event_source(event: dict[str, Any], *, source_rel_path: str) -> str:
     return "\n".join(fm_lines)
 
 
-def render_source_export(event: dict[str, Any]) -> str:
-    """JSON audit sidecar under raw/sources/news/."""
-    structured = event.get("structured_summary") if isinstance(event.get("structured_summary"), dict) else {}
-    meta = structured.get("event_meta") if isinstance(structured.get("event_meta"), dict) else {}
-    payload = {
-        "event_id": event.get("event_id"),
-        "title": event.get("title"),
-        "ticker": event.get("ticker"),
-        "publish_day": event.get("publish_day"),
-        "compiled_at": _now_iso(),
-        "content_fingerprint": event_content_fingerprint(event),
-        "references": meta.get("references") or [],
-        "timeline": meta.get("timeline") or [],
-        "consensus": meta.get("consensus") or {},
-    }
-    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-
-
 def compile_event_to_wiki(
     event: dict[str, Any],
     *,
@@ -176,16 +170,16 @@ def compile_event_to_wiki(
 
     source_rel = f"news/{slug}.md"
     md_path = news_dir / f"{slug}.md"
-    json_path = news_dir / f"{slug}.json"
 
     md_path.write_text(render_event_source(event, source_rel_path=source_rel), encoding="utf-8")
-    json_path.write_text(render_source_export(event), encoding="utf-8")
+    legacy_json = news_dir / f"{slug}.json"
+    if legacy_json.is_file():
+        legacy_json.unlink()
 
     out: dict[str, Any] = {
         "ok": True,
         "event_id": event_id,
         "source_md_path": str(md_path),
-        "source_json_path": str(json_path),
         "slug": slug,
     }
     if rescan:
@@ -218,14 +212,9 @@ def source_export_is_current(event: dict[str, Any], *, news_dir: Path | None = N
     root = news_dir or llm_wiki_news_sources_dir()
     slug = event_slug(event)
     md_path = root / f"{slug}.md"
-    json_path = root / f"{slug}.json"
-    if not md_path.is_file() or not json_path.is_file():
+    if not md_path.is_file():
         return False
-    try:
-        sidecar = json.loads(json_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False
-    return sidecar.get("content_fingerprint") == event_content_fingerprint(event)
+    return frontmatter_field(md_path, "content_fingerprint") == event_content_fingerprint(event)
 
 
 def compile_all_events_to_wiki(
@@ -294,6 +283,64 @@ def compile_all_events_to_wiki(
     return out
 
 
+def cleanup_orphan_wiki_source_exports(
+    *,
+    ticker: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Remove raw/sources/news files that no longer map to active SSOT events."""
+    from trade_integrations.hub_storage.news_events_store import list_event_tickers, list_events
+
+    sym = (ticker or "").strip().upper() or None
+    events: list[dict[str, Any]] = []
+    if sym:
+        events = list_events(ticker=sym, limit=50_000, include_rejected=False)
+    else:
+        for t in list_event_tickers():
+            events.extend(list_events(ticker=t, limit=50_000, include_rejected=False))
+
+    seen_ids: set[str] = set()
+    active: list[dict[str, Any]] = []
+    for event in events:
+        if str(event.get("status") or "active") == "superseded":
+            continue
+        event_id = str(event.get("event_id") or "").strip()
+        if not event_id or event_id in seen_ids:
+            continue
+        seen_ids.add(event_id)
+        active.append(event)
+
+    expected_slugs = {event_slug(event) for event in active}
+    expected_ids = seen_ids
+    news_dir = llm_wiki_news_sources_dir()
+    removed: list[str] = []
+
+    if news_dir.is_dir():
+        for md_path in news_dir.glob("*.md"):
+            slug = md_path.stem
+            fm = read_frontmatter(md_path)
+            event_id = str(fm.get("event_id") or "").strip()
+            orphan = slug not in expected_slugs or (event_id and event_id not in expected_ids)
+            if not orphan:
+                continue
+            if not dry_run:
+                md_path.unlink()
+            removed.append(str(md_path))
+
+        for json_path in news_dir.glob("*.json"):
+            if not dry_run:
+                json_path.unlink()
+            removed.append(str(json_path))
+
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "removed": removed,
+        "removed_count": len(removed),
+        "expected_slugs": len(expected_slugs),
+    }
+
+
 def remove_event_wiki_files(event: dict[str, Any], *, rescan: bool = False) -> dict[str, Any]:
     """Remove exported source files for a discarded or archived event."""
     event_id = str(event.get("event_id") or "").strip()
@@ -302,11 +349,9 @@ def remove_event_wiki_files(event: dict[str, Any], *, rescan: bool = False) -> d
 
     slug = event_slug(event)
     removed: list[str] = []
-    for path in (
-        llm_wiki_news_sources_dir() / f"{slug}.md",
-        llm_wiki_news_sources_dir() / f"{slug}.json",
-        llm_wiki_events_dir() / f"{slug}.md",
-    ):
+    md_path = llm_wiki_news_sources_dir() / f"{slug}.md"
+    json_path = llm_wiki_news_sources_dir() / f"{slug}.json"
+    for path in (md_path, json_path):
         if path.is_file():
             path.unlink()
             removed.append(str(path))
@@ -315,3 +360,21 @@ def remove_event_wiki_files(event: dict[str, Any], *, rescan: bool = False) -> d
     if rescan and removed:
         out["rescan"] = trigger_sources_rescan()
     return out
+
+
+def purge_json_wiki_sidecars(*, dry_run: bool = False) -> dict[str, Any]:
+    """Remove legacy JSON sidecars from raw/sources/news/ and raw/sources/research/."""
+    from trade_integrations.dataflows.hub_wiki.config import (
+        llm_wiki_news_sources_dir,
+        llm_wiki_research_sources_dir,
+    )
+
+    removed: list[str] = []
+    for root in (llm_wiki_news_sources_dir(), llm_wiki_research_sources_dir()):
+        if not root.is_dir():
+            continue
+        for json_path in root.glob("*.json"):
+            if not dry_run:
+                json_path.unlink()
+            removed.append(str(json_path))
+    return {"ok": True, "dry_run": dry_run, "removed": removed, "removed_count": len(removed)}

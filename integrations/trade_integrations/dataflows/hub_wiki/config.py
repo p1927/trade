@@ -11,7 +11,7 @@ Storage layout (under hub root, default ``reports/hub/``):
         sources/news/     # Trade distilled event markdown + JSON audit
         sources/research/ # Trade Deep Research exports (immutable)
         assets/
-      wiki/               # LLM Wiki-generated pages after ingest (do not write events/ directly)
+      wiki/               # LLM Wiki-generated pages after ingest (Trade does not write here)
 
 Parquet/json SSOT stays in ``_data/`` — wiki is a derived, regeneratable layer.
 Point the LLM-Wiki desktop app at ``get_llm_wiki_project_dir()`` after migration.
@@ -90,15 +90,5 @@ def llm_wiki_wiki_sources_dir() -> Path:
     return llm_wiki_wiki_dir() / "sources"
 
 
-def llm_wiki_events_dir() -> Path:
-    """Legacy path — prefer ``raw/sources/news/`` for new exports."""
-    return llm_wiki_wiki_dir() / "events"
-
-
 def llm_wiki_entities_dir() -> Path:
     return llm_wiki_wiki_dir() / "entities"
-
-
-def legacy_sources_dir() -> Path:
-    """Pre-migration ``sources/`` tree (removed after one-shot migrate)."""
-    return get_llm_wiki_project_dir() / "sources"

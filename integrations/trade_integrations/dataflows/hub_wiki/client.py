@@ -143,12 +143,19 @@ def count_project_files(*, root: str = "wiki", project_id: str | None = None) ->
     return total
 
 
-def trigger_sources_rescan(*, project_id: str | None = None) -> dict[str, Any]:
+def trigger_sources_rescan(*, project_id: str | None = None, timeout: float | None = None) -> dict[str, Any]:
     """POST /api/v1/projects/{id}/sources/rescan after writing source files."""
     pid = project_id or resolve_project_id()
     if not pid:
         return {"ok": False, "error": "LLM_Wiki project id not configured and API unavailable"}
-    return _request("POST", f"/api/v1/projects/{pid}/sources/rescan")
+    if timeout is None:
+        import os
+
+        try:
+            timeout = float(os.getenv("LLM_WIKI_RESCAN_TIMEOUT", "300"))
+        except ValueError:
+            timeout = 300.0
+    return _request("POST", f"/api/v1/projects/{pid}/sources/rescan", timeout=timeout)
 
 
 def search_wiki(

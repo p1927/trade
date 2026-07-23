@@ -263,21 +263,9 @@ def export_research_for_event(
         ),
         encoding="utf-8",
     )
-    json_path = research_dir / f"{slug}.json"
-    json_path.write_text(
-        json.dumps(
-            {
-                "event_id": event_id,
-                "gap_kind": gap_kind,
-                "research_at": datetime.now(timezone.utc).isoformat(),
-                "source_md": str(md_path),
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    legacy_json = research_dir / f"{slug}.json"
+    if legacy_json.is_file():
+        legacy_json.unlink()
 
     _append_research_log(
         {

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 from trade_integrations.dataflows.hub_wiki.config import (
     get_llm_wiki_project_dir,
-    legacy_sources_dir,
     llm_wiki_concepts_dir,
     llm_wiki_entities_dir,
     llm_wiki_news_sources_dir,
@@ -22,6 +22,9 @@ from trade_integrations.dataflows.hub_wiki.config import (
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 
+_LEGACY_SOURCES_DIRNAME = "sources"
+_LEGACY_WIKI_EVENTS_SUBDIR = "events"
+
 
 def _copy_if_missing(src: Path, dest: Path) -> None:
     if dest.is_file() or not src.is_file():
@@ -29,55 +32,66 @@ def _copy_if_missing(src: Path, dest: Path) -> None:
     dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def migrate_legacy_sources_layout(root: Path) -> dict[str, int]:
-    """Move ``sources/*`` → ``raw/sources/*`` from pre-fix Trade layout."""
-    legacy = legacy_sources_dir()
-    if not legacy.is_dir():
-        return {"moved": 0}
+def _legacy_sources_dir() -> Path:
+    return get_llm_wiki_project_dir() / _LEGACY_SOURCES_DIRNAME
 
-    moved = 0
-    for sub in ("inbox", "news"):
-        src_dir = legacy / sub
-        if not src_dir.is_dir():
-            continue
-        dest_dir = llm_wiki_sources_dir() / sub
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        for item in src_dir.iterdir():
-            target = dest_dir / item.name
-            if target.exists():
-                continue
-            shutil.move(str(item), str(target))
-            moved += 1
 
-    # Migrate legacy wiki/events markdown into raw/sources/news for ingest
-    legacy_events = llm_wiki_wiki_dir() / "events"
+def _legacy_wiki_events_dir() -> Path:
+    return llm_wiki_wiki_dir() / _LEGACY_WIKI_EVENTS_SUBDIR
+
+
+def cleanup_legacy_wiki_artifacts(*, dry_run: bool = False) -> dict[str, Any]:
+    """Remove pre-cutover llm-wiki paths superseded by ``raw/sources/news/`` exports."""
+    removed_files = 0
+    removed_dirs: list[str] = []
+
+    legacy_src = _legacy_sources_dir()
+    if legacy_src.is_dir():
+        for item in legacy_src.rglob("*"):
+            if item.is_file():
+                removed_files += 1
+                if not dry_run:
+                    item.unlink()
+        if not dry_run:
+            shutil.rmtree(legacy_src, ignore_errors=True)
+        removed_dirs.append(str(legacy_src))
+
+    legacy_events = _legacy_wiki_events_dir()
     if legacy_events.is_dir():
-        dest_news = llm_wiki_news_sources_dir()
-        dest_news.mkdir(parents=True, exist_ok=True)
         for md in legacy_events.glob("*.md"):
-            target = dest_news / md.name
-            if target.exists():
-                continue
-            shutil.copy2(md, target)
-            moved += 1
+            removed_files += 1
+            if not dry_run:
+                md.unlink()
+        if not dry_run:
+            try:
+                legacy_events.rmdir()
+            except OSError:
+                shutil.rmtree(legacy_events, ignore_errors=True)
+        removed_dirs.append(str(legacy_events))
 
-    try:
-        if legacy.is_dir() and not any(legacy.iterdir()):
-            legacy.rmdir()
-        elif legacy.is_dir():
-            for sub in legacy.iterdir():
-                if sub.is_dir() and not any(sub.iterdir()):
-                    sub.rmdir()
-            if not any(legacy.iterdir()):
-                legacy.rmdir()
-    except OSError:
-        pass
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "removed_files": removed_files,
+        "removed_dirs": removed_dirs,
+    }
 
-    return {"moved": moved}
+
+def legacy_wiki_layout_report() -> dict[str, Any]:
+    """Report remaining deprecated on-disk layout (should be empty post-cutover)."""
+    legacy_src = _legacy_sources_dir()
+    legacy_events = _legacy_wiki_events_dir()
+    return {
+        "legacy_sources_dir": legacy_src.is_dir(),
+        "legacy_sources_files": sum(1 for _ in legacy_src.rglob("*") if _.is_file()) if legacy_src.is_dir() else 0,
+        "legacy_wiki_events_dir": legacy_events.is_dir(),
+        "legacy_wiki_events_files": sum(1 for _ in legacy_events.glob("*.md")) if legacy_events.is_dir() else 0,
+        "wiki_project_exists": get_llm_wiki_project_dir().is_dir(),
+    }
 
 
 def ensure_llm_wiki_project() -> Path:
-    """Create llm-wiki/ tree if missing; seed purpose/schema/wiki stubs; migrate legacy paths."""
+    """Create llm-wiki/ tree if missing; seed purpose/schema/wiki stubs."""
     root = get_llm_wiki_project_dir()
     for path in (
         root,
@@ -101,5 +115,4 @@ def ensure_llm_wiki_project() -> Path:
     _copy_if_missing(_TEMPLATES / "wiki_log.md", llm_wiki_wiki_dir() / "log.md")
     _copy_if_missing(_TEMPLATES / "wiki_overview.md", llm_wiki_wiki_dir() / "overview.md")
 
-    migrate_legacy_sources_layout(root)
     return root

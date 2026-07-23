@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit hub events SSOT vs LLM-Wiki raw/source exports."""
+"""Audit hub events SSOT vs LLM-Wiki source exports."""
 
 from __future__ import annotations
 
@@ -16,7 +16,11 @@ if str(ROOT / "integrations") not in sys.path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit hub events vs LLM-Wiki source exports")
     parser.add_argument("--ticker", default="", help="Filter by ticker (default: all tickers)")
-    parser.add_argument("--migrate-legacy", action="store_true", help="Run legacy layout migration first")
+    parser.add_argument(
+        "--cleanup-legacy",
+        action="store_true",
+        help="Remove deprecated llm-wiki/wiki/events/ and legacy sources/ layout",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON only")
     args = parser.parse_args()
 
@@ -26,7 +30,7 @@ def main() -> int:
     load_trade_env()
     report = audit_hub_wiki_sync(
         ticker=args.ticker or None,
-        run_legacy_migrate=args.migrate_legacy,
+        run_legacy_cleanup=args.cleanup_legacy,
     )
 
     if args.json:
@@ -38,10 +42,22 @@ def main() -> int:
         print(f"Missing export: {len(report['missing_export'])}")
         print(f"Stale export: {len(report['stale_export'])}")
         print(f"Orphan sources: {len(report['orphan_source_event_ids'])}")
+        print(f"Orphan md slugs: {len(report.get('orphan_md_slugs') or [])}")
+        print(f"JSON sidecars remaining: {report.get('json_sidecars_remaining', 0)}")
+        legacy = report.get("legacy") or {}
+        if not report.get("legacy_layout_clean"):
+            print(
+                "WARNING: legacy layout remains — "
+                f"wiki/events={legacy.get('legacy_wiki_events_files', 0)} files, "
+                f"sources/={legacy.get('legacy_sources_files', 0)} files"
+            )
         probe = report.get("llm_wiki_probe") or {}
         print(f"LLM-Wiki probe: {'ok' if probe.get('ok') else 'FAIL'}")
-        if report.get("legacy", {}).get("unmigrated_records_parquet"):
+        if legacy.get("unmigrated_records_parquet"):
             print("WARNING: unmigrated records.parquet rows remain")
+        cleanup = report.get("legacy_cleanup") or {}
+        if cleanup.get("removed_files"):
+            print(f"Legacy cleanup removed: {cleanup['removed_files']} files")
 
     return 0 if report.get("ok") else 1
 

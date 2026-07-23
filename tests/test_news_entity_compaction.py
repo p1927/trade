@@ -337,9 +337,7 @@ def test_run_hub_news_entity_job_uses_adaptive_batch(monkeypatch):
     assert captured["limit"] == 250
 
 
-def test_build_source_event_index_reads_sidecar(hub_tmp, monkeypatch):
-    import json
-
+def test_build_source_event_index_reads_frontmatter(hub_tmp, monkeypatch):
     from trade_integrations.dataflows.hub_wiki import ensure_llm_wiki_project
     from trade_integrations.dataflows.hub_wiki.search_dedup import (
         build_source_event_index,
@@ -349,14 +347,16 @@ def test_build_source_event_index_reads_sidecar(hub_tmp, monkeypatch):
     ensure_llm_wiki_project()
     news_dir = hub_tmp / "llm-wiki" / "raw" / "sources" / "news"
     news_dir.mkdir(parents=True, exist_ok=True)
-    sidecar = {
-        "event_id": "evt:canonical",
-        "title": "FII selling drags Nifty lower",
-        "publish_day": "2026-07-20",
-        "references": [{"url": "https://example.com/a", "publisher": "Mint", "raw_title": "A"}],
-        "timeline": [],
-    }
-    (news_dir / "fii-sell.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    (news_dir / "fii-sell.md").write_text(
+        "---\n"
+        "event_id: evt:canonical\n"
+        "title: FII selling drags Nifty lower\n"
+        "publish_day: 2026-07-20\n"
+        "content_fingerprint: abc\n"
+        "---\n"
+        "# body\n",
+        encoding="utf-8",
+    )
 
     index = build_source_event_index(news_dir=news_dir)
     assert "evt:canonical" in index["by_event_id"]
