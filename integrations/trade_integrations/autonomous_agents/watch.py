@@ -254,7 +254,7 @@ async def _run_watch_tick_impl(agent_id: str) -> dict[str, Any]:
             }
 
     if is_bridge_autonomous_agent(agent_id):
-        summary = "[autonomous_watch] India agent requires Nautilus bridge — auto_paper watch disabled"
+        summary = "[autonomous_watch] India agent requires Nautilus bridge — autonomous_agents watch disabled"
         feedback = {"alerts": [summary], "requires_action": False, "focus_ticker": focus}
         _persist_watch_state(agent, summary=summary, feedback=feedback, status="degraded")
         if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
@@ -267,7 +267,7 @@ async def _run_watch_tick_impl(agent_id: str) -> dict[str, Any]:
         }
 
     feedback: dict[str, Any] = {"alerts": [], "requires_action": False, "focus_ticker": focus}
-    summary = "[autonomous_watch] Nautilus bridge required — legacy auto_paper watch removed"
+    summary = "[autonomous_watch] Nautilus bridge required — legacy autonomous_agents watch removed"
     _persist_watch_state(agent, summary=summary, feedback=feedback, status="degraded")
     if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
         await _append_watch_system_message(session_id, summary)
@@ -349,6 +349,7 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
 
     prompt = build_full_reasoning_prompt(agent=agent, turn_kind=turn_kind) + prefetch_note
     agent["streaming"] = True
+    agent["active_turn_kind"] = turn_kind
     agent["last_full_reasoning_at"] = datetime.now(timezone.utc).isoformat()
     if turn_kind == "strategy_revision":
         agent["last_revision_at"] = agent["last_full_reasoning_at"]

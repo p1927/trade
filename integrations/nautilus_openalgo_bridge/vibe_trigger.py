@@ -200,6 +200,7 @@ async def dispatch_thesis_alert(
     )
     caller = make_vibe_message_client(config)
     agent["streaming"] = True
+    agent["active_turn_kind"] = "strategy_revision"
     agent["last_bridge_alert_at"] = alert.fired_at
     save_agent(agent)
     try:
@@ -263,6 +264,7 @@ async def dispatch_quant_alert(
     )
     caller = make_vibe_message_client(config)
     agent["streaming"] = True
+    agent["active_turn_kind"] = "strategy_revision"
     agent["last_quant_alert_at"] = alert_type
     agent["last_revision_at"] = datetime.now(timezone.utc).isoformat()
     save_agent(agent)
@@ -358,6 +360,7 @@ async def dispatch_watch_alert(
     caller = make_vibe_message_client(config)
 
     agent["streaming"] = True
+    agent["active_turn_kind"] = "strategy_revision"
     agent["last_bridge_alert_at"] = alert.fired_at
     agent["last_bridge_alert"] = alert.to_dict()
     save_agent(agent)

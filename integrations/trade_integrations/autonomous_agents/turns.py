@@ -172,7 +172,8 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
             "4. `set_agent_watch_spec(agent_id=\""
             f"{agent_id}\", strategy=<chosen_strategy>)` — watchers derived from strategy, not generic mandate dump.\n"
             "5. `record_autonomous_decision` with confidence, direction, strategy — **stop**.\n"
-            "6. Bootstrap completes autonomously — Nautilus watch activates; revision turns run on alerts.\n"
+            "6. **Stop** — user must approve the trade plan widget before Nautilus watch runs; "
+            "revision turns run on alerts after approval.\n"
         )
 
     harness_block = ""
@@ -181,7 +182,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
             harness_block = (
                 "\n## Harness (paper verification)\n"
                 f"If flat with no open {focus} position, enter one paper long via "
-                "`execute_auto_paper_basket` (OpenAlgo Alpaca plugin) on this turn, "
+                "`execute_autonomous_basket` (OpenAlgo Alpaca plugin) on this turn, "
                 "then set watch rules and record the decision.\n"
             )
         elif profile.market == "IN":

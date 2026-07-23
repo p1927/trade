@@ -88,11 +88,7 @@ def safe_finalize_bootstrap_if_ready(agent_id: str) -> bool:
 
 
 def finalize_bootstrap_if_ready(agent_id: str) -> bool:
-    """Auto-finalize bootstrap once decision, structured plan, and watch_spec are ready.
-
-    Sets ``plan_approved_at`` immediately (no manual approval gate) — aligns with
-    bootstrap prompt in ``turns.py`` and ``PlanApprovalBanner`` hiding when ``done``.
-    """
+    """Enter plan-approval gate once decision, structured plan, and watch_spec are ready."""
     agent = get_agent(agent_id)
     if not agent or str(agent.get("bootstrap_status")) != "running":
         return False
@@ -101,18 +97,18 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
     if not bootstrap_finalize_prerequisites_met(agent):
         return False
 
+    from trade_integrations.autonomous_agents.plan_approval import resolve_widget_id
+
     now = datetime.now(timezone.utc).isoformat()
-    agent["bootstrap_status"] = "done"
-    agent["plan_approved_at"] = now
-    agent["bootstrap_completed_at"] = now
-    agent.pop("plan_approval_required", None)
+    agent["bootstrap_status"] = "awaiting_plan_approval"
+    agent["plan_approval_required"] = True
+    agent["plan_revision_source"] = "bootstrap"
+    wid = resolve_widget_id(agent)
+    if wid:
+        agent["active_trade_plan_widget_id"] = wid
     agent.pop("bootstrap_error", None)
     save_agent(agent)
-    logger.info("agent %s bootstrap complete — autonomous watch active", agent_id)
-
-    from trade_integrations.autonomous_agents.plan_approval import activate_agent_watch_after_approval
-
-    activate_agent_watch_after_approval(agent_id, agent)
+    logger.info("agent %s bootstrap ready — awaiting user plan approval", agent_id)
 
     try:
         import sys
@@ -126,8 +122,8 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
                 "autonomous_agent.plan_ready",
                 {
                     "agent_id": agent_id,
-                    "bootstrap_status": "done",
-                    "plan_approved_at": now,
+                    "bootstrap_status": "awaiting_plan_approval",
+                    "active_trade_plan_widget_id": wid or None,
                     "strategy": (agent.get("thesis") or {}).get("strategy"),
                 },
             )
