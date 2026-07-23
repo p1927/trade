@@ -302,7 +302,11 @@ def _hub_paths() -> dict[str, str]:
     return paths
 
 
-_NEWS_MIGRATION_ACTION = "python scripts/migrate_hub_news_records_once.py --apply"
+_NEWS_MIGRATION_ACTION = (
+    "python -c \"from trade_integrations.env import load_trade_env; load_trade_env(); "
+    "from trade_integrations.hub_storage.news_migrations import ensure_hub_news_migrations; "
+    "ensure_hub_news_migrations()\""
+)
 
 
 def _build_hub_gates(*, migration_state: dict[str, Any]) -> dict[str, Any]:

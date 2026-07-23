@@ -542,8 +542,16 @@ def resolve_news_impact(
         items = [hydrate_news_item_from_hub(row, ticker=sym) for row in items]
     items = filter_prediction_attribution_items(items)
     report["items"] = items[:limit]
-    if report.get("summary") is None:
-        report["summary"] = {}
+    summary = dict(report.get("summary") or {})
+    summary["approved_count"] = sum(1 for i in items if i.get("verification_status") == "approved")
+    summary["partial_count"] = sum(1 for i in items if i.get("verification_status") == "partial")
+    summary["live_count"] = sum(
+        1
+        for i in items
+        if (i.get("actual_impact") or i.get("actual") or {}).get("nifty_points") is None
+    )
+    summary["staging_live_count"] = sum(1 for i in items if i.get("provenance") == "staging")
+    report["summary"] = summary
     try:
         from trade_integrations.hub_storage.news_staging_store import staging_queue_stats
 
