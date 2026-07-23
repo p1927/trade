@@ -160,6 +160,22 @@ Hub news ingest and distillation require the **LLM Wiki** desktop app running lo
 
 When the probe fails, `trade status` shows `✗ LLM-Wiki not running` and hub news ingest is blocked until the app is up and configured.
 
+**Cutover checklist (existing hub data):**
+
+```bash
+# 1. Audit SSOT vs wiki source exports
+python scripts/audit_hub_wiki_sync.py --migrate-legacy
+
+# 2. Backfill missing raw/sources/news/ from events.parquet
+python scripts/backfill_hub_wiki_sources.py
+
+# 3. Re-audit (expect coverage 100%, probe ok with app running)
+python scripts/audit_hub_wiki_sync.py
+
+# 4. Optional: enable Deep Research for knowledge gaps
+# HUB_NEWS_WIKI_DEEP_RESEARCH=1
+```
+
 **Hub Docker env flags** (see `stack/ports.yaml`):
 
 | Variable | Default | Role |
