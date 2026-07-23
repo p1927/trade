@@ -44,7 +44,7 @@ def activate_watch_spec_for_agent(
                 label="strategy watch",
             )
     except Exception:
-        logger.debug("watch registry sync failed for %s", agent_id, exc_info=True)
+        logger.warning("watch registry sync failed for %s", agent_id, exc_info=True)
 
     from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
 

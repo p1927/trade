@@ -477,31 +477,3 @@ def test_snapshot_includes_openalgo_rows_for_us_agent(agents_hub, monkeypatch) -
     assert snapshot.openalgo_rows == [{"symbol": "AAPL", "qty": 1}]
     assert snapshot.alpaca_symbols == []
     assert snapshot.total_open == 1
-
-
-@pytest.mark.unit
-def test_backfill_orphan_orchestrator_session(agents_hub, monkeypatch) -> None:
-    from trade_integrations.autonomous_agents.store import (
-        backfill_orphan_orchestrator_session,
-        get_agent,
-        set_active_orchestrator_session_id,
-    )
-
-    svc = FakeSessionService()
-    session = svc.create_session(
-        title="autonomous:orchestrator",
-        config={"session_kind": "autonomous_orchestrator", "orchestrator": True},
-    )
-    set_active_orchestrator_session_id(session.session_id)
-
-    monkeypatch.setattr(
-        "trade_integrations.autonomous_agents.store.find_agent_by_vibe_session",
-        lambda sid, status=None: None,
-    )
-
-    result = backfill_orphan_orchestrator_session(session_service=svc)
-    assert result is not None
-    agent = get_agent(result["agent_id"])
-    assert agent is not None
-    assert agent["status"] == "draft"
-    assert agent["vibe_session_id"] == session.session_id

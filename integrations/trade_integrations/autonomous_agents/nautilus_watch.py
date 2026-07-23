@@ -406,7 +406,7 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
 
         sync_nautilus_registry_from_watches(restart_if_changed=False)
     except Exception:
-        logger.debug("watch registry sync failed for %s", agent_id, exc_info=True)
+        logger.warning("watch registry sync failed for %s", agent_id, exc_info=True)
 
     if not is_agent_in_registry(agent_id):
         try:

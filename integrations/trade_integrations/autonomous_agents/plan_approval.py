@@ -93,7 +93,7 @@ def activate_agent_watch(agent_id: str, agent: dict[str, Any]) -> None:
 
         ensure_nautilus_watch_for_agent(agent_id)
     except Exception:
-        logger.debug("ensure_nautilus_watch_for_agent failed for %s", agent_id, exc_info=True)
+        logger.warning("ensure_nautilus_watch_for_agent failed for %s", agent_id, exc_info=True)
 
     watch_spec = _normalize_agent_watch_spec(agent) or {}
     if watch_spec:
@@ -111,7 +111,7 @@ def activate_agent_watch(agent_id: str, agent: dict[str, Any]) -> None:
 
             sync_watch_spec_to_handoff(agent_id, watch_spec)
         except Exception:
-            logger.debug("sync_watch_spec_to_handoff failed for %s", agent_id, exc_info=True)
+            logger.warning("sync_watch_spec_to_handoff failed for %s", agent_id, exc_info=True)
 
 
 def _activate_deferred_watch_spec(agent_id: str, agent: dict[str, Any]) -> None:
@@ -136,13 +136,13 @@ def _activate_deferred_watch_spec(agent_id: str, agent: dict[str, Any]) -> None:
 
         migrate_agent_watch_spec_to_registry(agent_id)
     except Exception:
-        logger.debug("migrate_agent_watch_spec_to_registry failed for %s", agent_id, exc_info=True)
+        logger.warning("migrate_agent_watch_spec_to_registry failed for %s", agent_id, exc_info=True)
     try:
         from trade_integrations.autonomous_agents.nautilus_watch import add_agent_to_registry
 
         add_agent_to_registry(agent_id)
     except Exception:
-        logger.debug("add_agent_to_registry failed for %s", agent_id, exc_info=True)
+        logger.warning("add_agent_to_registry failed for %s", agent_id, exc_info=True)
 
 
 def _pause_scheduled_research(agent_id: str) -> None:
@@ -264,11 +264,39 @@ def approve_agent_plan(agent_id: str, *, widget_id: str | None = None) -> dict[s
         agent["approved_trade_plan_widget_id"] = active
     save_agent(agent)
 
-    activate_agent_watch(agent_id, agent)
     _activate_deferred_watch_spec(agent_id, agent)
+    activate_agent_watch(agent_id, agent)
+    try:
+        from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
+
+        sync_nautilus_registry_from_watches(restart_if_changed=True)
+    except Exception:
+        logger.warning("nautilus registry sync failed after plan approval for %s", agent_id, exc_info=True)
     _nudge_watch_job(agent_id)
 
-    return {"status": "ok", "agent": agent, "plan_approved_at": now}
+    watch_warnings = _collect_watch_activation_warnings(agent_id)
+    result: dict[str, Any] = {"status": "ok", "agent": agent, "plan_approved_at": now}
+    if watch_warnings:
+        result["watch_activation_warnings"] = watch_warnings
+    return result
+
+
+def _collect_watch_activation_warnings(agent_id: str) -> list[str]:
+    """Post-approval verification — surface registry/Nautilus gaps on the API response."""
+    warnings: list[str] = []
+    from trade_integrations.watch_registry.store import OWNER_KIND_AUTONOMOUS, list_watches
+
+    if not list_watches(owner_kind=OWNER_KIND_AUTONOMOUS, owner_id=agent_id, active_only=True):
+        warnings.append(f"No active registry watch for {agent_id} after plan approval")
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+
+        msg = ensure_nautilus_watch_for_agent(agent_id)
+        if msg:
+            warnings.append(str(msg))
+    except Exception as exc:
+        warnings.append(f"Nautilus watch ensure failed: {exc}")
+    return warnings
 
 
 def _nudge_watch_job(agent_id: str) -> None:
@@ -349,16 +377,3 @@ def normalize_legacy_plan_approval(agent: dict[str, Any]) -> tuple[dict[str, Any
                 changed = True
 
     return updated, changed
-
-
-def ensure_plan_approval_record(agent: dict[str, Any], *, persist: bool = False) -> dict[str, Any]:
-    """Apply lazy legacy backfill when loading an agent from hub storage."""
-    normalized, changed = normalize_legacy_plan_approval(agent)
-    if not changed:
-        return agent
-    if persist:
-        from trade_integrations.autonomous_agents.store import save_agent
-
-        save_agent(normalized)
-        logger.info("backfilled plan approval fields for agent %s", normalized.get("id"))
-    return normalized

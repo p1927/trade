@@ -15,6 +15,27 @@ logger = logging.getLogger(__name__)
 _INFRA_HEAL_MIN_INTERVAL_S = 30
 
 
+def _ensure_registry_watch(agent_id: str, *, agent: dict[str, Any] | None = None) -> None:
+    """Create registry row from agent.watch_spec when plan-approved agent has none."""
+    from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+    from trade_integrations.autonomous_agents.store import get_agent
+    from trade_integrations.watch_registry.store import (
+        OWNER_KIND_AUTONOMOUS,
+        list_watches,
+        migrate_agent_watch_spec_to_registry,
+    )
+
+    aid = str(agent_id or "").strip()
+    if not aid:
+        return
+    row = agent if agent is not None else (get_agent(aid) or {})
+    if not is_plan_approved(row):
+        return
+    if list_watches(owner_kind=OWNER_KIND_AUTONOMOUS, owner_id=aid, active_only=True):
+        return
+    migrate_agent_watch_spec_to_registry(aid)
+
+
 def start_required_infra(
     *,
     agent: dict[str, Any],
@@ -34,10 +55,20 @@ def start_required_infra(
         from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
         if is_plan_approved(agent):
+            agent_id = str(agent.get("id") or "")
+            try:
+                _ensure_registry_watch(agent_id)
+            except Exception as exc:
+                logger.warning("registry watch ensure failed for %s", agent_id, exc_info=True)
+                msg = f"Watch registry sync failed ({exc})."
+                if profile.market == "IN":
+                    blocking.append(msg)
+                else:
+                    warnings.append(msg)
             try:
                 from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
 
-                watch_warning = ensure_nautilus_watch_for_agent(str(agent.get("id") or ""))
+                watch_warning = ensure_nautilus_watch_for_agent(agent_id)
                 if watch_warning:
                     msg = str(watch_warning)
                     if profile.market == "IN":
@@ -118,19 +149,6 @@ def attempt_infra_heal(agent_id: str) -> dict[str, Any] | None:
         vibe_session_id=str(agent.get("vibe_session_id") or ""),
         fresh_mandate_cfg=mc,
     )
-
-    if blocking:
-        try:
-            from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
-
-            if not is_plan_approved(agent):
-                watch_only = all(
-                    "no active watches" in str(item).lower() for item in blocking if str(item).strip()
-                )
-                if watch_only:
-                    blocking = []
-        except Exception:
-            pass
 
     if blocking:
         agent["infra_pending"] = blocking

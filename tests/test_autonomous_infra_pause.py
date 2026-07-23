@@ -190,3 +190,46 @@ def test_start_required_infra_blocks_nautilus_when_plan_approved(agents_hub, mon
     assert len(blocking) == 1
     assert "no active watches" in blocking[0]
     assert warnings == []
+
+
+@pytest.mark.unit
+def test_start_required_infra_ensures_registry_when_plan_approved(agents_hub, monkeypatch):
+    from trade_integrations.autonomous_agents.infra_startup import start_required_infra
+    from trade_integrations.execution.profile import resolve_profile
+
+    ensured: list[str] = []
+
+    def _fake_ensure(agent_id: str):
+        ensured.append(agent_id)
+
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.infra_startup._ensure_registry_watch",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.nautilus_watch.ensure_nautilus_watch_for_agent",
+        lambda agent_id: None,
+    )
+
+    agent = {
+        "id": "aa_registry_ensure",
+        "symbols": ["NIFTY"],
+        "constraints": {"mode": "paper"},
+        "execution_market": "IN",
+        "execution_backend": "openalgo",
+        "plan_approved_at": "2026-07-16T20:00:00+00:00",
+    }
+    profile = resolve_profile(agent=agent)
+    blocking, warnings = start_required_infra(
+        agent=agent,
+        profile=profile,
+        proposal={"constraints": agent["constraints"]},
+        primary_symbol="NIFTY",
+        symbols=["NIFTY"],
+        vibe_session_id="sess_registry",
+        fresh_mandate_cfg=None,
+    )
+
+    assert ensured == ["aa_registry_ensure"]
+    assert blocking == []
+    assert warnings == []

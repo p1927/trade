@@ -702,19 +702,6 @@ def _commit_autonomous_agent_locked(
         logger.debug("quote prewarm skipped for %s", agent_id, exc_info=True)
 
     if blocking and profile.market == "IN":
-        try:
-            from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
-
-            if not is_plan_approved(agent):
-                watch_only = all(
-                    "no active watches" in str(item).lower() for item in blocking if str(item).strip()
-                )
-                if watch_only:
-                    blocking = []
-        except Exception:
-            pass
-
-    if blocking and profile.market == "IN":
         agent["status"] = "paused"
         agent["pause_reason"] = "infra"
         agent["infra_pending"] = blocking
@@ -741,7 +728,7 @@ def _commit_autonomous_agent_locked(
 
             sync_nautilus_registry_from_watches(restart_if_changed=True)
         except Exception:
-            pass
+            logger.warning("nautilus registry sync failed during commit for %s", agent_id, exc_info=True)
 
     result: dict[str, Any] = {
         "status": "ok",
@@ -778,7 +765,7 @@ def stop_autonomous_agent(agent_id: str) -> dict[str, Any]:
 
         sync_nautilus_registry_from_watches(restart_if_changed=True)
     except Exception:
-        pass
+        logger.warning("nautilus registry sync failed during stop for %s", agent_id, exc_info=True)
     return {"status": "ok", "agent": agent}
 
 
@@ -795,7 +782,7 @@ def pause_autonomous_agent(agent_id: str) -> dict[str, Any]:
 
         sync_nautilus_registry_from_watches(restart_if_changed=True)
     except Exception:
-        pass
+        logger.warning("nautilus registry sync failed during pause for %s", agent_id, exc_info=True)
     return {"status": "ok", "agent": agent}
 
 
@@ -827,14 +814,19 @@ def resume_autonomous_agent(agent_id: str) -> dict[str, Any]:
 
         profile = resolve_profile(agent=agent)
         if profile.uses_nautilus_watch:
-            from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
+            from trade_integrations.autonomous_agents.infra_startup import _ensure_registry_watch
+            from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
-            sync_nautilus_registry_from_watches(restart_if_changed=True)
-            from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+            if is_plan_approved(agent):
+                _ensure_registry_watch(agent_id, agent=agent)
+                from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
 
-            ensure_nautilus_watch_for_agent(agent_id)
+                sync_nautilus_registry_from_watches(restart_if_changed=True)
+                from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+
+                ensure_nautilus_watch_for_agent(agent_id)
     except Exception:
-        pass
+        logger.warning("nautilus watch ensure failed during resume for %s", agent_id, exc_info=True)
     return {"status": "ok", "agent": agent}
 
 
