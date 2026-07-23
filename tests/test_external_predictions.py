@@ -206,6 +206,79 @@ def test_refresh_emits_pipeline_logs(hub_dir: Path, monkeypatch: pytest.MonkeyPa
     assert any("complete" in entry.message.lower() for entry in pipeline.entries)
 
 
+def test_refresh_on_source_complete_callback(hub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.refresh import (
+        refresh_all_external_predictions,
+    )
+
+    seed_registry_if_missing()
+    completed: list[str] = []
+
+    def _fake_refresh_source(source_id: str, **kwargs: object) -> ExternalPredictionRecord:
+        record = ExternalPredictionRecord(
+            source_id=source_id,
+            horizon_days=14,
+            fetch_status="ok",
+            target=ExternalPredictionTarget(mid=25000.0),
+        )
+        upsert_prediction(record)
+        return record
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.refresh_source",
+        _fake_refresh_source,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh._fetch_spot",
+        lambda _sym, pipeline=None: 24000.0,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh._internal_forecast",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.crawl_sources_parallel",
+        lambda *args, **kwargs: {},
+    )
+
+    def on_complete(source_id: str, _record, partial) -> None:
+        completed.append(source_id)
+        assert partial.fetched_at
+
+    refresh_all_external_predictions(
+        symbol="NIFTY",
+        horizon_days=14,
+        min_interval_sec=0,
+        on_source_complete=on_complete,
+    )
+    assert len(completed) >= 1
+
+
+def test_append_source_complete_writes_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    jobs_root = tmp_path / "log" / "external_predictions_jobs"
+    jobs_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "src.trade.external_predictions_run_jobs._jobs_root",
+        lambda: jobs_root,
+    )
+    from src.trade import external_predictions_run_jobs as jobs_mod
+    from src.trade.external_predictions_run_jobs import append_source_complete, get_job, start_job
+
+    jobs_mod.EXTERNAL_PREDICTIONS_RUN_JOBS.clear()
+    jobs_mod._ACTIVE_BY_SCOPE.clear()
+    job_id, _ = start_job(ticker="NIFTY", horizon_days=14)
+    append_source_complete(
+        job_id,
+        source_id="moneycontrol",
+        record={"source_id": "moneycontrol", "fetch_status": "ok"},
+        partial_snapshot={"symbol": "NIFTY", "horizon_days": 14, "fetched_at": "2026-07-23T12:00:00+00:00"},
+    )
+    job = get_job(job_id)
+    assert job is not None
+    assert job.get("partial_snapshot") is not None
+    assert any(log.get("stage") == "source_complete" for log in job.get("logs") or [])
+
+
 def test_save_snapshot_serializes_internal_forecast_datetime(hub_dir: Path) -> None:
     from datetime import datetime, timezone
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from trade_integrations.dataflows.crawl4ai_client import crawl4ai_queue_stats
@@ -334,6 +335,8 @@ def refresh_all_external_predictions(
     horizon_days: int = 14,
     min_interval_sec: float = 0.0,
     pipeline: PipelineLogger | None = None,
+    on_source_complete: Callable[[str, ExternalPredictionRecord, ExternalPredictionSnapshot], None]
+    | None = None,
 ) -> ExternalPredictionSnapshot:
     """Run refresh batch. Caller should hold ``external_refresh_lock`` for single-flight."""
     _ensure_env_loaded()
@@ -344,7 +347,29 @@ def refresh_all_external_predictions(
             f"Starting external predictions refresh for {sym} ({horizon_days}d horizon)",
         )
     spot = _fetch_spot(sym, pipeline)
+    try:
+        from trade_integrations.dataflows.index_research.external_predictions.financial_expert_context import (
+            build_and_save_expert_context,
+        )
+
+        expert_ctx = build_and_save_expert_context(
+            symbol=sym,
+            horizon_days=horizon_days,
+            spot=spot,
+        )
+        if pipeline:
+            pipeline.info(
+                "expert_context",
+                "Financial expert context built",
+                as_of=expert_ctx.get("as_of"),
+                movers=len(expert_ctx.get("top_factor_movers") or []),
+            )
+    except Exception as exc:
+        logger.warning("expert context build failed: %s", exc)
+        if pipeline:
+            pipeline.warn("expert_context", f"Context build skipped: {exc}")
     internal = _internal_forecast(sym, horizon_days, pipeline)
+    fetched_at = utc_now_iso()
     sources = watchlisted_sources()
     if pipeline:
         pipeline.info("refresh", f"Watchlisted sources: {len(sources)}")
@@ -366,7 +391,7 @@ def refresh_all_external_predictions(
 
     for idx, src in enumerate(sources, start=1):
         try:
-            refresh_source(
+            record = refresh_source(
                 src.id,
                 symbol=sym,
                 horizon_days=horizon_days,
@@ -380,24 +405,34 @@ def refresh_all_external_predictions(
             logger.exception("refresh failed for %s: %s", src.id, exc)
             if pipeline:
                 pipeline.error("source", f"{src.display_name}: {exc}", source_id=src.id)
-            upsert_prediction(
-                ExternalPredictionRecord(
-                    source_id=src.id,
-                    symbol=sym,
-                    horizon_days=horizon_days,
-                    as_of=utc_now_iso()[:10],
-                    spot_at_fetch=spot,
-                    fetch_status="error",
-                    error_message=str(exc),
-                ),
+            record = ExternalPredictionRecord(
+                source_id=src.id,
                 symbol=sym,
+                horizon_days=horizon_days,
+                as_of=utc_now_iso()[:10],
+                spot_at_fetch=spot,
+                fetch_status="error",
+                error_message=str(exc),
             )
+            upsert_prediction(record, symbol=sym)
+
+        if on_source_complete is not None:
+            partial = rebuild_snapshot(
+                symbol=sym,
+                horizon_days=horizon_days,
+                internal_forecast=internal,
+                fetched_at=fetched_at,
+            )
+            try:
+                on_source_complete(src.id, record, partial)
+            except Exception as exc:
+                logger.warning("on_source_complete failed for %s: %s", src.id, exc)
 
     snapshot = rebuild_snapshot(
         symbol=sym,
         horizon_days=horizon_days,
         internal_forecast=internal,
-        fetched_at=utc_now_iso(),
+        fetched_at=fetched_at,
     )
     ok_count = sum(1 for p in snapshot.predictions if p.fetch_status == "ok")
     if pipeline:

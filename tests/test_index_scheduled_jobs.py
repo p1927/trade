@@ -113,6 +113,12 @@ class TestIndexJobRegistration:
         assert first >= 4
         assert register_default_index_jobs(store) == 0
 
+    def test_external_predictions_cron_not_registered(self, tmp_path):
+        store = ScheduledResearchJobStore(path=tmp_path / "jobs.json")
+        register_default_index_jobs(store)
+        jobs = store.load()
+        assert "nifty-external-predictions-refresh" not in jobs
+
     def test_index_job_types_frozen(self):
         assert JOB_TYPE_INDEX_FACTOR_SNAPSHOT in INDEX_JOB_TYPES
         assert JOB_TYPE_INDEX_RESEARCH in INDEX_JOB_TYPES
