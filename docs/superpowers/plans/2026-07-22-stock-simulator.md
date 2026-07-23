@@ -115,6 +115,19 @@ Trade-side `fetch_multi_quotes_raw()` may still delegate to OpenAlgo (no duplica
 
 ---
 
+## Operational modes (demo vs AAHE)
+
+| Mode | Env | Sim clock | Use case |
+|------|-----|-----------|----------|
+| **Demo** | `SIM_EVAL_MODE=continuous`, `NSE_REPLAY_SPEED=60` | Wall clock × speed | OpenAlgo Option Chain, Sandbox live feel |
+| **AAHE** | `SIM_EVAL_MODE=stepped`, `NSE_REPLAY_SPEED=0` or `1` | +5 sim min per autonomous watch tick (or Sandbox Step) | Deterministic agent historical backtest |
+
+**Attention gate (independent of stepped mode):** autonomous agents use `watch_spec.gate.skip_if_unchanged_minutes` (default 30) to suppress repeated **REVIEW_NEEDED** Vibe turns. **THESIS_BROKEN** and **EXIT_NOW** bypass that gate — see [`vibe_trigger.py`](../../integrations/nautilus_openalgo_bridge/vibe_trigger.py) and [`poll_loop.py`](../../integrations/nautilus_openalgo_bridge/runtime/poll_loop.py).
+
+Switch modes in Sandbox (Demo preset = continuous 60x) or via env + `./trade reload app`.
+
+---
+
 ## OpenAlgo UI (Phase 1d)
 
 | Surface | Change |
@@ -202,3 +215,15 @@ Implement phase scope only
 | 2b OpenAlgo parity | **Met** — master contract, NFO quotes, margin, history 1m, depth |
 | 3 Tick recorder | Pending |
 | 4 Ops | Pending |
+
+### Review backlog (seeded 2026-07-23 — convergence Pass 6)
+
+Fixed in working tree (not yet committed): MC fingerprint persistence, sim skip IST cutoff, history DataFrame, expiry replay anchor, MasterContract counts UI, expiry stem filter — see `.superpowers/master-todo.md` SIM-F01–F07.
+
+**SIM-D01–D05 fixed 2026-07-23:** intraday history (15m/30m/1h), NFO option history, expiry replay without api_key, MC rebuild on replay-date change, HF option-chain fast path.
+
+**Hypothesis investigation 2026-07-23 (BY DESIGN):**
+
+- **`_pick_expiry_file` `files[-1]` fallback** — When replay date is after all HF parquet expiries, the store picks the last expiry file; `chain_at` returns `None` if that file has no bars for the sim trading day (no silent wrong LTP). [`replay.py`](../../integrations/trade_integrations/stock_simulator/replay.py) then falls through to the options synthesizer for chain display.
+- **Replay singleton** — `get_replay_service()` auto-reloads when `load_sim_config()` differs from the cached service (replay date/time/speed/loop/eval_mode/data_root). OpenAlgo hydrates sandbox DB → env before load via `_maybe_hydrate_sim_env()`.
+- **Fyers option-chain fast path** — Uses the same `needed == mapped` gate as `stock_simulator` so partial broker chains fall back to multiquotes.

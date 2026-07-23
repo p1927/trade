@@ -248,6 +248,33 @@ stack_probe_searxng() {
   stack_probe_searxng_engines || return 1
 }
 
+stack_llm_wiki_python() {
+  local root py
+  root="$(_sdl_root)"
+  py="$root/.venv/bin/python"
+  [[ -x "$py" ]] || py="python3"
+  echo "$py"
+}
+
+stack_probe_llm_wiki() {
+  local root py
+  root="$(_sdl_root)"
+  py="$(stack_llm_wiki_python)"
+  PYTHONPATH="$root/integrations" "$py" -m trade_integrations.dataflows.hub_wiki.probe >/dev/null 2>&1
+}
+
+stack_print_llm_wiki_status() {
+  local root py line
+  root="$(_sdl_root)"
+  py="$(stack_llm_wiki_python)"
+  line="$(PYTHONPATH="$root/integrations" "$py" -m trade_integrations.dataflows.hub_wiki.probe --status-line 2>/dev/null || true)"
+  if [[ -n "$line" ]]; then
+    echo "  $line"
+  else
+    echo "  ✗ LLM-Wiki not running — please start LLM Wiki.app for news ingest"
+  fi
+}
+
 stack_ensure_searxng() {
   local base compose
   base="$(stack_searxng_url)"
@@ -606,6 +633,8 @@ PY
       echo "  ⚠ Hub manifest $manifest"
     fi
   fi
+
+  stack_print_llm_wiki_status || true
 
   echo "══════════════════════════════════════════════════════════"
   if (( ok )); then return 0; fi
