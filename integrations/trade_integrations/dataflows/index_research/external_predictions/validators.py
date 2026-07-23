@@ -86,9 +86,10 @@ def validate_record(
     horizon_match = _evaluate_horizon(record)
     record.provenance = {**record.provenance, "horizon_match": horizon_match}
     if horizon_match.get("in_window") is False:
-        record.fetch_status = "not_found"
-        record.error_message = "horizon_mismatch"
-        return record
+        record.provenance["horizon_match"] = {
+            **horizon_match,
+            "soft_mismatch": True,
+        }
 
     record.fetch_status = "ok"
     record.error_message = ""

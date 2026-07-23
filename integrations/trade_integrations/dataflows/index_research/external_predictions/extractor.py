@@ -17,8 +17,11 @@ from trade_integrations.dataflows.index_research.external_predictions.models imp
 from trade_integrations.dataflows.index_research.external_predictions.validators import (
     validate_record,
 )
+from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 
 logger = logging.getLogger(__name__)
+
+_MAX_PARSE_RETRIES = 2
 
 _JSON_OBJECT = re.compile(r"\{[\s\S]*\}")
 _LEVEL_PATTERN = re.compile(
@@ -109,8 +112,16 @@ def _build_prompt(
     url: str,
     published_at: str,
     body: str,
+    validator_errors: list[str] | None = None,
 ) -> str:
     spot_line = f"Current NIFTY spot reference: {spot:.0f}" if spot else "Current NIFTY spot: unknown"
+    retry_block = ""
+    if validator_errors:
+        retry_block = (
+            "\nPrevious extraction failed validation:\n- "
+            + "\n- ".join(validator_errors)
+            + "\nFix these issues in your JSON output.\n"
+        )
     return f"""Extract a structured NIFTY 50 index forecast from the article below.
 
 Source: {source.display_name}
@@ -119,7 +130,7 @@ User-selected horizon: {horizon_days} trading days ({_horizon_label(horizon_days
 Published: {published_at or "unknown"}
 URL: {url}
 Title: {title}
-
+{retry_block}
 Return ONLY valid JSON with this schema:
 {{
   "has_prediction": true,
@@ -245,136 +256,171 @@ def extract_prediction_from_text(
         record.error_message = "No article text available"
         return record
 
-    payload: dict[str, Any] = {}
-    model_name = "regex"
-    try:
-        prompt = _build_prompt(
-            source=source,
-            horizon_days=horizon_days,
-            spot=spot,
-            title=title,
-            url=url,
-            published_at=published_at,
-            body=text,
-        )
-        payload = _call_minimax(prompt, max_tokens=1400)
-        model_name = "minimax"
-        if pipeline:
-            pipeline.info("extract", "MiniMax extraction completed", source_id=source.id)
-    except Exception as exc:
-        if pipeline:
-            pipeline.warn("extract", f"MiniMax unavailable — using regex fallback: {exc}", source_id=source.id)
-        logger.debug("LLM extraction failed for %s: %s", source.id, exc)
+    validator_errors: list[str] = []
+    last_record = record
 
-    has_prediction = bool(payload.get("has_prediction", True))
-    target = ExternalPredictionTarget(
-        low=_normalize_level(_maybe_float(payload.get("target_low")), spot),
-        mid=_normalize_level(_maybe_float(payload.get("target_mid")), spot),
-        high=_normalize_level(_maybe_float(payload.get("target_high")), spot),
-    )
-    used_regex_target = False
-    if not any(v is not None for v in (target.low, target.mid, target.high)):
-        target = _regex_fallback(text, spot)
-        used_regex_target = any(v is not None for v in (target.low, target.mid, target.high))
-        if used_regex_target:
-            model_name = "regex"
-            if pipeline:
-                pipeline.info("extract", "Regex fallback found numeric target", source_id=source.id)
-
-    if not has_prediction and not any(
-        v is not None for v in (target.low, target.mid, target.high)
-    ):
-        record.error_message = "No NIFTY target found in source"
-        return record
-
-    if not any(v is not None for v in (target.low, target.mid, target.high)):
-        record.error_message = "No numeric NIFTY target extracted"
-        return record
-
-    direction = str(payload.get("direction") or "neutral")
-    if direction not in {"bullish", "bearish", "neutral"}:
-        if spot and target.mid:
-            direction = "bullish" if target.mid >= spot else "bearish"
-        else:
-            direction = "neutral"
-
-    summary = str(payload.get("summary") or "").strip()
-    bullets = payload.get("rationale_bullets") or []
-    if not isinstance(bullets, list):
-        bullets = []
-    bullets = [str(b).strip() for b in bullets if str(b).strip()]
-
-    if (not summary or len(bullets) < 2) and model_name == "regex" and used_regex_target:
+    for attempt in range(_MAX_PARSE_RETRIES + 1):
+        payload: dict[str, Any] = {}
+        model_name = "regex"
         try:
-            rationale_payload = _call_minimax(
-                _build_rationale_prompt(
-                    source=source,
-                    horizon_days=horizon_days,
-                    title=title,
-                    url=url,
-                    body=text,
-                    target_mid=target.mid,
-                ),
-                max_tokens=900,
+            prompt = _build_prompt(
+                source=source,
+                horizon_days=horizon_days,
+                spot=spot,
+                title=title,
+                url=url,
+                published_at=published_at,
+                body=text,
+                validator_errors=validator_errors or None,
             )
-            if not summary:
-                summary = str(rationale_payload.get("summary") or "").strip()
-            extra = rationale_payload.get("rationale_bullets") or []
-            if isinstance(extra, list):
-                for item in extra:
-                    line = str(item).strip()
-                    if line and line not in bullets:
-                        bullets.append(line)
-            if bullets:
-                model_name = "minimax+rationale"
-                if pipeline:
-                    pipeline.info("extract", "MiniMax rationale pass completed", source_id=source.id)
+            payload = _call_minimax(prompt, max_tokens=1400)
+            model_name = "minimax"
+            if pipeline:
+                pipeline.info(
+                    "extract",
+                    "MiniMax extraction completed",
+                    source_id=source.id,
+                    attempt=attempt + 1,
+                )
         except Exception as exc:
             if pipeline:
-                pipeline.warn("extract", f"Rationale LLM pass skipped: {exc}", source_id=source.id)
+                pipeline.warn(
+                    "extract",
+                    f"MiniMax unavailable — using regex fallback: {exc}",
+                    source_id=source.id,
+                )
+            logger.debug("LLM extraction failed for %s: %s", source.id, exc)
 
-    if not bullets:
-        if summary:
-            bullets = [summary]
-        elif snippet:
-            bullets = [snippet[:240]]
-
-    confidence = str(payload.get("confidence") or "medium")
-    if confidence not in {"high", "medium", "low"}:
-        confidence = "high" if "minimax" in model_name and body else "low"
-
-    expected_return = _maybe_float(payload.get("expected_return_pct"))
-    if expected_return is None and spot and target.mid:
-        expected_return = round((target.mid - spot) / spot * 100, 2)
-
-    pub = str(payload.get("published_at") or published_at or "")[:10]
-
-    record.target = target
-    record.target_date = str(payload.get("target_date") or "")[:10]
-    record.direction = direction  # type: ignore[assignment]
-    record.expected_return_pct = expected_return
-    record.rationale_bullets = bullets[:6]
-    record.confidence = confidence  # type: ignore[assignment]
-    record.published_at = pub
-    record.extraction = {
-        "model": model_name,
-        "extracted_at": utc_now_iso(),
-        "instrument": str(payload.get("instrument") or "NIFTY50"),
-    }
-    record.provenance = {
-        "url": url,
-        "title": title,
-        "snippet": snippet[:500],
-        "summary": summary,
-        "horizon_days": horizon_days,
-        "instrument": str(payload.get("instrument") or "NIFTY50"),
-    }
-    record.fetch_status = "ok"
-    record = validate_record(record, body=text, used_regex_only=used_regex_target and model_name == "regex")
-    if record.fetch_status != "ok" and pipeline:
-        pipeline.warn(
-            "extract",
-            f"Validation failed: {record.error_message or 'not_found'}",
-            source_id=source.id,
+        has_prediction = bool(payload.get("has_prediction", True))
+        target = ExternalPredictionTarget(
+            low=_normalize_level(_maybe_float(payload.get("target_low")), spot),
+            mid=_normalize_level(_maybe_float(payload.get("target_mid")), spot),
+            high=_normalize_level(_maybe_float(payload.get("target_high")), spot),
         )
-    return record
+        used_regex_target = False
+        if not any(v is not None for v in (target.low, target.mid, target.high)):
+            target = _regex_fallback(text, spot)
+            used_regex_target = any(v is not None for v in (target.low, target.mid, target.high))
+            if used_regex_target:
+                model_name = "regex"
+                if pipeline:
+                    pipeline.info("extract", "Regex fallback found numeric target", source_id=source.id)
+
+        if not has_prediction and not any(
+            v is not None for v in (target.low, target.mid, target.high)
+        ):
+            record.error_message = "No NIFTY target found in source"
+            return record
+
+        if not any(v is not None for v in (target.low, target.mid, target.high)):
+            record.error_message = "No numeric NIFTY target extracted"
+            return record
+
+        direction = str(payload.get("direction") or "neutral")
+        if direction not in {"bullish", "bearish", "neutral"}:
+            if spot and target.mid:
+                direction = "bullish" if target.mid >= spot else "bearish"
+            else:
+                direction = "neutral"
+
+        summary = str(payload.get("summary") or "").strip()
+        bullets = payload.get("rationale_bullets") or []
+        if not isinstance(bullets, list):
+            bullets = []
+        bullets = [str(b).strip() for b in bullets if str(b).strip()]
+
+        if (not summary or len(bullets) < 2) and model_name == "regex" and used_regex_target:
+            try:
+                rationale_payload = _call_minimax(
+                    _build_rationale_prompt(
+                        source=source,
+                        horizon_days=horizon_days,
+                        title=title,
+                        url=url,
+                        body=text,
+                        target_mid=target.mid,
+                    ),
+                    max_tokens=900,
+                )
+                if not summary:
+                    summary = str(rationale_payload.get("summary") or "").strip()
+                extra = rationale_payload.get("rationale_bullets") or []
+                if isinstance(extra, list):
+                    for item in extra:
+                        line = str(item).strip()
+                        if line and line not in bullets:
+                            bullets.append(line)
+                if bullets:
+                    model_name = "minimax+rationale"
+                    if pipeline:
+                        pipeline.info("extract", "MiniMax rationale pass completed", source_id=source.id)
+            except Exception as exc:
+                if pipeline:
+                    pipeline.warn("extract", f"Rationale LLM pass skipped: {exc}", source_id=source.id)
+
+        if not bullets:
+            if summary:
+                bullets = [summary]
+            elif snippet:
+                bullets = [snippet[:240]]
+
+        confidence = str(payload.get("confidence") or "medium")
+        if confidence not in {"high", "medium", "low"}:
+            confidence = "high" if "minimax" in model_name and body else "low"
+
+        expected_return = _maybe_float(payload.get("expected_return_pct"))
+        if expected_return is None and spot and target.mid:
+            expected_return = round((target.mid - spot) / spot * 100, 2)
+
+        pub = str(payload.get("published_at") or published_at or "")[:10]
+
+        attempt_record = ExternalPredictionRecord(
+            source_id=source.id,
+            symbol=symbol.upper(),
+            horizon_days=horizon_days,
+            as_of=date.today().isoformat(),
+            spot_at_fetch=spot,
+            target=target,
+            target_date=str(payload.get("target_date") or "")[:10],
+            direction=direction,  # type: ignore[arg-type]
+            expected_return_pct=expected_return,
+            rationale_bullets=bullets[:6],
+            confidence=confidence,  # type: ignore[arg-type]
+            published_at=pub,
+            provenance={
+                "url": url,
+                "title": title,
+                "snippet": snippet[:500],
+                "summary": summary,
+                "horizon_days": horizon_days,
+                "instrument": str(payload.get("instrument") or "NIFTY50"),
+            },
+            extraction={
+                "model": model_name,
+                "extracted_at": utc_now_iso(),
+                "instrument": str(payload.get("instrument") or "NIFTY50"),
+                "attempt": attempt + 1,
+            },
+            fetch_status="ok",
+        )
+        validated = validate_record(
+            attempt_record,
+            body=text,
+            used_regex_only=used_regex_target and model_name == "regex",
+        )
+        last_record = validated
+        if validated.fetch_status == "ok":
+            return validated
+
+        err = validated.error_message or "validation_failed"
+        if pipeline:
+            pipeline.warn(
+                "extract",
+                f"Validation failed (attempt {attempt + 1}): {err}",
+                source_id=source.id,
+            )
+        if attempt >= _MAX_PARSE_RETRIES or model_name == "regex":
+            return validated
+        validator_errors = [err]
+
+    return last_record

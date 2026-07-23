@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,29 @@ def hub_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     hub.mkdir()
     monkeypatch.setenv("TRADE_STACK_HUB_DIR", str(hub))
     return hub
+
+
+def _patch_refresh_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Avoid network discovery/crawl during refresh batch tests."""
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.discover_sources_parallel",
+        lambda sources, **kwargs: {src.id: [] for src in sources},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.crawl_sources_parallel",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.financial_expert_context.build_and_save_expert_context",
+        lambda **_k: {},
+    )
+
+
+def _ensure_vibetrading_agent_on_path() -> None:
+    agent_dir = Path(__file__).resolve().parent.parent / "vibetrading" / "agent"
+    agent_path = str(agent_dir)
+    if agent_path not in sys.path:
+        sys.path.insert(0, agent_path)
 
 
 def test_target_round_trip() -> None:
@@ -127,6 +151,8 @@ def test_refresh_all_writes_snapshot(hub_dir: Path, monkeypatch: pytest.MonkeyPa
 
     seed_registry_if_missing()
 
+    _patch_refresh_batch(monkeypatch)
+
     def _fake_refresh_source(source_id: str, **kwargs: object) -> ExternalPredictionRecord:
         record = ExternalPredictionRecord(
             source_id=source_id,
@@ -166,6 +192,8 @@ def test_refresh_emits_pipeline_logs(hub_dir: Path, monkeypatch: pytest.MonkeyPa
     from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 
     seed_registry_if_missing()
+
+    _patch_refresh_batch(monkeypatch)
 
     def _fake_refresh_source(source_id: str, **kwargs: object) -> ExternalPredictionRecord:
         pipeline = kwargs.get("pipeline")
@@ -214,6 +242,8 @@ def test_refresh_on_source_complete_callback(hub_dir: Path, monkeypatch: pytest.
     seed_registry_if_missing()
     completed: list[str] = []
 
+    _patch_refresh_batch(monkeypatch)
+
     def _fake_refresh_source(source_id: str, **kwargs: object) -> ExternalPredictionRecord:
         record = ExternalPredictionRecord(
             source_id=source_id,
@@ -236,10 +266,6 @@ def test_refresh_on_source_complete_callback(hub_dir: Path, monkeypatch: pytest.
         "trade_integrations.dataflows.index_research.external_predictions.refresh._internal_forecast",
         lambda *_a, **_k: None,
     )
-    monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.external_predictions.refresh.crawl_sources_parallel",
-        lambda *args, **kwargs: {},
-    )
 
     def on_complete(source_id: str, _record, partial) -> None:
         completed.append(source_id)
@@ -255,6 +281,7 @@ def test_refresh_on_source_complete_callback(hub_dir: Path, monkeypatch: pytest.
 
 
 def test_append_source_complete_writes_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_vibetrading_agent_on_path()
     jobs_root = tmp_path / "log" / "external_predictions_jobs"
     jobs_root.mkdir(parents=True)
     monkeypatch.setattr(
@@ -306,6 +333,7 @@ def test_save_snapshot_serializes_internal_forecast_datetime(hub_dir: Path) -> N
 
 
 def test_external_predictions_job_start_reuses_active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_vibetrading_agent_on_path()
     jobs_root = tmp_path / "log" / "external_predictions_jobs"
     jobs_root.mkdir(parents=True)
 
@@ -479,7 +507,7 @@ def test_horizon_validator_accepts_window() -> None:
     assert validated.provenance["horizon_match"]["in_window"] is True
 
 
-def test_horizon_validator_rejects_mismatch() -> None:
+def test_horizon_validator_soft_mismatch_keeps_record() -> None:
     from trade_integrations.dataflows.index_research.external_predictions.validators import (
         validate_record,
     )
@@ -495,8 +523,9 @@ def test_horizon_validator_rejects_mismatch() -> None:
     )
     body = "Goldman Sachs sees Nifty 50 at 26,500 by June 2027."
     validated = validate_record(record, body=body, used_regex_only=False)
-    assert validated.fetch_status == "not_found"
-    assert validated.error_message == "horizon_mismatch"
+    assert validated.fetch_status == "ok"
+    assert validated.provenance["horizon_match"]["in_window"] is False
+    assert validated.provenance["horizon_match"].get("soft_mismatch") is True
 
 
 def test_record_to_live_forecast_mapper() -> None:
@@ -516,6 +545,93 @@ def test_record_to_live_forecast_mapper() -> None:
     assert mapped["spot"] == 24000.0
     assert mapped["rangeLow"] == 24500.0
     assert mapped["rangeHigh"] == 25500.0
+
+
+def test_extract_retries_on_validation_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.extractor import (
+        extract_prediction_from_text,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionSource,
+    )
+
+    source = ExternalPredictionSource(id="test", display_name="Test Broker")
+    body = "Analyst sees Nifty 50 index target at 25,000 by month end on strong flows."
+    prompts: list[str] = []
+
+    def _fake_minimax(prompt: str, *, max_tokens: int = 1200) -> dict:
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return {
+                "has_prediction": True,
+                "instrument": "RELIANCE",
+                "target_mid": 26000,
+                "direction": "bullish",
+                "confidence": "medium",
+            }
+        return {
+            "has_prediction": True,
+            "instrument": "NIFTY50",
+            "target_mid": 25000,
+            "target_low": 24500,
+            "target_high": 25500,
+            "direction": "bullish",
+            "confidence": "high",
+            "rationale_bullets": ["Flows", "Earnings"],
+        }
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.extractor._call_minimax",
+        _fake_minimax,
+    )
+
+    record = extract_prediction_from_text(
+        source=source,
+        horizon_days=14,
+        spot=24000.0,
+        title="Nifty outlook",
+        url="https://example.com/nifty-target",
+        snippet=body[:200],
+        body=body,
+    )
+    assert len(prompts) == 2
+    assert "Previous extraction failed validation" in prompts[1]
+    assert record.fetch_status == "ok"
+    assert record.target.mid == 25000.0
+    assert record.extraction.get("attempt") == 2
+
+
+def test_extract_regex_does_not_retry_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.extractor import (
+        extract_prediction_from_text,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionSource,
+    )
+
+    source = ExternalPredictionSource(id="test", display_name="Test Broker")
+    body = "Broker sees Nifty 50 target at 25,000 on FII flows."
+
+    def _fail_minimax(*_args, **_kwargs):
+        raise RuntimeError("minimax unavailable")
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.extractor._call_minimax",
+        _fail_minimax,
+    )
+
+    record = extract_prediction_from_text(
+        source=source,
+        horizon_days=14,
+        spot=24000.0,
+        title="Nifty outlook",
+        url="https://example.com/nifty-target",
+        snippet=body[:200],
+        body=body,
+    )
+    assert record.fetch_status == "ok"
+    assert record.extraction.get("model") == "regex"
+    assert record.extraction.get("attempt") == 1
 
 
 def test_seed_sources_have_curated_urls(hub_dir: Path) -> None:

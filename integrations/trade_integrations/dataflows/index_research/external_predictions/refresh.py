@@ -17,6 +17,16 @@ from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_f
 from trade_integrations.dataflows.index_research.external_predictions.extractor import (
     extract_prediction_from_text,
 )
+from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+    discover_sources_parallel,
+)
+from trade_integrations.dataflows.index_research.external_predictions.navigation_paths import (
+    persist_successful_exploratory_path,
+    try_fast_path_then_exploratory,
+)
+from trade_integrations.dataflows.index_research.external_predictions.path_store import (
+    touch_path_success,
+)
 from trade_integrations.dataflows.index_research.external_predictions.models import (
     ExternalPredictionRecord,
     ExternalPredictionSnapshot,
@@ -222,13 +232,22 @@ def _record_from_crawl_group(
     )
     record.as_of = utc_now_iso()[:10]
     record.spot_at_fetch = spot_val
+    navigation_mode = str(record.provenance.get("navigation_mode") or "exploratory")
     record.provenance = {
         **dict(record.provenance or {}),
         "url": url,
         "title": crawl.title or record.provenance.get("title", ""),
         "fetch_method": "crawl4ai",
+        "navigation_mode": navigation_mode,
         "elapsed_ms": crawl.elapsed_ms,
     }
+    if record.fetch_status == "ok":
+        persist_successful_exploratory_path(
+            src.id,
+            horizon_days=horizon_days,
+            url=url,
+            pipeline=pipeline,
+        )
     if record.fetch_status == "ok":
         mid = record.target.mid
         if pipeline:
@@ -301,8 +320,17 @@ def refresh_source(
         )
         rows = grouped.get(source_id, [])
 
+    replay_result, rows, exploratory_backup = try_fast_path_then_exploratory(
+        src,
+        horizon_days=horizon_days,
+        exploratory_rows=rows,
+        pipeline=pipeline,
+    )
+    used_fast = replay_result is not None and replay_result.success
+    navigation_mode = "fast" if used_fast else "exploratory"
+
     try:
-        return _record_from_crawl_group(
+        record = _record_from_crawl_group(
             src,
             rows,
             symbol=sym,
@@ -312,6 +340,37 @@ def refresh_source(
             source_index=source_index,
             source_total=source_total,
         )
+        if used_fast and record.fetch_status != "ok":
+            if exploratory_backup:
+                if pipeline:
+                    pipeline.warn(
+                        "navigation",
+                        "Fast-path extract failed — falling back to exploratory crawl batch",
+                        source_id=source_id,
+                        error=record.error_message or "not_found",
+                    )
+                navigation_mode = "exploratory"
+                record = _record_from_crawl_group(
+                    src,
+                    exploratory_backup,
+                    symbol=sym,
+                    horizon_days=horizon_days,
+                    spot_val=spot_val,
+                    pipeline=pipeline,
+                    source_index=source_index,
+                    source_total=source_total,
+                )
+            else:
+                navigation_mode = "exploratory"
+        elif used_fast and record.fetch_status == "ok":
+            touch_path_success(src.id, horizon_days=horizon_days)
+        if navigation_mode == "fast" and record.fetch_status == "ok":
+            record.provenance = {
+                **dict(record.provenance or {}),
+                "navigation_mode": "fast",
+                "fetch_method": "path_replay",
+            }
+        return record
     except Exception as exc:
         logger.warning("refresh failed for %s: %s", source_id, exc)
         if pipeline:
@@ -387,6 +446,11 @@ def refresh_all_external_predictions(
         symbol=sym,
         horizon_days=horizon_days,
         pipeline=pipeline,
+        discovery_urls=discover_sources_parallel(
+            sources,
+            horizon_days=horizon_days,
+            pipeline=pipeline,
+        ),
     )
 
     for idx, src in enumerate(sources, start=1):

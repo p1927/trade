@@ -11,6 +11,8 @@ AddedBy = Literal["seed", "user", "discover"]
 FetchStatus = Literal["ok", "stale", "not_found", "error"]
 Direction = Literal["bullish", "bearish", "neutral"]
 Confidence = Literal["high", "medium", "low"]
+NavigationAction = Literal["goto", "click", "wait", "scroll"]
+PathApprovedBy = Literal["auto", "user"]
 
 
 def _utc_now_iso() -> str:
@@ -42,6 +44,103 @@ class ExternalPredictionTarget:
 
 
 @dataclass
+class NavigationStep:
+    action: NavigationAction = "goto"
+    url: str = ""
+    selector: str = ""
+    text: str = ""
+    wait_ms: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "url": self.url,
+            "selector": self.selector,
+            "text": self.text,
+            "wait_ms": self.wait_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> NavigationStep:
+        if not isinstance(data, dict):
+            return cls()
+        action = str(data.get("action") or "goto")
+        if action not in {"goto", "click", "wait", "scroll"}:
+            action = "goto"
+        wait_ms = data.get("wait_ms")
+        try:
+            wait_val = int(wait_ms or 0)
+        except (TypeError, ValueError):
+            wait_val = 0
+        return cls(
+            action=action,  # type: ignore[arg-type]
+            url=str(data.get("url") or ""),
+            selector=str(data.get("selector") or ""),
+            text=str(data.get("text") or ""),
+            wait_ms=max(0, wait_val),
+        )
+
+
+@dataclass
+class NavigationTrace:
+    steps: list[NavigationStep] = field(default_factory=list)
+    final_url: str = ""
+    approved_by: PathApprovedBy = "auto"
+    stale: bool = False
+    created_at: str = ""
+    last_success_at: str = ""
+    replay_failures: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "steps": [step.to_dict() for step in self.steps],
+            "final_url": self.final_url,
+            "approved_by": self.approved_by,
+            "stale": self.stale,
+            "created_at": self.created_at,
+            "last_success_at": self.last_success_at,
+            "replay_failures": self.replay_failures,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> NavigationTrace | None:
+        if not isinstance(data, dict):
+            return None
+        steps = [
+            NavigationStep.from_dict(row)
+            for row in (data.get("steps") or [])
+            if isinstance(row, dict)
+        ]
+        approved_by = str(data.get("approved_by") or "auto")
+        if approved_by not in {"auto", "user"}:
+            approved_by = "auto"
+        try:
+            replay_failures = int(data.get("replay_failures") or 0)
+        except (TypeError, ValueError):
+            replay_failures = 0
+        return cls(
+            steps=steps,
+            final_url=str(data.get("final_url") or ""),
+            approved_by=approved_by,  # type: ignore[arg-type]
+            stale=bool(data.get("stale")),
+            created_at=str(data.get("created_at") or ""),
+            last_success_at=str(data.get("last_success_at") or ""),
+            replay_failures=max(0, replay_failures),
+        )
+
+
+def _trace_map_from_dict(raw: Any) -> dict[str, NavigationTrace]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, NavigationTrace] = {}
+    for key, value in raw.items():
+        trace = NavigationTrace.from_dict(value if isinstance(value, dict) else None)
+        if trace is not None:
+            out[str(key)] = trace
+    return out
+
+
+@dataclass
 class ExternalPredictionSource:
     id: str
     display_name: str
@@ -50,7 +149,10 @@ class ExternalPredictionSource:
     domains: list[str] = field(default_factory=list)
     landing_urls: list[str] = field(default_factory=list)
     curated_urls: list[str] = field(default_factory=list)
+    entry_urls: list[str] = field(default_factory=list)
     search_keywords: list[str] = field(default_factory=list)
+    saved_paths: dict[str, NavigationTrace] = field(default_factory=dict)
+    approved_paths: dict[str, NavigationTrace] = field(default_factory=dict)
     watchlisted: bool = True
     discovered_at: str | None = None
     added_by: AddedBy = "seed"
@@ -65,7 +167,10 @@ class ExternalPredictionSource:
             "domains": list(self.domains),
             "landing_urls": list(self.landing_urls),
             "curated_urls": list(self.curated_urls),
+            "entry_urls": list(self.entry_urls),
             "search_keywords": list(self.search_keywords),
+            "saved_paths": {k: v.to_dict() for k, v in self.saved_paths.items()},
+            "approved_paths": {k: v.to_dict() for k, v in self.approved_paths.items()},
             "watchlisted": self.watchlisted,
             "discovered_at": self.discovered_at,
             "added_by": self.added_by,
@@ -93,7 +198,10 @@ class ExternalPredictionSource:
             domains=[str(d) for d in (data.get("domains") or []) if str(d).strip()],
             landing_urls=[str(u) for u in (data.get("landing_urls") or []) if str(u).strip()],
             curated_urls=[str(u) for u in (data.get("curated_urls") or []) if str(u).strip()],
+            entry_urls=[str(u) for u in (data.get("entry_urls") or []) if str(u).strip()],
             search_keywords=[str(k) for k in (data.get("search_keywords") or []) if str(k).strip()],
+            saved_paths=_trace_map_from_dict(data.get("saved_paths")),
+            approved_paths=_trace_map_from_dict(data.get("approved_paths")),
             watchlisted=bool(data.get("watchlisted", True)),
             discovered_at=data.get("discovered_at"),
             added_by=added_by,  # type: ignore[arg-type]

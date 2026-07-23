@@ -14,6 +14,10 @@ from trade_integrations.dataflows.index_research.external_predictions.models imp
 from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
     format_queries,
 )
+from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
+    is_allowed_url,
+    is_candidate_article_url,
+)
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.searxng_finance import search_finance
 
@@ -158,3 +162,76 @@ def fetch_source_content(
                 url=url,
             )
     return title, url, body or snippet
+
+
+def filter_discovery_urls(
+    results: list[dict[str, Any]],
+    source: ExternalPredictionSource,
+    *,
+    limit: int = 3,
+) -> list[str]:
+    """Return allowlisted article URLs from SearXNG hits."""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for row in results:
+        url = str(row.get("url") or "").strip()
+        title = str(row.get("title") or "")
+        if not url or url in seen:
+            continue
+        policy = is_allowed_url(url, title=title)
+        if not policy.allowed and not is_candidate_article_url(url, title=title).allowed:
+            continue
+        seen.add(url)
+        urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+def discover_source_urls(
+    source: ExternalPredictionSource,
+    *,
+    horizon_days: int,
+    pipeline: PipelineLogger | None = None,
+) -> list[str]:
+    rows = search_source_results(source, horizon_days=horizon_days, pipeline=pipeline)
+    return filter_discovery_urls(rows, source)
+
+
+def discover_sources_parallel(
+    sources: list[ExternalPredictionSource],
+    *,
+    horizon_days: int,
+    pipeline: PipelineLogger | None = None,
+) -> dict[str, list[str]]:
+    """Run SearXNG discovery for each source in parallel."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not sources:
+        return {}
+
+    out: dict[str, list[str]] = {source.id: [] for source in sources}
+    max_workers = min(8, len(sources))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(
+                discover_source_urls,
+                source,
+                horizon_days=horizon_days,
+                pipeline=pipeline,
+            ): source
+            for source in sources
+        }
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                out[source.id] = future.result()
+            except Exception as exc:
+                if pipeline:
+                    pipeline.warn(
+                        "searxng",
+                        f"Parallel discovery failed: {exc}",
+                        source_id=source.id,
+                    )
+                logger.debug("parallel discovery failed for %s: %s", source.id, exc)
+    return out

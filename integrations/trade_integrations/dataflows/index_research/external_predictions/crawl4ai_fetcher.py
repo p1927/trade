@@ -132,14 +132,16 @@ def resolve_source_urls(
     *,
     symbol: str = "NIFTY",
     horizon_days: int = 14,
+    discovery_urls: list[str] | None = None,
 ) -> list[str]:
-    """Return allowlisted crawl targets (curated URLs + last ok article if policy passes)."""
+    """Return allowlisted crawl targets (curated, entry, discovery, last ok article)."""
     urls: list[str] = []
     seen: set[str] = set()
 
     raw_list = list(source.curated_urls or []) or list(curated_urls_for_source(source.id))
     if not raw_list:
         raw_list = list(source.landing_urls or [])
+    raw_list.extend(source.entry_urls or [])
 
     for raw in raw_list:
         u = _format_url_template(str(raw or "").strip(), horizon_days=horizon_days)
@@ -147,6 +149,16 @@ def resolve_source_urls(
             continue
         policy = is_allowed_listing_url(u)
         if not policy.allowed:
+            continue
+        seen.add(u)
+        urls.append(u)
+
+    for extra in discovery_urls or []:
+        u = str(extra or "").strip()
+        if not u or u in seen:
+            continue
+        policy = is_allowed_url(u, title=source.display_name)
+        if not policy.allowed and not is_candidate_article_url(u, title=source.display_name).allowed:
             continue
         seen.add(u)
         urls.append(u)
@@ -298,13 +310,20 @@ def crawl_sources_parallel(
     symbol: str = "NIFTY",
     horizon_days: int = 14,
     pipeline: PipelineLogger | None = None,
+    discovery_urls: dict[str, list[str]] | None = None,
 ) -> dict[str, list[tuple[str, CrawlPageResult]]]:
     """Crawl curated URLs; then top-ranked article candidates per source."""
     grouped: dict[str, list[tuple[str, CrawlPageResult]]] = {source.id: [] for source in sources}
 
     landing_jobs: list[tuple[str, str]] = []
     for source in sources:
-        for url in resolve_source_urls(source, symbol=symbol, horizon_days=horizon_days):
+        extras = (discovery_urls or {}).get(source.id) or []
+        for url in resolve_source_urls(
+            source,
+            symbol=symbol,
+            horizon_days=horizon_days,
+            discovery_urls=extras,
+        ):
             landing_jobs.append((source.id, url))
 
     if not landing_jobs:
