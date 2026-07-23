@@ -1,0 +1,85 @@
+{
+  "source": "huggingface",
+  "dataset_id": "thetrademarkk/india-index-options-1m",
+  "downloaded_at_utc": "2026-07-22T21:27:57.214839+00:00",
+  "local_dir": "data/nse/historic_data/replay/hf-india-index-options-1m",
+  "index": {
+    "BANKNIFTY": {
+      "rows": 486861,
+      "from": "2021-05-27 09:15:00+05:30",
+      "to": "2026-07-02 15:30:00+05:30",
+      "path": "index/BANKNIFTY.parquet"
+    },
+    "NIFTY": {
+      "rows": 486050,
+      "from": "2021-05-24 09:07:00+05:30",
+      "to": "2026-07-02 15:30:00+05:30",
+      "path": "index/NIFTY.parquet"
+    },
+    "SENSEX": {
+      "rows": 364715,
+      "from": "2022-09-01 09:15:00+05:30",
+      "to": "2026-07-02 15:30:00+05:30",
+      "path": "index/SENSEX.parquet"
+    }
+  },
+  "options": {
+    "BANKNIFTY": {
+      "expiry_files": 62,
+      "sample_file": "2024-05-29.parquet",
+      "sample_rows": 345955,
+      "columns": [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "open_interest",
+        "trading_day",
+        "symbol",
+        "strike",
+        "option_type",
+        "expiry"
+      ]
+    },
+    "NIFTY": {
+      "expiry_files": 267,
+      "sample_file": "2024-04-10.parquet",
+      "sample_rows": 256909,
+      "columns": [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "open_interest",
+        "trading_day",
+        "symbol",
+        "strike",
+        "option_type",
+        "expiry"
+      ]
+    },
+    "SENSEX": {
+      "expiry_files": 148,
+      "sample_file": "2024-08-30.parquet",
+      "sample_rows": 150749,
+      "columns": [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "open_interest",
+        "trading_day",
+        "symbol",
+        "strike",
+        "option_type",
+        "expiry"
+      ]
+    }
+  }
+}
