@@ -53,6 +53,25 @@ async def prefetch_bootstrap_research(agent_id: str) -> None:
 async def prefetch_turn_research(agent_id: str, *, turn_kind: str = "research") -> None:
     """Warm hub research and TradingAgents debate before full-reasoning turns."""
     agent = get_agent(agent_id) or {}
+    from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
+
+    if is_observe_agent(agent) or turn_kind == "watch_report":
+        symbols = list(agent.get("symbols") or [])
+        if not symbols:
+            return
+        sym = str(symbols[0]).strip().upper()
+        from trade_integrations.execution.routing_context import research_kinds_for_agent
+        from trade_integrations.research.orchestrator import ensure_research_complete
+
+        kinds = research_kinds_for_agent(agent) or ["index"]
+
+        def hub_only() -> None:
+            for kind in kinds:
+                ensure_research_complete(sym, kind=kind, refresh=False)
+
+        await asyncio.to_thread(hub_only)
+        return
+
     symbols = list(agent.get("symbols") or [])
     if not symbols:
         return

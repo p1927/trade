@@ -17,6 +17,18 @@ class MandateViolation(Exception):
         super().__init__(message)
 
 
+def _is_observe_mandate(mandate: MandateConfig) -> bool:
+    return str(getattr(mandate, "agent_mode", "trade") or "trade").strip().lower() == "observe"
+
+
+def _assert_observe_allows_trading(mandate: MandateConfig) -> None:
+    if _is_observe_mandate(mandate):
+        raise MandateViolation(
+            "observe_mode",
+            "Observe-only agent — cannot execute trades or use trade-plan widgets.",
+        )
+
+
 def _mandate_from_session(session: dict[str, Any]) -> MandateConfig:
     return mandate_config_from_session(session)
 
@@ -58,6 +70,7 @@ def assert_widget_allowed(
     mandate: MandateConfig,
 ) -> None:
     """Ensure widget instrument type is permitted by mandate."""
+    _assert_observe_allows_trading(mandate)
     inst = widget_instrument_class(widget)
     allowed = {str(x).strip().lower() for x in (mandate.allowed_instruments or []) if str(x).strip()}
     if not allowed:
@@ -86,6 +99,7 @@ def assert_can_execute(
         raise MandateViolation("session_halted", f"Session halted: {reason}")
 
     mandate = mandate or _mandate_from_session(session)
+    _assert_observe_allows_trading(mandate)
 
     if mandate.market_hours_only and not is_trading_session_open(market=_session_market(session)):
         raise MandateViolation("outside_market_hours", "Market is closed for this agent's trading window")
@@ -134,6 +148,11 @@ def validate_decision(
     mandate = mandate or _mandate_from_session(session)
     decision_u = decision.strip().upper()
     warnings: list[str] = []
+
+    if _is_observe_mandate(mandate) and decision_u in {"ENTER", "REVISE", "ADJUST"}:
+        warnings.append("observe_mode blocks trading decisions — use WATCH or SKIP")
+        return "SKIP", warnings
+
     open_positions = len(list_open_entries())
     market = _session_market(session)
     market_open = is_trading_session_open(market=market)

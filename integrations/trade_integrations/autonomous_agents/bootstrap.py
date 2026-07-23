@@ -102,8 +102,21 @@ def _bootstrap_watch_spec_ready(agent: dict) -> bool:
     return False
 
 
+def _observe_bootstrap_ready(agent: dict) -> bool:
+    """Observe agents need watch_spec + a recorded decision only."""
+    if not _bootstrap_watch_spec_ready(agent):
+        return False
+    last = dict(agent.get("last_decision") or {})
+    decision = str(last.get("decision") or "").strip().upper()
+    return decision in {"WATCH", "HOLD", "SKIP", "ENTER", "REVISE", "EXIT"}
+
+
 def bootstrap_finalize_prerequisites_met(agent: dict) -> bool:
     """True when bootstrap can safely auto-finalize (structured plan + watch_spec)."""
+    from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
+
+    if is_observe_agent(agent):
+        return _observe_bootstrap_ready(agent)
     return _bootstrap_structured_plan_ready(agent) and _bootstrap_watch_spec_ready(agent)
 
 
@@ -125,6 +138,11 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
         return False
     if not bootstrap_finalize_prerequisites_met(agent):
         return False
+
+    from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
+
+    if is_observe_agent(agent):
+        return _finalize_observe_bootstrap(agent_id, agent)
 
     from trade_integrations.autonomous_agents.plan_approval import resolve_widget_id
 
@@ -161,9 +179,82 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
     return True
 
 
+def _finalize_observe_bootstrap(agent_id: str, agent: dict) -> bool:
+    """Observe agents skip plan approval — bootstrap completes after first report."""
+    now = datetime.now(timezone.utc).isoformat()
+    agent["bootstrap_status"] = "done"
+    agent["bootstrap_completed_at"] = now
+    agent["plan_approved_at"] = now
+    agent.pop("plan_approval_required", None)
+    agent.pop("bootstrap_error", None)
+    save_agent(agent)
+    logger.info("agent %s observe bootstrap complete — watch reporting active", agent_id)
+
+    try:
+        from trade_integrations.autonomous_agents.plan_approval import (
+            _activate_deferred_watch_spec,
+            _nudge_watch_job,
+            activate_agent_watch,
+        )
+
+        latest = get_agent(agent_id) or agent
+        _activate_deferred_watch_spec(agent_id, latest)
+        activate_agent_watch(agent_id, latest)
+        try:
+            from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
+
+            sync_nautilus_registry_from_watches(restart_if_changed=True)
+        except Exception:
+            logger.warning("nautilus registry sync failed after observe bootstrap for %s", agent_id, exc_info=True)
+        _nudge_watch_job(agent_id)
+    except Exception as exc:
+        logger.warning("observe bootstrap watch activation failed for %s: %s", agent_id, exc, exc_info=True)
+
+    try:
+        import sys
+
+        host = sys.modules.get("api_server") or sys.modules.get("agent.api_server")
+        svc = host._get_session_service() if host else None
+        session_id = str(agent.get("vibe_session_id") or "")
+        if svc and session_id:
+            svc.event_bus.emit(
+                session_id,
+                "autonomous_agent.plan_approved",
+                {
+                    "agent_id": agent_id,
+                    "bootstrap_status": "done",
+                    "observe_mode": True,
+                },
+            )
+    except Exception as exc:
+        logger.debug("observe bootstrap emit failed for %s: %s", agent_id, exc)
+    return True
+
+
 async def _prefetch_bootstrap_research(agent_id: str) -> None:
+    from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
     from trade_integrations.autonomous_agents.research_prefetch import prefetch_bootstrap_research
 
+    agent = get_agent(agent_id) or {}
+    if is_observe_agent(agent):
+        # Hub index summary only — skip TradingAgents debate warmup for observe agents.
+        symbols = list(agent.get("symbols") or [])
+        if not symbols:
+            return
+        sym = str(symbols[0]).strip().upper()
+
+        def hub_only() -> None:
+            from trade_integrations.execution.routing_context import research_kinds_for_agent
+            from trade_integrations.research.orchestrator import ensure_research_complete
+
+            kinds = research_kinds_for_agent(agent) or ["index"]
+            for kind in kinds:
+                ensure_research_complete(sym, kind=kind, refresh=False)
+
+        import asyncio
+
+        await asyncio.to_thread(hub_only)
+        return
     await prefetch_bootstrap_research(agent_id)
 
 
@@ -225,7 +316,7 @@ async def _bootstrap_agent_locked(agent_id: str) -> None:
 
         await _append_watch_system_message(
             session_id,
-            "Bootstrap starting — running first watch tick and research turn. Activity will appear here shortly.",
+            "Bootstrap starting — running first watch tick and initial report turn. Activity will appear here shortly.",
         )
 
     try:

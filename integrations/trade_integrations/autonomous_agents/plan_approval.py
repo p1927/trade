@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 
 def is_plan_approved(agent: dict[str, Any]) -> bool:
     """True once the user approved the bootstrap plan (agent fully autonomous)."""
+    from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
+
+    if is_observe_agent(agent) and str(agent.get("bootstrap_status") or "") == "done":
+        return True
     return bool(agent.get("plan_approved_at"))
 
 
