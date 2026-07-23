@@ -131,6 +131,42 @@ def decode_screenshot_payload(payload: str | bytes | None) -> bytes | None:
         return None
 
 
+def _write_m3_tiles(
+    *,
+    raw: bytes,
+    root: Path,
+    source_id: str,
+) -> tuple[list[Path], int]:
+    """Resize for M3; retry at 512 when primary dimension fails or yields no tiles."""
+    primary = m3_max_dimension()
+    dims_to_try = [primary]
+    if primary != _FALLBACK_M3_MAX:
+        dims_to_try.append(_FALLBACK_M3_MAX)
+
+    last_exc: Exception | None = None
+    for dim in dims_to_try:
+        try:
+            tiles = resize_for_m3_tiles(raw, max_dim=dim)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("M3 screenshot resize failed at %spx for %s: %s", dim, source_id, exc)
+            continue
+        if not tiles:
+            logger.warning("M3 screenshot resize produced no tiles at %spx for %s", dim, source_id)
+            continue
+        paths: list[Path] = []
+        for idx, tile in enumerate(tiles):
+            name = "screenshot_m3.jpg" if len(tiles) == 1 else f"screenshot_m3_{idx + 1}.jpg"
+            path = root / name
+            path.write_bytes(tile)
+            paths.append(path)
+        return paths, dim
+
+    if last_exc is not None:
+        logger.warning("M3 screenshot resize exhausted fallbacks for %s", source_id)
+    return [], primary
+
+
 def persist_screenshot(
     *,
     symbol: str,
@@ -145,13 +181,9 @@ def persist_screenshot(
     full_path.write_bytes(raw)
 
     m3_paths: list[Path] = []
+    m3_dim_used = m3_max_dimension()
     try:
-        tiles = resize_for_m3_tiles(raw)
-        for idx, tile in enumerate(tiles):
-            name = "screenshot_m3.jpg" if len(tiles) == 1 else f"screenshot_m3_{idx + 1}.jpg"
-            path = root / name
-            path.write_bytes(tile)
-            m3_paths.append(path)
+        m3_paths, m3_dim_used = _write_m3_tiles(raw=raw, root=root, source_id=source_id)
     except Exception as exc:
         logger.warning("M3 screenshot resize failed for %s: %s", source_id, exc)
 
