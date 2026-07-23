@@ -66,6 +66,10 @@ def main() -> int:
     failures = 0
 
     if not args.skip_cleanup:
+        if not lib.ensure_stack_healthy():
+            _log("stack_preflight", "fail", error="OpenAlgo or Vibe API not healthy")
+            return 1
+        _log("stack_preflight", "pass")
         cleanup = lib.cleanup_all_autonomous_agents()
         _log("cleanup", "pass", deleted=cleanup.get("deleted"), errors=cleanup.get("errors"))
         if args.cleanup_only:

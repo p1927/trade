@@ -537,6 +537,25 @@ def stop_autonomous_agents_session() -> None:
         pass
 
 
+def ensure_stack_healthy(*, timeout_sec: int = 120) -> bool:
+    """Wait for OpenAlgo + Vibe API after trade heal (E2E preflight)."""
+    import subprocess
+
+    subprocess.run([str(ROOT / "trade"), "heal"], cwd=ROOT, check=False, capture_output=True)
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            oa = urllib.request.urlopen("http://127.0.0.1:5001/", timeout=3)
+            oa.close()
+            va = urllib.request.urlopen("http://127.0.0.1:8899/health", timeout=3)
+            va.close()
+            return True
+        except Exception:
+            time.sleep(3)
+            subprocess.run([str(ROOT / "trade"), "heal"], cwd=ROOT, check=False, capture_output=True)
+    return False
+
+
 def cleanup_all_autonomous_agents(*, clear_nautilus_registry: bool = True) -> dict[str, Any]:
     """Stop and delete all autonomous agents; clear watches and Nautilus registry for a clean E2E."""
     from trade_integrations.autonomous_agents.store import list_agents
