@@ -181,9 +181,8 @@ def persist_screenshot(
     full_path.write_bytes(raw)
 
     m3_paths: list[Path] = []
-    m3_dim_used = m3_max_dimension()
     try:
-        m3_paths, m3_dim_used = _write_m3_tiles(raw=raw, root=root, source_id=source_id)
+        m3_paths, _m3_dim_used = _write_m3_tiles(raw=raw, root=root, source_id=source_id)
     except Exception as exc:
         logger.warning("M3 screenshot resize failed for %s: %s", source_id, exc)
 

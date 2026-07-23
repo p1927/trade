@@ -304,3 +304,106 @@ def test_replay_allows_saved_article_url_without_title_signals(
     result = replay_navigation_path(trace, source=source)
     assert result.success is True
     assert result.url.endswith("/articleshow/123.cms")
+
+
+def test_refresh_source_fast_path_provenance_before_exploratory_fallback(
+    hub_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.navigation_paths import (
+        ReplayResult,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.refresh import (
+        refresh_source,
+    )
+
+    seed_registry_if_missing()
+    src = next(s for s in load_registry() if s.id == "moneycontrol")
+    fast_url = "https://www.moneycontrol.com/news/nifty-fast.html"
+    exp_url = "https://www.moneycontrol.com/news/nifty-exp.html"
+    exploratory = [
+        (
+            exp_url,
+            CrawlPageResult(url=exp_url, success=True, markdown="Nifty 50 target 24800 exploratory"),
+        )
+    ]
+    nav_modes: list[str] = []
+
+    def _fake_try_fast_path(source, *, horizon_days, exploratory_rows, pipeline=None):
+        replay = ReplayResult(
+            success=True,
+            url=fast_url,
+            title="Fast",
+            markdown="Nifty 50 target 24900 fast",
+            metadata={"screenshot_b64": "fastshot"},
+        )
+        synthetic = CrawlPageResult(
+            url=fast_url,
+            success=True,
+            title="Fast",
+            markdown="Nifty 50 target 24900 fast",
+            metadata={"screenshot_b64": "fastshot"},
+        )
+        return replay, [(fast_url, synthetic)], list(exploratory_rows)
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.try_fast_path_then_exploratory",
+        _fake_try_fast_path,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh._fetch_spot",
+        lambda _sym, pipeline=None: 24000.0,
+    )
+
+    from trade_integrations.dataflows.index_research.external_predictions import refresh as refresh_mod
+
+    original_record_from_crawl = refresh_mod._record_from_crawl_group
+
+    def _record_with_nav(*args, **kwargs):
+        nav_modes.append(kwargs.get("navigation_mode", "missing"))
+        record = original_record_from_crawl(*args, **kwargs)
+        url = args[1][0][0] if args[1] else ""
+        if url == fast_url:
+            record.fetch_status = "not_found"
+            record.error_message = "fast extract failed"
+        else:
+            record.fetch_status = "ok"
+            record.target = ExternalPredictionTarget(mid=24800.0)
+        return record
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh._record_from_crawl_group",
+        _record_with_nav,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.pick_best_crawl_result",
+        lambda rows, *args, **kwargs: rows[0] if rows else None,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.resolve_source_urls",
+        lambda *args, **kwargs: ["https://example.com"],
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.filter_markdown_for_extraction",
+        lambda markdown, *args, **kwargs: markdown,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.extract_forecast",
+        lambda **kwargs: ExternalPredictionRecord(
+            source_id=src.id,
+            fetch_status="not_found" if "fast" in kwargs.get("url", "") else "ok",
+            target=ExternalPredictionTarget(mid=24800.0),
+        ),
+    )
+
+    record = refresh_source(
+        src.id,
+        symbol="NIFTY",
+        horizon_days=14,
+        crawl_group={src.id: exploratory},
+    )
+    assert nav_modes[0] == "fast"
+    assert "exploratory" in nav_modes
+    assert record.fetch_status == "ok"
+    assert record.provenance.get("navigation_mode") == "exploratory"
+    assert record.provenance.get("fetch_method") == "crawl4ai"

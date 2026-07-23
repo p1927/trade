@@ -280,6 +280,35 @@ def test_refresh_on_source_complete_callback(hub_dir: Path, monkeypatch: pytest.
     assert len(completed) >= 1
 
 
+def test_rebuild_snapshot_includes_refresh_rollup(hub_dir: Path) -> None:
+    seed_registry_if_missing()
+    upsert_prediction(
+        ExternalPredictionRecord(
+            source_id="moneycontrol",
+            horizon_days=14,
+            fetch_status="ok",
+            target=ExternalPredictionTarget(mid=25000.0),
+        ),
+        symbol="NIFTY",
+    )
+    upsert_prediction(
+        ExternalPredictionRecord(
+            source_id="economictimes",
+            horizon_days=14,
+            fetch_status="error",
+            error_message="crawl failed",
+        ),
+        symbol="NIFTY",
+    )
+    snap = rebuild_snapshot(symbol="NIFTY", horizon_days=14, fetched_at="2026-07-23T12:00:00+00:00")
+    assert snap.sources_ok >= 1
+    assert snap.sources_error >= 1
+    assert snap.had_errors is True
+    payload = snap.to_dict()
+    assert payload["sources_ok"] >= 1
+    assert payload["had_errors"] is True
+
+
 def test_append_source_complete_writes_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _ensure_vibetrading_agent_on_path()
     jobs_root = tmp_path / "log" / "external_predictions_jobs"

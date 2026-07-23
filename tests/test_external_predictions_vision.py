@@ -183,3 +183,27 @@ def test_decode_screenshot_payload_accepts_data_uri() -> None:
     b64 = base64.b64encode(raw).decode("ascii")
     decoded = decode_screenshot_payload(f"data:image/jpeg;base64,{b64}")
     assert decoded == raw
+
+
+def test_persist_screenshot_falls_back_to_512_on_primary_resize_failure(
+    hub_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions import screenshot_utils as su
+
+    dims_tried: list[int] = []
+    raw = _solid_jpeg(width=800, height=1200)
+    real_resize = su.resize_for_m3_tiles
+
+    def _fake_resize(raw_bytes: bytes, *, max_dim: int | None = None) -> list[bytes]:
+        dims_tried.append(max_dim or 0)
+        if max_dim == 1024:
+            raise RuntimeError("simulated 1024 resize failure")
+        return real_resize(raw_bytes, max_dim=max_dim)
+
+    monkeypatch.setenv("EXTERNAL_PREDICTIONS_M3_MAX_DIM", "1024")
+    monkeypatch.setattr(su, "resize_for_m3_tiles", _fake_resize)
+    artifacts = persist_screenshot(symbol="NIFTY", source_id="moneycontrol", raw=raw, run_id="fallback512")
+    assert 1024 in dims_tried
+    assert 512 in dims_tried
+    assert artifacts.m3_paths
