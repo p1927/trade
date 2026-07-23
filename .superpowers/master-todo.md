@@ -228,6 +228,28 @@ Full sorted list: run `find integrations -type f -name '*.py' | sort` (337 paths
 
 ## Issue log
 
+### Sim OpenAlgo parity — mistake-prevention loop (2026-07-23)
+
+**Convergence:** Pass 6 — **0 CONFIRMED** remaining in sim parity scope.  
+**Verification:** `pytest tests/test_stock_simulator_master_contract.py tests/test_stock_simulator*.py -q` → 25 passed (uncommitted).
+
+| ID | File | Issue (brief) | Plan | Status | Commit |
+|----|------|---------------|------|--------|--------|
+| SIM-F01 | `openalgo/utils/auth_utils.py` | Async MC overwrote sim fingerprint stats / marked success after internal failure | Skip duplicate `update_download_stats` for sim; check `get_status()` error before success; re-download on error/empty symtoken | **fixed (uncommitted)** | — |
+| SIM-F02 | `openalgo/utils/auth_utils.py` | IST 08:00 cutoff forced sim re-download despite matching replay fingerprint | Early return when replay_date + underlyings + max_expiries match | **fixed (uncommitted)** | — |
+| SIM-F03 | `openalgo/broker/stock_simulator/api/data.py` | `get_history` returned list; history_service expects DataFrame | Return `pd.DataFrame` with `oi` column | **fixed (uncommitted)** | — |
+| SIM-F04 | `openalgo/utils/auth_utils.py` | `load_mc_max_expiries` NameError / wrong default on import-failure path | Env fallback default `12`; sorted underlyings compare; missing fingerprint fields trigger rebuild | **fixed (uncommitted)** | — |
+| SIM-F05 | `openalgo/frontend/src/pages/MasterContract.tsx` | Exchange stats card broke on nested `exchange_stats.counts` | Render `counts` sub-object; filter numeric entries only | **fixed (uncommitted)** | — |
+| SIM-F06 | `integrations/.../master_contract.py`, `options/replay_store.py` | Unparseable expiry stems included in expiry file pick | Require parsed expiry `>= replay_day` | **fixed (uncommitted)** | — |
+| SIM-F07 | `openalgo/services/expiry_service.py` | Wall-clock filtered all replay expiries as expired | `_expiry_reference_date` uses `NSE_REPLAY_DATE` for stock_simulator | **fixed (uncommitted)** | — |
+| SIM-D01 | `openalgo/broker/stock_simulator/api/data.py` | **DATA-2** — 15m/30m/1h intervals fall through to daily bars | `_history_intraday` with OHLCV resample for 15/30/60m | **fixed (uncommitted)** | — |
+| SIM-D02 | `openalgo/broker/stock_simulator/api/data.py` | **DATA-3** — NFO option symbol history empty (index catalog only) | `OptionsReplayStore.history_bars` for NFO/BFO symbols | **fixed (uncommitted)** | — |
+| SIM-D03 | `openalgo/services/expiry_service.py` | **EXP-1** — replay anchor date only when `api_key` → stock_simulator | `STOCK_SIMULATOR_MODE=replay` + session broker gates | **fixed (uncommitted)** | — |
+| SIM-D04 | `openalgo/blueprints/sandbox.py` | **OPS-1** — sandbox replay-date POST does not rebuild MC in-session | Async MC download when `replay_date` in config POST | **fixed (uncommitted)** | — |
+| SIM-D05 | `openalgo/services/option_chain_service.py` | **CHAIN-1** — generic chain path may not use HF `chain_at` fast path | Simulator HF fast path in option_chain_service | **fixed (uncommitted)** | — |
+
+---
+
 | ID | File | Issue (brief) | Plan | Status | Commit |
 |----|------|---------------|------|--------|--------|
 | M033 | `execution/prompt_fragments.py` | Scheduled research prompt disabled but env can still dispatch | Align scheduler + prompt policy | **pending** | — |
@@ -296,7 +318,8 @@ _Status values: `open` | `fixing` | `fixed` | `pending` | `wontfix`_
 |------|-------|
 | Scheduler | Background ping loop (PID in terminal 200912), every 20m, ticks 2→21 |
 | Ticks completed with agent work | 1–6 |
-| Open issues (Fixer backlog) | M007–M011, M013–M023, M025–M033 (**M007 next after M006 ✅**) |
+| Open issues (Fixer backlog) | M007–M011, M013–M023, M025–M033, SIM-D01/D03 (**M007 next after M006 ✅**) |
+| Sim parity deferred | All SIM-D01–D05 **fixed (uncommitted)**; hypothesis pass **2026-07-23** (auto-reload, Fyers gate, hydrate hardening) |
 | `master todo:` commits | 10 (see audit table) |
 
 ---

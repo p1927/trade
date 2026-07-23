@@ -1,0 +1,160 @@
+---
+description: After user approves a plan, decompose into phased subplans; plan-first, then implement with convergence loops until mistakes → 0
+alwaysApply: true
+---
+
+# Multi-Phase Plan Convergence
+
+When the user **approves** a spec or implementation plan, **do not write production code yet**. First decompose into phased subplans, run a **plan-level** convergence pass, then execute phases sequentially with **implementation-level** convergence on every task.
+
+Works with `subagent-driven-development`, `fix-review-before-stack`, `review-evidence-discipline`, `design-intent-debate-before-change`, `test-before-report`, and the **review-bugbot** skill.
+
+---
+
+## Trigger
+
+User says **approved**, **implement the plan**, **LGTM**, or equivalent after reviewing a spec/plan draft.
+
+Until subplans exist and pass the plan gate below → **planning mode only**.
+
+---
+
+## Step 1 — Master index plan (required)
+
+Create `docs/superpowers/plans/YYYY-MM-DD-<feature>-index.md` (or extend an existing index).
+
+**Must include:**
+
+| Section | Content |
+|---------|---------|
+| Goal | One sentence |
+| Phase map | Table: phase #, subplan file, **type**, depends-on, status |
+| Global constraints | Verbatim from approved spec — copied once, inherited by all phases |
+| Verification protocol | Convergence loop (see below) |
+| Execution order | Sequential phases; optional phases marked |
+| Success criteria | Program-level, testable |
+
+**Phase types** (label every subplan):
+
+| Type | When to use |
+|------|-------------|
+| `implement` | New behavior per design |
+| `refactor` | Restructure without behavior change (or with explicit parity tests) |
+| `cleanup` | Remove dead code, flags, duplicates superseded by earlier phases |
+| `migrate` | Move callers off deprecated APIs; delete only after migration gate |
+
+One concern per phase. Do not mix unrelated subsystems in one subplan.
+
+**Reference shape:** `docs/superpowers/plans/2026-07-23-openalgo-market-authority-index.md`
+
+---
+
+## Step 2 — One subplan per phase (required before any code)
+
+Each phase → `docs/superpowers/plans/YYYY-MM-DD-<feature>-phase-N-<slug>.md`
+
+Use `writing-plans` skill structure: file map, tasks with Files/Interfaces, checkbox steps, phase pytest scope, completion gate.
+
+Each subplan header must state: **Type**, **Depends on**, **Supersedes** (if any), **Out of scope**.
+
+---
+
+## Step 3 — Plan-level convergence (before implementation)
+
+Review the **plan set**, not code. Minimum one full round; repeat until no new CONFIRMED plan defects.
+
+```
+Plan Pass A — Decompose audit
+  - Every approved spec requirement maps to exactly one phase (or explicit deferral)
+  - Dependencies acyclic; no phase assumes work from a later phase
+  - Cleanup/migrate phases exist where old paths must be removed
+  - Global constraints copied verbatim; no drift between index and subplans
+
+Plan Pass B — Edge cases & design flaws
+  - Triple debate (design-intent-debate-before-change) on risky cuts: routing,
+    authority, date boundaries, parallel code paths, status rollup, deprecation
+  - Label findings: CONFIRMED GAP / BY DESIGN / HYPOTHESIS / DEFERRED
+  - Fix plan text for CONFIRMED GAP; do not "fix in code" during planning
+
+Plan Pass C — Adversarial plan review
+  - Dispatch task reviewer or general reviewer subagent on index + all subplans
+  - User may approve plan set explicitly, or implicit approval to proceed after fixes
+```
+
+**Plan gate:** All subplan files exist; phase map complete; Plan Pass C has zero open **CONFIRMED GAP** rows.
+
+Only then announce implementation start and create SDD todos.
+
+---
+
+## Step 4 — Implementation (per phase, per task)
+
+Follow `subagent-driven-development`:
+
+1. Read **one phase subplan**; todos for all its tasks.
+2. **One implementer subagent per task** (sequential within phase).
+3. After **each task** — mandatory **implementation convergence loop**:
+
+```
+Task Pass 0 — Research + label (CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN)
+Task Pass 1 — Implement smallest change; symmetry grep parallel paths
+Task Pass 2 — Author audit: git diff line-by-line + full scoped verification
+Task Pass 3 — Adversarial review: Bugbot subagent (review-bugbot skill,
+              Diff: uncommitted changes) OR manual mistake checklist from
+              fix-review-before-stack
+Task Pass 4 — Fix CONFIRMED / user-approved items → Task Pass 2 on NEW diff
+```
+
+**Stop task when:** ≥2 full Task Pass 2→3 cycles **and** 0 new **CONFIRMED** on latest diff **and** verification exit 0 this session.
+
+4. Task reviewer subagent (spec ✅ + quality) before next task.
+5. After all tasks in phase — phase pytest scope exits 0; phase-level Bugbot clean; final whole-branch reviewer on capable model.
+6. Record in `.superpowers/sdd/progress.md`.
+7. **Do not start phase N+1** until phase N completion gate passes.
+
+---
+
+## Bugbot invocation (implementation Pass 3)
+
+```text
+Full Repository Path: <repo absolute path>
+Diff: uncommitted changes
+Custom Instructions: <phase-specific regressions: silent failures, wrong-frame routing,
+  asymmetric paths, status rollup, migration leftovers>
+```
+
+Re-read every Bugbot finding in primary sources before labeling CONFIRMED.
+
+---
+
+## Reporting (mandatory)
+
+**After plan gate:**
+
+- List subplan paths and phase types
+- Note any DEFERRED / HYPOTHESIS items
+
+**After each phase:**
+
+- Convergence round counts (`Phase 2 round 1: 1 CONFIRMED → fixed; round 2: 0 CONFIRMED`)
+- Verification commands + exit codes from **this session**
+- Separate CONFIRMED fixed vs HYPOTHESIS deferred vs BY DESIGN
+
+---
+
+## Forbidden
+
+- Starting implementation before index + all required subplans exist
+- Skipping plan-level convergence on multi-phase work
+- Single-pass review before marking a task or phase done
+- Parallel implementer subagents on the same phase
+- Mixing cleanup/migration into an implement phase without an explicit migration gate task
+- Reporting "done" without fresh verification exit codes
+
+---
+
+## When to skip full decomposition
+
+Single-file, single-task fix with no spec → use `targeted-bug-fix-discipline` + `fix-review-before-stack` only; no index plan required.
+
+If approved scope spans **2+ subsystems**, **refactor + new behavior**, or **deprecation** → full multi-phase workflow is **required**.

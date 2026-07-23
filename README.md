@@ -139,6 +139,27 @@ Foreground / special modes (`start.sh`):
 
 **PID claims:** `log/claims/{openalgo,vibe-api,vibe-ui,nautilus-watch}.claim` — written on start, removed on `trade down`. Session stamp: `log/stack.session`. Summary: `log/stack.instance`. If a port is held by an unclaimed process, `trade up` fails fast with a clear message instead of killing it.
 
+### LLM-Wiki (required for hub news ingest)
+
+Hub news ingest and distillation require the **LLM Wiki** desktop app running locally. Trade does **not** auto-launch the app — start it yourself before news ingest.
+
+1. Install [LLM Wiki.app](https://llmwiki.app) (macOS).
+2. Open or create a project at `reports/hub/llm-wiki/` inside this repo.
+3. Copy the project id from the app (or `GET http://127.0.0.1:19828/api/v1/projects`) into root `.env`:
+
+   ```bash
+   LLM_WIKI_PROJECT_ID=<your-project-id>
+   HUB_NEWS_REQUIRE_LLM_WIKI=1
+   ```
+
+4. Verify (wiki app must be running):
+
+   ```bash
+   PYTHONPATH=integrations python -m trade_integrations.dataflows.hub_wiki.probe --status-line
+   ```
+
+When the probe fails, `trade status` shows `✗ LLM-Wiki not running` and hub news ingest is blocked until the app is up and configured.
+
 **Hub Docker env flags** (see `stack/ports.yaml`):
 
 | Variable | Default | Role |
