@@ -12,6 +12,46 @@ ProductType = Literal["MIS", "NRML", "auto"]
 RevisionPolicy = Literal["re_rank_on_alert", "scheduled_only", "user_guidance_only"]
 StrategyStyle = Literal["event_vol", "directional", "income", "user_defined"]
 PrimaryInstrument = Literal["options", "equity"]
+AgentMode = Literal["trade", "observe"]
+
+_OBSERVE_INTENT_RE = re.compile(
+    r"\b("
+    r"watch\s+(?:the\s+)?(?:index|nifty|banknifty|market)\s+and\s+report|"
+    r"watch\s+and\s+report|monitor\s+and\s+report|observe\s+only|report\s+only|"
+    r"just\s+watch|watch\s+only|monitor\s+only|no\s+trading|"
+    r"don'?t\s+trade|do\s+not\s+trade"
+    r")\b",
+    re.I,
+)
+_TRADE_INTENT_RE = re.compile(
+    r"\b(paper\s+trade|enter\s+(?:a\s+)?(?:trade|position)|execute|buy\s+|sell\s+|"
+    r"option\s+chain|straddle|strangle|iron\s+condor|budget|max\s+loss)\b",
+    re.I,
+)
+
+
+def detect_observe_intent(text: str) -> bool:
+    """True when user wants watch/report only — not autonomous trading."""
+    blob = str(text or "").strip()
+    if not blob:
+        return False
+    if _TRADE_INTENT_RE.search(blob):
+        return False
+    return bool(_OBSERVE_INTENT_RE.search(blob))
+
+
+def is_observe_agent(agent: dict[str, Any]) -> bool:
+    mc = agent.get("mandate_config") if isinstance(agent.get("mandate_config"), dict) else {}
+    mode = str(mc.get("agent_mode") or agent.get("agent_mode") or "trade").strip().lower()
+    return mode == "observe"
+
+
+def observe_mandate_text(symbol: str) -> str:
+    sym = str(symbol or "NIFTY").strip().upper() or "NIFTY"
+    return (
+        f"Observe {sym}; watch index and post concise reports. "
+        "No trading unless user explicitly asks."
+    )
 
 
 @dataclass
@@ -55,6 +95,7 @@ class MandateConfig:
     confidence_threshold: int = 75
     alert_rules: AlertRules = field(default_factory=AlertRules)
     revision_policy: RevisionPolicy = "re_rank_on_alert"
+    agent_mode: AgentMode = "trade"
     watch_spec: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,6 +110,7 @@ class MandateConfig:
             "confidence_threshold": self.confidence_threshold,
             "alert_rules": self.alert_rules.to_dict(),
             "revision_policy": self.revision_policy,
+            "agent_mode": self.agent_mode,
             "watch_spec": dict(self.watch_spec),
         }
         return payload
@@ -89,6 +131,9 @@ class MandateConfig:
         revision = str(payload.get("revision_policy") or "re_rank_on_alert").lower()
         if revision not in ("re_rank_on_alert", "scheduled_only", "user_guidance_only"):
             revision = "re_rank_on_alert"
+        agent_mode = str(payload.get("agent_mode") or "trade").lower()
+        if agent_mode not in ("trade", "observe"):
+            agent_mode = "trade"
         style = str(payload.get("strategy_style") or "user_defined").lower()
         if style not in ("event_vol", "directional", "income", "user_defined"):
             style = "user_defined"
@@ -119,6 +164,7 @@ class MandateConfig:
                 payload.get("alert_rules") if isinstance(payload.get("alert_rules"), dict) else None
             ),
             revision_policy=revision,  # type: ignore[arg-type]
+            agent_mode=agent_mode,  # type: ignore[arg-type]
             watch_spec=watch_spec,
         )
 
@@ -272,6 +318,12 @@ def parse_mandate_from_text(
 
     if any(w in text for w in ("watch only", "don't trade", "do not trade", "wait until")):
         cfg.revision_policy = "user_guidance_only"
+
+    if detect_observe_intent(text):
+        cfg.agent_mode = "observe"
+        cfg.revision_policy = "user_guidance_only"
+        cfg.allowed_instruments = ["equity"]
+        cfg.max_open_positions = 0
 
     if any(
         w in text
@@ -536,6 +588,9 @@ def resolve_allowed_instruments(
     sym_list = [str(s).strip().upper() for s in symbols if str(s).strip()]
     sym0 = sym_list[0] if sym_list else ""
     is_us = str(execution_market or "").upper() == "US"
+
+    if detect_observe_intent(mandate_text):
+        return ["equity"]
 
     inferred = _infer_allowed_instruments(mandate_text, sym_list, is_us=is_us)
     if inferred is not None:

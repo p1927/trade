@@ -1,6 +1,7 @@
 """Mandate configuration and enforcement for autonomous agents."""
 
 from trade_integrations.autonomous_agents.mandate_config import (  # noqa: F401
+    AgentMode,
     AlertRules,
     FlattenPolicy,
     HoldingPeriod,
@@ -9,8 +10,11 @@ from trade_integrations.autonomous_agents.mandate_config import (  # noqa: F401
     ProductType,
     RevisionPolicy,
     StrategyStyle,
+    detect_observe_intent,
+    is_observe_agent,
     mandate_config_from_agent,
     mandate_config_from_session,
+    observe_mandate_text,
     primary_instrument_from_mandate,
     resolve_allowed_instruments,
     resolve_mandate_config,
@@ -27,6 +31,7 @@ from trade_integrations.autonomous_agents.mandate_enforcer import (  # noqa: F40
 )
 
 __all__ = [
+    "AgentMode",
     "AlertRules",
     "FlattenPolicy",
     "HoldingPeriod",
@@ -36,6 +41,9 @@ __all__ = [
     "ProductType",
     "RevisionPolicy",
     "StrategyStyle",
+    "detect_observe_intent",
+    "is_observe_agent",
+    "observe_mandate_text",
     "assert_can_execute",
     "assert_widget_allowed",
     "mandate_config_from_agent",

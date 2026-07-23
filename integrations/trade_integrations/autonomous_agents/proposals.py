@@ -104,6 +104,11 @@ def _validate_proposal_committable(proposal: dict[str, Any]) -> None:
 
 
 def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
+    from trade_integrations.autonomous_agents.mandate_config import (
+        detect_observe_intent,
+        observe_mandate_text,
+    )
+
     symbols = _normalize_symbols(kwargs.get("symbols"))
     watch_min = kwargs.get("watch_interval_min")
     research_min = kwargs.get("research_interval_min")
@@ -120,11 +125,22 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     if not name and symbols:
         name = f"{symbols[0]} autonomous"
 
+    user_blob = "\n".join(
+        p for p in (str(kwargs.get("user_text") or ""), str(kwargs.get("mandate") or "")) if p.strip()
+    )
+    observe = str(kwargs.get("agent_mode") or "").lower() == "observe" or detect_observe_intent(user_blob)
+    sym0 = symbols[0] if symbols else "NIFTY"
+    default_mandate = (
+        observe_mandate_text(sym0)
+        if observe
+        else f"Paper trade {sym0} autonomously; research, watch, act when confident."
+    )
+
     return {
         "symbols": symbols,
         "name": name or "Autonomous agent",
-        "mandate": str(kwargs.get("mandate") or "").strip()
-        or f"Paper trade {symbols[0] if symbols else 'NIFTY'} autonomously; research, watch, act when confident.",
+        "mandate": str(kwargs.get("mandate") or "").strip() or default_mandate,
+        "agent_mode": "observe" if observe else "trade",
         "budget_inr": float(kwargs.get("budget_inr") or DEFAULT_BUDGET_INR),
         "max_daily_loss_inr": float(kwargs.get("max_daily_loss_inr") or DEFAULT_MAX_DAILY_LOSS_INR),
         "confidence_threshold": int(kwargs.get("confidence_threshold") or DEFAULT_CONFIDENCE_THRESHOLD),
@@ -134,6 +150,7 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
         "vibe_session_id": kwargs.get("vibe_session_id"),
         "orchestrator_session_id": kwargs.get("orchestrator_session_id"),
         "alert_spot_move_pct": float(kwargs.get("alert_spot_move_pct") or 0.5),
+        "user_text": kwargs.get("user_text"),
     }
 
 
@@ -144,12 +161,18 @@ def _build_mandate_config(
     execution_market: str | None = None,
     allowed_instruments: list[str] | None = None,
 ) -> MandateConfig:
+    from trade_integrations.autonomous_agents.mandate_config import detect_observe_intent
+
     sym_list = list(draft.get("symbols") or ["NIFTY"])
     primary = sym_list[0] if sym_list else "NIFTY"
     market = execution_market or symbol_execution_market(primary)
     stored = draft.get("mandate_config") if isinstance(draft.get("mandate_config"), dict) else {}
     if allowed_instruments:
         stored = {**stored, "allowed_instruments": allowed_instruments}
+    text = mandate_text or str(draft.get("mandate") or "")
+    observe = str(draft.get("agent_mode") or "").lower() == "observe" or detect_observe_intent(text)
+    if observe:
+        stored = {**stored, "agent_mode": "observe", "revision_policy": "user_guidance_only"}
     return resolve_mandate_config(
         symbols=sym_list,
         mandate_text=mandate_text or str(draft.get("mandate") or ""),
@@ -462,12 +485,15 @@ def _build_agent_system_note(
     instruments = ", ".join(mc.get("allowed_instruments") or list(profile.allowed_instruments))
     constraints = dict(proposal.get("constraints") or {})
     sym_line = ", ".join(symbols)
+    observe_note = ""
+    if str(mc.get("agent_mode") or "").lower() == "observe":
+        observe_note = " Observe-only agent — post watch reports; do not place orders or create trade widgets unless the user explicitly asks to trade."
     base = (
         f"You are autonomous agent {agent_id} for {profile.market} ({sym_line}). "
         f"Confirmed mandate (user tapped Confirm on proposal {proposal.get('proposal_id')}): "
         f"instruments={instruments}, "
         f"holding={mc.get('holding_period')}, flatten={mc.get('flatten_policy')}, "
-        f"product={mc.get('product_type')}, mode={constraints.get('mode') or profile.mode}. "
+        f"product={mc.get('product_type')}, mode={constraints.get('mode') or profile.mode}.{observe_note} "
         "Trust get_autonomous_agent_status for this agent_id on each turn. "
         "Do not apply rules from other agents or pre-commit orchestrator chat about other symbols. "
         f"{prefetch_note}"
@@ -583,6 +609,7 @@ def _commit_autonomous_agent_locked(
     session_cfg: dict[str, Any] = {
         "session_kind": "autonomous_agent",
         "autonomous_agent_id": agent_id,
+        "agent_mode": fresh_mandate_cfg.agent_mode,
         "symbols": symbols,
         "orchestrator": False,
         "options_advisor_autonomous": "options" in profile.allowed_instruments and profile.market == "IN",

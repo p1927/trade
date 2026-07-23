@@ -207,6 +207,10 @@ def orchestrator_has_propose_intent(user_message: str, assistant_text: str = "")
 
 def _should_default_index_options(symbols: list[str], text: str) -> bool:
     """Default NIFTY/BANKNIFTY autonomous agents to options when instrument type is ambiguous."""
+    from trade_integrations.autonomous_agents.mandate_config import detect_observe_intent
+
+    if detect_observe_intent(text):
+        return False
     sym0 = str(symbols[0] if symbols else "").strip().upper()
     if sym0 not in _INDEX_SYMBOLS:
         return False
@@ -233,6 +237,10 @@ def _default_symbol(*, text: str) -> str | None:
 
 def _infer_mandate(text: str, symbols: list[str]) -> str:
     sym = symbols[0] if symbols else "NIFTY"
+    from trade_integrations.autonomous_agents.mandate_config import detect_observe_intent, observe_mandate_text
+
+    if detect_observe_intent(text):
+        return observe_mandate_text(sym)
     parts: list[str] = [f"Paper trade {sym} autonomously"]
     if _INTRADAY_RE.search(text):
         parts.append("intraday (flat by close)")
@@ -342,6 +350,13 @@ def build_auto_propose_kwargs(
     if "mandate" not in kwargs:
         kwargs["mandate"] = _infer_mandate(user_message, symbols)
 
+    from trade_integrations.autonomous_agents.mandate_config import detect_observe_intent
+
+    if detect_observe_intent(text):
+        kwargs["agent_mode"] = "observe"
+        kwargs["allowed_instruments"] = ["equity"]
+        kwargs["mandate"] = _infer_mandate(user_message, symbols)
+
     kwargs["user_text"] = user_message
     if _IN_HINT_RE.search(user_message) and not _us_market_explicit(user_message, symbols):
         kwargs["execution_market"] = "IN"
@@ -356,7 +371,6 @@ def build_auto_propose_kwargs(
         kwargs["allowed_instruments"] = ["options"]
 
     return kwargs
-
 
 def maybe_auto_propose_after_orchestrator_turn(
     *,
