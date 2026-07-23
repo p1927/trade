@@ -46,6 +46,10 @@ def test_legacy_ingest_skips_staging(hub_tmp, monkeypatch):
     monkeypatch.setattr(staging_store, "is_entity_pipeline_enabled", lambda: True)
     monkeypatch.setattr(staging_store, "is_legacy_ingest_enabled", lambda: True)
     monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.probe.check_ingest_allowed",
+        lambda **_: {"blocked": False, "reason": ""},
+    )
+    monkeypatch.setattr(
         engine,
         "load_aligned_factor_history",
         lambda **_: __import__("pandas").DataFrame(

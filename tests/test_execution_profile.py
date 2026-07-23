@@ -275,7 +275,23 @@ def test_widget_instrument_enforcement() -> None:
     assert widget_instrument_class(equity_widget) == "equity"
 
 
-def test_us_options_profile_fragment() -> None:
+def test_us_options_profile_fragment(monkeypatch) -> None:
+    from trade_integrations.openalgo.market_context import MarketContext
+
+    class FakeAdapter:
+        def market_context(self):
+            return MarketContext(
+                analyze_mode=True,
+                execution_venue="paper-api.alpaca.markets",
+                positions_authority="alpaca.paper",
+                market_region="US",
+                data_broker="alpaca",
+            )
+
+    monkeypatch.setattr(
+        "trade_integrations.execution.trading_port.adapter_for_agent",
+        lambda agent: FakeAdapter(),
+    )
     cfg = resolve_mandate_config(
         symbols=["SPY"],
         execution_market="US",

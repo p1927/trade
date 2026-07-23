@@ -6,7 +6,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from trade_integrations.auto_paper.mandate_config import MandateConfig, mandate_config_from_agent, primary_instrument_from_mandate
+from trade_integrations.autonomous_agents.mandate import (
+    MandateConfig,
+    mandate_config_from_agent,
+    primary_instrument_from_mandate,
+)
 from trade_integrations.openalgo.market_context import MarketContext
 
 logger = logging.getLogger(__name__)

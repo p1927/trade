@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent, mandate_config_from_session
-from trade_integrations.auto_paper.mandate_enforcer import assert_can_execute, assert_widget_allowed, MandateViolation
-from trade_integrations.auto_paper.config import get_auto_paper_config
+from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent, mandate_config_from_session
+from trade_integrations.autonomous_agents.mandate_enforcer import assert_can_execute, assert_widget_allowed, MandateViolation
 from trade_integrations.auto_paper.session_store import load_session
 from trade_integrations.execution.profile import resolve_profile
 from trade_integrations.autonomous_agents.store import get_agent
@@ -175,9 +174,13 @@ def execute_widget_via_bridge(
     else:
         session = load_session(autonomous_agent_id=agent_id)
         mandate = mandate_config_from_session(session)
-        cfg = get_auto_paper_config()
         try:
-            assert_can_execute(session, cfg=cfg, confidence=confidence)
+            assert_can_execute(
+                session,
+                mandate=mandate,
+                confidence=confidence,
+                require_active_session=bool(session.get("enabled")),
+            )
             assert_widget_allowed(widget, mandate)
         except MandateViolation as exc:
             raise ValueError(str(exc)) from exc
@@ -221,9 +224,9 @@ def execute_widget_via_bridge(
         raise RuntimeError(f"Bridge execution failed: {err}")
 
     from trade_integrations.monitor.execution_ledger import record_execution_from_widget
-    from trade_integrations.auto_paper.lifecycle import on_basket_executed
+    from trade_integrations.autonomous_agents.lifecycle import on_basket_executed
     from trade_integrations.auto_paper.session_store import save_session
-    from trade_integrations.auto_paper.outcome_ledger import append_outcome
+    from trade_integrations.autonomous_agents.outcome_ledger import append_outcome
 
     record_execution_from_widget(widget, result.get("results") or [result], execution_mode=execution_mode)
     session = load_session(autonomous_agent_id=agent_id)

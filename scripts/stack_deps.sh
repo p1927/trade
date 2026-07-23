@@ -168,6 +168,11 @@ stack_verify_dependencies() {
         failures=$((failures + 1))
       fi
     fi
+    if stack_probe_llm_wiki; then
+      echo "  ✓ LLM-Wiki probe (news ingest)"
+    else
+      echo "  ✗ LLM-Wiki probe failed — start LLM Wiki.app and set LLM_WIKI_PROJECT_ID" >&2
+    fi
   fi
 
   if [[ "$tier" == "app" || "$tier" == "all" ]]; then

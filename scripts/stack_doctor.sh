@@ -117,6 +117,12 @@ else
   echo "  · Redis       skipped (NAUTILUS_WATCH_ENABLE=0)"
 fi
 
+if stack_probe_llm_wiki; then
+  stack_print_llm_wiki_status
+else
+  echo "  ✗ LLM-Wiki  not running — start LLM Wiki.app and set LLM_WIKI_PROJECT_ID for news ingest"
+fi
+
 echo "══════════════════════════════════════════════════════════"
 if (( failures == 0 )); then
   echo "  Doctor: all critical checks passed"

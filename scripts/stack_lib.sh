@@ -1477,6 +1477,7 @@ stack_ensure_nautilus_watch() {
 
 stack_print_ready() {
   local openalgo_port api_port ui_port
+  stack_load_env
   openalgo_port="$(stack_openalgo_port)"
   api_port="$(stack_vibe_api_port)"
   ui_port="$(stack_vibe_ui_port)"
@@ -1492,6 +1493,10 @@ stack_print_ready() {
   echo "Stop: trade down"
   echo "Heal: trade restart"
   echo "Status: trade status"
+  if ! stack_probe_llm_wiki; then
+    echo ""
+    echo "News ingest blocked: start LLM Wiki.app and set LLM_WIKI_PROJECT_ID in .env"
+  fi
 }
 
 stack_status_vibe_stack() {
