@@ -52,12 +52,18 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
         return False
 
     now = datetime.now(timezone.utc).isoformat()
-    agent["bootstrap_status"] = "awaiting_plan_approval"
-    agent["plan_approval_required"] = True
+    agent["bootstrap_status"] = "done"
+    agent["plan_approved_at"] = now
     agent["bootstrap_completed_at"] = now
+    agent.pop("plan_approval_required", None)
     agent.pop("bootstrap_error", None)
     save_agent(agent)
-    logger.info("agent %s awaiting plan approval", agent_id)
+    logger.info("agent %s bootstrap complete — autonomous watch active", agent_id)
+
+    from trade_integrations.autonomous_agents.plan_approval import activate_agent_watch_after_approval
+
+    activate_agent_watch_after_approval(agent_id, agent)
+
     try:
         import sys
 
@@ -70,7 +76,8 @@ def finalize_bootstrap_if_ready(agent_id: str) -> bool:
                 "autonomous_agent.plan_ready",
                 {
                     "agent_id": agent_id,
-                    "bootstrap_status": "awaiting_plan_approval",
+                    "bootstrap_status": "done",
+                    "plan_approved_at": now,
                     "strategy": (agent.get("thesis") or {}).get("strategy"),
                 },
             )
@@ -91,9 +98,30 @@ async def bootstrap_agent(agent_id: str) -> None:
     if not agent or str(agent.get("status")) != "running":
         return
 
+    bootstrap = str(agent.get("bootstrap_status") or "")
+    if bootstrap == "done":
+        return
+    if agent.get("streaming"):
+        logger.info("skip bootstrap for %s: turn already in flight", agent_id)
+        return
+    if bootstrap == "running":
+        logger.info("skip bootstrap for %s: bootstrap already running", agent_id)
+        return
+    if bootstrap not in {"pending", "failed", ""}:
+        return
+
     agent["bootstrap_status"] = "running"
     agent.pop("bootstrap_error", None)
     save_agent(agent)
+
+    session_id = str(agent.get("vibe_session_id") or "")
+    if session_id:
+        from trade_integrations.autonomous_agents.watch import _append_watch_system_message
+
+        await _append_watch_system_message(
+            session_id,
+            "Bootstrap starting — running first watch tick and research turn. Activity will appear here shortly.",
+        )
 
     try:
         from trade_integrations.stock_simulator.integration import is_simulator_active
@@ -110,9 +138,29 @@ async def bootstrap_agent(agent_id: str) -> None:
         logger.debug("sim eval run start skipped", exc_info=True)
 
     try:
-        await asyncio.gather(run_watch_tick(agent_id), _prefetch_bootstrap_research(agent_id))
+        # Warm hub/debate in background — do not block the first Vibe turn on TradingAgents.
+        prefetch_task = asyncio.create_task(
+            _prefetch_bootstrap_research(agent_id),
+            name=f"bootstrap-prefetch-{agent_id[:12]}",
+        )
+
+        def _log_prefetch_result(task: asyncio.Task) -> None:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("bootstrap prefetch failed for %s: %s", agent_id, exc)
+
+        prefetch_task.add_done_callback(_log_prefetch_result)
+
+        await run_watch_tick(agent_id)
         dispatched = await dispatch_full_reasoning(agent_id, turn_kind="bootstrap")
         if not dispatched:
+            latest = get_agent(agent_id) or agent
+            if latest.get("streaming"):
+                logger.info("bootstrap dispatch skipped for %s: turn already in flight", agent_id)
+                return
             raise RuntimeError("bootstrap research turn was not dispatched (session unavailable or turn in flight)")
     except Exception as exc:
         logger.warning("bootstrap failed for %s: %s", agent_id, exc, exc_info=True)

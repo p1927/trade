@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from trade_integrations.dataflows.company_research.india_symbols import (
     india_index_tickers,
@@ -15,7 +15,7 @@ from trade_integrations.dataflows.company_research.market import Market, detect_
 from trade_integrations.dataflows.company_research.us_symbols import is_us_known_symbol
 
 MarketCode = Literal["IN", "US"]
-Confidence = Literal["explicit", "registry", "hint", "default"]
+Confidence = Literal["explicit", "connector", "registry", "hint", "default"]
 
 _INDEX_ALIASES: dict[str, str] = {
     "NIFTY50": "NIFTY",
@@ -120,7 +120,14 @@ def resolve_execution_market(
     user_text: str = "",
     market_hint: str | None = None,
     session_config: dict | None = None,
+    connector_context: Any | None = None,
 ) -> MarketResolution:
+    from trade_integrations.execution.connector_context import (
+        ConnectorExecutionContext,
+        load_active_connector_context,
+        symbol_allowed_for_connector_market,
+    )
+
     canon = canonicalize_autonomous_symbol(symbol, user_text=user_text)
     sym = canon.canonical_symbol
     warnings = list(canon.warnings)
@@ -139,6 +146,25 @@ def resolve_execution_market(
             confidence="explicit",
             warnings=tuple(warnings),
         )
+
+    ctx: ConnectorExecutionContext | None = connector_context
+    if ctx is None:
+        agent = None
+        if session_config and session_config.get("connector_profile_id"):
+            agent = {"connector_profile_id": session_config.get("connector_profile_id")}
+        ctx = load_active_connector_context(agent=agent)
+    if ctx is not None:
+        allowed, err = symbol_allowed_for_connector_market(sym, ctx.market)
+        if err:
+            warnings.append(err)
+        if allowed:
+            return MarketResolution(
+                market=ctx.market,
+                canonical_symbol=sym,
+                openalgo_exchange=_openalgo_exchange_for(sym, ctx.market),
+                confidence="connector",
+                warnings=tuple(warnings),
+            )
 
     try:
         detected = detect_market(sym)

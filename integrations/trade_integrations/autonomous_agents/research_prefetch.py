@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from trade_integrations.autonomous_agents.store import get_agent
@@ -11,6 +12,8 @@ from trade_integrations.execution.routing_context import (
     india_debate_eligible_for_agent,
     research_kinds_for_agent,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def prefetch_bootstrap_research(agent_id: str) -> None:
@@ -33,11 +36,18 @@ async def prefetch_bootstrap_research(agent_id: str) -> None:
         eligible, _ = india_debate_eligible_for_agent(agent, sym)
         if not eligible:
             return
+        from trade_integrations.context.hub import is_agent_debate_cache_fresh
+
+        if is_agent_debate_cache_fresh(sym):
+            return
         asset_type = debate_asset_type_for_agent(agent)
-        run_agent_debate_locked(sym, asset_type=asset_type)
+        run_agent_debate_locked(sym, asset_type=asset_type, allow_stale_cache=True)
 
     await asyncio.to_thread(hub, refresh=False)
-    await asyncio.to_thread(debate)
+    try:
+        await asyncio.to_thread(debate)
+    except Exception as exc:
+        logger.warning("bootstrap debate prefetch skipped for %s: %s", sym, exc)
 
 
 async def prefetch_turn_research(agent_id: str, *, turn_kind: str = "research") -> None:

@@ -187,13 +187,20 @@ def record_reflection_on_exit(
     rationale = str(decision_entry.get("rationale") or "")
 
     pnl: float | None = None
-    try:
-        pnl_block = _session_pnl_block(session, focus_ticker=str(symbol))
-        raw = pnl_block.get("day_pnl_inr")
-        if raw is not None:
-            pnl = float(raw)
-    except Exception:
-        pass
+    raw_pnl = decision_entry.get("pnl_inr")
+    if raw_pnl is not None:
+        try:
+            pnl = float(raw_pnl)
+        except (TypeError, ValueError):
+            pnl = None
+    if pnl is None:
+        try:
+            pnl_block = _session_pnl_block(session, focus_ticker=str(symbol))
+            raw = pnl_block.get("day_pnl_inr")
+            if raw is not None:
+                pnl = float(raw)
+        except Exception:
+            pass
 
     summary = (
         f"Agent {agent_id} EXIT on {symbol}"

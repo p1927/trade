@@ -204,6 +204,15 @@ def _paper_runtime() -> dict[str, Any]:
 
 def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
     """Trader brain state — distinct from HTTP infra health."""
+    if str(agent.get("status") or "") == "draft":
+        return {
+            "status": "draft",
+            "scheduler_health": "disabled",
+            "nautilus_watch_enabled": False,
+            "nautilus_state": "off",
+            "watch_path": "draft",
+        }
+
     agent_id = str(agent.get("id") or "")
     mc = dict(agent.get("mandate_config") or {})
     alert_rules = dict(agent.get("alert_rules") or mc.get("alert_rules") or {})
@@ -245,13 +254,13 @@ def build_agent_runtime(agent: dict[str, Any]) -> dict[str, Any]:
         if not nautilus_on:
             watch_path = "degraded"
         elif in_registry and nautilus_alive:
-            watch_path = "nautilus_alpaca_detached" if profile.is_us else "nautilus_detached"
+            watch_path = "nautilus_detached"
         elif in_registry:
             watch_path = "nautilus_scheduler_poll"
         elif nautilus_alive:
             watch_path = "nautilus_scheduler_poll"
         else:
-            watch_path = "nautilus_scheduler_poll" if profile.uses_nautilus_handoff else "nautilus_alpaca_poll"
+            watch_path = "nautilus_scheduler_poll"
     elif linked and session.get("nautilus_bridge_mode"):
         watch_path = "nautilus_bridge"
     else:

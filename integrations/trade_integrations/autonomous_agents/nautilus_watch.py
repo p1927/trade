@@ -16,6 +16,61 @@ logger = logging.getLogger(__name__)
 _LAUNCH_VERIFY_SEC = 2.0
 
 
+def _fetch_market_context_generation(agent_id: str) -> str | None:
+    """Fetch authoritative context_generation once for handoff stamping."""
+    agent_id = str(agent_id or "").strip()
+    if not agent_id:
+        return None
+    agent: dict[str, Any] | None = None
+    try:
+        from trade_integrations.autonomous_agents.store import get_agent
+        from trade_integrations.execution.trading_port import adapter_for_agent
+
+        agent = get_agent(agent_id)
+        if agent:
+            return adapter_for_agent(agent).market_context().context_generation
+    except Exception as exc:
+        logger.debug("trading port market_context failed for %s: %s", agent_id, exc)
+    if agent:
+        try:
+            from trade_integrations.execution.connector_context import load_active_connector_context
+
+            ctx = load_active_connector_context(agent=agent)
+            if ctx and ctx.execution_path != "openalgo":
+                logger.warning(
+                    "skip OpenAlgo fallback handoff stamp for %s (execution_path=%s)",
+                    agent_id,
+                    ctx.execution_path,
+                )
+                return None
+        except Exception:
+            logger.debug("connector context unavailable for handoff stamp %s", agent_id, exc_info=True)
+    try:
+        from nautilus_openalgo_bridge.openalgo_client import get_openalgo_client
+
+        return get_openalgo_client().get_market_context().context_generation
+    except Exception as exc:
+        logger.warning("market context fetch failed for handoff stamp %s: %s", agent_id, exc)
+        return None
+
+
+def _stamp_handoff_market_context(agent_id: str) -> None:
+    generation = _fetch_market_context_generation(agent_id)
+    if not generation:
+        return
+    try:
+        from nautilus_openalgo_bridge.handoff import stamp_handoff_context_generation
+
+        stamp_handoff_context_generation(agent_id, generation)
+    except Exception as exc:
+        logger.warning("handoff context_generation stamp failed for %s: %s", agent_id, exc)
+
+
+def _stamp_registry_handoff_contexts() -> None:
+    for agent_id in get_registry_agent_ids():
+        _stamp_handoff_market_context(agent_id)
+
+
 def _trade_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -316,6 +371,7 @@ def _launch_watch(*, use_registry: bool = True) -> None:
     registry = load_registry()
     registry["node_pid"] = proc.pid
     save_registry(registry)
+    _stamp_registry_handoff_contexts()
 
     time.sleep(_LAUNCH_VERIFY_SEC)
     if not _process_alive(proc.pid):
@@ -340,6 +396,15 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
     if not agent_id or not _watch_enabled():
         return None
 
+    try:
+        from trade_integrations.autonomous_agents.store import get_agent
+
+        agent = get_agent(agent_id)
+        if agent and str(agent.get("status") or "") == "draft":
+            return None
+    except Exception:
+        pass
+
     reconcile_stale_watch_pid()
     try:
         from trade_integrations.watch_registry.store import (
@@ -354,6 +419,8 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
 
     if not is_agent_in_registry(agent_id):
         return f"Nautilus watch not started — no active watches for {agent_id}"
+
+    _stamp_handoff_market_context(agent_id)
 
     pid = _read_pid()
     if pid is not None and _process_alive(pid):

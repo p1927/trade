@@ -31,6 +31,7 @@ from trade_integrations.autonomous_agents.runtime_status import build_stack_heal
 from trade_integrations.autonomous_agents.store import (
     acquire_proposal_commit_lock,
     delete_proposal,
+    find_agent_by_vibe_session,
     get_agent,
     list_agents,
     load_proposal,
@@ -89,13 +90,11 @@ def _validate_proposal_committable(proposal: dict[str, Any]) -> None:
 
     symbols = list(proposal.get("symbols") or [])
     routing_errors = validate_proposal_routing(proposal)
-    symbol_errors = validate_proposal_symbols(symbols)
+    symbol_errors = validate_proposal_symbols(
+        symbols,
+        execution_market=str(proposal.get("execution_market") or "IN"),
+    )
     fresh_errors = list(routing_errors) + list(symbol_errors)
-    exec_market = str(proposal.get("execution_market") or "").upper()
-    if exec_market == "US":
-        fresh_errors.append(
-            "US autonomous agents are not enabled until US execution profile exists — use /agent for US research"
-        )
     for sym in symbols:
         eligible, reason = _debate_eligibility_for_symbol(sym)
         if not eligible and reason:
@@ -174,18 +173,36 @@ def _user_text_for_routing(kwargs: dict[str, Any], draft: dict[str, Any]) -> str
 
 def validate_proposal_routing(proposal: dict[str, Any]) -> list[str]:
     """Return blocking errors when execution market/backend disagree with symbols."""
+    from trade_integrations.execution.connector_context import (
+        connector_execution_market,
+        connector_from_profile_id,
+        symbol_allowed_for_connector_market,
+    )
+
     errors: list[str] = []
     market = str(proposal.get("execution_market") or "").upper()
     backend = str(proposal.get("execution_backend") or "").lower()
     symbols = list(proposal.get("symbols") or [])
     user_text = str(proposal.get("mandate") or "")
 
+    connector_id = str(proposal.get("connector_profile_id") or "").strip().lower()
+    if connector_id and market in {"IN", "US"}:
+        conn_market = connector_execution_market(connector_from_profile_id(connector_id))
+        if conn_market != market:
+            errors.append(
+                f"execution_market {market} disagrees with connector profile "
+                f"{connector_id} ({conn_market})."
+            )
+
     if market == "IN" and backend == "alpaca":
         errors.append("India execution_market cannot use Alpaca backend.")
-    if market == "US" and backend == "openalgo":
-        errors.append("US execution_market cannot use OpenAlgo backend.")
 
     for sym in symbols:
+        if market in {"IN", "US"}:
+            allowed, err = symbol_allowed_for_connector_market(str(sym), market)  # type: ignore[arg-type]
+            if err and not allowed:
+                errors.append(err)
+            continue
         expected = symbol_execution_market(str(sym), user_text=user_text)
         if expected == "IN" and market == "US":
             errors.append(f"Symbol {sym} is India-listed but execution_market is US.")
@@ -218,14 +235,28 @@ def _debate_eligibility_for_symbol(symbol: str) -> tuple[bool, str | None]:
     return debate_eligible_for_ticker(str(symbol or "").strip())
 
 
-def validate_proposal_symbols(symbols: list[str]) -> list[str]:
-    """Return blocking errors when symbols are not recognized."""
+def validate_proposal_symbols(symbols: list[str], *, execution_market: str = "IN") -> list[str]:
+    """Return blocking errors when symbols are not recognized for the connector market."""
+    errors: list[str] = []
+    market = str(execution_market or "IN").upper()
+    if market == "US":
+        from trade_integrations.dataflows.company_research.us_symbols import is_us_known_symbol
+
+        for sym in symbols:
+            raw = str(sym or "").strip().upper()
+            if not raw:
+                continue
+            if is_us_known_symbol(raw):
+                continue
+            errors.append(
+                f"Unknown US symbol {raw} for Alpaca connector — verify ticker or switch to OpenAlgo for India."
+            )
+        return errors
+
     from trade_integrations.dataflows.symbol_registry.openalgo_registry import (
         is_symbol_known_for_proposal,
         search_india_symbols,
     )
-
-    errors: list[str] = []
     for sym in symbols:
         raw = str(sym or "").strip().upper()
         if not raw:
@@ -278,10 +309,14 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
             "message": live_err,
         }
     user_text = _user_text_for_routing(kwargs, draft)
+    from trade_integrations.execution.connector_context import load_active_connector_context
+
+    connector_ctx = load_active_connector_context()
     symbols, resolution, routing_warnings = resolve_proposal_symbols(
         list(draft.get("symbols") or []),
         user_text=user_text,
         market_hint=kwargs.get("execution_market"),
+        session_config={"connector_profile_id": connector_ctx.profile_id} if connector_ctx else None,
     )
     draft["symbols"] = symbols
     missing = _missing_fields(draft)
@@ -333,6 +368,7 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
         "symbols": draft["symbols"],
         "execution_market": exec_market,
         "execution_backend": profile.backend,
+        "connector_profile_id": connector_ctx.profile_id if connector_ctx else None,
         "stack_health": build_stack_health(),
         "name": draft["name"],
         "mandate": draft["mandate"],
@@ -359,12 +395,19 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     }
 
     orch_sid = str(proposal.get("orchestrator_session_id") or draft.get("orchestrator_session_id") or "").strip()
+    draft_agent_id = str(kwargs.get("draft_agent_id") or "").strip()
+    if not draft_agent_id and orch_sid:
+        bound = find_agent_by_vibe_session(orch_sid, status="draft")
+        if bound:
+            draft_agent_id = str(bound.get("id") or "")
     if orch_sid:
         proposal["orchestrator_session_id"] = orch_sid
         proposal["session_id"] = orch_sid
+    if draft_agent_id:
+        proposal["draft_agent_id"] = draft_agent_id
 
     routing_errors = validate_proposal_routing(proposal)
-    symbol_errors = validate_proposal_symbols(symbols)
+    symbol_errors = validate_proposal_symbols(symbols, execution_market=exec_market)
     if symbol_errors:
         routing_errors = list(routing_errors) + symbol_errors
         if "symbols" not in missing:
@@ -430,7 +473,7 @@ def _build_agent_system_note(
         f"{prefetch_note}"
     )
     if profile.is_us:
-        return base + " Execution via Alpaca paper tools."
+        return base + " Execution via OpenAlgo/Nautilus bridge (Alpaca broker plugin for US)."
     return base + " Execution via OpenAlgo/Nautilus bridge."
 
 
@@ -491,7 +534,16 @@ def _commit_autonomous_agent_locked(
     session_service: Any,
     orchestrator_session_id: str | None,
 ) -> dict[str, Any]:
-    agent_id = new_agent_id()
+    orch_sid = str(orchestrator_session_id or proposal.get("orchestrator_session_id") or "").strip()
+    draft_agent_id = str(proposal.get("draft_agent_id") or "").strip()
+    existing_draft = get_agent(draft_agent_id) if draft_agent_id else None
+    if existing_draft and str(existing_draft.get("status") or "") != "draft":
+        existing_draft = None
+    if existing_draft is None and orch_sid:
+        existing_draft = find_agent_by_vibe_session(orch_sid, status="draft")
+
+    agent_id = str(existing_draft.get("id") or "") if existing_draft else new_agent_id()
+    draft_created_at = str(existing_draft.get("created_at") or "") if existing_draft else ""
     symbols = list(proposal.get("symbols") or [])
     name = str(proposal.get("name") or "Autonomous agent")
     primary_symbol = symbols[0] if symbols else "NIFTY"
@@ -537,6 +589,7 @@ def _commit_autonomous_agent_locked(
         "autonomous": True,
         "execution_market": exec_market,
         "execution_profile": profile.prompt_fragment_id,
+        "connector_profile_id": proposal.get("connector_profile_id"),
     }
     _prefetch_note = (
         "Hub `[research_context]` prepended for this session's symbol is normal prefetch — "
@@ -596,6 +649,7 @@ def _commit_autonomous_agent_locked(
         "symbols": symbols,
         "execution_market": exec_market,
         "execution_backend": profile.backend,
+        "connector_profile_id": proposal.get("connector_profile_id"),
         "mandate": proposal.get("mandate"),
         "mandate_config": fresh_mandate_cfg.to_dict(),
         "watch_spec": dict(fresh_mandate_cfg.watch_spec or proposal.get("watch_spec") or {}),
@@ -611,7 +665,7 @@ def _commit_autonomous_agent_locked(
         "bootstrap_status": "pending",
         "proposal_id": proposal_id,
         "orchestrator_session_id": orchestrator_session_id or proposal.get("orchestrator_session_id"),
-        "created_at": now,
+        "created_at": draft_created_at or now,
     }
     save_agent(agent)
 
@@ -650,6 +704,22 @@ def _commit_autonomous_agent_locked(
         agent["infra_last_attempt_at"] = now
         save_agent(agent)
         try:
+            from trade_integrations.autonomous_agents.session_promotion import append_autonomous_system_message
+
+            pending = ", ".join(str(item) for item in blocking if str(item).strip())
+            append_autonomous_system_message(
+                session_service=session_service,
+                session_id=str(vibe_session.session_id),
+                content=(
+                    "**Bootstrap deferred** — infrastructure is not ready, so watch and research turns "
+                    "will not start until you resume the agent.\n\n"
+                    f"Pending: {pending or 'infra not ready'}\n\n"
+                    "Run `trade status` or tap **Resume** once OpenAlgo / Nautilus / paper session is healthy."
+                ),
+            )
+        except Exception:
+            logger.debug("infra pause system message skipped for %s", agent_id, exc_info=True)
+        try:
             from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
 
             sync_nautilus_registry_from_watches(restart_if_changed=True)
@@ -667,10 +737,16 @@ def _commit_autonomous_agent_locked(
     return result
 
 
+def _reject_draft_lifecycle_mutation(agent: dict[str, Any], *, action: str) -> None:
+    if str(agent.get("status") or "") == "draft":
+        raise ValueError(f"draft agents cannot be {action}; delete the draft or confirm the proposal first")
+
+
 def stop_autonomous_agent(agent_id: str) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent:
         raise ValueError(f"agent not found: {agent_id}")
+    _reject_draft_lifecycle_mutation(agent, action="stopped")
     agent["status"] = "stopped"
     agent["stopped_at"] = datetime.now(timezone.utc).isoformat()
     save_agent(agent)
@@ -681,12 +757,11 @@ def stop_autonomous_agent(agent_id: str) -> dict[str, Any]:
     except Exception:
         pass
     try:
-        from trade_integrations.auto_paper.session_store import load_session
-        from trade_integrations.auto_paper.mcp_actions import stop_auto_paper
+        from trade_integrations.auto_paper.session_store import load_session, stop_session
 
         session = load_session(autonomous_agent_id=agent_id)
         if session.get("enabled") and str(session.get("autonomous_agent_id") or "") == agent_id:
-            stop_auto_paper(unregister_scheduler=True)
+            stop_session(autonomous_agent_id=agent_id)
     except Exception:
         pass
     try:
@@ -702,6 +777,7 @@ def pause_autonomous_agent(agent_id: str) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent:
         raise ValueError(f"agent not found: {agent_id}")
+    _reject_draft_lifecycle_mutation(agent, action="paused")
     agent["status"] = "paused"
     agent["pause_reason"] = "user"
     save_agent(agent)
@@ -718,6 +794,7 @@ def resume_autonomous_agent(agent_id: str) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent:
         raise ValueError(f"agent not found: {agent_id}")
+    _reject_draft_lifecycle_mutation(agent, action="resumed")
     if str(agent.get("status")) == "stopped":
         raise ValueError("stopped agents cannot resume; create a new agent")
 
@@ -756,29 +833,33 @@ def resume_autonomous_agent(agent_id: str) -> dict[str, Any]:
     return {"status": "ok", "agent": agent}
 
 
-def delete_autonomous_agent(agent_id: str) -> dict[str, Any]:
+def delete_autonomous_agent(
+    agent_id: str,
+    *,
+    session_service: Any | None = None,
+    flatten_positions: bool = False,
+) -> dict[str, Any]:
+    from trade_integrations.autonomous_agents.teardown import (
+        FlattenIncompleteError,
+        OpenPositionsConflictError,
+        OpenPositionsLookupError,
+        delete_active_autonomous_agent,
+        delete_draft_autonomous_agent,
+    )
+
     agent = get_agent(agent_id)
     if not agent:
         raise ValueError(f"agent not found: {agent_id}")
 
+    status = str(agent.get("status") or "")
+    if status == "draft":
+        result = delete_draft_autonomous_agent(agent_id, session_service=session_service)
+        return {"status": "ok", "deleted": agent_id, **result}
     try:
-        from trade_integrations.watch_registry.store import delete_watches_for_owner, sync_nautilus_registry_from_watches
-
-        delete_watches_for_owner(owner_kind="autonomous_agent", owner_id=agent_id)
-        sync_nautilus_registry_from_watches(restart_if_changed=True)
-    except Exception:
-        pass
-    try:
-        from nautilus_openalgo_bridge.handoff import clear_handoff
-
-        clear_handoff(agent_id)
-    except Exception:
-        pass
-
-    from trade_integrations.autonomous_agents.store import delete_agent
-
-    delete_agent(agent_id)
-    return {"status": "ok", "deleted": agent_id}
+        result = delete_active_autonomous_agent(agent_id, flatten_positions=flatten_positions)
+        return {"status": "ok", "deleted": agent_id, **result}
+    except (OpenPositionsConflictError, OpenPositionsLookupError, FlattenIncompleteError):
+        raise
 
 
 _INR_CLOSE_STRATEGIES = (
@@ -791,7 +872,7 @@ _INR_CLOSE_STRATEGIES = (
 
 
 def _flatten_all_positions(agents: list[dict[str, Any]]) -> dict[str, Any]:
-    """Best-effort flatten for OpenAlgo (India) and Alpaca (US) before agent teardown."""
+    """Best-effort flatten for OpenAlgo (all markets) before agent teardown."""
     result: dict[str, Any] = {"openalgo": None, "alpaca": []}
 
     try:
@@ -837,34 +918,6 @@ def _flatten_all_positions(agents: list[dict[str, Any]]) -> dict[str, Any]:
     except Exception as exc:
         result["openalgo"] = {"status": "error", "error": str(exc)}
 
-    us_symbols: set[str] = set()
-    try:
-        from trade_integrations.execution.profile import resolve_profile
-
-        for agent in agents:
-            if resolve_profile(agent=agent).is_us:
-                for sym in agent.get("symbols") or []:
-                    us_symbols.add(str(sym).upper())
-    except Exception:
-        pass
-
-    for sym in sorted(us_symbols):
-        row: dict[str, Any] = {"symbol": sym}
-        try:
-            from trade_integrations.dataflows.alpaca import close_alpaca_position, list_alpaca_positions
-
-            positions = list_alpaca_positions()
-            open_rows = [p for p in positions if str(p.get("symbol") or "").upper() == sym]
-            if not open_rows:
-                row["status"] = "no_positions"
-            else:
-                close_alpaca_position(sym)
-                row["status"] = "closed"
-        except Exception as exc:
-            row["status"] = "error"
-            row["error"] = str(exc)
-        result["alpaca"].append(row)
-
     return result
 
 
@@ -890,7 +943,7 @@ def _clear_bridge_artifacts() -> dict[str, int]:
     return counts
 
 
-def clear_all_autonomous_agents() -> dict[str, Any]:
+def clear_all_autonomous_agents(*, session_service: Any | None = None) -> dict[str, Any]:
     """Stop Nautilus watch, flatten positions, stop/delete every agent, clear bridge artifacts."""
     agents = list_agents()
     agent_ids = [str(a.get("id") or "") for a in agents if a.get("id")]
@@ -910,7 +963,11 @@ def clear_all_autonomous_agents() -> dict[str, Any]:
 
     for agent_id in agent_ids:
         try:
-            delete_autonomous_agent(agent_id)
+            delete_autonomous_agent(
+                agent_id,
+                session_service=session_service,
+                flatten_positions=True,
+            )
             deleted.append(agent_id)
         except Exception as exc:
             errors.append({"agent_id": agent_id, "phase": "delete", "error": str(exc)})
@@ -925,6 +982,13 @@ def clear_all_autonomous_agents() -> dict[str, Any]:
         pass
 
     artifacts = _clear_bridge_artifacts()
+
+    try:
+        from trade_integrations.autonomous_agents.store import clear_orchestrator_meta
+
+        clear_orchestrator_meta()
+    except Exception:
+        pass
 
     nautilus: dict[str, Any] = {}
     try:

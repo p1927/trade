@@ -166,11 +166,9 @@ async def test_us_agent_does_not_call_openalgo_poll(hub_tmp: Path, monkeypatch: 
         lambda: True,
     )
 
-    with patch("nautilus_openalgo_bridge.runtime.poll_loop.run_once") as mock_openalgo:
-        with patch("nautilus_openalgo_bridge.runtime.poll_loop.run_once_alpaca") as mock_alpaca:
-            mock_alpaca.return_value = {"alerts": [], "quotes": {}}
-            result = await run_watch_tick("aa_us")
-            mock_openalgo.assert_not_called()
-            mock_alpaca.assert_called_once()
+    with patch("nautilus_openalgo_bridge.runtime.poll_loop.run_once") as mock_run_once:
+        mock_run_once.return_value = {"alerts": [], "quotes": {}}
+        result = await run_watch_tick("aa_us")
+        mock_run_once.assert_called_once()
 
-    assert "nautilus_alpaca" in str(result.get("watch_path", ""))
+    assert "nautilus_scheduler_poll" in str(result.get("watch_path", ""))

@@ -32,10 +32,19 @@ def symbol_execution_market(
 
 
 def agent_execution_market(agent: dict[str, Any]) -> str:
-    """Resolve agent execution backend market from stored fields or symbols."""
+    """Resolve agent execution backend market from stored fields, connector, or symbols."""
     stored = str(agent.get("execution_market") or "").upper()
     if stored in {"IN", "US"}:
         return stored
+    if agent.get("connector_profile_id"):
+        try:
+            from trade_integrations.execution.connector_context import load_active_connector_context
+
+            ctx = load_active_connector_context(agent=agent)
+            if ctx is not None:
+                return ctx.market
+        except Exception:
+            pass
     symbols = list(agent.get("symbols") or [])
     if symbols:
         return symbol_execution_market(str(symbols[0]))

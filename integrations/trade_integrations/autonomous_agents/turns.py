@@ -90,6 +90,16 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 
     progress_block = format_strategy_progress_for_prompt(agent=agent, turn_kind=turn_kind)
 
+    revision_watch_block = ""
+    if turn_kind in {"strategy_revision", "post_execution"}:
+        revision_watch_block = (
+            "\n## Revision watch rules (mandatory)\n"
+            "- If REVISE/ADJUST changes strategy, stop, target, or entry levels, call "
+            "`set_agent_watch_spec` with the new levels **before** `record_autonomous_decision`.\n"
+            "- If you skip explicit watch update, the server auto-syncs watch rules when "
+            "stop/target/strategy differ from the current spec.\n"
+        )
+
     scorer_block = ""
     if routing.uses_strategy_scorer:
         tried = list(learning_snapshot.get("tried_strategies") or display_thesis.get("tried_strategies") or [])
@@ -105,8 +115,8 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
         turn_kind=turn_kind,
     )
 
-    market_label = "US (Alpaca paper)" if profile.is_us and profile.is_paper else (
-        "US (Alpaca live)" if profile.is_us else "IN (OpenAlgo analyzer)"
+    market_label = "US (OpenAlgo paper)" if profile.is_us and profile.is_paper else (
+        "US (OpenAlgo live)" if profile.is_us else "IN (OpenAlgo analyzer)"
     )
     instrument_line = ", ".join(profile.allowed_instruments)
 
@@ -126,7 +136,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
     if not profile.is_us:
         mandate_json = f"\n```json\n{json.dumps(mc.to_dict(), indent=2)}\n```\n"
 
-    title_suffix = " — US / Alpaca" if profile.is_us else ""
+    title_suffix = " — US / OpenAlgo" if profile.is_us else ""
 
     bootstrap_block = ""
     if turn_kind == "bootstrap":
@@ -162,7 +172,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
             "4. `set_agent_watch_spec(agent_id=\""
             f"{agent_id}\", strategy=<chosen_strategy>)` — watchers derived from strategy, not generic mandate dump.\n"
             "5. `record_autonomous_decision` with confidence, direction, strategy — **stop**.\n"
-            "6. User approves plan in UI before Nautilus revisions run.\n"
+            "6. Bootstrap completes autonomously — Nautilus watch activates; revision turns run on alerts.\n"
         )
 
     harness_block = ""
@@ -170,8 +180,9 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
         if profile.is_us:
             harness_block = (
                 "\n## Harness (paper verification)\n"
-                f"If flat with no open {focus} position, enter one paper long via the normal Alpaca flow "
-                "on this turn, then set watch rules and record the decision.\n"
+                f"If flat with no open {focus} position, enter one paper long via "
+                "`execute_auto_paper_basket` (OpenAlgo Alpaca plugin) on this turn, "
+                "then set watch rules and record the decision.\n"
             )
         elif profile.market == "IN":
             harness_block = (
@@ -184,8 +195,8 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
     elif agent.get("e2e_harness") and turn_kind == "strategy_revision" and profile.is_us and profile.is_paper:
         harness_block = (
             "\n## Harness (paper verification)\n"
-            f"If you hold {focus} shares, close the paper position via the normal Alpaca flow "
-            "and record EXIT.\n"
+            f"If you hold {focus} shares, close via `submit_bridge_execution_intent` (EXIT) "
+            "or let Nautilus stop rules fire, then record EXIT.\n"
         )
 
     skill_block = format_advisor_skill_block(routing, turn_kind=turn_kind)
@@ -215,7 +226,7 @@ def build_full_reasoning_prompt(*, agent: dict[str, Any], turn_kind: str = "rese
 {mandate}
 
 {mandate_json}
-{thesis_block}{guidance_block}{learning_block}{progress_block}{scorer_block}
+{thesis_block}{guidance_block}{learning_block}{progress_block}{revision_watch_block}{scorer_block}
 {skill_block}{index_flow_note}{bootstrap_block}{flow}
 {harness_block}
 {_RUNNING_AGENT_FOOTER}"""

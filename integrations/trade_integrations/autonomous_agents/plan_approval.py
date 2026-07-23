@@ -18,6 +18,25 @@ def is_awaiting_plan_approval(agent: dict[str, Any]) -> bool:
     return str(agent.get("bootstrap_status") or "") == "awaiting_plan_approval"
 
 
+def activate_agent_watch_after_approval(agent_id: str, agent: dict[str, Any]) -> None:
+    """Start Nautilus watch and sync handoff watch_spec after bootstrap/plan approval."""
+    try:
+        from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
+
+        ensure_nautilus_watch_for_agent(agent_id)
+    except Exception:
+        pass
+
+    watch_spec = dict(agent.get("watch_spec") or {})
+    if watch_spec.get("rules"):
+        try:
+            from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
+
+            sync_watch_spec_to_handoff(agent_id, watch_spec)
+        except Exception:
+            pass
+
+
 def approve_agent_plan(agent_id: str) -> dict[str, Any]:
     from trade_integrations.autonomous_agents.store import get_agent, save_agent
 
@@ -36,22 +55,7 @@ def approve_agent_plan(agent_id: str) -> dict[str, Any]:
     agent["bootstrap_completed_at"] = agent.get("bootstrap_completed_at") or now
     agent.pop("plan_approval_required", None)
     save_agent(agent)
-
-    try:
-        from trade_integrations.autonomous_agents.nautilus_watch import ensure_nautilus_watch_for_agent
-
-        ensure_nautilus_watch_for_agent(agent_id)
-    except Exception:
-        pass
-
-    watch_spec = dict(agent.get("watch_spec") or {})
-    if watch_spec.get("rules"):
-        try:
-            from nautilus_openalgo_bridge.handoff import sync_watch_spec_to_handoff
-
-            sync_watch_spec_to_handoff(agent_id, watch_spec)
-        except Exception:
-            pass
+    activate_agent_watch_after_approval(agent_id, agent)
 
     return {"status": "ok", "agent": agent, "plan_approved_at": now}
 

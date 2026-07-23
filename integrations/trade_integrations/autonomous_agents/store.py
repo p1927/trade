@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from trade_integrations.context.hub import get_hub_dir
+from trade_integrations.context import hub as hub_context
 
 _AGENT_DIR = "autonomous_agents"
 _PROPOSAL_DIR = "proposals"
@@ -19,7 +19,7 @@ _ORCHESTRATOR_FILE = "orchestrator.json"
 
 
 def _agents_root() -> Path:
-    root = get_hub_dir() / "_data" / _AGENT_DIR
+    root = hub_context.get_hub_dir() / "_data" / _AGENT_DIR
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -307,3 +307,137 @@ def get_active_orchestrator_session_id() -> str | None:
 
 def set_active_orchestrator_session_id(session_id: str) -> dict[str, Any]:
     return save_orchestrator_meta({"active_orchestrator_session_id": str(session_id).strip()})
+
+
+def find_agent_by_vibe_session(
+    vibe_session_id: str,
+    *,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    """Find agent record bound to a vibe session id."""
+    sid = str(vibe_session_id or "").strip()
+    if not sid:
+        return None
+    want_status = str(status or "").strip().lower()
+    for agent in list_agents():
+        if str(agent.get("vibe_session_id") or "") != sid:
+            continue
+        if want_status and str(agent.get("status") or "").lower() != want_status:
+            continue
+        return agent
+    return None
+
+
+def create_draft_agent(*, session_service: Any) -> dict[str, Any]:
+    """Create a draft agent card and fresh orchestrator vibe session."""
+    from trade_integrations.autonomous_agents.turns import build_orchestrator_system_note
+
+    if session_service is None:
+        raise ValueError("session runtime not enabled")
+
+    agent_id = new_agent_id()
+    now = datetime.now(timezone.utc).isoformat()
+    session = session_service.create_session(
+        title=f"autonomous:draft:{agent_id[:12]}",
+        config={
+            "session_kind": "autonomous_orchestrator",
+            "orchestrator": True,
+            "draft_agent_id": agent_id,
+            "system_note": build_orchestrator_system_note(),
+        },
+    )
+    agent: dict[str, Any] = {
+        "id": agent_id,
+        "type": "autonomous_agent.instance",
+        "name": "New agent draft",
+        "status": "draft",
+        "pause_reason": None,
+        "infra_pending": [],
+        "infra_last_attempt_at": None,
+        "vibe_session_id": session.session_id,
+        "symbols": [],
+        "execution_market": None,
+        "execution_backend": None,
+        "connector_profile_id": None,
+        "mandate": "",
+        "mandate_config": {},
+        "watch_spec": {},
+        "constraints": {},
+        "schedules": {},
+        "alert_rules": {},
+        "thesis": {},
+        "user_guidance": [],
+        "last_watch_at": None,
+        "last_full_reasoning_at": None,
+        "last_revision_at": None,
+        "streaming": False,
+        "bootstrap_status": None,
+        "proposal_id": None,
+        "orchestrator_session_id": session.session_id,
+        "created_at": now,
+    }
+    save_agent(agent)
+    return {
+        "status": "ok",
+        "agent_id": agent_id,
+        "session_id": session.session_id,
+        "agent": agent,
+    }
+
+
+def backfill_orphan_orchestrator_session(*, session_service: Any) -> dict[str, Any] | None:
+    """Migrate legacy orchestrator.json active session into a draft agent if unbound."""
+    if session_service is None:
+        return None
+    active_sid = get_active_orchestrator_session_id()
+    if not active_sid:
+        return None
+    if find_agent_by_vibe_session(active_sid):
+        return None
+    existing = session_service.get_session(active_sid)
+    if existing is None:
+        clear_orchestrator_meta(active_sid)
+        return None
+    try:
+        from src.session.orchestrator_profile import is_orchestrator_session
+    except ImportError:
+        is_orchestrator_session = lambda cfg: bool((cfg or {}).get("orchestrator"))  # noqa: E731
+
+    if not is_orchestrator_session(existing.config):
+        return None
+
+    agent_id = new_agent_id()
+    now = datetime.now(timezone.utc).isoformat()
+    draft_agent_id = str((existing.config or {}).get("draft_agent_id") or agent_id)
+    agent: dict[str, Any] = {
+        "id": draft_agent_id,
+        "type": "autonomous_agent.instance",
+        "name": existing.title or "Agent draft",
+        "status": "draft",
+        "pause_reason": None,
+        "infra_pending": [],
+        "infra_last_attempt_at": None,
+        "vibe_session_id": active_sid,
+        "symbols": [],
+        "execution_market": None,
+        "execution_backend": None,
+        "connector_profile_id": None,
+        "mandate": "",
+        "mandate_config": {},
+        "watch_spec": {},
+        "constraints": {},
+        "schedules": {},
+        "alert_rules": {},
+        "thesis": {},
+        "user_guidance": [],
+        "last_watch_at": None,
+        "last_full_reasoning_at": None,
+        "last_revision_at": None,
+        "streaming": False,
+        "bootstrap_status": None,
+        "proposal_id": None,
+        "orchestrator_session_id": active_sid,
+        "created_at": now,
+    }
+    save_agent(agent)
+    return {"status": "ok", "agent_id": draft_agent_id, "session_id": active_sid, "agent": agent, "backfilled": True}

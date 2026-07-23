@@ -46,6 +46,9 @@ def test_commit_reuses_orchestrator_session(monkeypatch, agents_hub):
             "watch_spec": {},
             "schedules": {"watch_ms": 420000, "research_ms": 5400000},
             "alert_rules": {},
+            "execution_market": "IN",
+            "execution_backend": "openalgo",
+            "connector_profile_id": "openalgo-paper-sdk",
             "orchestrator_session_id": orch_sid,
             "expires_at_ms": 9999999999999,
         }
@@ -121,6 +124,7 @@ def test_commit_reuses_orchestrator_session(monkeypatch, agents_hub):
     assert result["vibe_session_id"] == orch_sid
     assert created == []  # must NOT create a new session
     assert result["agent"]["vibe_session_id"] == orch_sid
+    assert result["agent"]["connector_profile_id"] == "openalgo-paper-sdk"
 
 
 def test_commit_trusts_proposal_execution_market(monkeypatch, agents_hub):
@@ -175,7 +179,7 @@ def test_commit_trusts_proposal_execution_market(monkeypatch, agents_hub):
     )
     monkeypatch.setattr(
         "trade_integrations.autonomous_agents.proposals.validate_proposal_symbols",
-        lambda _s: [],
+        lambda _s, execution_market="IN": [],
     )
     monkeypatch.setattr(
         "trade_integrations.autonomous_agents.market.symbol_execution_market",

@@ -57,16 +57,28 @@ def test_finalize_bootstrap_requires_last_decision(hub_tmp: Path):
     assert agent["bootstrap_status"] == "running"
 
 
-def test_finalize_bootstrap_marks_awaiting_plan_approval(hub_tmp: Path):
+def test_finalize_bootstrap_auto_approves_and_activates_watch(hub_tmp: Path, monkeypatch: pytest.MonkeyPatch):
+    watch_calls: list[str] = []
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.nautilus_watch.ensure_nautilus_watch_for_agent",
+        lambda aid: watch_calls.append(aid),
+    )
+    monkeypatch.setattr(
+        "nautilus_openalgo_bridge.handoff.sync_watch_spec_to_handoff",
+        lambda *_a, **_k: None,
+    )
     agent = _agent()
     agent["last_decision"] = {"decision": "HOLD", "at": "2026-07-16T20:00:00+00:00"}
     agent["thesis"] = {"recommended": {"legs": [{"symbol": "NIFTY", "side": "BUY", "qty": 1}]}}
+    agent["watch_spec"] = {"rules": [{"symbol": "NIFTY", "metric": "spot_move_pct", "threshold": 1.0}]}
     save_agent(agent)
     assert finalize_bootstrap_if_ready("aa_boot") is True
     updated = get_agent("aa_boot")
-    assert updated["bootstrap_status"] == "awaiting_plan_approval"
-    assert updated.get("plan_approval_required") is True
+    assert updated["bootstrap_status"] == "done"
+    assert updated.get("plan_approved_at")
+    assert not updated.get("plan_approval_required")
     assert updated.get("bootstrap_completed_at")
+    assert watch_calls == ["aa_boot"]
 
 
 def test_register_jobs_defers_research_while_bootstrap_pending(hub_tmp: Path):

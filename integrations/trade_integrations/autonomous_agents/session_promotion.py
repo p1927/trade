@@ -8,6 +8,21 @@ from src.session.models import Message
 from src.session.orchestrator_profile import is_orchestrator_session
 
 
+def append_autonomous_system_message(*, session_service: Any, session_id: str, content: str) -> None:
+    """Append a system line to an autonomous session and emit message.received SSE."""
+    sid = str(session_id or "").strip()
+    text = str(content or "").strip()
+    if not sid or not text:
+        return
+    message = Message(session_id=sid, role="system", content=text)
+    session_service.store.append_message(message)
+    session_service.event_bus.emit(
+        sid,
+        "message.received",
+        {"message_id": message.message_id, "role": "system", "content": message.content},
+    )
+
+
 def _mandate_divider_content(*, name: str, agent_id: str, proposal: dict[str, Any] | None) -> str:
     if not proposal:
         return (
@@ -54,19 +69,13 @@ def promote_orchestrator_session(
     session.title = f"autonomous:{name}"
     session_service.store.update_session(session)
 
-    transition = Message(
+    append_autonomous_system_message(
+        session_service=session_service,
         session_id=orch_sid,
-        role="system",
         content=(
             f"Autonomous agent **{name}** (`{agent_id}`) is now running. "
             "Bootstrap watch + research turns are starting — activity will appear below."
         ),
-    )
-    session_service.store.append_message(transition)
-    session_service.event_bus.emit(
-        orch_sid,
-        "message.received",
-        {"message_id": transition.message_id, "role": "system", "content": transition.content},
     )
 
     divider = Message(

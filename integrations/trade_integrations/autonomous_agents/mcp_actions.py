@@ -48,7 +48,7 @@ def mcp_get_status(agent_id: str | None = None) -> dict[str, Any]:
             "paper_session_active": paper_active if profile.uses_openalgo_auto_paper and paper_matches else None,
             "paper_session": session if profile.uses_openalgo_auto_paper and paper_matches else None,
             "paper_note": (
-                "US agent — use Alpaca paper tools; OpenAlgo INR auto_paper session not used."
+                "US agent — OpenAlgo Alpaca plugin is execution authority; INR sandbox P&L may not apply."
                 if profile.is_us
                 else (
                     "OpenAlgo paper session belongs to a different agent — ignore session P&L for this agent."
@@ -90,6 +90,9 @@ def _merge_thesis_from_decision(
     confidence: int | None = None,
     direction: str | None = None,
     strategy: str | None = None,
+    stop: float | None = None,
+    target: float | None = None,
+    spot: float | None = None,
 ) -> None:
     from datetime import datetime, timezone
 
@@ -103,6 +106,12 @@ def _merge_thesis_from_decision(
         thesis["direction"] = direction.strip()
     if strategy:
         thesis["strategy"] = strategy.strip()
+    if stop is not None:
+        thesis["stop"] = stop
+    if target is not None:
+        thesis["target"] = target
+    if spot is not None:
+        thesis["spot"] = spot
     agent["thesis"] = thesis
 
 
@@ -112,6 +121,9 @@ def _attach_decision_metadata(
     confidence: int | None,
     direction: str | None,
     strategy: str | None,
+    stop: float | None = None,
+    target: float | None = None,
+    spot: float | None = None,
 ) -> dict[str, Any] | None:
     if not entry:
         return entry
@@ -121,6 +133,12 @@ def _attach_decision_metadata(
         entry["direction"] = direction.strip()
     if strategy:
         entry["strategy"] = strategy.strip()
+    if stop is not None:
+        entry["stop"] = stop
+    if target is not None:
+        entry["target"] = target
+    if spot is not None:
+        entry["spot"] = spot
     return entry
 
 
@@ -135,6 +153,27 @@ def _record_sim_eval_decision(*, agent_id: str, decision: dict[str, Any]) -> Non
         pass
 
 
+def _apply_revision_watch_sync(
+    agent: dict[str, Any],
+    *,
+    decision: str,
+    strategy: str | None,
+    stop: float | None,
+    target: float | None,
+    spot: float | None,
+) -> dict[str, Any]:
+    from trade_integrations.autonomous_agents.revision_watch_spec import maybe_sync_watch_spec_on_revision
+
+    return maybe_sync_watch_spec_on_revision(
+        agent,
+        decision=decision,
+        strategy=strategy,
+        stop=stop,
+        target=target,
+        spot=spot,
+    )
+
+
 def mcp_record_decision(
     *,
     agent_id: str,
@@ -145,6 +184,10 @@ def mcp_record_decision(
     confidence: int | None = None,
     direction: str | None = None,
     strategy: str | None = None,
+    stop: float | None = None,
+    target: float | None = None,
+    spot: float | None = None,
+    pnl_inr: float | None = None,
 ) -> dict[str, Any]:
     from datetime import datetime, timezone
 
@@ -168,7 +211,12 @@ def mcp_record_decision(
             confidence=norm_confidence,
             direction=direction,
             strategy=strategy,
+            stop=stop,
+            target=target,
+            spot=spot,
         )
+        if pnl_inr is not None:
+            entry["pnl_inr"] = float(pnl_inr)
         agent["last_decision"] = entry
         _merge_thesis_from_decision(
             agent,
@@ -177,9 +225,21 @@ def mcp_record_decision(
             confidence=norm_confidence,
             direction=direction,
             strategy=strategy,
+            stop=stop,
+            target=target,
+            spot=spot,
         )
+        watch_sync = {}
         if entry["decision"] in {"REVISE", "ADJUST"}:
             agent["last_revision_at"] = entry["at"]
+            watch_sync = _apply_revision_watch_sync(
+                agent,
+                decision=decision,
+                strategy=strategy,
+                stop=stop,
+                target=target,
+                spot=spot,
+            )
         if entry["decision"] == "EXIT":
             from trade_integrations.autonomous_agents.agent_learning import apply_exit_learning
 
@@ -197,6 +257,7 @@ def mcp_record_decision(
             "agent_id": agent_id,
             "decision": entry,
             "thesis": agent.get("thesis"),
+            "watch_spec_sync": watch_sync or None,
             "paper_note": f"{profile.market} agent — decision stored on agent record (not OpenAlgo session).",
         }
 
@@ -217,7 +278,12 @@ def mcp_record_decision(
         confidence=norm_confidence,
         direction=direction,
         strategy=strategy,
+        stop=stop,
+        target=target,
+        spot=spot,
     )
+    if pnl_inr is not None:
+        last["pnl_inr"] = float(pnl_inr)
     agent["last_decision"] = last
     _merge_thesis_from_decision(
         agent,
@@ -226,10 +292,22 @@ def mcp_record_decision(
         confidence=norm_confidence,
         direction=direction,
         strategy=strategy,
+        stop=stop,
+        target=target,
+        spot=spot,
     )
     decision_upper = str(decision).upper()
+    watch_sync = {}
     if decision_upper in {"REVISE", "ADJUST"}:
         agent["last_revision_at"] = last.get("at")
+        watch_sync = _apply_revision_watch_sync(
+            agent,
+            decision=decision,
+            strategy=strategy,
+            stop=stop,
+            target=target,
+            spot=spot,
+        )
     if decision_upper == "EXIT":
         from nautilus_openalgo_bridge.handoff import clear_agent_position_state
         from trade_integrations.autonomous_agents.agent_learning import apply_exit_learning
@@ -260,6 +338,7 @@ def mcp_record_decision(
         "agent_id": agent_id,
         **{k: v for k, v in result.items() if k != "status"},
         "thesis": agent.get("thesis"),
+        "watch_spec_sync": watch_sync or None,
     }
 
 
@@ -272,6 +351,8 @@ def mcp_set_watch_spec(
     target: float | None = None,
     stop: float | None = None,
 ) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
     agent = get_agent(agent_id)
     if not agent:
         return {"status": "error", "error": f"agent not found: {agent_id}"}
@@ -299,6 +380,7 @@ def mcp_set_watch_spec(
         return {"status": "error", "error": "provide strategy name or explicit watch_spec"}
 
     agent["watch_spec"] = watch_spec
+    agent["watch_spec_updated_at"] = datetime.now(timezone.utc).isoformat()
     mc_dict = dict(agent.get("mandate_config") or {})
     mc_dict["watch_spec"] = watch_spec
     agent["mandate_config"] = mc_dict

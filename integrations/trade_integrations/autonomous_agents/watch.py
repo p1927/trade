@@ -107,12 +107,6 @@ def _nautilus_watch_enabled() -> bool:
 
 
 def _watch_path_label(profile, *, detached: bool, scheduler_poll: bool) -> str:
-    if profile.is_us:
-        if detached:
-            return "nautilus_alpaca_detached"
-        if scheduler_poll:
-            return "nautilus_alpaca_poll"
-        return "nautilus_alpaca"
     if detached:
         return "nautilus_detached"
     if scheduler_poll:
@@ -130,14 +124,13 @@ async def _run_nautilus_poll_tick(
     market: str = "IN",
 ) -> dict[str, Any]:
     """Scheduler inline poll for Nautilus watch rules."""
-    if market == "US":
-        from nautilus_openalgo_bridge.runtime.poll_loop import run_once_alpaca
+    from nautilus_openalgo_bridge.runtime.poll_loop import run_once
 
-        bridge = run_once_alpaca(agent_id=agent_id, trigger_vibe=True, process_intents=False)
-    else:
-        from nautilus_openalgo_bridge.runtime.poll_loop import run_once
-
-        bridge = run_once(agent_id=agent_id, trigger_vibe=True, process_intents=True)
+    bridge = run_once(
+        agent_id=agent_id,
+        trigger_vibe=True,
+        process_intents=bool(profile.uses_nautilus_handoff),
+    )
 
     alerts = list(bridge.get("alerts") or [])
     feedback = {
@@ -244,7 +237,7 @@ async def _run_watch_tick_impl(agent_id: str) -> dict[str, Any]:
                 profile=profile,
                 focus=focus,
                 session_id=session_id,
-                market="IN",
+                market=profile.market,
             )
         except Exception as exc:
             logger.warning("nautilus bridge watch tick failed for %s: %s", agent_id, exc)
@@ -258,30 +251,6 @@ async def _run_watch_tick_impl(agent_id: str) -> dict[str, Any]:
                 "reason": "nautilus_bridge_failed",
                 "summary": summary,
                 "watch_path": "nautilus_scheduler_poll",
-            }
-
-    if nautilus_watch and profile.is_us and _nautilus_watch_enabled():
-        try:
-            return await _run_nautilus_poll_tick(
-                agent_id=agent_id,
-                agent=agent,
-                profile=profile,
-                focus=focus,
-                session_id=session_id,
-                market="US",
-            )
-        except Exception as exc:
-            logger.warning("US nautilus alpaca watch tick failed for %s: %s", agent_id, exc)
-            summary = f"[autonomous_watch] US Alpaca watch error: {exc}"
-            feedback = {"alerts": [summary], "requires_action": False, "focus_ticker": focus}
-            _persist_watch_state(agent, summary=summary, feedback=feedback, status="error")
-            if should_post_watch_to_chat(agent=agent, feedback=feedback, market_closed=False):
-                await _append_watch_system_message(session_id, summary)
-            return {
-                "status": "error",
-                "reason": "nautilus_alpaca_failed",
-                "summary": summary,
-                "watch_path": "nautilus_alpaca_poll",
             }
 
     if is_bridge_autonomous_agent(agent_id):
@@ -345,7 +314,7 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
     if not agent or str(agent.get("status")) != "running":
         return False
 
-    if turn_kind in {"strategy_revision", "research"}:
+    if turn_kind in {"strategy_revision", "research", "post_execution"}:
         try:
             from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
@@ -372,7 +341,7 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
         return False
 
     prefetch_note = ""
-    if turn_kind in {"strategy_revision", "research"}:
+    if turn_kind in {"strategy_revision", "research", "post_execution"}:
         try:
             from trade_integrations.autonomous_agents.research_prefetch import prefetch_turn_research
 
@@ -395,6 +364,8 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
     agent["last_full_reasoning_at"] = datetime.now(timezone.utc).isoformat()
     if turn_kind == "strategy_revision":
         agent["last_revision_at"] = agent["last_full_reasoning_at"]
+    elif turn_kind == "post_execution":
+        agent["last_post_execution_at"] = agent["last_full_reasoning_at"]
     save_agent(agent)
 
     try:

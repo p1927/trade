@@ -54,10 +54,6 @@ def start_required_infra(
                 blocking.append(msg)
             else:
                 warnings.append(msg)
-    elif profile.is_us:
-        warnings.append(
-            "US agent — OpenAlgo INR auto-paper session not started; use Alpaca paper tools."
-        )
 
     if profile.uses_nautilus_watch:
         try:

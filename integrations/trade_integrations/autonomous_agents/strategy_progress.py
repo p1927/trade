@@ -167,7 +167,24 @@ def _bridge_position_block(*, agent_id: str, focus: str, handoff: Any | None = N
             )
     if handoff_leg_count > 0 and open_positions == 0:
         block["handoff_book_mismatch"] = True
+    order_state = _order_state_block(agent_id=agent_id, focus=focus)
+    if order_state:
+        block["order_state"] = order_state
     return block
+
+
+def _order_state_block(*, agent_id: str, focus: str) -> dict[str, Any] | None:
+    try:
+        from nautilus_openalgo_bridge.reconcile import read_order_state_for_agent
+
+        state = read_order_state_for_agent(agent_id, underlying=focus)
+        if state.get("error"):
+            return {"error": state.get("error")}
+        if not state.get("orders") and not any(state.get(k) for k in ("filled", "pending", "rejected")):
+            return None
+        return state
+    except Exception:
+        return None
 
 
 def _lifecycle_block(*, agent_id: str, profile: Any) -> dict[str, Any]:
@@ -301,11 +318,14 @@ def read_strategy_progress_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
             handoff = None
         position = _bridge_position_block(agent_id=agent_id, focus=focus, handoff=handoff)
     elif profile.is_us:
-        position = {"source": "alpaca", "open_positions": 0}
+        position = {
+            "source": "openalgo" if profile.backend == "openalgo" else "alpaca",
+            "open_positions": 0,
+        }
         try:
-            from trade_integrations.dataflows.alpaca import list_alpaca_positions
+            from trade_integrations.execution.trading_port import adapter_for_agent
 
-            rows = list_alpaca_positions()
+            rows = adapter_for_agent(agent).positionbook()
             matched = [r for r in rows if str(r.get("symbol") or "").upper() == str(focus).upper()]
             position["open_positions"] = len(matched)
             if matched:
@@ -335,6 +355,8 @@ def read_strategy_progress_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
     snapshot: dict[str, Any] = {
         "agent_id": agent_id,
         "focus": focus,
+        "connector_profile_id": agent.get("connector_profile_id"),
+        "execution_market": profile.market,
         "mandate": {
             "holding_period": mandate.holding_period,
             "flatten_policy": mandate.flatten_policy,
@@ -365,8 +387,8 @@ def read_strategy_progress_snapshot(*, agent: dict[str, Any]) -> dict[str, Any]:
 
 
 def format_strategy_progress_for_prompt(*, agent: dict[str, Any], turn_kind: str) -> str:
-    """Structured progress block for strategy_revision turns only."""
-    if turn_kind != "strategy_revision":
+    """Structured progress block for revision and post-execution turns."""
+    if turn_kind not in {"strategy_revision", "post_execution"}:
         return ""
     try:
         payload = read_strategy_progress_snapshot(agent=agent)
@@ -375,10 +397,26 @@ def format_strategy_progress_for_prompt(*, agent: dict[str, Any], turn_kind: str
     snapshot = payload.get("snapshot") or {}
     if not snapshot:
         return ""
+    if turn_kind == "post_execution":
+        header = (
+            "## Post-execution state (mandatory — cite before HOLD/REVISE/EXIT)\n"
+            "Confirm filled legs, order_state, unrealized P&L, and mandate time remaining.\n"
+        )
+        footer = (
+            "- Update `watch_spec` if stop/target/entry levels changed.\n"
+            "- If orders rejected or partial, REVISE or EXIT — do not assume full fill.\n"
+        )
+    else:
+        header = (
+            "## Strategy progress (mandatory — cite before REVISE/HOLD/EXIT)\n"
+            "Compare live position vs approved plan, P&L vs mandate duration, and hub freshness.\n"
+        )
+        footer = (
+            "- State whether the trade is **on track**, **needs revision**, or **should exit** vs the plan.\n"
+            "- If spot/levels changed materially, update `watch_spec` via `set_agent_watch_spec`.\n"
+        )
     return (
-        "## Strategy progress (mandatory — cite before REVISE/HOLD/EXIT)\n"
-        "Compare live position vs approved plan, P&L vs mandate duration, and hub freshness.\n"
+        f"{header}"
         f"```json\n{json.dumps(snapshot, indent=2, default=str)}\n```\n"
-        "- State whether the trade is **on track**, **needs revision**, or **should exit** vs the plan.\n"
-        "- If spot/levels changed materially, update `watch_spec` via `set_agent_watch_spec`.\n"
+        f"{footer}"
     )
