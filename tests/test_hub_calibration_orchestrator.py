@@ -25,7 +25,7 @@ def hub(tmp_path, monkeypatch):
     data = tmp_path / "_data"
     (data / "index_predictions").mkdir(parents=True)
     (data / "options_predictions").mkdir(parents=True)
-    (data / "auto_paper").mkdir(parents=True)
+    (data / "autonomous_agents").mkdir(parents=True)
     (data / "trades").mkdir(parents=True)
     (data / "index_factors" / "daily").mkdir(parents=True)
     (tmp_path / "NIFTY" / "options_research").mkdir(parents=True)
@@ -53,7 +53,7 @@ def test_evening_dry_run(hub):
 def test_write_manifest_includes_calibration(hub):
     pd.DataFrame(
         [{"strategy": "iron_condor", "net_pnl_inr": 10.0, "action": "CLOSE", "intent_source": "paper"}]
-    ).to_parquet(hub / "_data" / "auto_paper" / "outcomes.parquet", index=False)
+    ).to_parquet(hub / "_data" / "autonomous_agents" / "outcomes.parquet", index=False)
     result = write_hub_manifest(sync_executions=False)
     assert Path(result["path"]).is_file()
     manifest = build_manifest(hub)

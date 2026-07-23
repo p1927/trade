@@ -21,7 +21,13 @@ def hub_tmp(tmp_path, monkeypatch):
     return hub
 
 
-def _similar_event(event_id: str, *, title_suffix: str = "", publish_day: str | None = None) -> DistilledNewsEvent:
+def _similar_event(
+    event_id: str,
+    *,
+    title_suffix: str = "",
+    publish_day: str | None = None,
+    parent_event_id: str = "parent:fii:2026",
+) -> DistilledNewsEvent:
     day = publish_day or (date.today() - timedelta(days=1)).isoformat()
     body = (
         "Foreign investors sold Rs 2,500 crore in the cash segment on Thursday, "
@@ -41,10 +47,73 @@ def _similar_event(event_id: str, *, title_suffix: str = "", publish_day: str | 
         content=body,
         publish_day=day,
         published_at=f"{day}T10:00:00+00:00",
+        parent_event_id=parent_event_id,
+        structured_summary={"event_meta": {"parent_event_id": parent_event_id}},
         tags=tags,
         consensus=EventConsensus(direction="bearish", ref_count=1, topics=["fii"], factors=["fii_net_5d"]),
         verification_status="approved",
     )
+
+
+def test_compact_distilled_events_skips_similarity_only_without_second_signal(hub_tmp, monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_DEDUP_SUMMARY_THRESHOLD", "0.72")
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(worker, "require_minimax_for_distillation", lambda: None)
+
+    left = _similar_event("evt:a", parent_event_id="")
+    left.parent_event_id = None
+    left.structured_summary = {}
+    right = _similar_event("evt:b", title_suffix=" by 120 points", parent_event_id="")
+    right.parent_event_id = None
+    right.structured_summary = {}
+    events_store.upsert_event(left)
+    events_store.upsert_event(right)
+
+    result = worker.compact_distilled_events(ticker="NIFTY", lookback_days=30, dry_run=True)
+    assert result["groups_merged"] == 0
+    assert events_store.count_events(ticker="NIFTY") == 2
+
+
+def test_post_upsert_safety_merges_shared_parent_pair(hub_tmp, monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_RULE_FALLBACK_DISTILL", "1")
+    monkeypatch.setenv("MINIMAX_API_KEY", "")
+    monkeypatch.setenv("HUB_NEWS_POST_UPSERT_SAFETY_SCAN", "1")
+    from trade_integrations.dataflows.index_research.news_post_upsert_safety import (
+        run_post_upsert_safety_scan,
+    )
+
+    events_store.upsert_event(_similar_event("evt:existing"))
+    events_store.upsert_event(_similar_event("evt:fresh", title_suffix=" update"))
+    assert events_store.count_events(ticker="NIFTY") == 2
+
+    result = run_post_upsert_safety_scan("evt:fresh", ticker="NIFTY", dry_run=False)
+    assert result.get("groups_merged") == 1
+    assert events_store.count_events(ticker="NIFTY") == 1
+    surviving = events_store.get_event("evt:existing") or events_store.get_event("evt:fresh")
+    assert surviving is not None
+
+
+def test_post_upsert_safety_skipped_when_disabled(hub_tmp, monkeypatch):
+    monkeypatch.setenv("HUB_NEWS_POST_UPSERT_SAFETY_SCAN", "0")
+    from trade_integrations.dataflows.index_research.news_post_upsert_safety import (
+        run_post_upsert_safety_scan,
+    )
+
+    events_store.upsert_event(_similar_event("evt:a"))
+    result = run_post_upsert_safety_scan("evt:a", ticker="NIFTY")
+    assert result.get("skipped") is True
+    assert result.get("reason") == "disabled"
+
+
+def test_resolver_agent_enabled_by_default(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_resolver_agent as agent_mod
+
+    monkeypatch.delenv("HUB_NEWS_RESOLVER_AGENT_ENABLED", raising=False)
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+    assert agent_mod.resolver_agent_enabled() is True
+    monkeypatch.setenv("HUB_NEWS_RESOLVER_AGENT_ENABLED", "0")
+    assert agent_mod.resolver_agent_enabled() is False
 
 
 def test_compact_distilled_events_dry_run_merges_similar_pair(hub_tmp, monkeypatch):
@@ -100,22 +169,41 @@ def test_distill_event_uses_canonical_id_on_create(monkeypatch):
 def test_build_duplicate_group_uses_star_topology_not_transitive():
     from trade_integrations.dataflows.index_research.news_entity_worker import _build_duplicate_group
 
-    anchor = {"canonical_story_id": "evt:a", "title": "Anchor", "content_summary": "Anchor body", "tags": {}}
-    member_b = {"canonical_story_id": "evt:b", "title": "Member B", "content_summary": "B body", "tags": {}}
-    member_c = {"canonical_story_id": "evt:c", "title": "Member C", "content_summary": "C body", "tags": {}}
+    parent = "parent:fii:2026"
+    anchor = {
+        "canonical_story_id": "evt:a",
+        "title": "Anchor",
+        "content_summary": "Anchor body",
+        "tags": {},
+        "structured_summary": {"event_meta": {"parent_event_id": parent}},
+    }
+    member_b = {
+        "canonical_story_id": "evt:b",
+        "title": "Member B",
+        "content_summary": "B body",
+        "tags": {},
+        "structured_summary": {"event_meta": {"parent_event_id": parent}},
+    }
+    member_c = {
+        "canonical_story_id": "evt:c",
+        "title": "Member C",
+        "content_summary": "C body",
+        "tags": {},
+        "structured_summary": {"event_meta": {"parent_event_id": "parent:other:2026"}},
+    }
 
-    def _fake_match(ref, events, *, ticker="NIFTY", threshold=None):
-        ref_title = ref.get("title") or ""
-        event_id = str(events[0].get("canonical_story_id") or "")
-        if ref_title == "Member B" and event_id == "evt:a":
-            return events[0]
-        if ref_title == "Member C" and event_id == "evt:b":
-            return events[0]
-        return None
+    def _fake_two_signal(left, right, **kwargs):
+        left_id = str(left.get("canonical_story_id") or "")
+        right_id = str(right.get("canonical_story_id") or "")
+        if {left_id, right_id} == {"evt:a", "evt:b"}:
+            return True, "shared_parent"
+        if {left_id, right_id} == {"evt:b", "evt:c"}:
+            return True, "shared_parent"
+        return False, ""
 
     with patch(
-        "trade_integrations.dataflows.index_research.news_event_matching.find_matching_event",
-        side_effect=_fake_match,
+        "trade_integrations.dataflows.index_research.news_event_clubbing.two_signal_merge_eligible",
+        side_effect=_fake_two_signal,
     ):
         group = _build_duplicate_group(
             anchor,
@@ -303,7 +391,7 @@ def test_compact_distilled_events_wiki_pass_dry_run(hub_tmp, monkeypatch):
         lambda *a, **k: ([(wiki_group, "evt:canonical")], {"wiki_search_queries": 1, "wiki_hits": 1}),
     )
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.news_entity_semantic_dedup.build_duplicate_groups_semantic",
+        "trade_integrations.dataflows.index_research.news_event_clubbing.build_duplicate_groups_two_signal",
         lambda *a, **k: [],
     )
 
@@ -360,7 +448,7 @@ def test_compact_distilled_events_wiki_merge_removes_wiki_files(hub_tmp, monkeyp
         lambda *a, **k: ([(wiki_group, "evt:canonical")], {"wiki_search_queries": 1, "wiki_hits": 1}),
     )
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.news_entity_semantic_dedup.build_duplicate_groups_semantic",
+        "trade_integrations.dataflows.index_research.news_event_clubbing.build_duplicate_groups_two_signal",
         lambda *a, **k: [],
     )
 
@@ -469,7 +557,7 @@ def test_wiki_merge_prefers_wiki_target_over_richer_orphan(hub_tmp, monkeypatch)
         lambda *a, **k: ([(wiki_group, "evt:wiki-target")], {"wiki_search_queries": 1, "wiki_hits": 1}),
     )
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.news_entity_semantic_dedup.build_duplicate_groups_semantic",
+        "trade_integrations.dataflows.index_research.news_event_clubbing.build_duplicate_groups_two_signal",
         lambda *a, **k: [],
     )
 

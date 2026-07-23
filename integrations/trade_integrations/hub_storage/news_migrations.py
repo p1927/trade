@@ -215,6 +215,12 @@ def finalize_events_ssot(*, dry_run: bool = False) -> dict[str, Any]:
         state["archive"] = archive_info
         state["ssot"] = SSOT_MODE
         save_migration_state(state)
+        try:
+            from trade_integrations.hub_storage.news_event_index import rebuild_event_index
+
+            rebuild_event_index()
+        except Exception as exc:
+            logger.warning("event index rebuild after cutover skipped: %s", exc)
 
     return {
         "dry_run": dry_run,
@@ -223,6 +229,12 @@ def finalize_events_ssot(*, dry_run: bool = False) -> dict[str, Any]:
         "tickers": migration_results,
         "archive": archive_info,
     }
+
+
+def events_ssot_finalized() -> bool:
+    """True after one-time records→events cutover completed."""
+    state = load_migration_state()
+    return bool(state.get("legacy_archived"))
 
 
 def needs_news_migration(*, ticker: str | None = None) -> bool:

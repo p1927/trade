@@ -28,8 +28,11 @@ def rollup_parent_topic_events(
     )
     from trade_integrations.dataflows.hub_wiki.compile import compile_event_to_wiki, wiki_compile_enabled
 
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+
     sym = ticker.strip().upper()
-    since = (date.today() - timedelta(days=max(lookback_days, 1))).isoformat()
+    end = date.fromisoformat(india_trading_date_iso()[:10])
+    since = (end - timedelta(days=max(lookback_days, 1))).isoformat()
     raw = list_events(ticker=sym, since=since, limit=5000, include_rejected=False)
     records = [distilled_event_to_headline_dict(e) for e in raw]
 

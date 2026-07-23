@@ -14,6 +14,9 @@ from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_f
     resolve_source_urls,
     source_keywords,
 )
+from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
+    should_run_searxng_fallback,
+)
 from trade_integrations.dataflows.index_research.external_predictions.browse_agent import (
     browse_enabled_for_source,
     browse_result_to_crawl_row,
@@ -27,7 +30,10 @@ from trade_integrations.dataflows.index_research.external_predictions.screenshot
     persist_screenshot_b64,
 )
 from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+    SearxngDiscoveryResult,
     discover_sources_parallel,
+    discovery_urls_map,
+    extract_via_searxng_fallback,
 )
 from trade_integrations.dataflows.index_research.external_predictions.navigation_paths import (
     persist_successful_exploratory_path,
@@ -48,8 +54,9 @@ from trade_integrations.dataflows.index_research.external_predictions.source_reg
     watchlisted_sources,
 )
 from trade_integrations.dataflows.index_research.external_predictions.store import (
+    load_source_prediction,
+    persist_refresh_result,
     rebuild_snapshot,
-    upsert_prediction,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.index_research.spot_fetch import fetch_index_spot
@@ -208,6 +215,7 @@ def _record_from_crawl_group(
     navigation_mode: str = "exploratory",
     fetch_method: str = "crawl4ai",
     navigation_steps: list[NavigationStep] | None = None,
+    searxng_discovery: SearxngDiscoveryResult | None = None,
 ) -> ExternalPredictionRecord:
     sym = symbol.upper()
     prefix = ""
@@ -231,8 +239,8 @@ def _record_from_crawl_group(
             fetch_status="not_found",
             error_message="No landing URLs configured",
         )
-        upsert_prediction(record, symbol=sym)
-        return record
+        _, attempt = persist_refresh_result(record, symbol=sym)
+        return attempt
 
     best = pick_best_crawl_result(
         rows,
@@ -243,12 +251,68 @@ def _record_from_crawl_group(
     if best is None:
         errors = [row.error_message for _, row in rows if row.error_message]
         message = errors[0] if errors else "Crawl failed for all URLs"
+        should_try_searxng, searxng_trigger = should_run_searxng_fallback(rows, message)
+        searxng_attempted = False
+        if should_try_searxng:
+            searxng_attempted = True
+            if pipeline:
+                pipeline.info(
+                    "searxng",
+                    f"{prefix}{src.display_name}: trying SearXNG text fallback ({searxng_trigger})",
+                    source_id=src.id,
+                    searxng_trigger=searxng_trigger,
+                )
+            fallback = extract_via_searxng_fallback(
+                src,
+                symbol=sym,
+                horizon_days=horizon_days,
+                spot=spot_val,
+                pipeline=pipeline,
+                search_outcome=searxng_discovery,
+            )
+            if fallback is not None:
+                fallback.provenance = {
+                    **dict(fallback.provenance or {}),
+                    "searxng_trigger": searxng_trigger,
+                    "searxng_attempted": True,
+                }
+                _, attempt = persist_refresh_result(fallback, symbol=sym)
+                if pipeline:
+                    if attempt.fetch_status == "ok":
+                        mid = attempt.target.mid
+                        pipeline.info(
+                            "source",
+                            f"{prefix}{src.display_name}: SearXNG fallback target {mid:,.0f}"
+                            if mid
+                            else f"{prefix}{src.display_name}: SearXNG fallback ok",
+                            source_id=src.id,
+                            url=str(attempt.provenance.get("url") or "")[:120],
+                        )
+                    else:
+                        pipeline.warn(
+                            "source",
+                            f"{prefix}{src.display_name}: SearXNG fallback — {attempt.error_message or 'not found'}",
+                            source_id=src.id,
+                        )
+                return attempt
+            if searxng_discovery is not None and searxng_discovery.all_queries_failed:
+                message = "SearXNG fallback skipped — all search queries failed"
+            else:
+                message = f"SearXNG fallback ({searxng_trigger}) found no forecast"
         if pipeline:
             pipeline.warn(
                 "source",
                 f"{prefix}{src.display_name}: {message}",
                 source_id=src.id,
             )
+        error_prov: dict[str, Any] = {
+            "urls_tried": list(dict.fromkeys(url for url, _ in rows)) or urls,
+        }
+        if searxng_attempted:
+            error_prov["searxng_trigger"] = searxng_trigger
+            error_prov["searxng_attempted"] = True
+        if searxng_discovery is not None and searxng_discovery.all_queries_failed:
+            error_prov["searxng_all_queries_failed"] = True
         record = ExternalPredictionRecord(
             source_id=src.id,
             symbol=sym,
@@ -257,10 +321,10 @@ def _record_from_crawl_group(
             spot_at_fetch=spot_val,
             fetch_status="error" if errors else "not_found",
             error_message=message,
-            provenance={"urls_tried": urls},
+            provenance=error_prov,
         )
-        upsert_prediction(record, symbol=sym)
-        return record
+        _, attempt = persist_refresh_result(record, symbol=sym)
+        return attempt
 
     url, crawl = best
     screenshot_b64 = None
@@ -317,8 +381,8 @@ def _record_from_crawl_group(
                 source_id=src.id,
                 url=url,
             )
-    upsert_prediction(record, symbol=sym)
-    return record
+    _, attempt = persist_refresh_result(record, symbol=sym)
+    return attempt
 
 
 def refresh_source(
@@ -331,6 +395,7 @@ def refresh_source(
     source_index: int | None = None,
     source_total: int | None = None,
     crawl_group: dict[str, list[tuple[str, Any]]] | None = None,
+    searxng_discovery: SearxngDiscoveryResult | None = None,
 ) -> ExternalPredictionRecord:
     src = get_source(source_id)
     if src is None:
@@ -417,6 +482,7 @@ def refresh_source(
             navigation_mode=navigation_mode,
             fetch_method=fetch_method,
             navigation_steps=navigation_steps,
+            searxng_discovery=searxng_discovery,
         )
         if used_fast and record.fetch_status != "ok":
             if exploratory_backup:
@@ -441,14 +507,17 @@ def refresh_source(
                     navigation_mode=navigation_mode,
                     fetch_method=fetch_method,
                     navigation_steps=None,
+                    searxng_discovery=searxng_discovery,
                 )
         elif used_fast and record.fetch_status == "ok":
             touch_path_success(src.id, horizon_days=horizon_days)
-        record.provenance = {
-            **dict(record.provenance or {}),
-            "navigation_mode": navigation_mode,
-            "fetch_method": fetch_method,
-        }
+        prov = dict(record.provenance or {})
+        if prov.get("navigation_mode") != "searxng_fallback":
+            record.provenance = {
+                **prov,
+                "navigation_mode": navigation_mode,
+                "fetch_method": fetch_method,
+            }
         return record
     except Exception as exc:
         logger.warning("refresh failed for %s: %s", source_id, exc)
@@ -463,8 +532,8 @@ def refresh_source(
             fetch_status="error",
             error_message=str(exc),
         )
-        upsert_prediction(record, symbol=sym)
-        return record
+        _, attempt = persist_refresh_result(record, symbol=sym)
+        return attempt
 
 
 def refresh_all_external_predictions(
@@ -520,21 +589,23 @@ def refresh_all_external_predictions(
             waiting=stats.get("waiting"),
         )
 
+    discovery_by_source = discover_sources_parallel(
+        sources,
+        horizon_days=horizon_days,
+        pipeline=pipeline,
+    )
     crawl_group = crawl_sources_parallel(
         sources,
         symbol=sym,
         horizon_days=horizon_days,
         pipeline=pipeline,
-        discovery_urls=discover_sources_parallel(
-            sources,
-            horizon_days=horizon_days,
-            pipeline=pipeline,
-        ),
+        discovery_urls=discovery_urls_map(discovery_by_source),
     )
 
+    refresh_attempt_failures = 0
     for idx, src in enumerate(sources, start=1):
         try:
-            record = refresh_source(
+            attempt = refresh_source(
                 src.id,
                 symbol=sym,
                 horizon_days=horizon_days,
@@ -543,12 +614,13 @@ def refresh_all_external_predictions(
                 source_index=idx,
                 source_total=len(sources),
                 crawl_group=crawl_group,
+                searxng_discovery=discovery_by_source.get(src.id),
             )
         except Exception as exc:
             logger.exception("refresh failed for %s: %s", src.id, exc)
             if pipeline:
                 pipeline.error("source", f"{src.display_name}: {exc}", source_id=src.id)
-            record = ExternalPredictionRecord(
+            err_record = ExternalPredictionRecord(
                 source_id=src.id,
                 symbol=sym,
                 horizon_days=horizon_days,
@@ -557,7 +629,15 @@ def refresh_all_external_predictions(
                 fetch_status="error",
                 error_message=str(exc),
             )
-            upsert_prediction(record, symbol=sym)
+            _, attempt = persist_refresh_result(err_record, symbol=sym)
+
+        stored = load_source_prediction(src.id, symbol=sym, horizon_days=horizon_days)
+        if (
+            stored is not None
+            and stored.fetch_status == "ok"
+            and attempt.fetch_status != "ok"
+        ):
+            refresh_attempt_failures += 1
 
         if on_source_complete is not None:
             partial = rebuild_snapshot(
@@ -565,9 +645,10 @@ def refresh_all_external_predictions(
                 horizon_days=horizon_days,
                 internal_forecast=internal,
                 fetched_at=fetched_at,
+                refresh_attempt_failures=refresh_attempt_failures,
             )
             try:
-                on_source_complete(src.id, record, partial)
+                on_source_complete(src.id, attempt, partial)
             except Exception as exc:
                 logger.warning("on_source_complete failed for %s: %s", src.id, exc)
 
@@ -576,6 +657,7 @@ def refresh_all_external_predictions(
         horizon_days=horizon_days,
         internal_forecast=internal,
         fetched_at=fetched_at,
+        refresh_attempt_failures=refresh_attempt_failures,
     )
     ok_count = sum(1 for p in snapshot.predictions if p.fetch_status == "ok")
     if pipeline:
@@ -584,7 +666,8 @@ def refresh_all_external_predictions(
             "refresh",
             (
                 f"Refresh complete — {ok_count}/{len(snapshot.predictions)} sources with forecasts"
-                f" ({snapshot.sources_error} errors, {snapshot.sources_not_found} not found)"
+                f" ({snapshot.sources_error} errors, {snapshot.sources_not_found} not found"
+                f"{f', {snapshot.refresh_attempt_failures} cached after failed refresh' if snapshot.refresh_attempt_failures else ''})"
             ),
             fetched_at=snapshot.fetched_at,
             crawl_elapsed_ms=batch.get("elapsed_ms"),
@@ -592,5 +675,6 @@ def refresh_all_external_predictions(
             sources_error=snapshot.sources_error,
             sources_not_found=snapshot.sources_not_found,
             had_errors=snapshot.had_errors,
+            refresh_attempt_failures=snapshot.refresh_attempt_failures,
         )
     return snapshot

@@ -231,7 +231,7 @@ def hub_data_paths() -> dict[str, Path]:
     return {
         "index_predictions": data / "index_predictions" / "ledger.parquet",
         "options_predictions": data / "options_predictions" / "ledger.parquet",
-        "outcomes": data / "auto_paper" / "outcomes.parquet",
+        "outcomes": data / "autonomous_agents" / "outcomes.parquet",
         "executions": data / "trades" / "executions.parquet",
         "fills": data / "trades" / "fills.parquet",
         "index_factors_daily": data / "index_factors" / "daily",

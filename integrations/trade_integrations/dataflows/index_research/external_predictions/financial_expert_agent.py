@@ -113,6 +113,7 @@ Use the article text AND screenshot(s). Return ONLY valid JSON:
 Rules:
 - ONLY NIFTY 50 index level targets (15000-35000).
 - REJECT single-stock targets and options commentary without index level.
+- Do NOT treat technical resistance/support levels as analyst price targets unless explicitly labeled as a NIFTY target.
 - Extract target_date even when it differs from the user-selected horizon.
 
 Article text:

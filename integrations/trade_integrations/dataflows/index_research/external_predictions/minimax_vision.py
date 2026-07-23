@@ -86,7 +86,9 @@ def vision_cross_check(
         "Look at the screenshot(s). Return ONLY JSON:\n"
         '{"supports_forecast": true|false, "reason": "brief explanation"}\n'
         "Set supports_forecast=false if the visible page does not show this NIFTY 50 index target "
-        "or contradicts the extracted level/date."
+        "or contradicts the extracted level/date. "
+        "Technical resistance/support levels (e.g. 'face resistance near 24,000') are NOT analyst "
+        "price targets unless the article explicitly states a NIFTY 50 target at that level."
     )
     try:
         payload = call_minimax_vision_json(

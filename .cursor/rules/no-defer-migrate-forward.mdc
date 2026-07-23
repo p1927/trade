@@ -1,0 +1,52 @@
+---
+description: No deferred backlog without a plan; migrate and delete deprecated paths — no permanent shims
+alwaysApply: true
+---
+
+# No Defer — Migrate Forward
+
+Every review, convergence pass, or audit must **close or schedule** every finding. Nothing stays vague in chat alone.
+
+## No open deferrals
+
+| Label in review | Required next step |
+|-----------------|-------------------|
+| **CONFIRMED** | Fix in current batch, or open a plan task **in the same session** with file + acceptance criteria |
+| **HYPOTHESIS** | Reproduce or downgrade to BY DESIGN **before end of session**; if still open → plan task, not chat-only deferral |
+| **IMPROVEMENT** | Plan task or user-approved skip with reason in plan index |
+| **BY DESIGN** | Document once in plan/spec; no backlog row |
+
+**Forbidden:** Ending a session with "deferred", "HYPOTHESIS for later", or "optional follow-up" **without** a row in a plan under `docs/superpowers/plans/` (or `.superpowers/master-todo.md` Issue log for ticker work).
+
+**Next session rule:** Pick up **all** plan rows marked `pending` / `deferred` before starting unrelated work — same priority as CONFIRMED bugs.
+
+## No permanent deprecated surface
+
+Do not leave unmigrated or retired code paths "for compatibility".
+
+| Pattern | Required treatment |
+|---------|-------------------|
+| `*_shims.py`, `mcp_compat`, re-export wrappers | **Migrate phase** — move callers, delete shim in same program or explicit migrate subplan |
+| Retired HTTP routes (`410` / stub) | **Migrate phase** — UI + callers off old API, then remove route |
+| Dual stacks (old + new doing the same job) | **Migrate phase** — one authority; delete duplicate after parity tests |
+| Env flags guarding dead code forever | Remove flag + dead branch after migration gate |
+
+**Migration gate (before delete):** all callers grep-clean → targeted pytest → plan index marks phase `Done` → delete old module.
+
+**Forbidden:** Adding new shims instead of migrating callers; leaving `410` endpoints without a migrate subplan; "we'll remove later" without a plan row.
+
+## Plan shape for carried-forward work
+
+When carrying items forward, add to an index plan:
+
+- Issue ID, root cause, files, **Type** (`implement` | `migrate` | `cleanup`)
+- Acceptance criteria + pytest scope
+- Depends-on / blocks
+
+Works with `multi-phase-plan-convergence`, `fix-review-before-stack`, and `review-evidence-discipline`.
+
+## Agent checklist (every review completion)
+
+1. List every non–BY DESIGN finding with plan path or fix SHA.
+2. Zero rows labeled "deferred" without a plan file link.
+3. Grep touched area for `shim`, `compat`, `deprecated`, `retired`, `410` — if found, either migrate in batch or add **migrate** subplan before reporting done.

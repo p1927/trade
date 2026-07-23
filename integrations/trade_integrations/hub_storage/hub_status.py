@@ -290,10 +290,11 @@ def _hub_paths() -> dict[str, str]:
         "hub_root": _hub_relative(hub),
         "news_staging_pending": _hub_relative(hub / "_data" / "news_staging" / "pending.jsonl"),
         "news_events": _hub_relative(hub / "_data" / "news_events" / "events.parquet"),
+        "news_event_index": _hub_relative(hub / "_data" / "news_events" / "event_index.parquet"),
         "news_events_migration_state": _hub_relative(
             hub / "_data" / "news_events" / "migration_state.json"
         ),
-        "news_verified_records_archived": _hub_relative(
+        "news_verified_records_legacy": _hub_relative(
             hub / "_data" / "news_verified" / "records.parquet"
         ),
         "llm_wiki_project": _hub_relative(hub / "llm-wiki"),

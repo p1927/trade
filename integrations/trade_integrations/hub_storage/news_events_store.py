@@ -6,6 +6,7 @@ Application code must read/query via ``trade_integrations.dataflows.news_hub_bri
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ from trade_integrations.hub_storage.news_event_models import (
     TimelineEntry,
 )
 from trade_integrations.hub_storage.parquet_io import concat_dataframes, read_dataframe, write_dataframe
+
+logger = logging.getLogger(__name__)
 
 _EVENTS_REL = Path("_data") / "news_events" / "events.parquet"
 
@@ -256,6 +259,13 @@ def upsert_event(event: DistilledNewsEvent) -> None:
 
     write_dataframe(_coerce_events_frame(frame), events_path())
 
+    try:
+        from trade_integrations.hub_storage.news_event_index import upsert_index_from_event
+
+        upsert_index_from_event(event)
+    except Exception as exc:
+        logger.warning("event index upsert skipped for %s: %s", event_id, exc)
+
 
 def get_event(event_id: str) -> dict[str, Any] | None:
     frame = _load_events_frame()
@@ -483,7 +493,8 @@ def event_from_verified_record(record: dict[str, Any]) -> DistilledNewsEvent:
     story_id = str(record.get("canonical_story_id") or record.get("event_id") or "")
     structured = record.get("structured_summary") or {}
     event_meta = (structured.get("event_meta") if isinstance(structured, dict) else {}) or {}
-    event_id = story_id or str(event_meta.get("event_id") or "")
+    meta_id = str(event_meta.get("event_id") or "").strip()
+    event_id = meta_id or story_id
     refs_raw = event_meta.get("references") or []
     references = [NewsReference.from_dict(r) for r in refs_raw if isinstance(r, dict)]
     if not references:
@@ -692,6 +703,13 @@ def upsert_hub_record(record: dict[str, Any]) -> None:
 
     write_dataframe(_coerce_events_frame(frame), events_path())
 
+    try:
+        from trade_integrations.hub_storage.news_event_index import upsert_index_from_event
+
+        upsert_index_from_event(event)
+    except Exception as exc:
+        logger.warning("event index upsert skipped for hub record %s: %s", event_id, exc)
+
 
 def patch_event_meta(
     updates: list[tuple[str, dict[str, Any]]],
@@ -728,6 +746,18 @@ def patch_event_meta(
         if after != before:
             raise RuntimeError(f"refusing patch: row count changed {before} -> {after}")
         write_dataframe(_coerce_events_frame(frame), events_path())
+        try:
+            from trade_integrations.hub_storage.news_event_index import upsert_index_from_event
+
+            for event_id, _event_meta in updates:
+                eid = str(event_id or "").strip()
+                if not eid:
+                    continue
+                stored = get_event(eid)
+                if stored:
+                    upsert_index_from_event(stored)
+        except Exception as exc:
+            logger.warning("event index sync after patch skipped: %s", exc)
     return patched
 
 
@@ -863,4 +893,10 @@ def remove_events(event_ids: set[str] | list[str]) -> int:
     removed = before - len(frame)
     if removed:
         write_dataframe(_coerce_events_frame(frame), events_path())
+        try:
+            from trade_integrations.hub_storage.news_event_index import remove_index_rows
+
+            remove_index_rows(ids)
+        except Exception as exc:
+            logger.debug("event index remove skipped: %s", exc)
     return removed

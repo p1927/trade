@@ -38,9 +38,13 @@ def hub_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _patch_refresh_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Avoid network discovery/crawl during refresh batch tests."""
+    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+        SearxngDiscoveryResult,
+    )
+
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.discover_sources_parallel",
-        lambda sources, **kwargs: {src.id: [] for src in sources},
+        lambda sources, **kwargs: {src.id: SearxngDiscoveryResult() for src in sources},
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.crawl_sources_parallel",
@@ -136,17 +140,24 @@ def test_discover_sources_parallel(monkeypatch: pytest.MonkeyPatch) -> None:
         search_queries=["Nifty target {horizon} days"],
     )
 
-    def _fake_discover(src, *, horizon_days, pipeline=None):
-        return [
-            "https://example.com/markets/stocks/news/nifty-50-target-25000/articleshow/1.cms",
-        ]
+    def _fake_bundle(src, *, horizon_days, pipeline=None):
+        from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+            SearxngDiscoveryResult,
+        )
+
+        return SearxngDiscoveryResult(
+            urls=[
+                "https://example.com/markets/stocks/news/nifty-50-target-25000/articleshow/1.cms",
+            ],
+            hits=[{"url": "https://example.com/markets/stocks/news/nifty-50-target-25000/articleshow/1.cms"}],
+        )
 
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.external_predictions.fetcher.discover_source_urls",
-        _fake_discover,
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.discover_source_with_results",
+        _fake_bundle,
     )
     out = discover_sources_parallel([source], horizon_days=14)
-    assert out["test_src"][0].endswith("/1.cms")
+    assert out["test_src"].urls[0].endswith("/1.cms")
 
 
 def test_try_fast_path_fallback_on_replay_failure(hub_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -238,8 +249,12 @@ def test_refresh_wires_parallel_discovery(hub_dir: Path, monkeypatch: pytest.Mon
     discovery_calls: list[dict] = []
 
     def _fake_discover(sources, *, horizon_days, pipeline=None):
+        from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+            SearxngDiscoveryResult,
+        )
+
         discovery_calls.append({"count": len(sources), "horizon_days": horizon_days})
-        return {src.id: [] for src in sources}
+        return {src.id: SearxngDiscoveryResult() for src in sources}
 
     _patch_refresh_batch(monkeypatch)
     monkeypatch.setattr(

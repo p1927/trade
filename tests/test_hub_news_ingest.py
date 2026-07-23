@@ -28,6 +28,14 @@ def test_run_hub_news_ingest_rss_only(hub_tmp, monkeypatch):
 
     monkeypatch.setattr(staging_store, "get_hub_dir", lambda: hub_tmp)
     monkeypatch.setenv("HUB_NEWS_SYNC_DISTILL_LIMIT", "0")
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.probe.check_ingest_allowed",
+        lambda **k: {"blocked": False},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.pipeline_pause_status",
+        lambda **k: {"pipeline_paused": False, "pause_reason": "", "pending": {"queued": 0}},
+    )
 
     def fake_rss(**kwargs):
         from trade_integrations.dataflows.news_hub_bridge import ingest_rss_entries

@@ -298,6 +298,7 @@ class ExternalPredictionSnapshot:
     sources_error: int = 0
     sources_not_found: int = 0
     had_errors: bool = False
+    refresh_attempt_failures: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -315,6 +316,7 @@ class ExternalPredictionSnapshot:
         payload["sources_error"] = self.sources_error
         payload["sources_not_found"] = self.sources_not_found
         payload["had_errors"] = self.had_errors
+        payload["refresh_attempt_failures"] = self.refresh_attempt_failures
         return payload
 
     @classmethod
@@ -345,6 +347,7 @@ class ExternalPredictionSnapshot:
             sources_error=int(data.get("sources_error") or 0),
             sources_not_found=int(data.get("sources_not_found") or 0),
             had_errors=bool(data.get("had_errors", False)),
+            refresh_attempt_failures=int(data.get("refresh_attempt_failures") or 0),
         )
 
     @classmethod

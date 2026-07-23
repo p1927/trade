@@ -21,7 +21,7 @@ def hub(tmp_path, monkeypatch):
     data = tmp_path / "_data"
     (data / "index_predictions").mkdir(parents=True)
     (data / "options_predictions").mkdir(parents=True)
-    (data / "auto_paper").mkdir(parents=True)
+    (data / "autonomous_agents").mkdir(parents=True)
     (data / "trades").mkdir(parents=True)
     (data / "index_factors" / "daily").mkdir(parents=True)
 
@@ -56,7 +56,7 @@ def hub(tmp_path, monkeypatch):
                 "widget_id": "tp_NIFTY_abc",
             }
         ]
-    ).to_parquet(data / "auto_paper" / "outcomes.parquet", index=False)
+    ).to_parquet(data / "autonomous_agents" / "outcomes.parquet", index=False)
 
     pd.DataFrame(
         [

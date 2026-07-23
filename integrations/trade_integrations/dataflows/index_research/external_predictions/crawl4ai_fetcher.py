@@ -15,6 +15,9 @@ from trade_integrations.dataflows.crawl4ai_client import (
     CrawlPageResult,
     crawl_urls_parallel_sync,
 )
+from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
+    sort_urls_for_crawl,
+)
 from trade_integrations.dataflows.index_research.external_predictions.curated_urls import (
     curated_urls_for_source,
 )
@@ -134,45 +137,53 @@ def resolve_source_urls(
     horizon_days: int = 14,
     discovery_urls: list[str] | None = None,
 ) -> list[str]:
-    """Return allowlisted crawl targets (curated, entry, discovery, last ok article)."""
-    urls: list[str] = []
-    seen: set[str] = set()
+    """Return allowlisted crawl targets — entry URLs first, blocklisted domains last."""
+    ordered_raw: list[str] = []
+
+    for raw in source.entry_urls or []:
+        ordered_raw.append(str(raw or "").strip())
+
+    for extra in discovery_urls or []:
+        ordered_raw.append(str(extra or "").strip())
+
+    prior = load_source_prediction(source.id, symbol=symbol, horizon_days=horizon_days)
+    last_ok_url = ""
+    if prior and prior.fetch_status == "ok" and prior.provenance:
+        last_ok_url = str(prior.provenance.get("url") or "").strip()
+        if last_ok_url:
+            ordered_raw.append(last_ok_url)
 
     raw_list = list(source.curated_urls or []) or list(curated_urls_for_source(source.id))
     if not raw_list:
         raw_list = list(source.landing_urls or [])
-    raw_list.extend(source.entry_urls or [])
+    ordered_raw.extend(str(raw or "").strip() for raw in raw_list)
 
-    for raw in raw_list:
-        u = _format_url_template(str(raw or "").strip(), horizon_days=horizon_days)
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw in ordered_raw:
+        u = _format_url_template(raw, horizon_days=horizon_days)
         if not u or u in seen:
             continue
-        policy = is_allowed_listing_url(u)
-        if not policy.allowed:
-            continue
-        seen.add(u)
-        urls.append(u)
-
-    for extra in discovery_urls or []:
-        u = str(extra or "").strip()
-        if not u or u in seen:
-            continue
-        policy = is_allowed_url(u, title=source.display_name)
-        if not policy.allowed and not is_candidate_article_url(u, title=source.display_name).allowed:
-            continue
-        seen.add(u)
-        urls.append(u)
-
-    prior = load_source_prediction(source.id, symbol=symbol, horizon_days=horizon_days)
-    if prior and prior.fetch_status == "ok" and prior.provenance:
-        last_url = str(prior.provenance.get("url") or "").strip()
-        title = str(prior.provenance.get("title") or "")
-        if last_url and last_url not in seen:
-            policy = is_allowed_url(last_url, title=title)
+        if u == last_ok_url and prior and prior.provenance:
+            policy = is_allowed_url(u, title=str(prior.provenance.get("title") or ""))
             if policy.allowed:
-                seen.add(last_url)
-                urls.append(last_url)
-    return urls
+                seen.add(u)
+                urls.append(u)
+                continue
+            # Fall through to listing/article policy — article URLs may fail is_allowed_url
+            # but still be valid retry targets from a prior successful fetch.
+        policy = is_allowed_listing_url(u)
+        if policy.allowed:
+            seen.add(u)
+            urls.append(u)
+            continue
+        article_policy = is_candidate_article_url(u, title=source.display_name)
+        url_policy = is_allowed_url(u, title=source.display_name)
+        if url_policy.allowed or article_policy.allowed:
+            seen.add(u)
+            urls.append(u)
+
+    return sort_urls_for_crawl(urls)
 
 
 def _iter_link_candidates(

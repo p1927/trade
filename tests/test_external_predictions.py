@@ -23,6 +23,8 @@ from trade_integrations.dataflows.index_research.external_predictions.source_reg
 )
 from trade_integrations.dataflows.index_research.external_predictions.store import (
     load_snapshot,
+    load_source_prediction,
+    persist_refresh_result,
     rebuild_snapshot,
     upsert_prediction,
 )
@@ -38,9 +40,13 @@ def hub_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _patch_refresh_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Avoid network discovery/crawl during refresh batch tests."""
+    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+        SearxngDiscoveryResult,
+    )
+
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.discover_sources_parallel",
-        lambda sources, **kwargs: {src.id: [] for src in sources},
+        lambda sources, **kwargs: {src.id: SearxngDiscoveryResult() for src in sources},
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.crawl_sources_parallel",
@@ -385,6 +391,39 @@ def test_append_source_complete_writes_log(tmp_path: Path, monkeypatch: pytest.M
     assert any(log.get("stage") == "source_complete" for log in job.get("logs") or [])
 
 
+def test_job_serialize_strips_control_chars_in_nested_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ensure_vibetrading_agent_on_path()
+    jobs_root = tmp_path / "log" / "external_predictions_jobs"
+    jobs_root.mkdir(parents=True)
+    monkeypatch.setattr(
+        "src.trade.external_predictions_run_jobs._jobs_root",
+        lambda: jobs_root,
+    )
+    from src.trade import external_predictions_run_jobs as jobs_mod
+    from src.trade.external_predictions_run_jobs import append_source_complete, start_job
+
+    jobs_mod.EXTERNAL_PREDICTIONS_RUN_JOBS.clear()
+    jobs_mod._ACTIVE_BY_SCOPE.clear()
+    job_id, _ = start_job(ticker="NIFTY", horizon_days=14)
+    append_source_complete(
+        job_id,
+        source_id="moneycontrol",
+        record={
+            "source_id": "moneycontrol",
+            "fetch_status": "error",
+            "error_message": "fail\x07with\x08control",
+        },
+        partial_snapshot={"symbol": "NIFTY", "had_errors": True},
+    )
+    job_file = jobs_root / job_id / "job.json"
+    payload = json.loads(job_file.read_text(encoding="utf-8"))
+    nested = next(log for log in payload["logs"] if log.get("stage") == "source_complete")
+    assert "\x07" not in nested["record"]["error_message"]
+    assert "fail" in nested["record"]["error_message"]
+
+
 def test_save_snapshot_serializes_internal_forecast_datetime(hub_dir: Path) -> None:
     from datetime import datetime, timezone
 
@@ -724,3 +763,189 @@ def test_seed_sources_have_curated_urls(hub_dir: Path) -> None:
             continue
         assert src.curated_urls, f"{src.id} missing curated_urls"
         assert curated_urls_for_source(src.id)
+
+
+def test_persist_refresh_result_retains_prior_ok(hub_dir: Path) -> None:
+    ok_record = ExternalPredictionRecord(
+        source_id="economictimes",
+        symbol="NIFTY",
+        horizon_days=14,
+        as_of="2026-07-23",
+        fetch_status="ok",
+        target=ExternalPredictionTarget(mid=24500.0, high=24500.0),
+        provenance={"url": "https://example.com/old"},
+    )
+    upsert_prediction(ok_record, symbol="NIFTY")
+
+    fail_record = ExternalPredictionRecord(
+        source_id="economictimes",
+        symbol="NIFTY",
+        horizon_days=14,
+        as_of="2026-07-23",
+        fetch_status="error",
+        error_message="Akamai block",
+        provenance={"searxng_trigger": "bot_all"},
+    )
+    stored, attempt = persist_refresh_result(fail_record, symbol="NIFTY")
+
+    assert attempt.fetch_status == "error"
+    assert stored.fetch_status == "ok"
+    assert stored.target.mid == 24500.0
+    assert stored.provenance.get("last_refresh_attempt", {}).get("fetch_status") == "error"
+
+    on_disk = load_source_prediction("economictimes", symbol="NIFTY", horizon_days=14)
+    assert on_disk is not None
+    assert on_disk.fetch_status == "ok"
+    assert on_disk.target.mid == 24500.0
+
+
+def test_persist_refresh_result_writes_failure_when_no_prior_ok(hub_dir: Path) -> None:
+    fail_record = ExternalPredictionRecord(
+        source_id="new_source",
+        symbol="NIFTY",
+        horizon_days=14,
+        as_of="2026-07-23",
+        fetch_status="not_found",
+        error_message="No forecast",
+    )
+    stored, attempt = persist_refresh_result(fail_record, symbol="NIFTY")
+    assert stored.fetch_status == "not_found"
+    assert attempt.fetch_status == "not_found"
+    on_disk = load_source_prediction("new_source", symbol="NIFTY", horizon_days=14)
+    assert on_disk is not None
+    assert on_disk.fetch_status == "not_found"
+
+
+def test_persist_refresh_result_retains_ok_across_horizons(hub_dir: Path) -> None:
+    ok_14 = ExternalPredictionRecord(
+        source_id="economictimes",
+        symbol="NIFTY",
+        horizon_days=14,
+        as_of="2026-07-23",
+        fetch_status="ok",
+        target=ExternalPredictionTarget(mid=24500.0, high=24500.0),
+    )
+    upsert_prediction(ok_14, symbol="NIFTY")
+
+    fail_30 = ExternalPredictionRecord(
+        source_id="economictimes",
+        symbol="NIFTY",
+        horizon_days=30,
+        as_of="2026-07-23",
+        fetch_status="error",
+        error_message="timeout",
+    )
+    persist_refresh_result(fail_30, symbol="NIFTY")
+
+    kept_14 = load_source_prediction("economictimes", symbol="NIFTY", horizon_days=14)
+    assert kept_14 is not None
+    assert kept_14.fetch_status == "ok"
+    assert kept_14.target.mid == 24500.0
+
+    stored_30 = load_source_prediction("economictimes", symbol="NIFTY", horizon_days=30)
+    assert stored_30 is not None
+    assert stored_30.fetch_status == "error"
+
+
+def test_search_source_results_all_queries_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+        search_source_results_with_outcome,
+    )
+
+    source = ExternalPredictionSource(
+        id="test_src",
+        display_name="Test",
+        domains=["example.com"],
+        search_queries=["q1", "q2"],
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("searxng down")
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.search_finance",
+        _boom,
+    )
+    outcome = search_source_results_with_outcome(source, horizon_days=14)
+    assert outcome.all_queries_failed
+    assert outcome.hits == []
+
+
+def test_extract_via_searxng_reuses_cached_hits(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+        SearxngDiscoveryResult,
+        extract_via_searxng_fallback,
+    )
+
+    source = ExternalPredictionSource(
+        id="economictimes",
+        display_name="ET",
+        domains=["economictimes.indiatimes.com"],
+        search_queries=["Nifty target"],
+    )
+    calls = {"search": 0}
+
+    def _should_not_search(*_args, **_kwargs):
+        calls["search"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.search_source_results_with_outcome",
+        _should_not_search,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.fetch_source_content",
+        lambda *_a, **_k: ("", "", ""),
+    )
+
+    discovery = SearxngDiscoveryResult(
+        hits=[{"url": "https://economictimes.indiatimes.com/x", "title": "Nifty"}],
+        queries_run=1,
+        queries_failed=0,
+    )
+    extract_via_searxng_fallback(
+        source,
+        horizon_days=14,
+        search_outcome=discovery,
+    )
+    assert calls["search"] == 0
+
+
+def test_extract_via_searxng_retries_when_discovery_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+        SearxngDiscoveryResult,
+        extract_via_searxng_fallback,
+    )
+
+    source = ExternalPredictionSource(
+        id="economictimes",
+        display_name="ET",
+        domains=["economictimes.indiatimes.com"],
+        search_queries=["Nifty target"],
+    )
+    calls = {"search": 0}
+
+    def _search(*_args, **_kwargs):
+        calls["search"] += 1
+        from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+            SearxngSearchOutcome,
+        )
+
+        return SearxngSearchOutcome(hits=[], queries_run=1, queries_failed=1)
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.search_source_results_with_outcome",
+        _search,
+    )
+
+    failed_discovery = SearxngDiscoveryResult(
+        discovery_failed=True,
+        queries_run=1,
+        queries_failed=1,
+    )
+    extract_via_searxng_fallback(
+        source,
+        horizon_days=14,
+        search_outcome=failed_discovery,
+    )
+    assert calls["search"] == 1

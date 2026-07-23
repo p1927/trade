@@ -152,8 +152,32 @@ def _list_match_candidates(
     publish_day: str | None,
     parent_event_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load distilled events for staging match."""
+    """Load distilled events for staging match (index-backed when available)."""
     sym = ticker.strip().upper()
+    try:
+        from trade_integrations.hub_storage.news_event_index import (
+            ensure_event_index,
+            query_index_candidates,
+        )
+
+        ensure_event_index(ticker=sym)
+        indexed = query_index_candidates(
+            ticker=sym,
+            publish_day=publish_day or None,
+            parent_event_id=parent_event_id,
+            limit=120 if parent_event_id else 80,
+        )
+        if indexed:
+            if parent_event_id:
+                return [
+                    row
+                    for row in indexed
+                    if event_parent_id(row) == parent_event_id or not event_parent_id(row)
+                ]
+            return indexed
+    except Exception as exc:
+        logger.debug("event index match candidates fallback: %s", exc)
+
     if parent_event_id:
         events = list_events(
             ticker=sym,
@@ -245,99 +269,128 @@ def process_staging_ref(
     )
 
 
+def _apply_post_upsert_safety(
+    result: dict[str, Any],
+    *,
+    event_id: str,
+    ticker: str,
+    enriched: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Phase 4 merge-on-write safety net after successful upsert."""
+    from trade_integrations.dataflows.index_research.news_post_upsert_safety import (
+        run_post_upsert_safety_scan,
+    )
+    from trade_integrations.hub_storage.news_staging_store import mark_ref_merged
+
+    try:
+        safety = run_post_upsert_safety_scan(event_id, ticker=ticker)
+        result["post_upsert_safety"] = safety
+        canonical = str(
+            safety.get("canonical_event_id")
+            or safety.get("merged_into")
+            or event_id
+        )
+        if safety.get("merged_into") and canonical != event_id:
+            result["event_id"] = canonical
+            if result.get("action") == "create":
+                result["action"] = "update"
+            for ref in enriched:
+                rid = str(ref.get("ref_id") or "")
+                if rid:
+                    mark_ref_merged(rid, canonical)
+    except Exception as exc:
+        logger.debug("post-upsert safety scan skipped for %s: %s", event_id, exc)
+    return result
+
+
 def process_staging_group(
     refs: list[dict[str, Any]],
     *,
     ticker: str | None = None,
     market_context: dict[str, Any] | None = None,
     adjudication_summary: dict[str, Any] | None = None,
+    t4_budget: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Match a deduped ref group to hub event, distill once, verify, and upsert."""
     if not refs:
         return {"action": "skip_empty", "event_id": ""}
-    from trade_integrations.dataflows.index_research.news_claim_extraction import enrich_ref_with_claims
     from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headline_rows
-
-    enriched: list[dict[str, Any]] = []
-    for ref in refs:
-        enriched.append(enrich_ref_with_claims(dict(ref)))
-    sym = (ticker or enriched[-1].get("ticker") or "NIFTY").strip().upper()
-
-    from trade_integrations.dataflows.index_research.news_relevance import (
-        assess_ref_relevance,
-        relevance_min_confidence,
+    from trade_integrations.dataflows.index_research.news_resolver import (
+        attach_refs_to_event,
+        resolve_staging_group,
     )
     from trade_integrations.hub_storage.news_staging_store import mark_ref_discarded
 
-    kept: list[dict[str, Any]] = []
-    for candidate in enriched:
-        verdict = assess_ref_relevance(candidate, ticker=sym)
-        if not verdict.relevant and verdict.confidence >= relevance_min_confidence():
-            mark_ref_discarded(
-                str(candidate.get("ref_id") or ""),
-                reason=verdict.reason or "irrelevant",
-                relevance=verdict.to_dict(),
-                restore_payload=dict(candidate),
-                source_kind="auto_gate",
-            )
-            continue
-        kept.append(candidate)
-    if not kept:
-        return {
-            "action": "discard_irrelevant",
-            "reason": "all_refs_irrelevant",
-            "confidence": relevance_min_confidence(),
-        }
-    enriched = kept
-
-    from trade_integrations.dataflows.article_body import enrich_ref_summary_from_url
-
-    enriched = [enrich_ref_summary_from_url(r) for r in enriched]
+    decision = resolve_staging_group(
+        refs,
+        ticker=ticker,
+        market_context=market_context,
+        adjudication_summary=adjudication_summary,
+        t4_budget=t4_budget,
+    )
+    sym = (
+        ticker
+        or (decision.enriched_refs[-1].get("ticker") if decision.enriched_refs else None)
+        or "NIFTY"
+    )
+    sym = str(sym).strip().upper()
+    enriched = decision.enriched_refs or list(refs)
     ref = _pick_primary_ref(enriched)
+    publish_day = publish_day_from_value(str(ref.get("published_at") or ""))
+    adjudication_summary = decision.adjudication_summary
 
-    if adjudication_summary is None:
-        from trade_integrations.dataflows.index_research.news_llm_story_pipeline import (
-            adjudication_summary_from_refs,
+    if decision.action == "discard":
+        for r in enriched:
+            rid = str(r.get("ref_id") or "")
+            if rid:
+                mark_ref_discarded(
+                    rid,
+                    reason=decision.reason or "resolver_discard",
+                    restore_payload=dict(r),
+                    source_kind="resolver",
+                )
+        return {
+            "action": "discard_irrelevant" if decision.reason == "all_refs_irrelevant" else "discard",
+            "reason": decision.reason,
+            "tier": decision.tier,
+            "event_id": decision.event_id,
+        }
+
+    if decision.action == "skip_duplicate_url":
+        for r in enriched:
+            if r.get("ref_id"):
+                mark_ref_merged(str(r["ref_id"]), decision.event_id)
+        return {"action": "skip_duplicate_url", "event_id": decision.event_id}
+
+    if decision.action == "enrich" and decision.attach_only and decision.matched_event:
+        attach = attach_refs_to_event(refs=enriched, event_id=decision.event_id, ticker=sym)
+        if not attach.get("ok"):
+            return {"action": "error", "event_id": decision.event_id, "reason": attach.get("reason")}
+        for r in enriched:
+            if r.get("ref_id"):
+                mark_ref_merged(str(r["ref_id"]), decision.event_id)
+        out = {
+            "action": "update",
+            "event_id": decision.event_id,
+            "ref_count": len(enriched),
+            "attach_only": True,
+            "tier": decision.tier,
+            "stats": attach,
+        }
+        return _apply_post_upsert_safety(
+            out,
+            event_id=decision.event_id,
+            ticker=sym,
+            enriched=enriched,
         )
 
-        adjudication_summary = adjudication_summary_from_refs(enriched)
-
-    publish_day = publish_day_from_value(str(ref.get("published_at") or ""))
-
-    ref_tags = ref.get("tags") if isinstance(ref.get("tags"), dict) else {}
-    parent_id = infer_parent_event_id(ref, tags=ref_tags)
-    if parent_id:
-        ref["parent_event_id"] = parent_id
-
-    matched: dict[str, Any] | None = None
-    wiki_hit: dict[str, Any] | None = None
-    try:
-        from trade_integrations.dataflows.hub_wiki.search_dedup import find_wiki_match_for_record
-        from trade_integrations.hub_storage.news_pipeline_config import load_news_pipeline_config
-
-        pipe_cfg = load_news_pipeline_config()
-        if pipe_cfg.wiki_search_enabled:
-            wiki_hit = find_wiki_match_for_record(
-                ref,
-                ticker=sym,
-                top_k=pipe_cfg.wiki_search_top_k,
-                min_score=pipe_cfg.wiki_search_min_score,
-            )
-            if wiki_hit:
-                stored = get_event(str(wiki_hit.get("event_id") or ""))
-                if stored:
-                    candidate = distilled_event_to_headline_dict(stored)
-                    if find_matching_event(ref, [candidate], ticker=sym):
-                        matched = candidate
-                    else:
-                        wiki_hit = None
-    except Exception as exc:
-        logger.debug("wiki staging match skipped: %s", exc)
+    matched = decision.matched_event
+    event_id = decision.event_id
+    wiki_hit = decision.wiki_hit
 
     if wiki_hit and matched:
-        enrichment = wiki_hit.get("enrichment") or {}
         seen_urls = {str(r.get("url") or "") for r in enriched if r.get("url")}
-        for wiki_ref in enrichment.get("references") or []:
+        for wiki_ref in (wiki_hit.get("enrichment") or {}).get("references") or []:
             if not isinstance(wiki_ref, dict):
                 continue
             url = str(wiki_ref.get("url") or "")
@@ -353,25 +406,6 @@ def process_staging_group(
                     "published_at": ref.get("published_at") or "",
                 }
             )
-
-    if not matched:
-        candidates = _list_match_candidates(
-            ticker=sym,
-            publish_day=publish_day or None,
-            parent_event_id=parent_id,
-        )
-        matched = find_matching_event(ref, candidates, ticker=sym)
-    event_id = str(
-        matched.get("canonical_story_id") or matched.get("event_id") or ""
-    ) if matched else ""
-
-    if not matched:
-        url_id = canonical_story_id(str(ref.get("title") or ""), str(ref.get("url") or ""))
-        if url_id and get_event(url_id):
-            for r in enriched:
-                if r.get("ref_id"):
-                    mark_ref_merged(str(r["ref_id"]), url_id)
-            return {"action": "skip_duplicate_url", "event_id": url_id}
 
     if matched:
         prior_meta = ((matched.get("structured_summary") or {}).get("event_meta") or {})
@@ -394,7 +428,7 @@ def process_staging_group(
         row = _apply_distilled_to_row(row, distilled)
         action = "update"
     else:
-        event_id = canonical_story_id(str(ref.get("title") or ""), str(ref.get("url") or ""))
+        event_id = decision.event_id or canonical_story_id(str(ref.get("title") or ""), str(ref.get("url") or ""))
         row = _ref_to_process_row(ref, event_id=event_id)
         distilled = distill_event(
             refs=enriched,
@@ -449,10 +483,12 @@ def process_staging_group(
         "event_id": event_id,
         "ref_count": len(enriched),
         "stats": stats,
+        "tier": decision.tier,
+        "attach_only": False,
     }
     if wiki_result:
         out["wiki_compile"] = wiki_result
-    return out
+    return _apply_post_upsert_safety(out, event_id=event_id, ticker=sym, enriched=enriched)
 
 
 def _adaptive_drain_batch_size(*, ticker: str | None = None) -> int:
@@ -485,6 +521,14 @@ def process_staging_batch(
     from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status
 
     pause = pipeline_pause_status(ticker=ticker)
+    ttl_purge: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.index_research.news_resolver import purge_stale_pending_refs
+
+        ttl_purge = purge_stale_pending_refs(ticker=ticker)
+    except Exception as exc:
+        logger.debug("staging ttl purge skipped: %s", exc)
+
     if pause.get("pipeline_paused"):
         return {
             "processed": 0,
@@ -496,6 +540,7 @@ def process_staging_batch(
             "pipeline_paused": True,
             "pause_reason": pause.get("pause_reason") or "",
             "pending": pause.get("pending") or {},
+            "staging_ttl_purge": ttl_purge,
         }
 
     require_minimax_for_distillation()
@@ -548,6 +593,7 @@ def process_staging_batch(
         "updated": 0,
         "skipped": 0,
         "errors": 0,
+        "t4_agent_calls": 0,
         "cluster_dedup": cluster_stats,
         "llm_dedup_groups": pipeline_stats.get("llm_dedup_groups", len(groups)),
         "mechanical_refs": pipeline_stats.get("mechanical_refs", len(pending)),
@@ -560,6 +606,12 @@ def process_staging_batch(
         "adjudication_fallback": pipeline_stats.get("adjudication_fallback", 0),
         "story_groups_fallback": pipeline_stats.get("story_groups_fallback", False),
     }
+    from trade_integrations.dataflows.index_research.news_resolver_agent import (
+        resolver_agent_max_per_drain,
+    )
+
+    t4_budget = {"remaining": resolver_agent_max_per_drain()}
+    t4_initial = int(t4_budget["remaining"])
     for group in groups:
         group_refs = group.get("refs")
         if not isinstance(group_refs, list) or not group_refs:
@@ -575,6 +627,7 @@ def process_staging_batch(
                 adjudication_summary=group.get("adjudication_summary")
                 if isinstance(group.get("adjudication_summary"), dict)
                 else None,
+                t4_budget=t4_budget,
             )
             summary["processed"] += int(result.get("ref_count") or len(group_refs))
             action = result.get("action")
@@ -582,8 +635,10 @@ def process_staging_batch(
                 summary["created"] += 1
             elif action == "update":
                 summary["updated"] += 1
-            elif action in {"skip_duplicate_url", "discard_irrelevant", "skip_empty"}:
+            elif action in {"skip_duplicate_url", "discard_irrelevant", "discard", "skip_empty"}:
                 summary["skipped"] += 1
+            elif action == "error":
+                summary["errors"] += 1
             wiki_compile = result.get("wiki_compile")
             if isinstance(wiki_compile, dict) and wiki_compile.get("ok"):
                 summary["wiki_exports"] = int(summary.get("wiki_exports") or 0) + 1
@@ -594,6 +649,7 @@ def process_staging_batch(
                 group.get("group_id"),
                 exc,
             )
+    summary["t4_agent_calls"] = max(0, t4_initial - int(t4_budget.get("remaining") or 0))
     if run_wiki_rescan and int(summary.get("wiki_exports") or 0) > 0:
         try:
             from trade_integrations.dataflows.hub_wiki.compile import batch_rescan_if_enabled
@@ -652,6 +708,15 @@ def _safe_stage(name: str, fn: Any, /, **kwargs: Any) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("hub news entity stage %s failed", name)
         return {"status": "error", "stage": name, "error": str(exc)}
+
+
+def _part_had_errors(part: Any) -> bool:
+    """True when a stage failed outright or reported partial item errors."""
+    if not isinstance(part, dict):
+        return False
+    if part.get("status") == "error":
+        return True
+    return int(part.get("errors") or 0) > 0
 
 
 def _refresh_news_impact_cache(*, ticker: str) -> dict[str, Any]:
@@ -716,6 +781,14 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             )
         staging = _merge_staging_summaries(staging_parts)
 
+    staging_ttl: dict[str, Any] = {}
+    try:
+        from trade_integrations.dataflows.index_research.news_resolver import purge_stale_pending_refs
+
+        staging_ttl = purge_stale_pending_refs(ticker=ticker)
+    except Exception as exc:
+        logger.debug("staging ttl purge skipped: %s", exc)
+
     if pause.get("pipeline_paused"):
         skipped = {
             "skipped": True,
@@ -726,15 +799,13 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "mode": mode,
             "migration": migration,
             "staging": staging,
+            "staging_ttl_purge": staging_ttl,
             "repair": dict(skipped),
             "backfill": dict(skipped),
             "compact_events": dict(skipped),
             "pipeline_paused": True,
             "pause_reason": pause.get("pause_reason") or "",
-            "had_errors": any(
-                isinstance(part, dict) and part.get("status") == "error"
-                for part in (migration, staging)
-            ),
+            "had_errors": any(_part_had_errors(part) for part in (migration, staging)),
         }
 
     if not run_maintenance:
@@ -757,7 +828,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "rollup": {"skipped": True, "reason": "drain_only"},
             "news_impact_refresh": news_impact,
             "had_errors": any(
-                isinstance(part, dict) and part.get("status") == "error"
+                _part_had_errors(part)
                 for part in (migration, staging, compact_events, news_impact)
             ),
         }
@@ -804,10 +875,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         "cleanup": cleanup,
         "rollup": rollup,
         "news_impact_refresh": news_impact,
-        "had_errors": any(
-            isinstance(part, dict) and part.get("status") == "error"
-            for part in (*stages, news_impact)
-        ),
+        "had_errors": any(_part_had_errors(part) for part in (*stages, news_impact)),
     }
     if isinstance(compact_events, dict):
         wiki_block = {
@@ -883,12 +951,32 @@ def _enrich_refs_from_wiki(
     return refs
 
 
+def _event_content_fingerprint(event: dict[str, Any] | None) -> tuple[str, str]:
+    if not event:
+        return "", ""
+    title = str(event.get("title") or "").strip()
+    body = str(
+        event.get("content")
+        or event.get("content_summary")
+        or event.get("summary")
+        or ""
+    ).strip()
+    return title, body
+
+
+def _event_materially_changed(before: dict[str, Any] | None, after: dict[str, Any] | None) -> bool:
+    if not before or not after:
+        return True
+    return _event_content_fingerprint(before) != _event_content_fingerprint(after)
+
+
 def _cleanup_wiki_after_merge(
     *,
     canon_id: str,
     dropped_events: list[dict[str, Any]],
     pre_canonical_snapshot: dict[str, Any] | None,
     dry_run: bool,
+    post_canonical_snapshot: dict[str, Any] | None = None,
 ) -> int:
     if dry_run:
         return len(dropped_events)
@@ -909,8 +997,8 @@ def _cleanup_wiki_after_merge(
         if pre_canonical_snapshot:
             result = remove_event_wiki_files(pre_canonical_snapshot, rescan=False)
             removed += len(result.get("removed") or [])
-        stored = get_event(canon_id)
-        if stored:
+        stored = post_canonical_snapshot or get_event(canon_id)
+        if stored and _event_materially_changed(pre_canonical_snapshot, stored):
             compile_event_to_wiki(stored, rescan=False)
     except Exception as exc:
         logger.debug("wiki cleanup after merge skipped: %s", exc)
@@ -988,10 +1076,12 @@ def _merge_duplicate_group(
         publish_day=publish_day or "",
     )
     rows_removed = remove_events(drop_ids)
+    post_snapshot = get_event(canon_id)
     wiki_files_removed = _cleanup_wiki_after_merge(
         canon_id=canon_id,
         dropped_events=[e for e in dropped_events if e],
         pre_canonical_snapshot=pre_wiki_snapshot,
+        post_canonical_snapshot=post_snapshot,
         dry_run=False,
     )
     consumed.update(group_ids)
@@ -1029,20 +1119,23 @@ def _build_duplicate_group(
     *,
     ticker: str,
     consumed: set[str],
+    wiki_index: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Collect records similar to anchor (semantic search + rule match)."""
-    from trade_integrations.dataflows.index_research.news_entity_semantic_dedup import (
-        build_duplicate_groups_semantic,
+    """Collect records similar to anchor with two-signal merge confirmation."""
+    from trade_integrations.dataflows.index_research.news_event_clubbing import (
+        build_duplicate_groups_two_signal,
+        two_signal_merge_eligible,
     )
 
     anchor_id = str(anchor.get("canonical_story_id") or anchor.get("event_id") or "")
     if not anchor_id or anchor_id in consumed:
         return [anchor]
 
-    groups = build_duplicate_groups_semantic(
+    groups = build_duplicate_groups_two_signal(
         records,
         ticker=ticker,
         consumed=consumed,
+        wiki_index=wiki_index,
     )
     for group in groups:
         ids = {
@@ -1052,17 +1145,19 @@ def _build_duplicate_group(
         if anchor_id in ids:
             return group
 
-    from trade_integrations.dataflows.index_research.news_event_matching import find_matching_event
-
     group = [anchor]
     group_ids = {anchor_id}
     for other in records:
         oid = str(other.get("canonical_story_id") or other.get("event_id") or "")
         if not oid or oid in consumed or oid in group_ids:
             continue
-        ref = _record_to_ref(other)
-        ref["tags"] = other.get("tags") or ref.get("tags")
-        if find_matching_event(ref, [anchor], ticker=ticker):
+        ok, _reason = two_signal_merge_eligible(
+            anchor,
+            other,
+            ticker=ticker,
+            wiki_index=wiki_index,
+        )
+        if ok:
             group.append(other)
             group_ids.add(oid)
     return group
@@ -1339,11 +1434,15 @@ def _compact_distilled_events_once(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Single compaction pass over distilled events parquet."""
-    from datetime import date, timedelta
+    from datetime import timedelta
+
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+    from datetime import date
 
     require_minimax_for_distillation()
     sym = ticker.strip().upper()
-    since = (date.today() - timedelta(days=max(lookback_days, 1))).isoformat()
+    end = date.fromisoformat(india_trading_date_iso()[:10])
+    since = (end - timedelta(days=max(lookback_days, 1))).isoformat()
     raw_events = list_events(
         ticker=sym,
         since=since,
@@ -1365,8 +1464,8 @@ def _compact_distilled_events_once(
         reset_wiki_search_availability_cache,
         wiki_search_available,
     )
-    from trade_integrations.dataflows.index_research.news_entity_semantic_dedup import (
-        build_duplicate_groups_semantic,
+    from trade_integrations.dataflows.index_research.news_event_clubbing import (
+        build_duplicate_groups_two_signal,
     )
     from trade_integrations.hub_storage.news_pipeline_config import load_news_pipeline_config
 
@@ -1417,7 +1516,12 @@ def _compact_distilled_events_once(
         except Exception as exc:
             logger.debug("llm-wiki post-compaction rescan skipped: %s", exc)
 
-    duplicate_groups = build_duplicate_groups_semantic(records, ticker=sym, consumed=consumed)
+    duplicate_groups = build_duplicate_groups_two_signal(
+        records,
+        ticker=sym,
+        consumed=consumed,
+        wiki_index=wiki_index,
+    )
     for group in duplicate_groups:
         result = _merge_duplicate_group(
             group,
@@ -1435,7 +1539,7 @@ def _compact_distilled_events_once(
         anchor_id = str(anchor.get("canonical_story_id") or anchor.get("event_id") or "")
         if not anchor_id or anchor_id in consumed:
             continue
-        group = _build_duplicate_group(anchor, records, ticker=sym, consumed=consumed)
+        group = _build_duplicate_group(anchor, records, ticker=sym, consumed=consumed, wiki_index=wiki_index)
         result = _merge_duplicate_group(
             group,
             ticker=sym,

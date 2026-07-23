@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
 from trade_integrations.dataflows.article_body import fetch_article_body
 from trade_integrations.dataflows.index_research.external_predictions.models import (
+    ExternalPredictionRecord,
     ExternalPredictionSource,
 )
 from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
@@ -32,6 +34,34 @@ _RELEVANCE_TERMS = (
     "outlook",
     "view",
 )
+
+
+@dataclass
+class SearxngSearchOutcome:
+    hits: list[dict[str, Any]] = field(default_factory=list)
+    queries_run: int = 0
+    queries_failed: int = 0
+
+    @property
+    def all_queries_failed(self) -> bool:
+        return self.queries_run > 0 and self.queries_failed >= self.queries_run
+
+    @property
+    def empty(self) -> bool:
+        return not self.hits
+
+
+@dataclass
+class SearxngDiscoveryResult:
+    urls: list[str] = field(default_factory=list)
+    hits: list[dict[str, Any]] = field(default_factory=list)
+    queries_run: int = 0
+    queries_failed: int = 0
+    discovery_failed: bool = False
+
+    @property
+    def all_queries_failed(self) -> bool:
+        return self.queries_run > 0 and self.queries_failed >= self.queries_run
 
 
 def _domain(host: str) -> str:
@@ -76,16 +106,18 @@ def rank_search_results(
     return ranked[:limit]
 
 
-def search_source_results(
+def search_source_results_with_outcome(
     source: ExternalPredictionSource,
     *,
     horizon_days: int,
     limit: int = 8,
     pipeline: PipelineLogger | None = None,
-) -> list[dict[str, Any]]:
+) -> SearxngSearchOutcome:
     collected: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     queries = format_queries(source, horizon_days=horizon_days)
+    queries_run = 0
+    queries_failed = 0
     if pipeline:
         pipeline.info(
             "searxng",
@@ -93,11 +125,13 @@ def search_source_results(
             source_id=source.id,
         )
     for query in queries:
+        queries_run += 1
         if pipeline:
             pipeline.info("searxng", f"Query: {query}", source_id=source.id)
         try:
             rows = search_finance(query, limit=limit)
         except Exception as exc:
+            queries_failed += 1
             if pipeline:
                 pipeline.warn("searxng", f"Search failed: {exc}", source_id=source.id, query=query)
             logger.debug("search failed for %s query=%r: %s", source.id, query, exc)
@@ -116,13 +150,41 @@ def search_source_results(
             seen_urls.add(url)
             collected.append(row)
     ranked = rank_search_results(collected, source, limit=3)
+    outcome = SearxngSearchOutcome(
+        hits=ranked,
+        queries_run=queries_run,
+        queries_failed=queries_failed,
+    )
     if pipeline:
-        pipeline.info(
-            "searxng",
-            f"Ranked {len(ranked)} candidate article(s) for {source.display_name}",
-            source_id=source.id,
-        )
-    return ranked
+        if outcome.all_queries_failed:
+            pipeline.warn(
+                "searxng",
+                f"All {queries_run} SearXNG queries failed for {source.display_name}",
+                source_id=source.id,
+            )
+        else:
+            pipeline.info(
+                "searxng",
+                f"Ranked {len(ranked)} candidate article(s) for {source.display_name}",
+                source_id=source.id,
+                queries_failed=queries_failed,
+            )
+    return outcome
+
+
+def search_source_results(
+    source: ExternalPredictionSource,
+    *,
+    horizon_days: int,
+    limit: int = 8,
+    pipeline: PipelineLogger | None = None,
+) -> list[dict[str, Any]]:
+    return search_source_results_with_outcome(
+        source,
+        horizon_days=horizon_days,
+        limit=limit,
+        pipeline=pipeline,
+    ).hits
 
 
 def fetch_source_content(
@@ -188,14 +250,37 @@ def filter_discovery_urls(
     return urls
 
 
+def discover_source_with_results(
+    source: ExternalPredictionSource,
+    *,
+    horizon_days: int,
+    pipeline: PipelineLogger | None = None,
+) -> SearxngDiscoveryResult:
+    outcome = search_source_results_with_outcome(
+        source,
+        horizon_days=horizon_days,
+        pipeline=pipeline,
+    )
+    urls = filter_discovery_urls(outcome.hits, source)
+    return SearxngDiscoveryResult(
+        urls=urls,
+        hits=list(outcome.hits),
+        queries_run=outcome.queries_run,
+        queries_failed=outcome.queries_failed,
+    )
+
+
 def discover_source_urls(
     source: ExternalPredictionSource,
     *,
     horizon_days: int,
     pipeline: PipelineLogger | None = None,
 ) -> list[str]:
-    rows = search_source_results(source, horizon_days=horizon_days, pipeline=pipeline)
-    return filter_discovery_urls(rows, source)
+    return discover_source_with_results(
+        source,
+        horizon_days=horizon_days,
+        pipeline=pipeline,
+    ).urls
 
 
 def discover_sources_parallel(
@@ -203,19 +288,21 @@ def discover_sources_parallel(
     *,
     horizon_days: int,
     pipeline: PipelineLogger | None = None,
-) -> dict[str, list[str]]:
-    """Run SearXNG discovery for each source in parallel."""
+) -> dict[str, SearxngDiscoveryResult]:
+    """Run SearXNG discovery for each source in parallel (single search per source per batch)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if not sources:
         return {}
 
-    out: dict[str, list[str]] = {source.id: [] for source in sources}
+    out: dict[str, SearxngDiscoveryResult] = {
+        source.id: SearxngDiscoveryResult() for source in sources
+    }
     max_workers = min(8, len(sources))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(
-                discover_source_urls,
+                discover_source_with_results,
                 source,
                 horizon_days=horizon_days,
                 pipeline=pipeline,
@@ -234,4 +321,141 @@ def discover_sources_parallel(
                         source_id=source.id,
                     )
                 logger.debug("parallel discovery failed for %s: %s", source.id, exc)
+                out[source.id] = SearxngDiscoveryResult(
+                    queries_run=1,
+                    queries_failed=1,
+                    discovery_failed=True,
+                )
     return out
+
+
+def discovery_urls_map(
+    discovery: dict[str, SearxngDiscoveryResult],
+) -> dict[str, list[str]]:
+    return {source_id: bundle.urls for source_id, bundle in discovery.items()}
+
+
+def extract_via_searxng_fallback(
+    source: ExternalPredictionSource,
+    *,
+    symbol: str = "NIFTY",
+    horizon_days: int = 14,
+    spot: float | None = None,
+    pipeline: PipelineLogger | None = None,
+    search_outcome: SearxngSearchOutcome | SearxngDiscoveryResult | None = None,
+) -> ExternalPredictionRecord | None:
+    """
+    Text-only fallback when Crawl4AI is blocked — search SearXNG and extract without screenshots.
+    """
+    from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_fetcher import (
+        filter_markdown_for_extraction,
+        source_keywords,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.financial_expert_agent import (
+        extract_forecast,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        utc_now_iso,
+    )
+
+    sym = symbol.upper()
+    if pipeline:
+        pipeline.info(
+            "searxng",
+            f"SearXNG text fallback for {source.display_name}",
+            source_id=source.id,
+        )
+
+    keywords = source_keywords(source, horizon_days=horizon_days)
+    if search_outcome is not None:
+        if isinstance(search_outcome, SearxngDiscoveryResult):
+            if search_outcome.discovery_failed:
+                if pipeline:
+                    pipeline.info(
+                        "searxng",
+                        f"Discovery failed earlier — running direct SearXNG search for {source.display_name}",
+                        source_id=source.id,
+                    )
+                outcome = search_source_results_with_outcome(
+                    source,
+                    horizon_days=horizon_days,
+                    pipeline=pipeline,
+                )
+                hits = outcome.hits
+            else:
+                hits = list(search_outcome.hits)
+                outcome = SearxngSearchOutcome(
+                    hits=hits,
+                    queries_run=search_outcome.queries_run,
+                    queries_failed=search_outcome.queries_failed,
+                )
+                if pipeline:
+                    pipeline.info(
+                        "searxng",
+                        f"Reusing cached SearXNG hits for {source.display_name} ({len(hits)} ranked)",
+                        source_id=source.id,
+                    )
+        else:
+            outcome = search_outcome
+            hits = list(outcome.hits)
+    else:
+        outcome = search_source_results_with_outcome(
+            source,
+            horizon_days=horizon_days,
+            pipeline=pipeline,
+        )
+        hits = outcome.hits
+
+    if outcome.all_queries_failed:
+        if pipeline:
+            pipeline.warn(
+                "searxng",
+                f"SearXNG fallback skipped — all queries failed for {source.display_name}",
+                source_id=source.id,
+            )
+        return None
+
+    last_record: ExternalPredictionRecord | None = None
+
+    for hit in hits:
+        title, url, body = fetch_source_content(hit, pipeline=pipeline, source_id=source.id)
+        if len(body.strip()) < 80:
+            continue
+        filtered = filter_markdown_for_extraction(
+            body,
+            keywords,
+            horizon_days=horizon_days,
+        )
+        snippet = "\n".join(filtered.splitlines()[:12])
+        record = extract_forecast(
+            source=source,
+            horizon_days=horizon_days,
+            spot=spot,
+            title=title or source.display_name,
+            url=url,
+            snippet=snippet,
+            body=filtered,
+            symbol=sym,
+            screenshot_artifacts=None,
+            pipeline=pipeline,
+        )
+        record.as_of = utc_now_iso()[:10]
+        record.spot_at_fetch = spot
+        record.provenance = {
+            **dict(record.provenance or {}),
+            "url": url,
+            "title": title or record.provenance.get("title", ""),
+            "fetch_method": "searxng_text",
+            "navigation_mode": "searxng_fallback",
+        }
+        last_record = record
+        if record.fetch_status == "ok":
+            if pipeline:
+                pipeline.info(
+                    "searxng",
+                    f"Fallback extracted forecast from {url[:100]}",
+                    source_id=source.id,
+                )
+            return record
+
+    return last_record

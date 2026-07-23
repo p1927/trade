@@ -300,6 +300,13 @@ def list_verified_tickers() -> list[str]:
     tickers = list_event_tickers()
     if tickers:
         return tickers
+    try:
+        from trade_integrations.hub_storage.news_migrations import events_ssot_finalized, needs_news_migration
+
+        if events_ssot_finalized() or not needs_news_migration():
+            return []
+    except Exception:
+        pass
     frame = _load_records_frame()
     if frame.empty or "ticker" not in frame.columns:
         return []
