@@ -108,6 +108,7 @@ def recover_stale_agent_streaming(*, max_age_s: float = _STALE_STREAMING_MAX_AGE
 
 def _build_bootstrap_structure_recovery_message(*, agent_id: str, focus: str) -> str:
     return (
+        "# Autonomous agent turn (bootstrap recovery)\n\n"
         "## Bootstrap finalize recovery\n"
         f"Agent `{agent_id}` recorded a decision but bootstrap is not ready to finalize.\n"
         f"1. Call `get_options_trade_plan(ticker=\"{focus}\")` or `get_options_trade_widget` once.\n"
