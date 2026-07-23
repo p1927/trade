@@ -41,6 +41,24 @@ class TestAutonomousTurns:
         assert 'load_skill("stock-advisor")' in prompt
         assert 'load_skill("options-advisor")' not in prompt
 
+    def test_observe_bootstrap_prompt_excludes_widget_and_enter(self):
+        agent = {
+            "id": "aa_obs1",
+            "name": "NIFTY watch",
+            "symbols": ["NIFTY"],
+            "mandate": "Observe NIFTY; watch index and post concise reports.",
+            "constraints": {"mode": "paper", "confidence_threshold": 75},
+            "execution_market": "IN",
+            "mandate_config": {"agent_mode": "observe", "allowed_instruments": ["equity"]},
+        }
+        prompt = build_full_reasoning_prompt(agent=agent, turn_kind="bootstrap")
+        assert "Observe bootstrap" in prompt or "observe bootstrap" in prompt.lower()
+        assert "get_index_trade_widget" not in prompt
+        assert "get_options_trade_widget" not in prompt
+        assert "Decision: WATCH | SKIP" in prompt
+        assert "Decision: ENTER" not in prompt
+        assert 'load_skill("index-advisor")' not in prompt
+
     def test_strategy_revision_includes_progress_block(self, monkeypatch):
         agent = {
             "id": "aa_test1",

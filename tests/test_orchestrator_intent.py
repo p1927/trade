@@ -111,6 +111,22 @@ def test_create_nifty_agent_does_not_extract_agent_ticker() -> None:
     assert extract_orchestrator_symbols("Create NIFTY paper trade agent ₹20k intraday") == ["NIFTY"]
 
 
+def test_watch_and_report_sets_observe_mode() -> None:
+    from trade_integrations.autonomous_agents.orchestrator_intent import build_auto_propose_kwargs
+
+    kwargs = build_auto_propose_kwargs(
+        user_message="Watch NIFTY and report on index moves",
+        assistant_text="",
+        orchestrator_session_id="orch_obs",
+    )
+    assert kwargs is not None
+    assert kwargs.get("agent_mode") == "observe"
+    assert kwargs.get("allowed_instruments") == ["equity"]
+    assert "NIFTY" in kwargs["symbols"]
+    assert "observe" in kwargs["mandate"].lower() or "report" in kwargs["mandate"].lower()
+    assert "options" not in str(kwargs.get("allowed_instruments"))
+
+
 @pytest.fixture
 def agents_hub(tmp_path, monkeypatch):
     hub = tmp_path / "hub"

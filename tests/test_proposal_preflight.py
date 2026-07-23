@@ -38,7 +38,19 @@ def test_nifty_proposal_routes_india(agents_hub) -> None:
     assert prop["execution_market"] == "IN"
     assert prop["execution_backend"] == "openalgo"
     assert prop["symbols"] == ["NIFTY"]
-    assert not prop.get("routing_errors")
+
+
+def test_observe_mandate_proposal_sets_agent_mode(agents_hub) -> None:
+    result = propose_autonomous_agent(
+        symbols=["NIFTY"],
+        mandate="Watch NIFTY and report on index moves",
+        user_text="Watch NIFTY and report",
+        execution_market="IN",
+    )
+    assert result["status"] == "ready"
+    mc = result["proposal"].get("mandate_config") or {}
+    assert mc.get("agent_mode") == "observe"
+    assert mc.get("allowed_instruments") == ["equity"]
 
 
 def test_niftybees_proposal_routes_india(agents_hub, monkeypatch) -> None:

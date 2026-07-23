@@ -21,6 +21,7 @@ from trade_integrations.autonomous_agents.mandate_config import (  # noqa: E402
 from trade_integrations.autonomous_agents.mandate_enforcer import (  # noqa: E402
     MandateViolation,
     assert_can_execute,
+    assert_widget_allowed,
     validate_decision,
 )
 
@@ -104,3 +105,32 @@ def test_validate_decision_hold_after_close_intraday(monkeypatch):
     decision, warnings = validate_decision("HOLD", session)
     assert decision == "EXIT"
     assert warnings
+
+
+def test_observe_mode_blocks_execute_and_widgets():
+    observe = MandateConfig(agent_mode="observe")
+    session = {"enabled": True, "mandate_config": observe.to_dict()}
+    with pytest.raises(MandateViolation) as exc:
+        assert_can_execute(session, mandate=observe)
+    assert exc.value.code == "observe_mode"
+
+    widget = {"widget_id": "tp_test", "recommended": {"asset_class": "options"}}
+    with pytest.raises(MandateViolation) as exc2:
+        assert_widget_allowed(widget, observe)
+    assert exc2.value.code == "observe_mode"
+
+
+def test_observe_mode_validate_decision_blocks_enter():
+    observe = MandateConfig(agent_mode="observe")
+    session = {"enabled": True, "mandate_config": observe.to_dict()}
+    decision, warnings = validate_decision("ENTER", session, mandate=observe)
+    assert decision == "SKIP"
+    assert any("observe_mode" in w for w in warnings)
+    watch_decision, _ = validate_decision("WATCH", session, mandate=observe)
+    assert watch_decision == "WATCH"
+
+
+def test_parse_observe_mandate_sets_agent_mode():
+    cfg = parse_mandate_from_text("Watch NIFTY and report on index moves", symbols=["NIFTY"])
+    assert cfg.agent_mode == "observe"
+    assert cfg.allowed_instruments == ["equity"]
