@@ -162,6 +162,81 @@ def test_should_retry_engine_search_only_for_transient_reasons():
 
 
 @pytest.mark.unit
+def test_should_retry_engine_search_only_for_transient_reasons():
+    transient = {"unresponsive_engines": [["bing", "timeout"]], "results": []}
+    blocked = {"unresponsive_engines": [["bing", "CAPTCHA"]], "results": []}
+
+    assert searxng_client.should_retry_engine_search(transient, "bing", attempt=0) is True
+    assert searxng_client.should_retry_engine_search(transient, "bing", attempt=1) is False
+    assert searxng_client.should_retry_engine_search(blocked, "bing", attempt=0) is False
+
+
+@pytest.mark.unit
+def test_classify_unresponsive_reason_from_log_strings():
+    read_timeout = (
+        "HTTP requests timeout (search duration : 10.0 s, timeout: 10.0 s) : ReadTimeout"
+    )
+    dns_err = "requests exception (search duration : 0.006 s, timeout: 10.0 s) : [Errno -2] Name or service not known"
+    server_err = "requests exception (search duration : 0.930 s, timeout: 10.0 s) : Server error '500 Internal Server Error'"
+    captcha = "CAPTCHA (suspended_time=0)"
+
+    assert searxng_client.classify_unresponsive_reason(read_timeout) == "transient"
+    assert searxng_client.classify_unresponsive_reason(dns_err) == "transient"
+    assert searxng_client.classify_unresponsive_reason(server_err) == "transient"
+    assert searxng_client.classify_unresponsive_reason(captcha) == "hard"
+    assert searxng_client.classify_unresponsive_reason("403") == "hard"
+
+
+@pytest.mark.unit
+def test_engine_unresponsive_transient_matches_log_reason_substrings():
+    payload = {
+        "unresponsive_engines": [
+            [
+                "bing",
+                "HTTP requests timeout (search duration : 10.0 s, timeout: 10.0 s) : ReadTimeout",
+            ]
+        ],
+        "results": [],
+    }
+    assert searxng_client.engine_unresponsive_transient(payload, "bing") is True
+    assert searxng_client.should_retry_engine_search(payload, "bing", attempt=0) is True
+
+
+@pytest.mark.unit
+def test_search_json_records_success_for_transient_unresponsive_engine(monkeypatch):
+    events: list[str] = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [],
+                "unresponsive_engines": [
+                    [
+                        "bing",
+                        "requests exception (search duration : 0.006 s, timeout: 10.0 s) : [Errno -2] Name or service not known",
+                    ]
+                ],
+            }
+
+    monkeypatch.setattr(searxng_client, "get", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(searxng_client, "_base_url", lambda: "http://searxng.test")
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.source_availability.record_failure",
+        lambda vendor, capability, exc: events.append(f"fail:{exc}"),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.source_availability.record_success",
+        lambda vendor, capability: events.append("success"),
+    )
+
+    searxng_client.search_json("macro probe", categories="finance", engines="bing")
+    assert events == ["success"]
+
+
+@pytest.mark.unit
 def test_search_json_records_failure_for_hard_unresponsive_engine(monkeypatch):
     events: list[str] = []
 

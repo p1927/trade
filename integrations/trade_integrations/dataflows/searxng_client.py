@@ -78,6 +78,41 @@ _TRANSIENT_UNRESPONSIVE_REASONS = frozenset(
     {"parsing error", "timeout", "unexpected crash"}
 )
 
+_HARD_UNRESPONSIVE_SUBSTRINGS = (
+    "captcha",
+    "403",
+    "access denied",
+    "429",
+    "blocked",
+)
+
+_TRANSIENT_UNRESPONSIVE_SUBSTRINGS = (
+    "timeout",
+    "readtimeout",
+    "connecttimeout",
+    "engine timeout",
+    "500",
+    "502",
+    "503",
+    "name or service not known",
+    "no address associated",
+    "requests exception",
+)
+
+
+def classify_unresponsive_reason(reason: str) -> str:
+    """Return ``hard``, ``transient``, or ``unknown`` for a SearXNG engine reason string."""
+    lowered = (reason or "").strip().lower()
+    if not lowered:
+        return "unknown"
+    if lowered in _TRANSIENT_UNRESPONSIVE_REASONS:
+        return "transient"
+    if any(token in lowered for token in _HARD_UNRESPONSIVE_SUBSTRINGS):
+        return "hard"
+    if any(token in lowered for token in _TRANSIENT_UNRESPONSIVE_SUBSTRINGS):
+        return "transient"
+    return "unknown"
+
 
 def engine_unresponsive_reason(payload: dict[str, Any], engine: str) -> str | None:
     """Return the unresponsive reason for ``engine``, or None when it responded."""
@@ -95,7 +130,7 @@ def engine_unresponsive_transient(payload: dict[str, Any], engine: str) -> bool:
     reason = engine_unresponsive_reason(payload, engine)
     if reason is None:
         return False
-    return reason.lower() in _TRANSIENT_UNRESPONSIVE_REASONS
+    return classify_unresponsive_reason(reason) == "transient"
 
 
 def should_retry_engine_search(payload: dict[str, Any], engine: str, *, attempt: int) -> bool:

@@ -18,10 +18,11 @@ Ops scripts under `scripts/` may call internal repair helpers (`repair_hub_tags`
 
 ```
 Source fetch (RSS / aggregator / SearXNG / archive / watcher)
-  → ingest_* on news_hub_bridge
-  → dedup + tags (news_dedup)
-  → verify cache-first (news_impact_engine)
-  → hub SSOT (reports/hub/_data/news_verified/records.parquet)
+  → staging queue (_data/news_staging/)
+  → entity distillation worker (async)
+  → verify + enrich (news_impact_engine)
+  → hub SSOT (reports/hub/_data/news_events/events.parquet)
+  → compile → llm-wiki/raw/sources/news/ → LLM Wiki ingest → wiki/
   → consumers read via news_hub_bridge
 ```
 
@@ -77,7 +78,10 @@ Called by wired fetchers after they collect raw items. Application code should n
 
 | Artifact | Path |
 |----------|------|
-| Hub SSOT records | `reports/hub/_data/news_verified/records.parquet` |
+| Hub SSOT (distilled events) | `reports/hub/_data/news_events/events.parquet` |
+| Staging queue (raw refs) | `reports/hub/_data/news_staging/pending.jsonl` |
+| LLM-Wiki source exports | `reports/hub/llm-wiki/raw/sources/news/` |
+| Legacy records (migration only) | `reports/hub/_data/news_verified/records.parquet` |
 | Impact snapshot | `reports/hub/{TICKER}/index_research/news_impact_latest.json` |
 | Embedded in index doc | `reports/hub/{TICKER}/index_research/latest.json` → `news_impact` |
 

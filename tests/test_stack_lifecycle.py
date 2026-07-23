@@ -106,6 +106,18 @@ def test_searxng_probe_engine_match_is_case_insensitive():
     assert "exit:1" in proc.stdout
 
 
+def test_searxng_remediation_hint_dns():
+    proc = _bash(
+        """
+        source scripts/stack_docker_lib.sh
+        _searxng_remediation_hint "bing: requests exception [Errno -2] Name or service not known" 1>&2
+        """
+    )
+    assert proc.returncode == 0
+    assert "DNS failed" in proc.stderr
+    assert "docker-compose.stack.yml" in proc.stderr
+
+
 def test_stack_hub_docker_required_when_searxng_on():
     proc = _bash(
         """

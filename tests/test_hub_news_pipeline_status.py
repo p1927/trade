@@ -91,13 +91,16 @@ def test_ensure_llm_wiki_project_creates_tree(hub_tmp):
     assert (root / "schema.md").is_file()
     assert (root / "raw" / "sources" / "inbox").is_dir()
     assert (root / "raw" / "sources" / "news").is_dir()
+    assert (root / "raw" / "sources" / "research").is_dir()
+    assert (root / "wiki" / "entities").is_dir()
+    assert (root / "wiki" / "concepts").is_dir()
 
 
 def test_compile_event_exports_to_raw_sources(hub_tmp, monkeypatch):
-    from trade_integrations.context import hub as hub_mod
     from trade_integrations.dataflows.hub_wiki.compile import compile_event_to_wiki
+    from tests.conftest import patch_hub_wiki_dirs
 
-    monkeypatch.setattr(hub_mod, "get_hub_dir", lambda: hub_tmp)
+    patch_hub_wiki_dirs(monkeypatch, hub_tmp)
 
     result = compile_event_to_wiki(
         {

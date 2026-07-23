@@ -475,6 +475,14 @@ def process_staging_group(
                 "verification_status": "pending",
             }
             wiki_result = compile_event_to_wiki(payload, rescan=False)
+            try:
+                from trade_integrations.dataflows.hub_wiki.research import maybe_research_event_gaps
+
+                research_result = maybe_research_event_gaps(stored or payload, rescan=False)
+                if research_result:
+                    wiki_result = {**(wiki_result or {}), "wiki_research": research_result}
+            except Exception as research_exc:
+                logger.debug("llm-wiki deep research skipped for %s: %s", event_id, research_exc)
     except Exception as exc:
         logger.debug("llm-wiki compile skipped for %s: %s", event_id, exc)
 
@@ -517,6 +525,13 @@ def process_staging_batch(
     """Process up to ``limit`` queued staging refs."""
     if not is_entity_pipeline_enabled():
         return {"processed": 0, "skipped": True}
+
+    try:
+        from trade_integrations.dataflows.hub_wiki.research import reset_batch_research_count
+
+        reset_batch_research_count()
+    except Exception:
+        pass
 
     from trade_integrations.hub_storage.news_staging_store import pipeline_pause_status
 
@@ -853,6 +868,21 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
 
     repair = _safe_stage("repair", repair_leaked_distilled_summaries, ticker=ticker)
     backfill = _safe_stage("backfill", backfill_distilled_event_metadata, ticker=ticker)
+    wiki_backfill: dict[str, Any] = {"skipped": True, "reason": "HUB_NEWS_WIKI_BACKFILL disabled"}
+    try:
+        from trade_integrations.dataflows.hub_wiki.compile import compile_all_events_to_wiki, wiki_backfill_enabled
+
+        if wiki_backfill_enabled():
+            wiki_backfill = _safe_stage(
+                "wiki_backfill",
+                compile_all_events_to_wiki,
+                ticker=ticker,
+                dry_run=False,
+                force=False,
+                rescan=True,
+            )
+    except Exception as exc:
+        logger.debug("wiki backfill skipped: %s", exc)
     compact_events = _safe_stage(
         "compact_events",
         compact_distilled_events,
@@ -877,6 +907,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         "staging": staging,
         "repair": repair,
         "backfill": backfill,
+        "wiki_backfill": wiki_backfill,
         "compact_events": compact_events,
         "cleanup": cleanup,
         "rollup": rollup,
@@ -957,23 +988,12 @@ def _enrich_refs_from_wiki(
     return refs
 
 
-def _event_content_fingerprint(event: dict[str, Any] | None) -> tuple[str, str]:
-    if not event:
-        return "", ""
-    title = str(event.get("title") or "").strip()
-    body = str(
-        event.get("content")
-        or event.get("content_summary")
-        or event.get("summary")
-        or ""
-    ).strip()
-    return title, body
-
-
 def _event_materially_changed(before: dict[str, Any] | None, after: dict[str, Any] | None) -> bool:
     if not before or not after:
         return True
-    return _event_content_fingerprint(before) != _event_content_fingerprint(after)
+    from trade_integrations.dataflows.hub_wiki.compile import event_content_fingerprint
+
+    return event_content_fingerprint(before) != event_content_fingerprint(after)
 
 
 def _cleanup_wiki_after_merge(

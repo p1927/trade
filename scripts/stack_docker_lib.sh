@@ -196,6 +196,34 @@ if failed:
 ' "$required"
 }
 
+_searxng_remediation_hint() {
+  local reason="${1:-}"
+  local lowered
+  lowered="$(printf '%s' "$reason" | tr '[:upper:]' '[:lower:]')"
+  [[ -n "$lowered" ]] || return 0
+
+  if [[ "$lowered" == *"name or service not known"* || "$lowered" == *"no address associated"* ]]; then
+    echo "[stack] Hint: Bing DNS failed inside the container — add dns: [1.1.1.1, 8.8.8.8] to searxng in docker-compose.stack.yml and run: trade restart --force" >&2
+    return 0
+  fi
+  if [[ "$lowered" == *"certificate"* || "$lowered" == *"ssl"* || "$lowered" == *"tls"* ]]; then
+    echo "[stack] Hint: TLS verify failed — run ./scripts/export_searxng_ca.sh then trade restart --force" >&2
+    return 0
+  fi
+  if [[ "$lowered" == *"captcha"* || "$lowered" == *"403"* || "$lowered" == *"access denied"* ]]; then
+    echo "[stack] Hint: engine blocked — confirm stack/searxng/settings.yml keep_only: [bing] and restart SearXNG" >&2
+    return 0
+  fi
+  if [[ "$lowered" == *"timeout"* || "$lowered" == *"readtimeout"* || "$lowered" == *"connecttimeout"* ]]; then
+    echo "[stack] Hint: Bing timed out — raise outgoing.request_timeout in stack/searxng/settings.yml (currently 15s) and reduce query rate (SEARXNG_MIN_INTERVAL_SEC)" >&2
+    return 0
+  fi
+  if [[ "$lowered" == *"500"* || "$lowered" == *"502"* || "$lowered" == *"503"* ]]; then
+    echo "[stack] Hint: transient Bing upstream error — retry after a few seconds; client retries once automatically" >&2
+    return 0
+  fi
+}
+
 stack_searxng_probe_engines() {
   echo "${SEARXNG_PROBE_ENGINES:-${SEARXNG_NEWS_ENGINES:-bing}}"
 }
@@ -214,6 +242,7 @@ _searxng_run_engine_probe() {
 
   if ! probe_err="$(printf '%s' "$body" | _searxng_probe_check_unresponsive "$required" 2>&1)"; then
     echo "[stack] SearXNG ${label}: engine ${required} failing${probe_err:+ — ${probe_err}} (check stack/searxng/settings.yml)" >&2
+    _searxng_remediation_hint "$probe_err"
     return 1
   fi
   return 0

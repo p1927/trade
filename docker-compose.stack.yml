@@ -11,6 +11,9 @@ services:
     entrypoint: ["/bin/sh", "/etc/searxng/entrypoint-wrapper.sh"]
     environment:
       - SEARXNG_BASE_URL=${SEARXNG_BASE_URL}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     healthcheck:
       test: ["CMD", "wget", "-qO-", "--header=X-Real-IP: 127.0.0.1", "http://127.0.0.1:8080/healthz"]
       interval: 10s
