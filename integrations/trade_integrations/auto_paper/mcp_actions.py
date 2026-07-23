@@ -78,7 +78,10 @@ def start_auto_paper(
         symbols.insert(0, symbol)
 
     client = OpenAlgoClient()
-    client.ensure_analyzer_mode()
+    from trade_integrations.execution.context_verify import ensure_paper_execution_ready
+    from trade_integrations.execution.default_profile import paper_mode_env_enabled
+
+    ensure_paper_execution_ready(client, env_paper_lock=paper_mode_env_enabled())
 
     session = start_session(
         budget_inr=budget_inr,
@@ -222,6 +225,28 @@ def get_status(*, autonomous_agent_id: str | None = None) -> dict[str, Any]:
     except RuntimeError:
         pass
 
+    connector_status: dict[str, Any] | None = None
+    try:
+        from trade_integrations.execution.connector_context import load_active_connector_context
+
+        agent: dict[str, Any] | None = None
+        if autonomous_agent_id:
+            from trade_integrations.autonomous_agents.store import get_agent
+
+            agent = get_agent(autonomous_agent_id)
+        ctx = load_active_connector_context(agent=agent)
+        if ctx is not None:
+            connector_status = {
+                "profile_id": ctx.profile_id,
+                "connector": ctx.connector,
+                "market": ctx.market,
+                "backend": ctx.backend,
+                "execution_path": ctx.execution_path,
+                "source": ctx.source,
+            }
+    except Exception:
+        logger.debug("connector context unavailable for auto_paper status", exc_info=True)
+
     position_summary = []
     for entry in open_entries:
         position_summary.append(
@@ -248,6 +273,8 @@ def get_status(*, autonomous_agent_id: str | None = None) -> dict[str, Any]:
         "positions": position_summary,
         "funds": funds,
         "analyze_mode": analyze_mode,
+        "connector": connector_status,
+        "execution_path": connector_status.get("execution_path") if connector_status else None,
         "halted": bool(session.get("halted")),
         "halt_reason": session.get("halt_reason"),
         "last_tick_at": session.get("last_tick_at"),
@@ -385,8 +412,10 @@ def execute_basket(widget_id: str, *, confidence: int | None = None) -> dict[str
         raise ValueError(f"No execute_basket orders in widget {widget_id}")
 
     client = OpenAlgoClient()
-    if not client.ensure_analyzer_mode():
-        raise RuntimeError("Could not enable OpenAlgo analyzer (paper) mode")
+    from trade_integrations.execution.context_verify import ensure_paper_execution_ready
+    from trade_integrations.execution.default_profile import paper_mode_env_enabled
+
+    ensure_paper_execution_ready(client, env_paper_lock=paper_mode_env_enabled())
 
     results = client.place_basket(orders, strategy="auto_paper_agent")
     record_execution_from_widget(widget, results, execution_mode="paper")

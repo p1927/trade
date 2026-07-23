@@ -29,6 +29,19 @@ class OpenAlgoClient:
         data = body.get("data") if isinstance(body.get("data"), dict) else body
         return bool(data.get("analyze_mode"))
 
+    def get_market_context(self):
+        """Fetch authoritative market context from OpenAlgo."""
+        from trade_integrations.openalgo.market_context import MarketContext, MarketContextError
+
+        body = self._post("marketcontext", {"apikey": self.api_key}, timeout=15)
+        if str(body.get("status") or "").lower() != "success":
+            message = body.get("message") or body.get("error") or "MarketContext request failed"
+            raise MarketContextError(str(message))
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise MarketContextError("MarketContext response missing data object")
+        return MarketContext.from_api_data(data)
+
     def ensure_analyzer_mode(self) -> bool:
         """Enable paper/analyzer mode idempotently."""
         if self.analyzer_status():

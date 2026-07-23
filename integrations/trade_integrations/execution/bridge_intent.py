@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from trade_integrations.auto_paper.mandate_config import mandate_config_from_session
+from trade_integrations.auto_paper.mandate_config import mandate_config_from_agent, mandate_config_from_session
 from trade_integrations.auto_paper.mandate_enforcer import assert_can_execute, assert_widget_allowed, MandateViolation
 from trade_integrations.auto_paper.config import get_auto_paper_config
 from trade_integrations.auto_paper.session_store import load_session
@@ -42,6 +42,50 @@ def legs_from_widget(widget: dict[str, Any], *, product: str) -> list[dict[str, 
             f"Widget has {basket_steps} execute_basket steps; expected exactly one"
         )
     return orders
+
+
+def build_adjust_legs_from_widget(
+    *,
+    handoff_legs: list,
+    widget: dict[str, Any],
+    product: str,
+) -> list:
+    """Build minimal delta legs: close removed/changed legs, open new target legs."""
+    from nautilus_openalgo_bridge.models import ExecutionLeg
+
+    target_raw = legs_from_widget(widget, product=product)
+    target = [ExecutionLeg.from_dict(row) for row in target_raw]
+    if not handoff_legs:
+        return target
+
+    def _key(leg) -> tuple[str, str]:
+        return (str(leg.symbol).upper(), str(leg.exchange).upper())
+
+    handoff_map = {_key(leg): leg for leg in handoff_legs}
+    target_map = {_key(leg): leg for leg in target}
+    delta: list[ExecutionLeg] = []
+
+    for key, hleg in handoff_map.items():
+        tleg = target_map.get(key)
+        if tleg is None or tleg.action != hleg.action or tleg.quantity != hleg.quantity:
+            close_action = "BUY" if hleg.action == "SELL" else "SELL"
+            delta.append(
+                ExecutionLeg(
+                    symbol=hleg.symbol,
+                    exchange=hleg.exchange,
+                    action=close_action,
+                    quantity=hleg.quantity,
+                    product=hleg.product,
+                    order_type=hleg.order_type,
+                )
+            )
+
+    for key, tleg in target_map.items():
+        hleg = handoff_map.get(key)
+        if hleg is None or hleg.action != tleg.action or hleg.quantity != tleg.quantity:
+            delta.append(tleg)
+
+    return delta
 
 
 def build_bridge_market_feedback(*, agent_id: str, ticker: str | None = None) -> dict[str, Any]:
@@ -116,23 +160,42 @@ def execute_widget_via_bridge(
     from nautilus_openalgo_bridge.execute import execute_intent
     from nautilus_openalgo_bridge.models import ExecutionIntent, ExecutionLeg, IntentAction
 
-    session = load_session(autonomous_agent_id=agent_id)
-    mandate = mandate_config_from_session(session)
-    cfg = get_auto_paper_config()
-    try:
-        assert_can_execute(session, cfg=cfg, confidence=confidence)
-        assert_widget_allowed(widget, mandate)
-    except MandateViolation as exc:
-        raise ValueError(str(exc)) from exc
-
     agent = get_agent(agent_id)
     if not agent:
         raise ValueError(f"agent not found: {agent_id}")
     profile = resolve_profile(agent=agent)
     execution_mode = profile.mode
 
+    mandate = mandate_config_from_agent(agent)
+    if profile.uses_nautilus_handoff:
+        try:
+            assert_widget_allowed(widget, mandate)
+        except MandateViolation as exc:
+            raise ValueError(str(exc)) from exc
+    else:
+        session = load_session(autonomous_agent_id=agent_id)
+        mandate = mandate_config_from_session(session)
+        cfg = get_auto_paper_config()
+        try:
+            assert_can_execute(session, cfg=cfg, confidence=confidence)
+            assert_widget_allowed(widget, mandate)
+        except MandateViolation as exc:
+            raise ValueError(str(exc)) from exc
+
     product = mandate.resolve_product()
     raw_orders = legs_from_widget(widget, product=product)
+    if action.upper() == "ADJUST":
+        from nautilus_openalgo_bridge.handoff import load_handoff
+
+        handoff = load_handoff(agent_id)
+        if handoff and handoff.legs:
+            adjust_legs = build_adjust_legs_from_widget(
+                handoff_legs=list(handoff.legs),
+                widget=widget,
+                product=product,
+            )
+            if adjust_legs:
+                raw_orders = [leg.to_dict() for leg in adjust_legs]
     if not raw_orders:
         raise ValueError(f"No execute_basket orders in widget {widget_id}")
 
@@ -202,6 +265,7 @@ def submit_exit_intent(
     underlying: str | None = None,
 ) -> dict[str, Any]:
     """Queue EXIT intent for bridge processing (used when Vibe decides to flatten)."""
+    from nautilus_openalgo_bridge.agent_scoping import default_exit_underlying
     from nautilus_openalgo_bridge.handoff import load_handoff
     from nautilus_openalgo_bridge.intent_queue import submit_intent
     from nautilus_openalgo_bridge.models import ExecutionIntent, IntentAction
@@ -211,7 +275,7 @@ def submit_exit_intent(
         action=IntentAction.EXIT,
         agent_id=agent_id,
         rationale=rationale,
-        underlying=(underlying or (handoff.underlying if handoff else "NIFTY")).upper(),
+        underlying=default_exit_underlying(agent_id, explicit=underlying),
         legs=list(handoff.legs) if handoff and handoff.legs else [],
         strategy="vibe_exit",
     )

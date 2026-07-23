@@ -1,4 +1,8 @@
-"""Alpaca paper/live market-data adapter for US equities.
+"""Alpaca paper/live market-data adapter for US equities (research and backfill only).
+
+Autonomous agent quotes, orders, positions, and Nautilus watch route through
+OpenAlgo (Alpaca broker plugin). This module remains for offline research,
+TradingAgents backfill, and MCP vendor-chain fallbacks.
 
 TradingAgents and OpenAlgo MCP use this module for US tickers when Alpaca keys
 are configured. Indian symbols continue through OpenAlgo; Alpaca is tried only

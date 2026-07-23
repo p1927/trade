@@ -314,10 +314,6 @@ def _try_entry(
         actions.append({"action": "skip", "ticker": ticker, "reason": reason})
         return False
 
-    if not client.ensure_analyzer_mode():
-        actions.append({"action": "skip", "ticker": ticker, "reason": "analyzer_mode_failed"})
-        return False
-
     results = client.place_basket(orders, strategy="auto_paper")
     widget_id = _persist_widget(widget)
     record_execution_from_widget(widget, results, execution_mode="paper")
@@ -387,9 +383,14 @@ def run_auto_paper_tick(*, dry_run: bool = False) -> dict[str, Any]:
         record_tick_result(result)
         return result
 
-    if not client.ensure_analyzer_mode():
+    try:
+        from trade_integrations.execution.context_verify import ensure_paper_execution_ready
+        from trade_integrations.execution.default_profile import paper_mode_env_enabled
+
+        ensure_paper_execution_ready(client, env_paper_lock=paper_mode_env_enabled())
+    except RuntimeError as exc:
         result["status"] = "error"
-        result["reason"] = "analyzer_mode_unavailable"
+        result["reason"] = str(exc)
         record_tick_result(result)
         return result
 

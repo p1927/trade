@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from trade_integrations.auto_paper.mandate_config import MandateConfig, mandate_config_from_agent, primary_instrument_from_mandate
+from trade_integrations.openalgo.market_context import MarketContext
+
+logger = logging.getLogger(__name__)
 
 MarketCode = Literal["IN", "US"]
 ModeCode = Literal["paper", "live"]
@@ -69,21 +73,26 @@ def _prompt_fragment_id(
     return "in_options_paper" if mode == "paper" else "in_options_live"
 
 
-def resolve_profile(*, agent: dict[str, Any], mode: str | None = None) -> ExecutionProfile:
-    """Resolve execution profile from agent record (stored market + mandate)."""
-    from trade_integrations.autonomous_agents.market import agent_execution_market
+def _mode_from_market_context(market_context: MarketContext) -> ModeCode:
+    """Derive paper/live mode from authoritative MarketContext."""
+    venue = market_context.execution_venue.strip().lower()
+    if market_context.market_region == "IN" and venue in ("sandbox", "broker"):
+        return "paper" if venue == "sandbox" else "live"
+    return "paper" if market_context.analyze_mode else "live"
 
-    market = agent_execution_market(agent)
-    constraints = dict(agent.get("constraints") or {})
-    agent_mode = str(mode or constraints.get("mode") or "paper").lower()
-    if agent_mode not in ("paper", "live"):
-        agent_mode = "paper"
+
+def _build_execution_profile(
+    *,
+    market: MarketCode,
+    mode: ModeCode,
+    agent: dict[str, Any],
+) -> ExecutionProfile:
     mc = mandate_config_from_agent(agent)
     instruments = _instruments_tuple(mc)
     sym_tuple = tuple(str(s).upper() for s in (agent.get("symbols") or ["NIFTY"]) if str(s).strip())
     fragment = _prompt_fragment_id(
         market=market,
-        mode=agent_mode,  # type: ignore[arg-type]
+        mode=mode,
         instruments=instruments,
         mandate_text=str(agent.get("mandate") or ""),
         symbols=sym_tuple or ("NIFTY",),
@@ -92,29 +101,85 @@ def resolve_profile(*, agent: dict[str, Any], mode: str | None = None) -> Execut
     if market == "US":
         return ExecutionProfile(
             market="US",
-            mode=agent_mode,  # type: ignore[arg-type]
-            backend="alpaca",
+            mode=mode,
+            backend="openalgo",
             allowed_instruments=instruments,
-            paper_session_kind="alpaca_account" if agent_mode == "paper" else "none",
+            paper_session_kind="openalgo_per_agent" if mode == "paper" else "none",
             prompt_fragment_id=fragment,
-            watch_backend="nautilus_alpaca",
-            uses_openalgo_auto_paper=False,
-            uses_nautilus_handoff=False,
+            watch_backend="nautilus_openalgo",
+            uses_openalgo_auto_paper=True,
+            uses_nautilus_handoff=True,
             uses_nautilus_watch=True,
         )
 
     return ExecutionProfile(
         market="IN",
-        mode=agent_mode,  # type: ignore[arg-type]
+        mode=mode,
         backend="openalgo",
         allowed_instruments=instruments,
-        paper_session_kind="openalgo_per_agent" if agent_mode == "paper" else "none",
+        paper_session_kind="openalgo_per_agent" if mode == "paper" else "none",
         prompt_fragment_id=fragment,
         watch_backend="nautilus_openalgo",
-        uses_openalgo_auto_paper=agent_mode == "paper",
+        uses_openalgo_auto_paper=mode == "paper",
         uses_nautilus_handoff=True,
         uses_nautilus_watch=True,
     )
+
+
+def _market_from_context(*, agent: dict[str, Any], market_context: MarketContext) -> MarketCode:
+    """Prefer authoritative market_region from MarketContext over agent record."""
+    from trade_integrations.autonomous_agents.market import agent_execution_market
+
+    region = str(market_context.market_region or "").strip().upper()
+    if region in ("IN", "US"):
+        agent_market = agent_execution_market(agent)
+        if agent_market != region:
+            logger.warning(
+                "resolve_profile_from_context: agent market=%s differs from context region=%s; using context",
+                agent_market,
+                region,
+            )
+        return region  # type: ignore[return-value]
+    return agent_execution_market(agent)
+
+
+def resolve_profile_from_context(
+    *,
+    agent: dict[str, Any],
+    market_context: MarketContext,
+) -> ExecutionProfile:
+    """Derive execution profile from agent mandate plus authoritative MarketContext."""
+    market = _market_from_context(agent=agent, market_context=market_context)
+    mode = _mode_from_market_context(market_context)
+    return _build_execution_profile(market=market, mode=mode, agent=agent)
+
+
+def resolve_profile(*, agent: dict[str, Any], mode: str | None = None) -> ExecutionProfile:
+    """Resolve execution profile; prefer MarketContext when adapter fetch succeeds."""
+    from trade_integrations.autonomous_agents.market import agent_execution_market
+
+    constraints = dict(agent.get("constraints") or {})
+    fallback_mode = str(mode or constraints.get("mode") or "paper").lower()
+    if fallback_mode not in ("paper", "live"):
+        fallback_mode = "paper"
+
+    try:
+        from trade_integrations.execution.trading_port import adapter_for_agent
+
+        adapter = adapter_for_agent(agent)
+        market_context = adapter.market_context()
+        return resolve_profile_from_context(agent=agent, market_context=market_context)
+    except Exception as exc:
+        logger.warning(
+            "resolve_profile: MarketContext fetch failed, using agent constraints mode=%s: %s",
+            fallback_mode,
+            exc,
+        )
+        return _build_execution_profile(
+            market=agent_execution_market(agent),
+            mode=fallback_mode,  # type: ignore[arg-type]
+            agent=agent,
+        )
 
 
 def profile_for_symbol(symbol: str, *, mode: str = "paper") -> ExecutionProfile:

@@ -41,6 +41,13 @@ def resolve_openalgo_symbol(symbol: str) -> tuple[str, str]:
             raw,
             f"index {raw!r} is not mapped for OpenAlgo (use NIFTY / BANKNIFTY or *.NS)",
         )
+    try:
+        from trade_integrations.dataflows.company_research.market import Market, detect_market
+
+        if detect_market(raw) == Market.US:
+            return raw, "NASDAQ"
+    except Exception:
+        pass
     # Plain equity symbols default to NSE (RELIANCE, SBIN, …).
     return raw, "NSE"
 

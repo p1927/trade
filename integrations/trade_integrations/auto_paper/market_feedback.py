@@ -51,8 +51,8 @@ def _session_pnl_block(session: dict[str, Any], *, focus_ticker: str | None = No
 
             if detect_market(symbol) == Market.US:
                 return {
-                    "pnl_basis": "alpaca",
-                    "note": "US symbols use Alpaca paper; OpenAlgo INR sandbox P&L does not apply.",
+                    "pnl_basis": "openalgo",
+                    "note": "US symbols use OpenAlgo Alpaca plugin; INR sandbox P&L may not apply.",
                 }
         except Exception:
             pass
