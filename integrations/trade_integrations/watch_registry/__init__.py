@@ -10,6 +10,7 @@ from trade_integrations.watch_registry.scope import (
     union_symbols_for_owners,
 )
 from trade_integrations.watch_registry.store import (
+    WatchMutationResult,
     create_watch,
     delete_watch,
     delete_watches_for_owner,
@@ -42,4 +43,5 @@ __all__ = [
     "sync_nautilus_registry_from_watches",
     "union_symbols_for_owners",
     "update_watch",
+    "WatchMutationResult",
 ]

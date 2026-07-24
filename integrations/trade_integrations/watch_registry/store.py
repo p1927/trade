@@ -7,7 +7,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from trade_integrations.context.hub import get_hub_dir
 from trade_integrations.watch_registry.scope import (
@@ -25,8 +25,26 @@ logger = logging.getLogger(__name__)
 _WATCH_DIR = "watches"
 
 
+class WatchMutationResult(TypedDict):
+    watch: dict[str, Any]
+    nautilus_sync: dict[str, Any]
+
+
+def _run_nautilus_sync(*, action: str) -> dict[str, Any]:
+    result = sync_nautilus_registry_from_watches(restart_if_changed=True)
+    _log_nautilus_sync_result(result, action=action)
+    return result
+
+
 def _log_nautilus_sync_result(result: dict[str, Any], *, action: str) -> None:
-    if str(result.get("status") or "") == "partial" or result.get("nautilus_ok") is False:
+    status = str(result.get("status") or "")
+    if status == "skipped":
+        logger.warning(
+            "Nautilus watch unavailable after %s (%s) — run: trade heal",
+            action,
+            result.get("reason") or "unknown",
+        )
+    elif status == "partial" or result.get("nautilus_ok") is False:
         logger.warning(
             "Nautilus watch not running after %s (agents=%s) — run: trade heal",
             action,
@@ -169,7 +187,7 @@ def create_watch(
     symbols: list[str] | None = None,
     label: str | None = None,
     one_shot: bool = False,
-) -> dict[str, Any]:
+) -> WatchMutationResult:
     owner_kind = str(owner_kind or "").strip().lower()
     owner_id = str(owner_id or "").strip()
     if owner_kind not in {OWNER_KIND_SESSION, OWNER_KIND_AUTONOMOUS}:
@@ -182,99 +200,118 @@ def create_watch(
     if not spec.get("rules"):
         raise ValueError("watch_spec.rules required")
 
-    now = _now_iso()
-    watch_id = new_watch_id()
-    sym_list = [str(s).upper() for s in (symbols or []) if str(s).strip()]
-    if not sym_list:
-        sym_list = list(symbols_for_watch({"watch_spec": spec, "symbols": []}))
+    from trade_integrations.watch_registry.sync_lock import watch_registry_mutation_lock
 
-    watch = {
-        "watch_id": watch_id,
-        "owner_kind": owner_kind,
-        "owner_id": owner_id,
-        "vibe_session_id": str(vibe_session_id),
-        "label": str(label or "").strip() or None,
-        "symbols": sym_list,
-        "watch_spec": spec,
-        "status": "active",
-        "one_shot": bool(one_shot),
-        "created_at": now,
-        "updated_at": now,
-        "last_fired_at": None,
-        "last_alert_message": None,
-    }
-    _write_watch(watch)
+    with watch_registry_mutation_lock():
+        now = _now_iso()
+        watch_id = new_watch_id()
+        sym_list = [str(s).upper() for s in (symbols or []) if str(s).strip()]
+        if not sym_list:
+            sym_list = list(symbols_for_watch({"watch_spec": spec, "symbols": []}))
 
-    index = _load_index()
-    owners = dict(index.get("owners") or {})
-    key = _owner_key(owner_kind, owner_id)
-    ids = list(owners.get(key) or [])
-    ids.append(watch_id)
-    owners[key] = ids
-    index["owners"] = owners
-    _save_index(index)
+        watch = {
+            "watch_id": watch_id,
+            "owner_kind": owner_kind,
+            "owner_id": owner_id,
+            "vibe_session_id": str(vibe_session_id),
+            "label": str(label or "").strip() or None,
+            "symbols": sym_list,
+            "watch_spec": spec,
+            "status": "active",
+            "one_shot": bool(one_shot),
+            "created_at": now,
+            "updated_at": now,
+            "last_fired_at": None,
+            "last_alert_message": None,
+        }
+        _write_watch(watch)
 
-    _sync_owner_handoff(owner_kind, owner_id)
-    _log_nautilus_sync_result(
-        sync_nautilus_registry_from_watches(restart_if_changed=True),
-        action="create_watch",
-    )
-    return watch
-
-
-def update_watch(watch_id: str, *, watch_spec: dict[str, Any] | None = None, label: str | None = None) -> dict[str, Any] | None:
-    watch = _read_watch(watch_id)
-    if not watch or str(watch.get("status")) == "deleted":
-        return None
-    if watch_spec is not None:
-        watch["watch_spec"] = dict(watch_spec)
-        watch["symbols"] = list(symbols_for_watch({"watch_spec": watch["watch_spec"]}))
-    if label is not None:
-        watch["label"] = str(label).strip() or None
-    watch["updated_at"] = _now_iso()
-    _write_watch(watch)
-    _sync_owner_handoff(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
-    _log_nautilus_sync_result(
-        sync_nautilus_registry_from_watches(restart_if_changed=True),
-        action="update_watch",
-    )
-    _sync_telemetry_baselines_for_watch_record(watch)
-    return watch
-
-
-def delete_watch(watch_id: str) -> bool:
-    watch = _read_watch(watch_id)
-    if not watch:
-        return False
-    watch["status"] = "deleted"
-    watch["updated_at"] = _now_iso()
-    _write_watch(watch)
-
-    index = _load_index()
-    owners = dict(index.get("owners") or {})
-    key = _owner_key(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
-    ids = [wid for wid in (owners.get(key) or []) if str(wid) != watch_id]
-    if ids:
+        index = _load_index()
+        owners = dict(index.get("owners") or {})
+        key = _owner_key(owner_kind, owner_id)
+        ids = list(owners.get(key) or [])
+        ids.append(watch_id)
         owners[key] = ids
-    else:
-        owners.pop(key, None)
-    index["owners"] = owners
-    _save_index(index)
+        index["owners"] = owners
+        _save_index(index)
 
-    _sync_owner_handoff(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
-    _log_nautilus_sync_result(
-        sync_nautilus_registry_from_watches(restart_if_changed=True),
-        action="delete_watch",
-    )
-    _sync_telemetry_baselines_for_watch_record(watch)
-    return True
+        _sync_owner_handoff(owner_kind, owner_id)
+        sync = _run_nautilus_sync(action="create_watch")
+        return {"watch": watch, "nautilus_sync": sync}
+
+
+def update_watch(watch_id: str, *, watch_spec: dict[str, Any] | None = None, label: str | None = None) -> WatchMutationResult | None:
+    from trade_integrations.watch_registry.sync_lock import watch_registry_mutation_lock
+
+    with watch_registry_mutation_lock():
+        watch = _read_watch(watch_id)
+        if not watch or str(watch.get("status")) == "deleted":
+            return None
+        if watch_spec is not None:
+            watch["watch_spec"] = dict(watch_spec)
+            watch["symbols"] = list(symbols_for_watch({"watch_spec": watch["watch_spec"]}))
+        if label is not None:
+            watch["label"] = str(label).strip() or None
+        watch["updated_at"] = _now_iso()
+        _write_watch(watch)
+        _sync_owner_handoff(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
+        sync = _run_nautilus_sync(action="update_watch")
+        _sync_telemetry_baselines_for_watch_record(watch)
+        return {"watch": watch, "nautilus_sync": sync}
+
+
+def delete_watch(watch_id: str) -> WatchMutationResult | None:
+    from trade_integrations.watch_registry.sync_lock import watch_registry_mutation_lock
+
+    with watch_registry_mutation_lock():
+        watch = _read_watch(watch_id)
+        if not watch:
+            return None
+        if str(watch.get("status")) == "deleted":
+            return {
+                "watch": watch,
+                "nautilus_sync": {
+                    "status": "ok",
+                    "reason": "already_deleted",
+                    "nautilus_ok": True,
+                    "agent_ids": [],
+                    "owners": 0,
+                },
+            }
+        watch["status"] = "deleted"
+        watch["updated_at"] = _now_iso()
+        _write_watch(watch)
+
+        index = _load_index()
+        owners = dict(index.get("owners") or {})
+        key = _owner_key(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
+        ids = [wid for wid in (owners.get(key) or []) if str(wid) != watch_id]
+        if ids:
+            owners[key] = ids
+        else:
+            owners.pop(key, None)
+        index["owners"] = owners
+        _save_index(index)
+
+        _sync_owner_handoff(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
+        sync = _run_nautilus_sync(action="delete_watch")
+        _sync_telemetry_baselines_for_watch_record(watch)
+        return {"watch": watch, "nautilus_sync": sync}
 
 
 def delete_watches_for_owner(*, owner_kind: str, owner_id: str) -> int:
     watches = list_watches(owner_kind=owner_kind, owner_id=owner_id, active_only=False)
     removed = 0
+    seen: set[str] = set()
     for watch in watches:
-        if str(watch.get("status")) != "deleted" and delete_watch(str(watch.get("watch_id"))):
+        wid = str(watch.get("watch_id") or "")
+        if not wid or wid in seen:
+            continue
+        seen.add(wid)
+        if str(watch.get("status")) == "deleted":
+            continue
+        result = delete_watch(wid)
+        if result and result.get("nautilus_sync", {}).get("reason") != "already_deleted":
             removed += 1
     return removed
 
@@ -447,7 +484,7 @@ def migrate_agent_watch_spec_to_registry(agent_id: str) -> dict[str, Any] | None
         watch_spec=raw,
         symbols=list(agent.get("symbols") or []),
         label="strategy watch",
-    )
+    )["watch"]
 
 
 def record_owner_alert_fired(
@@ -474,6 +511,14 @@ def record_owner_alert_fired(
 
 def sync_nautilus_registry_from_watches(*, restart_if_changed: bool = False) -> dict[str, Any]:
     """Rebuild log/nautilus-watch.agents.json from active watch owners."""
+    from trade_integrations.watch_registry.sync_lock import watch_registry_mutation_lock
+
+    with watch_registry_mutation_lock():
+        return _sync_nautilus_registry_from_watches_locked(restart_if_changed=restart_if_changed)
+
+
+def _sync_nautilus_registry_from_watches_locked(*, restart_if_changed: bool = False) -> dict[str, Any]:
+    """Internal sync body — caller must hold watch_registry_mutation_lock."""
     try:
         from trade_integrations.autonomous_agents import nautilus_watch as nw
     except ImportError:
@@ -523,7 +568,18 @@ def sync_nautilus_registry_from_watches(*, restart_if_changed: bool = False) -> 
         live_pid = nw._read_pid()
         if live_pid is not None and nw._process_alive(live_pid):
             logger.info("watch registry changed %s → %s — restarting Nautilus", old_ids, new_ids)
-            nw._stop_existing()
+            purge_result = nw.purge_nautilus_watch_processes()
+            if purge_result.get("survivors"):
+                return {
+                    "status": "partial",
+                    "owners": len(agents),
+                    "agent_ids": new_ids,
+                    "nautilus_ok": False,
+                    "reason": "purge_incomplete",
+                    "survivors": purge_result.get("survivors"),
+                }
+            if not new_ids:
+                return {"status": "ok", "owners": 0, "agent_ids": [], "nautilus_ok": True}
             nautilus_ok = False
             try:
                 nw._launch_watch(use_registry=True)

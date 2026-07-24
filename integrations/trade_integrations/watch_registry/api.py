@@ -10,12 +10,41 @@ from trade_integrations.watch_registry.scope import (
     nautilus_owner_id,
 )
 from trade_integrations.watch_registry.store import (
+    WatchMutationResult,
     create_watch,
     delete_watch,
-    get_watch,
     list_watches,
     update_watch,
 )
+
+
+def _status_from_nautilus_sync(sync: dict[str, Any]) -> str:
+    status = str(sync.get("status") or "")
+    if sync.get("nautilus_ok") is False or status in {"partial", "skipped"}:
+        return "partial"
+    if status == "error":
+        return "error"
+    return "ok"
+
+
+def _mutation_response(
+    mutation: WatchMutationResult,
+    *,
+    owner_kind: str | None = None,
+    owner_id: str | None = None,
+) -> dict[str, Any]:
+    watch = mutation["watch"]
+    sync = mutation["nautilus_sync"]
+    payload: dict[str, Any] = {
+        "status": _status_from_nautilus_sync(sync),
+        "watch": watch,
+        "nautilus_sync": sync,
+    }
+    kind = owner_kind or str(watch.get("owner_kind") or "")
+    oid = owner_id or str(watch.get("owner_id") or "")
+    if kind and oid:
+        payload["nautilus_owner_id"] = nautilus_owner_id(owner_kind=kind, owner_id=oid)
+    return payload
 
 
 def mcp_create_watch(
@@ -29,7 +58,7 @@ def mcp_create_watch(
     one_shot: bool = False,
 ) -> dict[str, Any]:
     try:
-        watch = create_watch(
+        mutation = create_watch(
             owner_kind=owner_kind,
             owner_id=owner_id,
             vibe_session_id=vibe_session_id,
@@ -40,11 +69,7 @@ def mcp_create_watch(
         )
     except ValueError as exc:
         return {"status": "error", "error": str(exc)}
-    return {
-        "status": "ok",
-        "watch": watch,
-        "nautilus_owner_id": nautilus_owner_id(owner_kind=owner_kind, owner_id=owner_id),
-    }
+    return _mutation_response(mutation, owner_kind=owner_kind, owner_id=owner_id)
 
 
 def mcp_list_watches(
@@ -77,10 +102,12 @@ def mcp_list_watches(
 def mcp_delete_watch(watch_id: str) -> dict[str, Any]:
     if not watch_id:
         return {"status": "error", "error": "watch_id required"}
-    ok = delete_watch(watch_id)
-    if not ok:
+    mutation = delete_watch(watch_id)
+    if not mutation:
         return {"status": "error", "error": f"watch not found: {watch_id}"}
-    return {"status": "ok", "watch_id": watch_id}
+    response = _mutation_response(mutation)
+    response["watch_id"] = watch_id
+    return response
 
 
 def mcp_update_watch(
@@ -89,10 +116,10 @@ def mcp_update_watch(
     watch_spec: dict[str, Any] | None = None,
     label: str | None = None,
 ) -> dict[str, Any]:
-    watch = update_watch(watch_id, watch_spec=watch_spec, label=label)
-    if not watch:
+    mutation = update_watch(watch_id, watch_spec=watch_spec, label=label)
+    if not mutation:
         return {"status": "error", "error": f"watch not found: {watch_id}"}
-    return {"status": "ok", "watch": watch}
+    return _mutation_response(mutation)
 
 
 def resolve_owner_for_session(session_id: str) -> tuple[str, str]:

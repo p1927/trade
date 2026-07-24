@@ -33,6 +33,16 @@ def log_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return log
 
 
+@pytest.fixture(autouse=True)
+def _mock_nautilus_watch_sync(monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.autonomous_agents import nautilus_watch as nw
+
+    monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
+    monkeypatch.setattr(nw, "_read_pid", lambda: 4242)
+    monkeypatch.setattr(nw, "_process_alive", lambda pid: int(pid) == 4242)
+
+
 def _sample_spec(threshold: float = 0.5) -> dict:
     return {
         "rules": [
@@ -69,7 +79,7 @@ def test_live_snapshot_spot_move_distance(hub_tmp: Path, log_dir: Path, monkeypa
         owner_id="sess_live",
         vibe_session_id="sess_live",
         watch_spec=_sample_spec(threshold=0.5),
-    )
+    )["watch"]
 
     baseline_ltp = 24_000.0
 
@@ -213,7 +223,7 @@ def test_baseline_evicted_on_delete(hub_tmp: Path, log_dir: Path, monkeypatch: p
         owner_id="sess_evict",
         vibe_session_id="sess_evict",
         watch_spec=_sample_spec(),
-    )
+    )["watch"]
 
     monkeypatch.setattr(
         "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",
@@ -223,7 +233,7 @@ def test_baseline_evicted_on_delete(hub_tmp: Path, log_dir: Path, monkeypatch: p
     key = owner_baseline_key("ws_sess_evict", "NIFTY")
     assert key in telemetry._baseline_ltp_cache
 
-    assert delete_watch(watch["watch_id"]) is True
+    assert delete_watch(watch["watch_id"]) is not None
     assert key not in telemetry._baseline_ltp_cache
 
 
@@ -285,7 +295,7 @@ def test_baseline_evicted_on_update_when_symbol_removed(hub_tmp: Path, log_dir: 
         owner_id="sess_upd",
         vibe_session_id="sess_upd",
         watch_spec=_sample_spec(),
-    )
+    )["watch"]
 
     monkeypatch.setattr(
         "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",

@@ -53,7 +53,7 @@ def test_create_list_delete_session_watch(hub_tmp: Path, log_dir: Path):
         vibe_session_id="sess_abc",
         watch_spec=_sample_spec(),
         label="NIFTY move",
-    )
+    )["watch"]
     assert watch["watch_id"].startswith("w_")
     assert watch["symbols"] == ["NIFTY"]
 
@@ -61,7 +61,7 @@ def test_create_list_delete_session_watch(hub_tmp: Path, log_dir: Path):
     assert len(rows) == 1
     assert nautilus_owner_id(owner_kind="session", owner_id="sess_abc") == "ws_sess_abc"
 
-    assert delete_watch(watch["watch_id"]) is True
+    assert delete_watch(watch["watch_id"]) is not None
     assert list_watches(owner_kind="session", owner_id="sess_abc") == []
 
 
@@ -70,7 +70,7 @@ def test_sync_nautilus_registry_from_session_watch(hub_tmp: Path, log_dir: Path,
     from trade_integrations.autonomous_agents import nautilus_watch as nw
 
     monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
-    monkeypatch.setattr(nw, "_stop_existing", lambda: None)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
     monkeypatch.setattr(nw, "_read_pid", lambda: None)
 
     create_watch(
@@ -157,7 +157,12 @@ def test_sync_nautilus_registry_recovers_after_relaunch_failure(
     monkeypatch.setattr(wr_store, "sync_nautilus_registry_from_watches", _capture_sync)
     monkeypatch.setattr(nw, "_read_pid", state.read_pid)
     monkeypatch.setattr(nw, "_process_alive", state.process_alive)
-    monkeypatch.setattr(nw, "_stop_existing", state.stop)
+
+    def _purge() -> dict:
+        state.stop()
+        return {"purged": True, "killed_pids": [], "survivors": []}
+
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", _purge)
 
     def _fail_launch(**_: object) -> None:
         raise RuntimeError("launch failed")
@@ -184,3 +189,129 @@ def test_sync_nautilus_registry_recovers_after_relaunch_failure(
     assert partial, sync_results
     assert partial[-1].get("nautilus_ok") is False
     assert "ws_sess_recover2" in (partial[-1].get("agent_ids") or [])
+
+
+def test_mcp_status_maps_skipped_sync_to_partial():
+    from trade_integrations.watch_registry.api import _status_from_nautilus_sync
+
+    assert (
+        _status_from_nautilus_sync({"status": "skipped", "reason": "nautilus_watch unavailable"})
+        == "partial"
+    )
+
+
+def test_delete_last_watch_purges_without_relaunch(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.autonomous_agents import nautilus_watch as nw
+    from trade_integrations.watch_registry import create_watch, delete_watch
+
+    launches: list[bool] = []
+    purges: list[bool] = []
+
+    monkeypatch.setattr(nw, "_launch_watch", lambda **_: launches.append(True))
+    monkeypatch.setattr(
+        nw,
+        "purge_nautilus_watch_processes",
+        lambda: purges.append(True) or {"purged": True, "killed_pids": [9999], "survivors": []},
+    )
+    monkeypatch.setattr(nw, "_read_pid", lambda: 9999)
+    monkeypatch.setattr(nw, "_process_alive", lambda pid: int(pid) == 9999)
+
+    watch = create_watch(
+        owner_kind="session",
+        owner_id="sess_last",
+        vibe_session_id="sess_last",
+        watch_spec=_sample_spec(),
+    )["watch"]
+    launches.clear()
+    purges.clear()
+
+    result = delete_watch(watch["watch_id"])
+    assert result is not None
+    assert result["nautilus_sync"]["status"] == "ok"
+    assert purges, "expected purge when removing last watch with live node"
+    assert not launches, "must not relaunch when registry becomes empty"
+
+
+def test_delete_already_deleted_watch_skips_sync(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.autonomous_agents import nautilus_watch as nw
+    from trade_integrations.watch_registry import create_watch, delete_watch
+    from trade_integrations.watch_registry import store as wr_store
+
+    monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
+    monkeypatch.setattr(nw, "_read_pid", lambda: None)
+
+    sync_calls: list[bool] = []
+    real_sync = wr_store._sync_nautilus_registry_from_watches_locked
+
+    def _counting_sync(**kwargs: object) -> dict:
+        sync_calls.append(True)
+        return real_sync(**kwargs)
+
+    monkeypatch.setattr(wr_store, "_sync_nautilus_registry_from_watches_locked", _counting_sync)
+
+    watch = create_watch(
+        owner_kind="session",
+        owner_id="sess_redelete",
+        vibe_session_id="sess_redelete",
+        watch_spec=_sample_spec(),
+    )["watch"]
+    delete_watch(watch["watch_id"])
+    sync_calls.clear()
+
+    again = delete_watch(watch["watch_id"])
+    assert again is not None
+    assert again["nautilus_sync"]["reason"] == "already_deleted"
+    assert sync_calls == []
+
+
+def test_concurrent_create_watch_serializes_sync(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    from trade_integrations.autonomous_agents import nautilus_watch as nw
+    from trade_integrations.watch_registry import create_watch
+    from trade_integrations.watch_registry import store as wr_store
+
+    monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
+    monkeypatch.setattr(nw, "_read_pid", lambda: None)
+
+    in_sync = {"n": 0, "max": 0}
+    gate = threading.Lock()
+    real_sync = wr_store._sync_nautilus_registry_from_watches_locked
+
+    def _tracked_sync(**kwargs: object) -> dict:
+        with gate:
+            in_sync["n"] += 1
+            in_sync["max"] = max(in_sync["max"], in_sync["n"])
+        time.sleep(0.03)
+        try:
+            return real_sync(**kwargs)
+        finally:
+            with gate:
+                in_sync["n"] -= 1
+
+    monkeypatch.setattr(wr_store, "_sync_nautilus_registry_from_watches_locked", _tracked_sync)
+
+    errors: list[BaseException] = []
+
+    def _create(owner_id: str) -> None:
+        try:
+            create_watch(
+                owner_kind="session",
+                owner_id=owner_id,
+                vibe_session_id=owner_id,
+                watch_spec=_sample_spec(),
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_create, args=(f"sess_par_{i}",)) for i in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not errors
+    assert in_sync["max"] == 1, f"sync ran concurrently (max overlap={in_sync['max']})"
