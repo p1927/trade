@@ -313,6 +313,43 @@ def filter_searxng_hits_for_source(
     )
 
 
+def score_discovery_hit(
+    result: dict[str, Any],
+    source: ExternalPredictionSource,
+    *,
+    as_of_date: str | None = None,
+    trading_dates: list[str] | None = None,
+) -> float:
+    """Public relevance score for progressive search ranking."""
+    return _relevance_score(
+        result,
+        source,
+        as_of_date=as_of_date,
+        trading_dates=trading_dates,
+    )
+
+
+def filter_discovery_hits(
+    hits: list[dict[str, Any]],
+    source: ExternalPredictionSource,
+    *,
+    as_of_date: str | None = None,
+    trading_dates: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Recency + domain filter for discovery hits."""
+    dated = filter_results_by_recency(
+        hits,
+        as_of_date=as_of_date or build_horizon_context(horizon_days=14)["today"],
+        trading_dates=trading_dates,
+    )
+    return filter_searxng_hits_for_source(
+        dated,
+        source,
+        as_of_date=as_of_date,
+        trading_dates=trading_dates,
+    )
+
+
 def rank_search_results(
     results: list[dict[str, Any]],
     source: ExternalPredictionSource,
@@ -880,25 +917,53 @@ def extract_via_searxng_fallback(
     last_record: ExternalPredictionRecord | None = None
 
     for hit in hits:
-        title, url, body = fetch_source_content(hit, pipeline=pipeline, source_id=source.id)
-        if len(body.strip()) < 80:
+        url = str(hit.get("url") or "").strip()
+        title = str(hit.get("title") or "")
+        if not url:
             continue
+        from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_fetcher import (
+            crawl_single_url,
+        )
+        from trade_integrations.dataflows.index_research.external_predictions.screenshot_utils import (
+            persist_screenshot_b64,
+        )
+
+        crawled = crawl_single_url(url, pipeline=pipeline)
+        if crawled is None:
+            continue
+        _u, crawl = crawled
+        if not crawl.success or len((crawl.markdown or "").strip()) < 80:
+            continue
+        markdown = crawl.markdown or ""
         filtered = filter_markdown_for_extraction(
-            body,
+            markdown,
             keywords,
             horizon_days=horizon_days,
         )
         snippet = "\n".join(filtered.splitlines()[:12])
+        body = markdown.strip() or filtered
+        screenshot_b64 = None
+        if isinstance(crawl.metadata, dict):
+            raw = crawl.metadata.get("screenshot_b64")
+            if raw:
+                screenshot_b64 = str(raw)
+        artifacts = None
+        if screenshot_b64:
+            artifacts = persist_screenshot_b64(
+                symbol=sym,
+                source_id=source.id,
+                screenshot_b64=screenshot_b64,
+            )
         record = extract_forecast(
             source=source,
             horizon_days=horizon_days,
             spot=spot,
-            title=title or source.display_name,
+            title=crawl.title or title or source.display_name,
             url=url,
             snippet=snippet,
-            body=filtered,
+            body=body,
             symbol=sym,
-            screenshot_artifacts=None,
+            screenshot_artifacts=artifacts,
             pipeline=pipeline,
         )
         record.as_of = utc_now_iso()[:10]
@@ -906,8 +971,8 @@ def extract_via_searxng_fallback(
         record.provenance = {
             **dict(record.provenance or {}),
             "url": url,
-            "title": title or record.provenance.get("title", ""),
-            "fetch_method": "searxng_text",
+            "title": crawl.title or title or record.provenance.get("title", ""),
+            "fetch_method": "crawl4ai_search",
             "navigation_mode": "searxng_fallback",
         }
         last_record = record

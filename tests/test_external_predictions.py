@@ -39,23 +39,33 @@ def hub_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _patch_refresh_batch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Avoid network discovery/crawl during refresh batch tests."""
-    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
-        SearxngDiscoveryResult,
+    """Avoid network crawl/search during refresh batch tests."""
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionRecord,
     )
 
-    monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.external_predictions.refresh.discover_sources_parallel",
-        lambda sources, **kwargs: {src.id: SearxngDiscoveryResult() for src in sources},
-    )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.crawl_sources_parallel",
         lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.progressive_search_until_forecast",
+        lambda *_a, **_k: type("O", (), {"record": None, "engines_tried": [], "queries_run": 0, "candidates_tried": []})(),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh._record_from_crawl_group",
+        lambda *_a, **_k: ExternalPredictionRecord(
+            source_id="stub",
+            symbol="NIFTY",
+            horizon_days=14,
+            fetch_status="not_found",
+        ),
+    )
+    monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.financial_expert_context.build_and_save_expert_context",
         lambda **_k: {},
     )
+
 
 
 def _ensure_vibetrading_agent_on_path() -> None:

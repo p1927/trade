@@ -100,6 +100,106 @@ def _accept_search_result(
     return _trusted_result(result)
 
 
+def _tag_search_provenance(
+    rows: list[dict[str, Any]],
+    *,
+    engine: str,
+    category: str,
+    query: str,
+) -> list[dict[str, Any]]:
+    tagged: list[dict[str, Any]] = []
+    for row in rows:
+        copy = dict(row)
+        copy["search_engine"] = engine
+        copy["search_category"] = category
+        copy["search_query"] = query
+        tagged.append(copy)
+    return tagged
+
+
+def search_finance_one(
+    query: str,
+    *,
+    engine: str,
+    category: str,
+    limit: int = 8,
+    allowed_domains: tuple[str, ...] | None = None,
+    time_range: str | None = None,
+    stats: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """Search a single SearXNG engine/category. Returns (hits, engine_failed, raw_count)."""
+    seen_urls: set[str] = set()
+    raw_seen: set[str] = set()
+    rejected_hosts: list[str] = []
+    collected: list[dict[str, Any]] = []
+    engine_failed = False
+    for attempt in range(2):
+        try:
+            tr = time_range if category == "news" and time_range in {"day", "month", "year"} else None
+            payload = search_json(
+                query,
+                categories=category,
+                engines=engine,
+                time_range=tr,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except RequestException as exc:
+            logger.debug(
+                "SearXNG search failed (%s/%s) for %r: %s", category, engine, query, exc
+            )
+            engine_failed = True
+            break
+        except ValueError as exc:
+            logger.debug(
+                "SearXNG invalid JSON (%s/%s) for %r: %s", category, engine, query, exc
+            )
+            engine_failed = True
+            break
+
+        for row in payload.get("results") or []:
+            link = str(row.get("url") or "")
+            if not link:
+                continue
+            raw_seen.add(link)
+            if link in seen_urls:
+                continue
+            seen_urls.add(link)
+            if _accept_search_result(row, allowed_domains=allowed_domains):
+                collected.append(row)
+            else:
+                host = _host_from_result(row)
+                if host and host not in rejected_hosts:
+                    rejected_hosts.append(host)
+            if len(collected) >= limit:
+                break
+
+        reason = engine_unresponsive_reason(payload, engine)
+        if reason:
+            if should_retry_engine_search(payload, engine, attempt=attempt):
+                time.sleep(2.0)
+                continue
+            logger.warning(
+                "SearXNG engine unresponsive (%s/%s): %s for %r",
+                category,
+                engine,
+                reason,
+                query,
+            )
+            engine_failed = True
+        break
+
+    if stats is not None:
+        stats["raw_count"] = len(raw_seen)
+        stats["rejected_hosts_sample"] = rejected_hosts[:5]
+    tagged = _tag_search_provenance(
+        collected[:limit],
+        engine=engine,
+        category=category,
+        query=query,
+    )
+    return tagged, engine_failed, len(raw_seen)
+
+
 def _trusted_nifty_pe_result(result: dict[str, Any]) -> bool:
     url = str(result.get("url") or "").lower()
     if any(fragment in url for fragment in _UNTRUSTED_PE_URL_FRAGMENTS):
@@ -121,81 +221,55 @@ def search_finance(
     time_range: str | None = None,
     stats: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Query SearXNG JSON API (finance category when configured).
+    """Query SearXNG JSON API across engine chain (finance/news categories).
 
     When ``allowed_domains`` is set, keep hits whose URL host matches the allowlist
     (suffix rules). Otherwise use the global TRUSTED_FINANCE_DOMAINS filter.
     Optional ``stats`` receives ``raw_count`` (unique URLs before domain filter).
+    Failed engines do not abort the remaining engine/category attempts.
     """
     category_attempts = ["news", "general", "finance"]
+    if categories and categories not in category_attempts:
+        category_attempts = [categories, *category_attempts]
     engine_attempts = parse_engine_list(searxng_finance_engines()) or ["bing"]
     seen_urls: set[str] = set()
-    raw_seen: set[str] = set()
-    rejected_hosts: list[str] = []
+    raw_total = 0
+    rejected_sample: list[str] = []
     collected: list[dict[str, Any]] = []
 
     for cat in category_attempts:
         for engine in engine_attempts:
-            for attempt in range(2):
-                try:
-                    # Bing WEB ignores time_range (JS-only filters). Bing News supports day/week/month.
-                    tr = time_range if cat == "news" and time_range in {"day", "month", "year"} else None
-                    payload = search_json(
-                        query,
-                        categories=cat,
-                        engines=engine,
-                        time_range=tr,
-                        timeout=REQUEST_TIMEOUT,
-                    )
-                except RequestException as exc:
-                    logger.debug(
-                        "SearXNG search failed (%s/%s) for %r: %s", cat or "all", engine, query, exc
-                    )
-                    break
-                except ValueError as exc:
-                    logger.debug(
-                        "SearXNG invalid JSON (%s/%s) for %r: %s", cat or "all", engine, query, exc
-                    )
-                    break
-
-                for row in payload.get("results") or []:
-                    link = str(row.get("url") or "")
-                    if not link:
-                        continue
-                    if link not in raw_seen:
-                        raw_seen.add(link)
-                    if link in seen_urls:
-                        continue
-                    seen_urls.add(link)
-                    if _accept_search_result(row, allowed_domains=allowed_domains):
-                        collected.append(row)
-                    else:
-                        host = _host_from_result(row)
-                        if host and host not in rejected_hosts:
-                            rejected_hosts.append(host)
-                    if len(collected) >= limit:
-                        if stats is not None:
-                            stats["raw_count"] = len(raw_seen)
-                            stats["rejected_hosts_sample"] = rejected_hosts[:5]
-                        return collected[:limit]
-
-                reason = engine_unresponsive_reason(payload, engine)
-                if reason:
-                    if should_retry_engine_search(payload, engine, attempt=attempt):
-                        time.sleep(2.0)
-                        continue
-                    logger.warning(
-                        "SearXNG engine unresponsive (%s/%s): %s for %r",
-                        cat,
-                        engine,
-                        reason,
-                        query,
-                    )
+            query_stats: dict[str, Any] = {}
+            rows, _failed, raw_count = search_finance_one(
+                query,
+                engine=engine,
+                category=cat,
+                limit=limit,
+                allowed_domains=allowed_domains,
+                time_range=time_range,
+                stats=query_stats,
+            )
+            raw_total = max(raw_total, raw_count)
+            rejected_sample.extend(list(query_stats.get("rejected_hosts_sample") or []))
+            for row in rows:
+                link = str(row.get("url") or "")
+                if not link or link in seen_urls:
+                    continue
+                seen_urls.add(link)
+                collected.append(row)
+                if len(collected) >= limit:
+                    if stats is not None:
+                        stats["raw_count"] = raw_total
+                        stats["rejected_hosts_sample"] = rejected_sample[:5]
+                    return collected[:limit]
+            if rows:
                 break
+        if collected:
+            break
 
     if stats is not None:
-        stats["raw_count"] = len(raw_seen)
-        stats["rejected_hosts_sample"] = rejected_hosts[:5]
+        stats["raw_count"] = raw_total
+        stats["rejected_hosts_sample"] = rejected_sample[:5]
     return collected[:limit]
 
 

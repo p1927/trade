@@ -13,12 +13,66 @@ def main() -> int:
     parser.add_argument("--symbol", default="NIFTY")
     parser.add_argument("--horizon", type=int, default=30)
     parser.add_argument("--discover", action="store_true", help="Run source discovery only")
+
+    parser.add_argument(
+        "--probe-engines",
+        action="store_true",
+        help="Probe duckduckgo,bing with 3 fixed queries (12s timeout); restart SearXNG if suspended",
+    )
     parser.add_argument(
         "--probe-searxng",
         metavar="SOURCE_ID",
         help="Diagnose SearXNG discovery for one source (e.g. motilal_oswal)",
     )
     args = parser.parse_args()
+
+    if args.probe_engines:
+        import json as _json
+
+        from trade_integrations.dataflows import searxng_finance
+        from trade_integrations.dataflows.searxng_finance import search_finance_one
+
+        engines = ["duckduckgo", "bing"]
+        queries = [
+            "Nifty 50 target outlook",
+            "Nifty 50 forecast today",
+            "India stock market Nifty prediction",
+        ]
+        prev_timeout = searxng_finance.REQUEST_TIMEOUT
+        searxng_finance.REQUEST_TIMEOUT = 12
+        report: dict = {
+            "engines": engines,
+            "queries": queries,
+            "timeout_sec": 12,
+            "cleanup": (
+                "If unresponsive_engines is non-empty, run: trade restart (or heal SearXNG) "
+                "and verify healthz before a full refresh."
+            ),
+            "results": [],
+        }
+        try:
+            for query in queries:
+                qentry = {"query": query, "engines": {}}
+                for engine in engines:
+                    rows, failed, raw = search_finance_one(
+                        query,
+                        engine=engine,
+                        category="news",
+                        limit=5,
+                        time_range="day",
+                    )
+                    qentry["engines"][engine] = {
+                        "engine_failed": failed,
+                        "raw_count": raw,
+                        "accepted_count": len(rows),
+                        "sample_urls": [str(r.get("url") or "")[:120] for r in rows[:3]],
+                    }
+                report["results"].append(qentry)
+        finally:
+            searxng_finance.REQUEST_TIMEOUT = prev_timeout
+        print(_json.dumps(report, indent=2))
+        return 0
+
 
     if args.probe_searxng:
         from trade_integrations.dataflows.index_research.external_predictions.fetcher import (

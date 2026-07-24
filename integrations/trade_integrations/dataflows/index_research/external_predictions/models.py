@@ -11,7 +11,15 @@ AddedBy = Literal["seed", "user", "discover"]
 FetchStatus = Literal["ok", "stale", "not_found", "error"]
 Direction = Literal["bullish", "bearish", "neutral"]
 Confidence = Literal["high", "medium", "low"]
-NavigationAction = Literal["goto", "click", "wait", "scroll"]
+NavigationAction = Literal[
+    "goto",
+    "click",
+    "wait",
+    "scroll",
+    "dismiss",
+    "click_text",
+    "press_key",
+]
 PathApprovedBy = Literal["auto", "user"]
 
 
@@ -43,29 +51,38 @@ class ExternalPredictionTarget:
         )
 
 
+_NAVIGATION_ACTIONS = frozenset(
+    {"goto", "click", "wait", "scroll", "dismiss", "click_text", "press_key"}
+)
+
+
 @dataclass
 class NavigationStep:
     action: NavigationAction = "goto"
     url: str = ""
     selector: str = ""
     text: str = ""
+    target: str = ""
     wait_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "action": self.action,
             "url": self.url,
             "selector": self.selector,
             "text": self.text,
             "wait_ms": self.wait_ms,
         }
+        if self.target:
+            payload["target"] = self.target
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> NavigationStep:
         if not isinstance(data, dict):
             return cls()
         action = str(data.get("action") or "goto")
-        if action not in {"goto", "click", "wait", "scroll"}:
+        if action not in _NAVIGATION_ACTIONS:
             action = "goto"
         wait_ms = data.get("wait_ms")
         try:
@@ -77,6 +94,7 @@ class NavigationStep:
             url=str(data.get("url") or ""),
             selector=str(data.get("selector") or ""),
             text=str(data.get("text") or ""),
+            target=str(data.get("target") or ""),
             wait_ms=max(0, wait_val),
         )
 

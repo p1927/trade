@@ -110,6 +110,111 @@ def test_run_exploratory_browse_stops_on_forecast_page() -> None:
     assert result.metadata.get("screenshot_b64") == "abc123"
 
 
+def test_run_exploratory_browse_vision_recovery_on_blocked_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _browse_source()
+    listing_url = "https://example.com/markets"
+    article_url = (
+        "https://example.com/markets/stocks/news/nifty-50-target-26500/articleshow/99.cms"
+    )
+    vision_calls: list[str] = []
+
+    def _crawl(url: str, score_links: bool) -> CrawlPageResult:
+        if url == listing_url:
+            return CrawlPageResult(
+                url=url,
+                success=True,
+                title="Markets",
+                markdown="Get Top News alerts Maybe Later Enable",
+                metadata={"screenshot_b64": "blocked-shot", "links": []},
+            )
+        return CrawlPageResult(
+            url=url,
+            success=True,
+            title="Nifty target",
+            markdown=_FORECAST_MD,
+            metadata={"screenshot_b64": "article-shot"},
+        )
+
+    def _fake_vision(url: str, *, pipeline=None, max_rounds=None):
+        vision_calls.append(url)
+        return CrawlPageResult(
+            url=url,
+            success=True,
+            title="Markets",
+            markdown=_LISTING_MD,
+            metadata={
+                "screenshot_b64": "recovered-shot",
+                "links": [{"href": article_url, "text": "Nifty 50 target raised"}],
+                "vision_nav": True,
+                "vision_nav_steps": [{"action": "click_text", "target": "Maybe Later"}],
+            },
+        )
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.crawl4ai_client.vision_nav_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.crawl4ai_client.vision_navigate_url_sync",
+        _fake_vision,
+    )
+
+    result = run_exploratory_browse(source, horizon_days=14, crawl_one=_crawl)
+    assert vision_calls == [listing_url]
+    assert result.success is True
+    assert result.url.endswith("/articleshow/99.cms")
+    assert result.metadata.get("vision_nav") is True
+
+
+def test_run_exploratory_browse_vision_picks_link_when_extraction_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _browse_source()
+    article_url = (
+        "https://example.com/markets/stocks/news/nifty-50-target-26500/articleshow/99.cms"
+    )
+    browse_calls: list[str] = []
+
+    def _crawl(url: str, score_links: bool) -> CrawlPageResult:
+        if url.endswith("/markets"):
+            return CrawlPageResult(
+                url=url,
+                success=True,
+                title="Markets",
+                markdown="Short page",
+                metadata={"screenshot_b64": "listing-shot", "links": []},
+            )
+        return CrawlPageResult(
+            url=url,
+            success=True,
+            title="Nifty target",
+            markdown=_FORECAST_MD,
+            metadata={"screenshot_b64": "article-shot"},
+        )
+
+    class _Plan:
+        next_url = article_url
+        pick_index = 1
+        reason = "visible tile"
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.crawl4ai_client.vision_nav_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.vision_navigator.plan_vision_browse_next_url",
+        lambda **kwargs: browse_calls.append(kwargs.get("goal", "")) or _Plan(),
+    )
+
+    result = run_exploratory_browse(source, horizon_days=14, crawl_one=_crawl)
+    assert result.success is True
+    assert result.url.endswith("/articleshow/99.cms")
+    assert browse_calls
+    assert browse_calls[0] == "open_forecast_article"
+
+
 def test_run_exploratory_browse_respects_max_steps() -> None:
     source = _browse_source()
     step = {"n": 0}

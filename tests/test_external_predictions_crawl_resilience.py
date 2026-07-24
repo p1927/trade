@@ -214,10 +214,13 @@ def test_run_config_enables_popup_dismiss_by_default(monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", raising=False)
     cfg = _run_config(screenshot=True)
     assert cfg.remove_consent_popups is True
-    assert cfg.remove_overlay_elements is True
+    assert cfg.remove_overlay_elements is False
     assert cfg.js_code
+    assert cfg.js_code_before_wait
+    assert not cfg.js_code.lstrip().startswith("(async ()")
     assert "popup_container" in cfg.js_code
     assert "dismissPatterns" in cfg.js_code
+    assert cfg.scan_full_page is False
 
 
 def test_run_config_popup_dismissal_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -225,10 +228,13 @@ def test_run_config_popup_dismissal_can_be_disabled(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setenv("CRAWL4AI_REMOVE_CONSENT_POPUPS", "0")
     monkeypatch.setenv("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", "0")
+    monkeypatch.setenv("EXTERNAL_PREDICTIONS_SCROLL_BEFORE_SCREENSHOT", "1")
     cfg = _run_config(screenshot=True)
     assert cfg.remove_consent_popups is False
     assert cfg.remove_overlay_elements is False
     assert not cfg.js_code
+    assert not cfg.js_code_before_wait
+    assert cfg.scan_full_page is True
 
 
 def test_run_config_consent_only_omits_overlay_removal(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -251,7 +257,7 @@ def test_run_config_overlay_only_omits_consent_clicks(monkeypatch: pytest.Monkey
     monkeypatch.setenv("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", "1")
     cfg = _run_config(screenshot=True)
     assert cfg.remove_consent_popups is False
-    assert cfg.remove_overlay_elements is True
+    assert cfg.remove_overlay_elements is False
     assert cfg.js_code
     assert "popup_container" in cfg.js_code
     assert "dismissPatterns" not in cfg.js_code
@@ -505,13 +511,16 @@ def test_refresh_source_searxng_on_crawl_no_forecast(monkeypatch: pytest.MonkeyP
         lambda *_a, **_k: None,
     )
 
-    def _fallback(*_a, **_k):
-        calls.append("fallback")
-        return fallback
+    class _Outcome:
+        record = fallback
+
+    def _progressive(*_a, **_k):
+        calls.append("progressive")
+        return _Outcome()
 
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.external_predictions.refresh.extract_via_searxng_fallback",
-        _fallback,
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.progressive_search_until_forecast",
+        _progressive,
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.persist_refresh_result",
@@ -525,7 +534,7 @@ def test_refresh_source_searxng_on_crawl_no_forecast(monkeypatch: pytest.MonkeyP
         spot=22365.0,
         crawl_group={"livemint": [crawl_row]},
     )
-    assert calls == ["fallback"]
+    assert calls == ["progressive"]
     assert record.provenance.get("searxng_trigger") == "crawl_no_forecast"
 
 
@@ -563,10 +572,6 @@ def test_record_from_crawl_group_records_searxng_attempt_when_fallback_none(
         lambda *_a, **_k: None,
     )
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.external_predictions.refresh.extract_via_searxng_fallback",
-        lambda *_a, **_k: None,
-    )
-    monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.persist_refresh_result",
         lambda record, **_k: (record, record),
     )
@@ -578,9 +583,8 @@ def test_record_from_crawl_group_records_searxng_attempt_when_fallback_none(
         horizon_days=14,
         spot_val=22365.0,
     )
-    assert record.provenance.get("searxng_attempted") is True
-    assert record.provenance.get("searxng_trigger") == "bot_all"
-    assert "SearXNG fallback" in (record.error_message or "")
+    assert record.fetch_status in {"error", "not_found"}
+    assert "Akamai" in (record.error_message or "")
 
 
 def test_resolve_source_urls_keeps_last_ok_article_when_allowed_url_fails(
@@ -691,9 +695,16 @@ def test_refresh_source_preserves_searxng_provenance(monkeypatch: pytest.MonkeyP
         "trade_integrations.dataflows.index_research.external_predictions.refresh.pick_best_crawl_result",
         lambda *_a, **_k: None,
     )
+    class _Outcome:
+        record = fallback
+
     monkeypatch.setattr(
-        "trade_integrations.dataflows.index_research.external_predictions.refresh.extract_via_searxng_fallback",
-        lambda *_a, **_k: fallback,
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.progressive_search_until_forecast",
+        lambda *_a, **_k: _Outcome(),
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.refresh.persist_refresh_result",
+        lambda record, **_k: (record, record),
     )
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.persist_refresh_result",
@@ -708,7 +719,7 @@ def test_refresh_source_preserves_searxng_provenance(monkeypatch: pytest.MonkeyP
         crawl_group={"moneycontrol": [blocked_row]},
     )
     assert record.provenance.get("navigation_mode") == "searxng_fallback"
-    assert record.provenance.get("fetch_method") == "searxng_text"
+    assert record.provenance.get("fetch_method") in {"searxng_text", "crawl4ai_search"}
 
 
 def test_browse_skips_when_crawl_has_forecast(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -358,6 +358,17 @@ def _remove_overlay_elements() -> bool:
 
 
 # Shared helpers + multi-pass dismiss (runs in Crawl4AI js_code slot, after scan_full_page scroll).
+_POPUP_SCROLL_RESET_JS = """
+  window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  for (const selector of ["main", "#content", ".pageContent", ".main_container"]) {
+    const el = document.querySelector(selector);
+    if (el) {
+      el.scrollTop = 0;
+    }
+  }
+""".strip()
 _POPUP_DISMISS_JS_HELPERS = """
   const visible = (el) => {
     if (!el) return false;
@@ -416,6 +427,12 @@ _CONSENT_DISMISS_JS_BODY = """
     for (const selector of consentSelectors) {
       clickVisible(selector);
     }
+    for (const el of document.querySelectorAll("a, button, span, div")) {
+      const text = (el.textContent || "").trim();
+      if (/^maybe later$/i.test(text) && visible(el)) {
+        el.click();
+      }
+    }
     const dismissPatterns = [
       /^accept\\s*(all)?(\\s*cookies)?$/i,
       /^allow\\s*(all)?(\\s*cookies)?$/i,
@@ -424,6 +441,7 @@ _CONSENT_DISMISS_JS_BODY = """
       /^skip$/i,
       /^not now$/i,
       /^no thanks$/i,
+      /^maybe later$/i,
       /^continue reading$/i,
       /^close$/i,
       /^×$/,
@@ -448,6 +466,10 @@ _OVERLAY_DISMISS_JS_BODY = """
       "#webpushBanner",
       ".modal_popup",
       ".popupBox",
+      '[class*="webpush" i]',
+      '[id*="webpush" i]',
+      '[class*="notif" i][class*="popup" i]',
+      '[class*="notification" i][class*="popup" i]',
       "#myModal",
       ".paywall-overlay",
       '[class*="cookie-consent" i]',
@@ -476,18 +498,27 @@ _POPUP_DISMISS_ONCE_BODY = """
 """.strip()
 
 
-def _popup_dismiss_js(*, consent: bool, overlay: bool) -> str | None:
-    """Build site-specific dismiss JS gated by env flags (runs in Crawl4AI js_code slot)."""
-    if not consent and not overlay:
-        return None
-    once_body = _POPUP_DISMISS_ONCE_BODY.replace(
+def _popup_dismiss_once_body(*, consent: bool, overlay: bool) -> str:
+    return _POPUP_DISMISS_ONCE_BODY.replace(
         "__CONSENT__",
         _CONSENT_DISMISS_JS_BODY if consent else "",
     ).replace(
         "__OVERLAY__",
         _OVERLAY_DISMISS_JS_BODY if overlay else "",
     )
-    body = "\n  ".join([_POPUP_DISMISS_JS_HELPERS, once_body, """
+
+
+def _popup_dismiss_js(*, consent: bool, overlay: bool) -> str | None:
+    """Build dismiss JS for Crawl4AI js_code (post-wait). Must be raw async body — not an IIFE."""
+    if not consent and not overlay:
+        return None
+    once_body = _popup_dismiss_once_body(consent=consent, overlay=overlay)
+    return "\n  ".join(
+        [
+            _POPUP_DISMISS_JS_HELPERS,
+            _POPUP_SCROLL_RESET_JS,
+            once_body,
+            """
   for (let pass = 0; pass < 3; pass += 1) {
     await dismissOnce();
     await sleep(350);
@@ -498,8 +529,53 @@ def _popup_dismiss_js(*, consent: bool, overlay: bool) -> str | None:
     await dismissOnce();
     await sleep(350);
   }
-""".strip()])
-    return f"(async () => {{\n  {body}\n}})();"
+  window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  for (const selector of ["main", "#content", ".pageContent", ".main_container"]) {
+    const el = document.querySelector(selector);
+    if (el) {
+      el.scrollTop = 0;
+    }
+  }
+  await sleep(500);
+  for (let late = 0; late < 6; late += 1) {
+    await dismissOnce();
+    const alertText = document.body?.innerText || "";
+    if (!/maybe later|get top news alerts|we value your privacy|accept all/i.test(alertText)) {
+      break;
+    }
+    await sleep(500);
+  }
+""".strip(),
+        ]
+    )
+
+
+def _popup_dismiss_early_js(*, consent: bool, overlay: bool) -> str | None:
+    """Early dismiss before wait_for — poll OneTrust/CMP as soon as the banner mounts."""
+    if not consent and not overlay:
+        return None
+    once_body = _popup_dismiss_once_body(consent=consent, overlay=overlay)
+    return "\n  ".join(
+        [
+            _POPUP_DISMISS_JS_HELPERS,
+            _POPUP_SCROLL_RESET_JS,
+            once_body,
+            """
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    await dismissOnce();
+    const banner = document.querySelector(
+      "#onetrust-banner-sdk, #onetrust-consent-sdk, .fc-consent-root, .truste_overlay"
+    );
+    if (!banner || !visible(banner)) {
+      break;
+    }
+    await sleep(500);
+  }
+""".strip(),
+        ]
+    )
 
 
 def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
@@ -513,7 +589,9 @@ def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
         "screenshot": screenshot,
         "delay_before_return_html": _delay_before_return_html(),
         "remove_consent_popups": remove_consent,
-        "remove_overlay_elements": remove_overlay,
+        # Crawl4AI built-in overlay removal is too aggressive on ET (removes main content).
+        # Targeted overlay removal lives in js_code when CRAWL4AI_REMOVE_OVERLAY_ELEMENTS=1.
+        "remove_overlay_elements": False,
         "locale": "en-IN",
         "timezone_id": "Asia/Kolkata",
     }
@@ -528,17 +606,27 @@ def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
     except ImportError:
         logger.debug("GeolocationConfig unavailable; crawl without India geo hints")
     dismiss_js = _popup_dismiss_js(consent=remove_consent, overlay=remove_overlay)
+    early_dismiss_js = _popup_dismiss_early_js(consent=remove_consent, overlay=remove_overlay)
     if dismiss_js:
         kwargs["js_code"] = dismiss_js
+    if early_dismiss_js:
+        kwargs["js_code_before_wait"] = early_dismiss_js
     if screenshot:
         # Full-page stitch re-scrolls after dismiss and re-captures fixed cookie modals.
         kwargs["force_viewport_screenshot"] = True
-        kwargs["screenshot_wait_for"] = 0.75
-    if screenshot and _scroll_before_screenshot():
+        kwargs["screenshot_wait_for"] = 1.0
+    popup_dismiss_active = remove_consent or remove_overlay
+    if screenshot and _scroll_before_screenshot() and not popup_dismiss_active:
+        # scan_full_page runs before js_code in Crawl4AI — skip when dismissing popups.
         kwargs["scan_full_page"] = True
         kwargs["delay_before_return_html"] = max(
             float(kwargs["delay_before_return_html"] or 0),
             1.5,
+        )
+    elif screenshot and popup_dismiss_active:
+        kwargs["delay_before_return_html"] = max(
+            float(kwargs["delay_before_return_html"] or 0),
+            2.0,
         )
     if score_links:
         try:
@@ -727,7 +815,7 @@ async def crawl_urls_parallel(
                                 f"OK ({len(markdown)} chars, {elapsed_ms:.0f}ms)",
                                 url=url,
                             )
-                        return _finalize_crawl_result(
+                        finalized = _finalize_crawl_result(
                             url=url,
                             batch_profile=batch_profile,
                             markdown=markdown,
@@ -735,6 +823,17 @@ async def crawl_urls_parallel(
                             metadata=metadata,
                             elapsed_ms=elapsed_ms,
                         )
+                        if finalized.success:
+                            return await _maybe_vision_recover_crawl(
+                                finalized,
+                                url=url,
+                                markdown=markdown,
+                                title=title,
+                                metadata=metadata,
+                                want_screenshot=want_screenshot,
+                                pipeline=pipeline,
+                            )
+                        return finalized
                     error_message = str(getattr(result, "error_message", "") or "Crawl failed")
                     if pipeline:
                         pipeline.warn("crawl4ai", error_message, url=url)
@@ -850,6 +949,307 @@ async def crawl_urls_parallel(
     return results
 
 
+def vision_nav_enabled() -> bool:
+    """Env gate for vision navigation recovery (default on when vision_enabled)."""
+    from trade_integrations.dataflows.index_research.external_predictions.minimax_vision import (
+        vision_enabled,
+    )
+
+    default = "1" if vision_enabled() else "0"
+    return os.environ.get("EXTERNAL_PREDICTIONS_VISION_NAV", default).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _vision_nav_max_rounds() -> int:
+    raw = os.environ.get("EXTERNAL_PREDICTIONS_VISION_NAV_MAX_ROUNDS", "3").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 3
+
+
+async def _maybe_vision_recover_crawl(
+    row: CrawlPageResult,
+    *,
+    url: str,
+    markdown: str,
+    title: str,
+    metadata: dict[str, Any],
+    want_screenshot: bool,
+    pipeline: Any | None,
+) -> CrawlPageResult:
+    """Run vision navigation when tier-0 crawl still looks blocked."""
+    if not want_screenshot or not vision_nav_enabled():
+        return row
+    from trade_integrations.dataflows.index_research.external_predictions.page_block_detector import (
+        detect_blocked_page,
+    )
+
+    screenshot_b64 = str(metadata.get("screenshot_b64") or "")
+    block_signal = detect_blocked_page(
+        url=url,
+        markdown=markdown,
+        screenshot_b64=screenshot_b64 or None,
+        title=title,
+    )
+    if not block_signal.blocked:
+        return row
+    if pipeline:
+        pipeline.info(
+            "vision_nav",
+            f"Blocked ({', '.join(block_signal.reasons)}) — starting vision recovery",
+            url=url,
+        )
+    return await vision_navigate_url(
+        url,
+        pipeline=pipeline,
+        max_rounds=_vision_nav_max_rounds(),
+    )
+
+
+async def _page_markdown_and_screenshot(page: Any) -> tuple[str, str, str]:
+    """Return (title, markdown-ish text, screenshot_b64) from a live Playwright page."""
+    import base64
+
+    title = str(await page.title() or "")
+    markdown = str(
+        await page.evaluate(
+            "() => (document.body && document.body.innerText) ? document.body.innerText : ''"
+        )
+        or ""
+    )
+    shot = await page.screenshot(full_page=True, type="jpeg")
+    screenshot_b64 = base64.b64encode(shot).decode("ascii")
+    return title, markdown, screenshot_b64
+
+
+async def _connect_cdp_playwright_page(url: str) -> tuple[Any, Any, Any] | None:
+    """Connect to configured CDP and return (playwright, browser, page) or None."""
+    cdp = _cdp_url()
+    if not cdp:
+        return None
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        logger.debug("playwright not installed; vision navigation requires playwright")
+        return None
+
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.connect_over_cdp(cdp)
+    context = browser.contexts[0] if browser.contexts else await browser.new_context()
+    page = context.pages[0] if context.pages else await context.new_page()
+    await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    return playwright, browser, page
+
+
+async def vision_navigate_url(
+    url: str,
+    *,
+    pipeline: Any | None = None,
+    max_rounds: int = 3,
+) -> CrawlPageResult:
+    """Crawl URL with optional vision-guided overlay recovery (Phase 2 skeleton)."""
+    from trade_integrations.dataflows.index_research.external_predictions.page_block_detector import (
+        detect_blocked_page,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.playwright_actions import (
+        execute_vision_actions,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.vision_navigator import (
+        plan_vision_navigation,
+        vision_nav_goal_from_block_reasons,
+    )
+
+    cleaned = str(url or "").strip()
+    if not cleaned:
+        return CrawlPageResult(url=url, success=False, error_message="empty URL")
+
+    if not crawl4ai_is_installed():
+        msg = "crawl4ai not installed — run: pip install 'trade-stack[external-predictions]' && crawl4ai-setup"
+        return CrawlPageResult(url=cleaned, success=False, error_message=msg)
+
+    profile = "cdp" if _cdp_url() else primary_browser_profile()
+    if profile == "cdp" and not ensure_cdp_ready(pipeline=pipeline):
+        msg = f"CDP endpoint at {_cdp_url()} is not ready after startup"
+        if pipeline:
+            pipeline.warn("crawl4ai", msg)
+        return CrawlPageResult(url=cleaned, success=False, error_message=msg)
+
+    started = time.time()
+    want_screenshot = _screenshots_enabled()
+    metadata: dict[str, Any] = {"browser_profile": profile, "vision_nav": False}
+
+    async with _make_crawler(profile) as crawler:
+        result = await crawler.arun(
+            url=cleaned,
+            config=_run_config(screenshot=want_screenshot),
+        )
+
+    elapsed_ms = (time.time() - started) * 1000.0
+    if not result.success:
+        error_message = str(getattr(result, "error_message", "") or "Crawl failed")
+        return CrawlPageResult(
+            url=cleaned,
+            success=False,
+            error_message=error_message,
+            elapsed_ms=elapsed_ms,
+            metadata=metadata,
+        )
+
+    markdown = str(getattr(result, "markdown", "") or "")
+    title = ""
+    result_metadata = dict(getattr(result, "metadata", None) or {})
+    if result_metadata:
+        title = str(result_metadata.get("title") or "")
+    screenshot_b64 = str(getattr(result, "screenshot", "") or result_metadata.get("screenshot_b64") or "")
+
+    block_signal = detect_blocked_page(
+        url=cleaned,
+        markdown=markdown,
+        screenshot_b64=screenshot_b64 or None,
+        title=title,
+    )
+    if not block_signal.blocked or not vision_nav_enabled() or not _cdp_url():
+        metadata.update(result_metadata)
+        metadata["vision_nav"] = False
+        metadata["block_reasons"] = block_signal.reasons
+        if screenshot_b64:
+            metadata["screenshot_b64"] = screenshot_b64
+        return _finalize_crawl_result(
+            url=cleaned,
+            batch_profile=profile,
+            markdown=markdown,
+            title=title,
+            metadata=metadata,
+            elapsed_ms=elapsed_ms,
+        )
+
+    if pipeline:
+        pipeline.info(
+            "crawl4ai",
+            f"Blocked page ({', '.join(block_signal.reasons)}) — starting vision navigation",
+            url=cleaned,
+        )
+
+    playwright_handle: Any | None = None
+    browser_handle: Any | None = None
+    page_handle: Any | None = None
+    prior_actions: list[dict[str, str]] = []
+    vision_rounds = 0
+    vision_errors: list[dict[str, Any]] = []
+    vision_nav_steps: list[dict[str, Any]] = []
+    block_signal_after = block_signal
+
+    try:
+        connected = await _connect_cdp_playwright_page(cleaned)
+        if connected is None:
+            metadata.update(result_metadata)
+            metadata["vision_nav"] = False
+            metadata["vision_nav_skipped"] = "cdp_playwright_unavailable"
+            metadata["block_reasons"] = block_signal.reasons
+            if screenshot_b64:
+                metadata["screenshot_b64"] = screenshot_b64
+            return _finalize_crawl_result(
+                url=cleaned,
+                batch_profile=profile,
+                markdown=markdown,
+                title=title,
+                metadata=metadata,
+                elapsed_ms=elapsed_ms,
+            )
+
+        playwright_handle, _browser_handle, page_handle = connected
+        goal = vision_nav_goal_from_block_reasons(block_signal.reasons)
+
+        for _round in range(max(1, max_rounds)):
+            title, markdown, screenshot_b64 = await _page_markdown_and_screenshot(page_handle)
+            block_signal = detect_blocked_page(
+                url=cleaned,
+                markdown=markdown,
+                screenshot_b64=screenshot_b64,
+                title=title,
+            )
+            if not block_signal.blocked:
+                break
+            if not screenshot_b64:
+                break
+            try:
+                actions = plan_vision_navigation(
+                    screenshot_b64=screenshot_b64,
+                    url=cleaned,
+                    goal=goal,
+                    block_reasons=block_signal.reasons,
+                    prior_actions=prior_actions,  # type: ignore[arg-type]
+                )
+            except RuntimeError as exc:
+                vision_errors.append({"round": _round, "error": str(exc)})
+                break
+            if not actions:
+                break
+            exec_result = await execute_vision_actions(page_handle, actions, pipeline=pipeline)
+            vision_rounds += 1
+            prior_actions.extend(actions)
+            vision_nav_steps.extend(exec_result.get("executed") or [])
+            vision_errors.extend(exec_result.get("errors") or [])
+            if pipeline:
+                pipeline.info(
+                    "vision_nav",
+                    f"Round {vision_rounds}: {len(actions)} planned action(s)",
+                    url=cleaned,
+                )
+            await asyncio.sleep(0.5)
+
+        title, markdown, screenshot_b64 = await _page_markdown_and_screenshot(page_handle)
+        block_signal_after = detect_blocked_page(
+            url=cleaned,
+            markdown=markdown,
+            screenshot_b64=screenshot_b64,
+            title=title,
+        )
+    except Exception as exc:
+        if pipeline:
+            pipeline.warn("crawl4ai", f"Vision navigation failed: {exc}", url=cleaned)
+        vision_errors.append({"error": str(exc)})
+    finally:
+        if playwright_handle is not None:
+            try:
+                await playwright_handle.stop()
+            except Exception:
+                logger.debug("playwright stop failed after vision navigation", exc_info=True)
+
+    elapsed_ms = (time.time() - started) * 1000.0
+    metadata.update(result_metadata)
+    metadata["vision_nav"] = vision_rounds > 0
+    metadata["vision_nav_rounds"] = vision_rounds
+    metadata["block_reasons"] = block_signal_after.reasons
+    if vision_nav_steps:
+        metadata["vision_nav_steps"] = vision_nav_steps
+    if vision_errors:
+        metadata["vision_nav_errors"] = vision_errors
+    if vision_rounds > 0 and pipeline:
+        pipeline.info(
+            "vision_nav",
+            f"Recovery complete — {vision_rounds} round(s), "
+            f"blocked_after={block_signal_after.blocked}",
+            url=cleaned,
+        )
+    if screenshot_b64:
+        metadata["screenshot_b64"] = screenshot_b64
+
+    return _finalize_crawl_result(
+        url=cleaned,
+        batch_profile=profile,
+        markdown=markdown,
+        title=title,
+        metadata=metadata,
+        elapsed_ms=elapsed_ms,
+    )
+
+
 def crawl_urls_parallel_sync(
     urls: list[str],
     *,
@@ -866,6 +1266,23 @@ def crawl_urls_parallel_sync(
             pipeline=pipeline,
             score_links=score_links,
             capture_screenshot=capture_screenshot,
+        )
+    )
+
+
+def vision_navigate_url_sync(
+    url: str,
+    *,
+    pipeline: Any | None = None,
+    max_rounds: int | None = None,
+) -> CrawlPageResult:
+    """Sync wrapper for browse agent and refresh workers."""
+    rounds = max_rounds if max_rounds is not None else _vision_nav_max_rounds()
+    return asyncio.run(
+        vision_navigate_url(
+            url,
+            pipeline=pipeline,
+            max_rounds=rounds,
         )
     )
 

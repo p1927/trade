@@ -323,6 +323,28 @@ def keyword_match_score(
     return score
 
 
+
+def crawl_single_url(
+    url: str,
+    *,
+    pipeline: PipelineLogger | None = None,
+) -> tuple[str, CrawlPageResult] | None:
+    """Crawl one URL with screenshot capture (sequential, max_parallel=1)."""
+    cleaned = str(url or "").strip()
+    if not cleaned:
+        return None
+    results = crawl_urls_parallel_sync(
+        [cleaned],
+        max_parallel=1,
+        pipeline=pipeline,
+        capture_screenshot=True,
+    )
+    if not results:
+        return None
+    return (cleaned, results[0])
+
+
+
 def crawl_sources_parallel(
     sources: list[ExternalPredictionSource],
     *,

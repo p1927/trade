@@ -9,8 +9,6 @@ from typing import Any
 from trade_integrations.dataflows.crawl4ai_client import crawl4ai_queue_stats
 from trade_integrations.dataflows.index_research.external_predictions.batch_url_dedup import (
     BatchUrlRegistry,
-    assign_discovery_url_owners,
-    dedup_discovery_for_batch,
 )
 from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_fetcher import (
     crawl_sources_parallel,
@@ -35,11 +33,9 @@ from trade_integrations.dataflows.index_research.external_predictions.screenshot
     ScreenshotArtifacts,
     persist_screenshot_b64,
 )
-from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
-    SearxngDiscoveryResult,
-    discover_sources_parallel,
-    discovery_urls_map,
-    extract_via_searxng_fallback,
+from trade_integrations.dataflows.index_research.external_predictions.search_agent import (
+    passes_verified_quality_gates,
+    progressive_search_until_forecast,
 )
 from trade_integrations.dataflows.index_research.external_predictions.navigation_paths import (
     persist_successful_exploratory_path,
@@ -228,8 +224,8 @@ def _record_from_crawl_group(
     navigation_mode: str = "exploratory",
     fetch_method: str = "crawl4ai",
     navigation_steps: list[NavigationStep] | None = None,
-    searxng_discovery: SearxngDiscoveryResult | None = None,
     batch_registry: BatchUrlRegistry | None = None,
+    tried_urls: set[str] | None = None,
 ) -> ExternalPredictionRecord:
     sym = symbol.upper()
     prefix = ""
@@ -267,60 +263,6 @@ def _record_from_crawl_group(
     if not ranked_crawls:
         errors = [row.error_message for _, row in rows if row.error_message]
         message = errors[0] if errors else "Crawl failed for all URLs"
-        should_try_searxng, searxng_trigger = should_run_searxng_fallback(rows, message)
-        searxng_attempted = False
-        if should_try_searxng:
-            searxng_attempted = True
-            if pipeline:
-                pipeline.info(
-                    "searxng",
-                    f"{prefix}{src.display_name}: trying SearXNG text fallback ({searxng_trigger})",
-                    source_id=src.id,
-                    searxng_trigger=searxng_trigger,
-                )
-            fallback = extract_via_searxng_fallback(
-                src,
-                symbol=sym,
-                horizon_days=horizon_days,
-                spot=spot_val,
-                pipeline=pipeline,
-                search_outcome=searxng_discovery,
-            )
-            if fallback is not None:
-                fallback.provenance = {
-                    **dict(fallback.provenance or {}),
-                    "searxng_trigger": searxng_trigger,
-                    "searxng_attempted": True,
-                }
-                _, attempt = persist_refresh_result(fallback, symbol=sym)
-                if pipeline:
-                    if attempt.fetch_status == "ok":
-                        mid = attempt.target.mid
-                        pipeline.info(
-                            "source",
-                            f"{prefix}{src.display_name}: SearXNG fallback target {mid:,.0f}"
-                            if mid
-                            else f"{prefix}{src.display_name}: SearXNG fallback ok",
-                            source_id=src.id,
-                            url=str(attempt.provenance.get("url") or "")[:120],
-                        )
-                    else:
-                        pipeline.warn(
-                            "source",
-                            f"{prefix}{src.display_name}: SearXNG fallback — {attempt.error_message or 'not found'}",
-                            source_id=src.id,
-                        )
-                return attempt
-            if searxng_discovery is not None and searxng_discovery.all_queries_failed:
-                message = "SearXNG fallback skipped — all search queries failed"
-            elif (
-                searxng_discovery is not None
-                and searxng_discovery.domain_filter_exhausted
-                and not searxng_discovery.hits
-            ):
-                message = "SearXNG returned hits but none matched source domains"
-            else:
-                message = f"SearXNG fallback ({searxng_trigger}) found no forecast"
         if pipeline:
             pipeline.warn(
                 "source",
@@ -330,13 +272,6 @@ def _record_from_crawl_group(
         error_prov: dict[str, Any] = {
             "urls_tried": list(dict.fromkeys(url for url, _ in rows)) or urls,
         }
-        if searxng_attempted:
-            error_prov["searxng_trigger"] = searxng_trigger
-            error_prov["searxng_attempted"] = True
-        if searxng_discovery is not None and searxng_discovery.all_queries_failed:
-            error_prov["searxng_all_queries_failed"] = True
-        if searxng_discovery is not None and searxng_discovery.domain_filter_exhausted:
-            error_prov["searxng_domain_filter_exhausted"] = True
         record = ExternalPredictionRecord(
             source_id=src.id,
             symbol=sym,
@@ -350,8 +285,12 @@ def _record_from_crawl_group(
         _, attempt = persist_refresh_result(record, symbol=sym)
         return attempt
 
+    tried = tried_urls if tried_urls is not None else set()
     last_record: ExternalPredictionRecord | None = None
     for url, crawl in ranked_crawls:
+        norm_url = str(url or "").strip().rstrip("/")
+        if norm_url:
+            tried.add(norm_url)
         screenshot_b64 = None
         if isinstance(crawl.metadata, dict):
             raw = crawl.metadata.get("screenshot_b64")
@@ -370,7 +309,7 @@ def _record_from_crawl_group(
         )
         record.as_of = utc_now_iso()[:10]
         record.spot_at_fetch = spot_val
-        record.provenance = {
+        provenance: dict[str, Any] = {
             **dict(record.provenance or {}),
             "url": url,
             "title": crawl.title or record.provenance.get("title", ""),
@@ -379,6 +318,20 @@ def _record_from_crawl_group(
             "elapsed_ms": crawl.elapsed_ms,
             "page_kind": classify_page_kind(url),
         }
+        if isinstance(crawl.metadata, dict):
+            vision_steps = crawl.metadata.get("vision_nav_steps")
+            if vision_steps:
+                provenance["vision_nav_trace"] = vision_steps
+            if crawl.metadata.get("vision_nav"):
+                if pipeline:
+                    pipeline.info(
+                        "vision_nav",
+                        f"{prefix}{src.display_name}: crawl used vision recovery "
+                        f"({crawl.metadata.get('vision_nav_rounds', 0)} round(s))",
+                        source_id=src.id,
+                        url=url[:120],
+                    )
+        record.provenance = provenance
         last_record = record
         if record.fetch_status == "stale":
             if pipeline:
@@ -393,6 +346,22 @@ def _record_from_crawl_group(
                 )
             continue
         if record.fetch_status == "ok":
+            if not passes_verified_quality_gates(
+                record,
+                src,
+                url,
+                title=crawl.title or "",
+                content=crawl.markdown or "",
+            ):
+                if pipeline:
+                    pipeline.info(
+                        "source",
+                        f"{prefix}{src.display_name}: crawl extract failed quality gates — next candidate",
+                        source_id=src.id,
+                        url=url[:120],
+                    )
+                last_record = record
+                continue
             persist_successful_exploratory_path(
                 src.id,
                 horizon_days=horizon_days,
@@ -450,8 +419,8 @@ def refresh_source(
     source_index: int | None = None,
     source_total: int | None = None,
     crawl_group: dict[str, list[tuple[str, Any]]] | None = None,
-    searxng_discovery: SearxngDiscoveryResult | None = None,
     batch_registry: BatchUrlRegistry | None = None,
+    tried_urls: set[str] | None = None,
 ) -> ExternalPredictionRecord:
     src = get_source(source_id)
     if src is None:
@@ -496,26 +465,24 @@ def refresh_source(
         )
 
     spot_val = spot if spot is not None else _fetch_spot(sym, pipeline)
-
-    if (
-        searxng_discovery is not None
-        and batch_registry is not None
-        and not batch_registry.attribution_owners_initialized
-    ):
-        batch_registry.set_attribution_owners(
-            assign_discovery_url_owners({src.id: searxng_discovery}, [src])
-        )
+    tried = tried_urls if tried_urls is not None else set()
 
     if crawl_group is not None:
-        rows = crawl_group.get(source_id, [])
+        rows = list(crawl_group.get(source_id, []))
     else:
         grouped = crawl_sources_parallel(
             [src],
             symbol=sym,
             horizon_days=horizon_days,
             pipeline=pipeline,
+            attribution_owners=batch_registry.attribution_owners if batch_registry else None,
         )
         rows = grouped.get(source_id, [])
+
+    for url, _row in rows:
+        norm = str(url or "").strip().rstrip("/")
+        if norm:
+            tried.add(norm)
 
     replay_result, rows, exploratory_backup = try_fast_path_then_exploratory(
         src,
@@ -527,52 +494,6 @@ def refresh_source(
     navigation_mode = "fast" if used_fast else "exploratory"
     fetch_method = "path_replay" if used_fast else "crawl4ai"
     navigation_steps: list[NavigationStep] | None = None
-
-    if not used_fast:
-        crawl_best = pick_best_crawl_result(
-            rows,
-            source_keywords(src, horizon_days=horizon_days),
-            horizon_days=horizon_days,
-            pipeline=None,
-            batch_registry=batch_registry,
-            source=src,
-        )
-        browse_from_landing = False
-        if not browse_enabled_for_source(src):
-            browse_from_landing = crawl_best is None and bool(src.landing_urls)
-        should_browse = crawl_best is None and (
-            browse_enabled_for_source(src) or browse_from_landing
-        )
-        if should_browse:
-            browse = run_exploratory_browse(
-                src,
-                horizon_days=horizon_days,
-                pipeline=pipeline,
-                include_landing_fallback=browse_from_landing,
-            )
-            if browse.success and browse.url:
-                rows = [browse_result_to_crawl_row(browse)]
-                navigation_steps = list(browse.trace.steps)
-                fetch_method = "browse_agent"
-                if pipeline:
-                    pipeline.info(
-                        "browse",
-                        f"Exploratory browse succeeded in {browse.steps_taken} step(s)",
-                        source_id=source_id,
-                        url=browse.url[:120],
-                    )
-            elif pipeline and browse.error_message:
-                pipeline.warn(
-                    "browse",
-                    f"Exploratory browse did not find forecast — using crawl batch ({browse.error_message})",
-                    source_id=source_id,
-                )
-        elif pipeline and crawl_best is not None and browse_enabled_for_source(src):
-            pipeline.info(
-                "browse",
-                "Skipping exploratory browse — crawl batch already has a forecast candidate",
-                source_id=source_id,
-            )
 
     try:
         record = _record_from_crawl_group(
@@ -587,8 +508,8 @@ def refresh_source(
             navigation_mode=navigation_mode,
             fetch_method=fetch_method,
             navigation_steps=navigation_steps,
-            searxng_discovery=searxng_discovery,
             batch_registry=batch_registry,
+            tried_urls=tried,
         )
         if used_fast and record.fetch_status != "ok":
             if exploratory_backup:
@@ -613,13 +534,90 @@ def refresh_source(
                     navigation_mode=navigation_mode,
                     fetch_method=fetch_method,
                     navigation_steps=None,
-                    searxng_discovery=searxng_discovery,
                     batch_registry=batch_registry,
+                    tried_urls=tried,
                 )
         elif used_fast and record.fetch_status == "ok":
             touch_path_success(src.id, horizon_days=horizon_days)
+
+        if record.fetch_status != "ok":
+            trigger = "crawl_no_forecast"
+            if rows:
+                errors = [row.error_message for _, row in rows if getattr(row, "error_message", None)]
+                message = errors[0] if errors else "Crawl failed for all URLs"
+                should_search, trigger = should_run_searxng_fallback(rows, message)
+                if not should_search:
+                    trigger = "crawl_no_forecast"
+            if pipeline:
+                pipeline.info(
+                    "search_agent",
+                    f"{prefix}{src.display_name}: progressive search ({trigger})",
+                    source_id=source_id,
+                )
+            outcome = progressive_search_until_forecast(
+                src,
+                symbol=sym,
+                horizon_days=horizon_days,
+                spot=spot_val,
+                tried_urls=tried,
+                batch_registry=batch_registry,
+                pipeline=pipeline,
+                searxng_trigger=trigger,
+            )
+            if outcome.record is not None and outcome.record.fetch_status == "ok":
+                _, record = persist_refresh_result(outcome.record, symbol=sym)
+            elif outcome.record is not None:
+                record = outcome.record
+
+        if record.fetch_status != "ok":
+            crawl_best = pick_best_crawl_result(
+                rows,
+                source_keywords(src, horizon_days=horizon_days),
+                horizon_days=horizon_days,
+                pipeline=None,
+                batch_registry=batch_registry,
+                source=src,
+            )
+            browse_from_landing = False
+            if not browse_enabled_for_source(src):
+                browse_from_landing = crawl_best is None and bool(src.landing_urls)
+            should_browse = crawl_best is None and (
+                browse_enabled_for_source(src) or browse_from_landing
+            )
+            if should_browse:
+                browse = run_exploratory_browse(
+                    src,
+                    horizon_days=horizon_days,
+                    pipeline=pipeline,
+                    include_landing_fallback=browse_from_landing,
+                )
+                if browse.success and browse.url:
+                    browse_rows = [browse_result_to_crawl_row(browse)]
+                    navigation_steps = list(browse.trace.steps)
+                    record = _record_from_crawl_group(
+                        src,
+                        browse_rows,
+                        symbol=sym,
+                        horizon_days=horizon_days,
+                        spot_val=spot_val,
+                        pipeline=pipeline,
+                        source_index=source_index,
+                        source_total=source_total,
+                        navigation_mode="browse_agent",
+                        fetch_method="browse_agent",
+                        navigation_steps=navigation_steps,
+                        batch_registry=batch_registry,
+                        tried_urls=tried,
+                    )
+                elif pipeline and browse.error_message:
+                    pipeline.warn(
+                        "browse",
+                        f"Exploratory browse last resort failed ({browse.error_message})",
+                        source_id=source_id,
+                    )
+
         prov = dict(record.provenance or {})
-        if prov.get("navigation_mode") != "searxng_fallback":
+        if prov.get("navigation_mode") not in {"searxng_fallback", "progressive_search"}:
             record.provenance = {
                 **prov,
                 "navigation_mode": navigation_mode,
@@ -707,24 +705,7 @@ def refresh_all_external_predictions(
             waiting=stats.get("waiting"),
         )
 
-    discovery_by_source = discover_sources_parallel(
-        sources,
-        horizon_days=horizon_days,
-        pipeline=pipeline,
-    )
-    discovery_by_source = dedup_discovery_for_batch(
-        discovery_by_source,
-        sources,
-        batch_registry,
-    )
-    crawl_group = crawl_sources_parallel(
-        sources,
-        symbol=sym,
-        horizon_days=horizon_days,
-        pipeline=pipeline,
-        discovery_urls=discovery_urls_map(discovery_by_source),
-        attribution_owners=batch_registry.attribution_owners,
-    )
+    tried_urls: set[str] = set()
 
     refresh_attempt_failures = 0
     for idx, src in enumerate(sources, start=1):
@@ -737,9 +718,8 @@ def refresh_all_external_predictions(
                 pipeline=pipeline,
                 source_index=idx,
                 source_total=len(sources),
-                crawl_group=crawl_group,
-                searxng_discovery=discovery_by_source.get(src.id),
                 batch_registry=batch_registry,
+                tried_urls=tried_urls,
             )
         except Exception as exc:
             logger.exception("refresh failed for %s: %s", src.id, exc)

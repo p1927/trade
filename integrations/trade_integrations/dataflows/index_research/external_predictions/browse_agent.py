@@ -34,6 +34,7 @@ from trade_integrations.dataflows.index_research.pipeline_log import PipelineLog
 logger = logging.getLogger(__name__)
 
 MAX_BROWSE_STEPS = 8
+MAX_VISION_CALLS_PER_BROWSE_STEP = 2
 _MD_LINK = re.compile(r"\[([^\]]*)\]\((https?://[^)]+)\)", re.I)
 CrawlOneFn = Callable[[str, bool], CrawlPageResult]
 
@@ -102,10 +103,206 @@ def browse_result_to_crawl_row(result: BrowseResult) -> tuple[str, CrawlPageResu
 
 
 def _default_crawl_one(url: str, score_links: bool) -> CrawlPageResult:
-    rows = crawl_urls_parallel_sync([url], score_links=score_links)
+    rows = crawl_urls_parallel_sync([url], score_links=score_links, capture_screenshot=True)
     if not rows:
         return CrawlPageResult(url=url, success=False, error_message="browse_crawl_empty")
     return rows[0]
+
+
+def _row_screenshot_b64(row: CrawlPageResult) -> str:
+    if isinstance(row.metadata, dict):
+        return str(row.metadata.get("screenshot_b64") or "")
+    return ""
+
+
+def _detect_row_blocked(row: CrawlPageResult, *, url: str) -> Any:
+    from trade_integrations.dataflows.index_research.external_predictions.page_block_detector import (
+        detect_blocked_page,
+    )
+
+    return detect_blocked_page(
+        url=url,
+        markdown=row.markdown or "",
+        screenshot_b64=_row_screenshot_b64(row) or None,
+        title=row.title or "",
+    )
+
+
+def _try_vision_blocked_recovery(
+    row: CrawlPageResult,
+    *,
+    url: str,
+    pipeline: PipelineLogger | None,
+) -> CrawlPageResult:
+    """Run vision overlay recovery when crawl still looks blocked."""
+    from trade_integrations.dataflows.crawl4ai_client import vision_nav_enabled, vision_navigate_url_sync
+
+    if not vision_nav_enabled():
+        return row
+    block_signal = _detect_row_blocked(row, url=url)
+    if not block_signal.blocked:
+        return row
+    if pipeline:
+        pipeline.info(
+            "vision_nav",
+            f"Browse step blocked ({', '.join(block_signal.reasons)}) — vision recovery",
+            url=url[:120],
+        )
+    try:
+        recovered = vision_navigate_url_sync(url, pipeline=pipeline)
+    except Exception as exc:
+        if pipeline:
+            pipeline.warn("vision_nav", f"Browse vision recovery failed: {exc}", url=url[:120])
+        logger.debug("browse vision recovery failed for %s", url, exc_info=True)
+        return row
+    if recovered.success:
+        return recovered
+    return row
+
+
+def _collect_browse_link_candidates(
+    *,
+    markdown: str,
+    native_links: list[dict[str, Any]] | None,
+    source: ExternalPredictionSource,
+    visited: set[str],
+    current_url: str,
+) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    for title, url, _ in _iter_browse_link_candidates(markdown, native_links):
+        norm = _normalize_url(url)
+        if norm in visited or url == current_url:
+            continue
+        if not _domain_matches_source(url, source):
+            continue
+        if not link_has_forecast_signal(f"{title} {url}"):
+            continue
+        candidates.append((title or url, url))
+        if len(candidates) >= 10:
+            break
+    return candidates
+
+
+def _vision_pick_listing_link(
+    *,
+    markdown: str,
+    native_links: list[dict[str, Any]] | None,
+    source: ExternalPredictionSource,
+    screenshot_b64: str,
+    visited: set[str],
+    current_url: str,
+    pipeline: PipelineLogger | None = None,
+    goal: str = "pick_listing_link",
+) -> tuple[str, str]:
+    """Vision-assisted link pick when listing markdown is thin or link extraction failed."""
+    from trade_integrations.dataflows.crawl4ai_client import vision_nav_enabled
+    from trade_integrations.dataflows.index_research.external_predictions.vision_navigator import (
+        BrowseVisionGoal,
+        plan_vision_browse_next_url,
+    )
+
+    if not vision_nav_enabled():
+        return "", ""
+    if goal == "pick_listing_link" and len((markdown or "").strip()) >= 1200:
+        return "", ""
+
+    candidates = _collect_browse_link_candidates(
+        markdown=markdown,
+        native_links=native_links,
+        source=source,
+        visited=visited,
+        current_url=current_url,
+    )
+    browse_goal: BrowseVisionGoal = (
+        "open_forecast_article" if goal == "open_forecast_article" else "pick_listing_link"
+    )
+    if browse_goal == "pick_listing_link" and not candidates:
+        return "", ""
+
+    try:
+        plan = plan_vision_browse_next_url(
+            screenshot_b64=screenshot_b64,
+            url=current_url,
+            goal=browse_goal,
+            candidates=candidates or None,
+        )
+    except Exception as exc:
+        if pipeline:
+            pipeline.warn("browse", f"Vision link pick skipped: {exc}", source_id=source.id)
+        return "", ""
+
+    next_url = str(plan.next_url or "").strip()
+    if not next_url:
+        return "", ""
+    norm = _normalize_url(next_url)
+    if norm in visited or next_url == current_url:
+        return "", ""
+    if not _domain_matches_source(next_url, source):
+        return "", ""
+
+    link_title = ""
+    for title, url, _ in _iter_browse_link_candidates(markdown, native_links):
+        if url == next_url and title:
+            link_title = title
+            break
+    if pipeline:
+        pipeline.info(
+            "vision_nav",
+            f"Vision browse pick ({browse_goal})",
+            source_id=source.id,
+            url=next_url[:120],
+        )
+    return next_url, link_title
+
+
+def _vision_pick_next_url_for_step(
+    *,
+    row: CrawlPageResult,
+    markdown: str,
+    native_links: list[dict[str, Any]] | None,
+    source: ExternalPredictionSource,
+    current_url: str,
+    visited: set[str],
+    pipeline: PipelineLogger | None,
+    vision_calls: int,
+) -> tuple[str, str, int]:
+    """Try up to remaining vision budget to pick next browse URL."""
+    screenshot_b64 = _row_screenshot_b64(row)
+    if not screenshot_b64:
+        return "", "", vision_calls
+
+    remaining = MAX_VISION_CALLS_PER_BROWSE_STEP - vision_calls
+    if remaining <= 0:
+        return "", "", vision_calls
+
+    next_url, link_text = _vision_pick_listing_link(
+        markdown=markdown,
+        native_links=native_links,
+        source=source,
+        screenshot_b64=screenshot_b64,
+        visited=visited,
+        current_url=current_url,
+        pipeline=pipeline,
+        goal="open_forecast_article",
+    )
+    vision_calls += 1
+    if next_url or remaining <= 1:
+        return next_url, link_text, vision_calls
+
+    pick_url, pick_title = _vision_pick_listing_link(
+        markdown=markdown,
+        native_links=native_links,
+        source=source,
+        screenshot_b64=screenshot_b64,
+        visited=visited,
+        current_url=current_url,
+        pipeline=pipeline,
+        goal="pick_listing_link",
+    )
+    vision_calls += 1
+    if pick_url:
+        return pick_url, pick_title or link_text, vision_calls
+    return next_url, link_text, vision_calls
 
 
 def _domain_matches_source(url: str, source: ExternalPredictionSource) -> bool:
@@ -141,76 +338,6 @@ def _iter_browse_link_candidates(
         seen.add(u)
         rows.append((title.strip(), u, None))
     return rows
-
-
-def _vision_pick_listing_link(
-    *,
-    markdown: str,
-    native_links: list[dict[str, Any]] | None,
-    source: ExternalPredictionSource,
-    screenshot_b64: str,
-    visited: set[str],
-    current_url: str,
-    pipeline: PipelineLogger | None = None,
-) -> tuple[str, str]:
-    """Optional vision-assisted link pick when listing markdown is thin (max 1 call per session)."""
-    from trade_integrations.dataflows.index_research.external_predictions.minimax_vision import (
-        call_minimax_vision_json,
-        vision_enabled,
-    )
-
-    if not vision_enabled():
-        return "", ""
-    if len((markdown or "").strip()) >= 1200:
-        return "", ""
-
-    candidates: list[tuple[str, str]] = []
-    for title, url, _ in _iter_browse_link_candidates(markdown, native_links):
-        norm = _normalize_url(url)
-        if norm in visited or url == current_url:
-            continue
-        if not _domain_matches_source(url, source):
-            continue
-        if not link_has_forecast_signal(f"{title} {url}"):
-            continue
-        candidates.append((title or url, url))
-        if len(candidates) >= 10:
-            break
-    if not candidates:
-        return "", ""
-
-    lines = "\n".join(f"{idx + 1}. {title} — {url}" for idx, (title, url) in enumerate(candidates))
-    try:
-        payload = call_minimax_vision_json(
-            system_prompt=(
-                "Pick the listing link most likely to lead to a NIFTY 50 weekly/index forecast page. "
-                "Return JSON: {\"pick\": <1-based index or 0 if none>}."
-            ),
-            user_text=f"Which link is the NIFTY 50 forecast article?\n{lines}",
-            image_jpeg_b64_list=[screenshot_b64],
-            max_tokens=200,
-        )
-    except Exception as exc:
-        if pipeline:
-            pipeline.warn("browse", f"Vision link pick skipped: {exc}", source_id=source.id)
-        return "", ""
-
-    pick_raw = payload.get("pick", payload.get("index", 0))
-    try:
-        pick_idx = int(pick_raw)
-    except (TypeError, ValueError):
-        return "", ""
-    if pick_idx < 1 or pick_idx > len(candidates):
-        return "", ""
-    title, url = candidates[pick_idx - 1]
-    if pipeline:
-        pipeline.info(
-            "browse",
-            f"Vision picked listing link #{pick_idx}",
-            source_id=source.id,
-            url=url[:120],
-        )
-    return url, title
 
 
 def _pick_next_url(
@@ -375,6 +502,21 @@ def run_exploratory_browse(
                 )
             break
 
+        vision_calls = 0
+        block_signal = _detect_row_blocked(row, url=current_url)
+        overlay_blocked = block_signal.blocked and any(
+            token in reason
+            for reason in block_signal.reasons
+            for token in ("cookie", "notification", "overlay", "bot")
+        )
+        if overlay_blocked and vision_calls < MAX_VISION_CALLS_PER_BROWSE_STEP:
+            recovered = _try_vision_blocked_recovery(row, url=current_url, pipeline=pipeline)
+            if recovered is not row:
+                row = recovered
+                last_row = row
+                total_elapsed_ms += float(row.elapsed_ms or 0.0)
+                vision_calls += 1
+
         if _page_has_forecast(
             row.markdown,
             url=current_url,
@@ -392,9 +534,6 @@ def run_exploratory_browse(
             break
 
         native_links = row.metadata.get("links") if isinstance(row.metadata, dict) else None
-        screenshot_b64 = ""
-        if isinstance(row.metadata, dict):
-            screenshot_b64 = str(row.metadata.get("screenshot_b64") or "")
         next_url, link_text = _pick_next_url(
             markdown=row.markdown,
             native_links=native_links if isinstance(native_links, list) else None,
@@ -402,15 +541,16 @@ def run_exploratory_browse(
             current_url=current_url,
             visited=visited,
         )
-        if not next_url and screenshot_b64:
-            next_url, link_text = _vision_pick_listing_link(
+        if not next_url:
+            next_url, link_text, vision_calls = _vision_pick_next_url_for_step(
+                row=row,
                 markdown=row.markdown,
                 native_links=native_links if isinstance(native_links, list) else None,
                 source=source,
-                screenshot_b64=screenshot_b64,
-                visited=visited,
                 current_url=current_url,
+                visited=visited,
                 pipeline=pipeline,
+                vision_calls=vision_calls,
             )
         if not next_url:
             if pipeline:
