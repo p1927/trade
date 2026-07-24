@@ -258,6 +258,9 @@ def _merge_seed_defaults(sources: list[ExternalPredictionSource]) -> list[Extern
         if src.domains != seed.domains:
             src.domains = list(seed.domains)
             changed = True
+        if list(src.search_queries or []) != list(seed.search_queries or []):
+            src.search_queries = list(seed.search_queries or [])
+            changed = True
         out.append(src)
     if changed:
         save_registry(out)

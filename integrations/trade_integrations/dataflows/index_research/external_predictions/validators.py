@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from trade_integrations.dataflows.index_research.external_predictions.models import (
@@ -208,6 +208,77 @@ def _days_ahead(from_day: date, target_day: date) -> int:
     return (target_day - from_day).days
 
 
+DEFAULT_PUBLISH_RECENCY_TRADING_DAYS = 3
+
+
+def recency_window_dates(
+    as_of_date: str,
+    trading_dates: list[str] | None = None,
+    *,
+    max_trading_days: int = DEFAULT_PUBLISH_RECENCY_TRADING_DAYS,
+) -> set[str]:
+    from trade_integrations.dataflows.index_research.external_predictions.query_builder import (
+        load_nifty_trading_dates,
+    )
+
+    dates = trading_dates if trading_dates is not None else load_nifty_trading_dates()
+    as_of = str(as_of_date)[:10]
+    ordered = [str(d).strip()[:10] for d in dates if str(d).strip()]
+    if ordered:
+        eligible = [d for d in ordered if d <= as_of]
+        if not eligible:
+            return {as_of}
+        return set(eligible[-max(1, int(max_trading_days)) :])
+    try:
+        end = date.fromisoformat(as_of)
+    except ValueError:
+        return {as_of}
+    return {(end - timedelta(days=offset)).isoformat() for offset in range(max_trading_days)}
+
+
+def is_published_within_recency_window(
+    published_at: str,
+    as_of: str,
+    *,
+    trading_dates: list[str] | None = None,
+    max_trading_days: int = DEFAULT_PUBLISH_RECENCY_TRADING_DAYS,
+) -> bool | None:
+    """Return True/False when parseable; None when publish date unknown."""
+    pub = _parse_date(published_at)
+    as_of_day = _parse_date(as_of)
+    if pub is None or as_of_day is None:
+        return None
+    window = recency_window_dates(
+        as_of_day.isoformat(),
+        trading_dates,
+        max_trading_days=max_trading_days,
+    )
+    return pub.isoformat() in window
+
+
+def apply_publish_recency_gate(
+    record: ExternalPredictionRecord,
+    *,
+    trading_dates: list[str] | None = None,
+    max_trading_days: int = DEFAULT_PUBLISH_RECENCY_TRADING_DAYS,
+) -> ExternalPredictionRecord:
+    within = is_published_within_recency_window(
+        record.published_at,
+        record.as_of,
+        trading_dates=trading_dates,
+        max_trading_days=max_trading_days,
+    )
+    if within is False:
+        record.fetch_status = "stale"
+        record.error_message = "published_outside_recency_window"
+        record.provenance = {
+            **dict(record.provenance or {}),
+            "publish_recency_days": max_trading_days,
+            "published_at": record.published_at,
+        }
+    return record
+
+
 def validate_record(
     record: ExternalPredictionRecord,
     *,
@@ -294,6 +365,10 @@ def validate_record(
     if record.confidence == "low" and _LOW_CONFIDENCE_DENIAL.search(rationale_blob):
         record.fetch_status = "not_found"
         record.error_message = "low_confidence_denies_forecast"
+        return record
+
+    record = apply_publish_recency_gate(record)
+    if record.fetch_status == "stale":
         return record
 
     record.fetch_status = "ok"

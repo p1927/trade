@@ -12,6 +12,11 @@ _BOT_BLOCK_RE = re.compile(
     r"anti-bot|akamai|bot protection|access denied|captcha|cloudflare|blocked by",
     re.I,
 )
+_AKAMAI_WRAP_MARKERS = (
+    "REDIRECT_QUERY_STRING",
+    "REQUEST_URI] => /europe/",
+    "[QUERY_STRING] => url=",
+)
 
 _DEFAULT_CRAWL_BLOCKLIST = frozenset({"moneycontrol.com"})
 _MIN_USABLE_MARKDOWN_CHARS = 80
@@ -35,30 +40,62 @@ def is_bot_block_error(message: str | None) -> bool:
     return bool(_BOT_BLOCK_RE.search(text))
 
 
+def is_akamai_wrapped_markdown(markdown: str | None, url: str = "") -> bool:
+    """Detect Akamai geo-edge shells that return HTTP 200 with the wrong page body."""
+    text = str(markdown or "").strip()
+    if not text:
+        return False
+    if any(marker in text for marker in _AKAMAI_WRAP_MARKERS):
+        return True
+    target = str(url or "").strip()
+    if target and "redirect_url =" in text and target in text:
+        lowered = text.lower()
+        if "/tags/" in target or target.rstrip("/").endswith("/markets"):
+            if lowered.count("articleshow") == 0 and len(text) < 12000:
+                return True
+    return False
+
+
+def is_crawl_bot_blocked(row: CrawlPageResult, url: str = "") -> bool:
+    """True for explicit bot errors or Akamai-wrapped successful crawls."""
+    if is_bot_block_error(row.error_message):
+        return True
+    if row.success and is_akamai_wrapped_markdown(row.markdown, url or row.url):
+        return True
+    return False
+
+
 def crawl_rows_all_bot_blocked(rows: list[tuple[str, CrawlPageResult]]) -> bool:
     """True when every failed crawl row looks like anti-bot blocking."""
-    failures = [row for _, row in rows if not row.success or not (row.markdown or "").strip()]
+    failures = [
+        (url, row)
+        for url, row in rows
+        if not row.success
+        or not (row.markdown or "").strip()
+        or is_akamai_wrapped_markdown(row.markdown, url)
+    ]
     if not failures:
         return False
-    blocked = [row for row in failures if is_bot_block_error(row.error_message)]
+    blocked = [row for _, row in failures if is_crawl_bot_blocked(row)]
     return len(blocked) == len(failures)
 
 
 def crawl_rows_any_bot_blocked(rows: list[tuple[str, CrawlPageResult]]) -> bool:
     """True when at least one failed row looks like anti-bot blocking."""
-    for _, row in rows:
-        if row.success and (row.markdown or "").strip():
+    for url, row in rows:
+        if row.success and (row.markdown or "").strip() and not is_akamai_wrapped_markdown(row.markdown, url):
             continue
-        if is_bot_block_error(row.error_message):
+        if is_crawl_bot_blocked(row, url):
             return True
     return False
 
 
 def crawl_rows_have_usable_text(rows: list[tuple[str, CrawlPageResult]]) -> bool:
     """True when crawl returned markdown but pick_best rejected it (no forecast signal)."""
-    for _, row in rows:
+    for url, row in rows:
         if row.success and len((row.markdown or "").strip()) >= _MIN_USABLE_MARKDOWN_CHARS:
-            return True
+            if not is_akamai_wrapped_markdown(row.markdown, url):
+                return True
     return False
 
 

@@ -110,11 +110,6 @@ def build_domain_tier_queries(
     name = source.display_name
     queries: list[str] = [
         expand_query_template(
-            f'"{name}" Nifty 50 target forecast {{today}} {{horizon_end}}',
-            context=context,
-            source=source,
-        ),
-        expand_query_template(
             f'"{name}" Nifty 50 outlook {{month_year}} India brokerage',
             context=context,
             source=source,
@@ -124,12 +119,60 @@ def build_domain_tier_queries(
             context=context,
             source=source,
         ),
-        expand_query_template(
-            f'"{name}" Nifty 50 target {{month_year}}',
-            context=context,
-            source=source,
-        ),
     ]
+    return list(dict.fromkeys(q for q in queries if q.strip()))
+
+
+def build_fallback_queries(
+    source: ExternalPredictionSource,
+    *,
+    horizon_days: int,
+    as_of_date: str | None = None,
+    trading_dates: list[str] | None = None,
+) -> list[str]:
+    """Broader queries used only when primary discovery returns no ranked hits."""
+    context = build_horizon_context(
+        horizon_days=horizon_days,
+        as_of_date=as_of_date,
+        trading_dates=trading_dates,
+    )
+    name = source.display_name
+    domain = primary_domain(source)
+    month_year = context.get("month_year") or ""
+    if source.kind == "media" and domain:
+        queries = [
+            expand_query_template(
+                "Nifty 50 target outlook site:{primary_domain}",
+                context=context,
+                source=source,
+            ),
+            expand_query_template(
+                "Nifty 50 forecast {month_year} site:{primary_domain}",
+                context=context,
+                source=source,
+            ),
+        ]
+    elif source.kind in {"broker", "global_bank"}:
+        queries = [
+            expand_query_template(
+                f'"{name}" Nifty 50 view India markets {{month_year}}',
+                context=context,
+                source=source,
+            ),
+            expand_query_template(
+                f'"{name}" Nifty 50 target India {month_year}',
+                context=context,
+                source=source,
+            ),
+        ]
+    else:
+        queries = [
+            expand_query_template(
+                f'"{name}" Nifty 50 outlook India {{month_year}}',
+                context=context,
+                source=source,
+            ),
+        ]
     return list(dict.fromkeys(q for q in queries if q.strip()))
 
 
@@ -151,4 +194,5 @@ def build_horizon_queries(
         for template in templates
     ]
     tiered = build_domain_tier_queries(source, context=context)
-    return list(dict.fromkeys([q for q in expanded + tiered if q.strip()]))
+    combined = list(dict.fromkeys([q for q in expanded + tiered if q.strip()]))
+    return combined[:5]

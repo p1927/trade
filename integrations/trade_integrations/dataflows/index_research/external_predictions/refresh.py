@@ -16,6 +16,7 @@ from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_f
     crawl_sources_parallel,
     filter_markdown_for_extraction,
     pick_best_crawl_result,
+    rank_crawl_results,
     resolve_source_urls,
     source_keywords,
 )
@@ -255,7 +256,7 @@ def _record_from_crawl_group(
         _, attempt = persist_refresh_result(record, symbol=sym)
         return attempt
 
-    best = pick_best_crawl_result(
+    ranked_crawls = rank_crawl_results(
         rows,
         source_keywords(src, horizon_days=horizon_days),
         horizon_days=horizon_days,
@@ -263,7 +264,7 @@ def _record_from_crawl_group(
         batch_registry=batch_registry,
         source=src,
     )
-    if best is None:
+    if not ranked_crawls:
         errors = [row.error_message for _, row in rows if row.error_message]
         message = errors[0] if errors else "Crawl failed for all URLs"
         should_try_searxng, searxng_trigger = should_run_searxng_fallback(rows, message)
@@ -349,57 +350,71 @@ def _record_from_crawl_group(
         _, attempt = persist_refresh_result(record, symbol=sym)
         return attempt
 
-    url, crawl = best
-    screenshot_b64 = None
-    if isinstance(crawl.metadata, dict):
-        raw = crawl.metadata.get("screenshot_b64")
-        if raw:
-            screenshot_b64 = str(raw)
-    record = _extract_from_crawl(
-        src,
-        symbol=sym,
-        horizon_days=horizon_days,
-        spot_val=spot_val,
-        url=url,
-        title=crawl.title,
-        markdown=crawl.markdown,
-        screenshot_b64=screenshot_b64,
-        pipeline=pipeline,
-    )
-    record.as_of = utc_now_iso()[:10]
-    record.spot_at_fetch = spot_val
-    record.provenance = {
-        **dict(record.provenance or {}),
-        "url": url,
-        "title": crawl.title or record.provenance.get("title", ""),
-        "fetch_method": fetch_method,
-        "navigation_mode": navigation_mode,
-        "elapsed_ms": crawl.elapsed_ms,
-        "page_kind": classify_page_kind(url),
-    }
-    if record.fetch_status == "ok":
-        persist_successful_exploratory_path(
-            src.id,
+    last_record: ExternalPredictionRecord | None = None
+    for url, crawl in ranked_crawls:
+        screenshot_b64 = None
+        if isinstance(crawl.metadata, dict):
+            raw = crawl.metadata.get("screenshot_b64")
+            if raw:
+                screenshot_b64 = str(raw)
+        record = _extract_from_crawl(
+            src,
+            symbol=sym,
             horizon_days=horizon_days,
+            spot_val=spot_val,
             url=url,
-            steps=navigation_steps,
+            title=crawl.title,
+            markdown=crawl.markdown,
+            screenshot_b64=screenshot_b64,
             pipeline=pipeline,
         )
-        if batch_registry is not None:
-            batch_registry.claim(url, src.id)
-    if record.fetch_status == "ok":
-        mid = record.target.mid
-        if pipeline:
-            pipeline.info(
-                "source",
-                f"{prefix}{src.display_name}: extracted target {mid:,.0f}" if mid else f"{prefix}{src.display_name}: ok",
-                source_id=src.id,
-                direction=record.direction,
-                confidence=record.confidence,
-                model=record.extraction.get("model"),
+        record.as_of = utc_now_iso()[:10]
+        record.spot_at_fetch = spot_val
+        record.provenance = {
+            **dict(record.provenance or {}),
+            "url": url,
+            "title": crawl.title or record.provenance.get("title", ""),
+            "fetch_method": fetch_method,
+            "navigation_mode": navigation_mode,
+            "elapsed_ms": crawl.elapsed_ms,
+            "page_kind": classify_page_kind(url),
+        }
+        last_record = record
+        if record.fetch_status == "stale":
+            if pipeline:
+                pipeline.info(
+                    "source",
+                    (
+                        f"{prefix}{src.display_name}: article published "
+                        f"{record.published_at or 'unknown'} outside 3d window — trying next candidate"
+                    ),
+                    source_id=src.id,
+                    url=url[:120],
+                )
+            continue
+        if record.fetch_status == "ok":
+            persist_successful_exploratory_path(
+                src.id,
+                horizon_days=horizon_days,
                 url=url,
+                steps=navigation_steps,
+                pipeline=pipeline,
             )
-    else:
+            if batch_registry is not None:
+                batch_registry.claim(url, src.id)
+            mid = record.target.mid
+            if pipeline:
+                pipeline.info(
+                    "source",
+                    f"{prefix}{src.display_name}: extracted target {mid:,.0f}" if mid else f"{prefix}{src.display_name}: ok",
+                    source_id=src.id,
+                    direction=record.direction,
+                    confidence=record.confidence,
+                    model=record.extraction.get("model"),
+                    url=url,
+                )
+            _, attempt = persist_refresh_result(record, symbol=sym)
+            return attempt
         if pipeline:
             pipeline.warn(
                 "source",
@@ -407,6 +422,20 @@ def _record_from_crawl_group(
                 source_id=src.id,
                 url=url,
             )
+
+    if last_record is not None:
+        _, attempt = persist_refresh_result(last_record, symbol=sym)
+        return attempt
+
+    record = ExternalPredictionRecord(
+        source_id=src.id,
+        symbol=sym,
+        horizon_days=horizon_days,
+        as_of=utc_now_iso()[:10],
+        spot_at_fetch=spot_val,
+        fetch_status="not_found",
+        error_message="No usable forecast from crawl candidates",
+    )
     _, attempt = persist_refresh_result(record, symbol=sym)
     return attempt
 

@@ -13,7 +13,28 @@ def main() -> int:
     parser.add_argument("--symbol", default="NIFTY")
     parser.add_argument("--horizon", type=int, default=30)
     parser.add_argument("--discover", action="store_true", help="Run source discovery only")
+    parser.add_argument(
+        "--probe-searxng",
+        metavar="SOURCE_ID",
+        help="Diagnose SearXNG discovery for one source (e.g. motilal_oswal)",
+    )
     args = parser.parse_args()
+
+    if args.probe_searxng:
+        from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+            probe_searxng_for_source,
+        )
+        from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
+            get_source,
+        )
+
+        source = get_source(args.probe_searxng.strip().lower())
+        if source is None:
+            print(json.dumps({"error": f"Unknown source {args.probe_searxng!r}"}, indent=2))
+            return 1
+        report = probe_searxng_for_source(source, horizon_days=args.horizon)
+        print(json.dumps(report, indent=2))
+        return 0
 
     if args.discover:
         from trade_integrations.dataflows.index_research.external_predictions.discover import (

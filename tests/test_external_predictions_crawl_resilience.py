@@ -24,6 +24,42 @@ def test_is_bot_block_error_detects_akamai() -> None:
     assert not is_bot_block_error("Connection timeout")
 
 
+def test_is_akamai_wrapped_markdown_detects_geo_shell() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
+        is_akamai_wrapped_markdown,
+    )
+
+    wrapped = (
+        "[REDIRECT_QUERY_STRING] => url=https://www.moneycontrol.com/news/tags/nifty.html\n"
+        "[REQUEST_URI] => /europe/?url=https://www.moneycontrol.com/news/tags/nifty.html\n"
+    )
+    assert is_akamai_wrapped_markdown(
+        wrapped,
+        "https://www.moneycontrol.com/news/tags/nifty.html",
+    )
+    assert not is_akamai_wrapped_markdown(
+        "Nifty 50 analysts expect the index to reach 24000 by month end.",
+        "https://economictimes.indiatimes.com/markets/stocks/news",
+    )
+
+
+def test_finalize_crawl_result_marks_akamai_wrapped_as_failure() -> None:
+    from trade_integrations.dataflows.crawl4ai_client import _finalize_crawl_result
+
+    wrapped = "[REDIRECT_QUERY_STRING] => url=https://www.moneycontrol.com/news/tags/nifty.html"
+    row = _finalize_crawl_result(
+        url="https://www.moneycontrol.com/news/tags/nifty.html",
+        batch_profile="cdp",
+        markdown=wrapped,
+        title="Wrong title",
+        metadata={"browser_profile": "cdp"},
+        elapsed_ms=10.0,
+    )
+    assert row.success is False
+    assert "Akamai wrapped" in row.error_message
+    assert row.metadata.get("akamai_wrapped") is True
+
+
 def test_crawl_rows_all_bot_blocked() -> None:
     rows = [
         (

@@ -422,7 +422,7 @@ def _url_pick_tier(url: str) -> int:
     return 3
 
 
-def pick_best_crawl_result(
+def rank_crawl_results(
     rows: list[tuple[str, CrawlPageResult]],
     keywords: list[str] | None = None,
     *,
@@ -430,8 +430,12 @@ def pick_best_crawl_result(
     pipeline: PipelineLogger | None = None,
     batch_registry: Any | None = None,
     source: ExternalPredictionSource | None = None,
-) -> tuple[str, CrawlPageResult] | None:
-    """Prefer forecast articles and structured hubs over listing/topic pages."""
+) -> list[tuple[str, CrawlPageResult]]:
+    """Return crawl candidates sorted best-first."""
+    from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
+        is_akamai_wrapped_markdown,
+    )
+
     candidates: list[tuple[str, CrawlPageResult, float, int]] = []
     for url, row in rows:
         if batch_registry is not None and source is not None:
@@ -447,6 +451,10 @@ def pick_best_crawl_result(
                 continue
             url, row = crawl_rows[0]
         if not row.success or not row.markdown.strip():
+            continue
+        if is_akamai_wrapped_markdown(row.markdown, url):
+            if pipeline:
+                pipeline.info("crawl4ai", "Skipped crawl (akamai_wrapped)", url=url[:120])
             continue
         policy = is_allowed_listing_url(url)
         if not policy.allowed:
@@ -468,9 +476,32 @@ def pick_best_crawl_result(
             candidates.append((url, row, score, tier))
 
     if not candidates:
-        return None
+        return []
 
     best_tier = min(item[3] for item in candidates)
     tier_pool = [item for item in candidates if item[3] == best_tier]
-    best = max(tier_pool, key=lambda item: item[2])
-    return best[0], best[1]
+    tier_pool.sort(key=lambda item: item[2], reverse=True)
+    return [(url, row) for url, row, _, _ in tier_pool]
+
+
+def pick_best_crawl_result(
+    rows: list[tuple[str, CrawlPageResult]],
+    keywords: list[str] | None = None,
+    *,
+    horizon_days: int = 14,
+    pipeline: PipelineLogger | None = None,
+    batch_registry: Any | None = None,
+    source: ExternalPredictionSource | None = None,
+) -> tuple[str, CrawlPageResult] | None:
+    """Prefer forecast articles and structured hubs over listing/topic pages."""
+    ranked = rank_crawl_results(
+        rows,
+        keywords,
+        horizon_days=horizon_days,
+        pipeline=pipeline,
+        batch_registry=batch_registry,
+        source=source,
+    )
+    if not ranked:
+        return None
+    return ranked[0]

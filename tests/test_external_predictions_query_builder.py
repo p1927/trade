@@ -122,6 +122,35 @@ def test_build_horizon_context_uses_calendar_fallback_when_calendar_missing() ->
     assert ctx["horizon_end_approx"] == "1"
 
 
+def test_build_fallback_queries_include_site_for_media() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionSource,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.query_builder import (
+        build_fallback_queries,
+    )
+
+    livemint = ExternalPredictionSource(
+        id="livemint",
+        display_name="Livemint",
+        kind="media",
+        domains=["livemint.com"],
+    )
+    queries = build_fallback_queries(livemint, horizon_days=14, as_of_date="2026-07-23", trading_dates=[])
+    assert any("site:livemint.com" in q for q in queries)
+
+
+def test_build_fallback_queries_broker_broader_attribution() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.query_builder import (
+        build_fallback_queries,
+    )
+
+    source = _broker_source("motilal_oswal", "Motilal Oswal", ["motilaloswal.com", "economictimes.indiatimes.com"])
+    queries = build_fallback_queries(source, horizon_days=14, as_of_date="2026-07-23", trading_dates=[])
+    assert any("Motilal Oswal" in q for q in queries)
+    assert not any("site:" in q for q in queries)
+
+
 def test_batch_url_registry_skips_second_source_on_same_url() -> None:
     registry = BatchUrlRegistry()
     url = "https://economictimes.indiatimes.com/topic/nifty-50"

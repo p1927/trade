@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 
 from trade_integrations.dataflows.article_body import fetch_article_body
 from trade_integrations.dataflows.index_research.external_predictions.domain_utils import (
     attribution_name_tokens,
+    has_stronger_attribution,
     native_domains,
     normalize_domain,
     url_matches_bank_topic,
@@ -18,6 +21,11 @@ from trade_integrations.dataflows.index_research.external_predictions.domain_uti
 from trade_integrations.dataflows.index_research.external_predictions.models import (
     ExternalPredictionRecord,
     ExternalPredictionSource,
+)
+from trade_integrations.dataflows.index_research.external_predictions.query_builder import (
+    build_fallback_queries,
+    build_horizon_context,
+    load_nifty_trading_dates,
 )
 from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
     format_queries,
@@ -29,7 +37,7 @@ from trade_integrations.dataflows.index_research.external_predictions.url_policy
     link_has_forecast_signal,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
-from trade_integrations.dataflows.searxng_finance import search_finance
+from trade_integrations.dataflows.searxng_finance import TRUSTED_FINANCE_DOMAINS, search_finance
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +77,7 @@ class SearxngSearchOutcome:
     queries_run: int = 0
     queries_failed: int = 0
     domain_filter_exhausted: bool = False
+    discovery_pass: str = ""
 
     @property
     def all_queries_failed(self) -> bool:
@@ -101,16 +110,122 @@ def _normalize_source_domain(domain: str) -> str:
     return normalize_domain(domain)
 
 
-def _source_allowed_domains(source: ExternalPredictionSource) -> tuple[str, ...]:
-    native = native_domains(source)
-    if native:
-        return native
-    syndicated: list[str] = []
+def _all_source_domains(source: ExternalPredictionSource) -> tuple[str, ...]:
+    out: list[str] = []
     for domain in source.domains or []:
         norm = normalize_domain(domain)
         if norm:
-            syndicated.append(norm)
-    return tuple(dict.fromkeys(syndicated))
+            out.append(norm)
+    return tuple(dict.fromkeys(out))
+
+
+def _source_allowed_domains(source: ExternalPredictionSource) -> tuple[str, ...]:
+    """Legacy single-pass allowlist — prefer ``discovery_search_passes``."""
+    native = native_domains(source)
+    if native:
+        return native
+    return _all_source_domains(source)
+
+
+def discovery_search_passes(
+    source: ExternalPredictionSource,
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Progressive domain widening: native → all configured → trusted+attribution."""
+    native = native_domains(source)
+    all_domains = _all_source_domains(source)
+    passes: list[tuple[str, tuple[str, ...]]] = []
+    if native:
+        passes.append(("native", native))
+    if all_domains and all_domains != native:
+        passes.append(("wide", all_domains))
+    if source.kind in {"broker", "global_bank"}:
+        passes.append(("trusted", TRUSTED_FINANCE_DOMAINS))
+    elif not passes and all_domains:
+        passes.append(("wide", all_domains))
+    return passes
+
+
+def _parse_pub_date_from_result(result: dict[str, Any]) -> date | None:
+    for key in ("publishedDate", "pubdate"):
+        raw = result.get(key)
+        if not raw:
+            continue
+        try:
+            if isinstance(raw, (int, float)):
+                return datetime.fromtimestamp(raw).date()
+            if isinstance(raw, str):
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    dt = parsedate_to_datetime(text)
+                except ValueError:
+                    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                return dt.date()
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return None
+
+
+def _recency_window_dates(
+    as_of_date: str,
+    trading_dates: list[str],
+    *,
+    max_trading_days: int = 3,
+) -> set[str]:
+    as_of = str(as_of_date)[:10]
+    ordered = [str(d).strip()[:10] for d in trading_dates if str(d).strip()]
+    if ordered:
+        eligible = [d for d in ordered if d <= as_of]
+        if not eligible:
+            return {as_of}
+        window = eligible[-max(1, int(max_trading_days)) :]
+        return set(window)
+    try:
+        end = date.fromisoformat(as_of)
+    except ValueError:
+        return {as_of}
+    return {(end - timedelta(days=offset)).isoformat() for offset in range(max_trading_days)}
+
+
+def filter_results_by_recency(
+    hits: list[dict[str, Any]],
+    *,
+    as_of_date: str,
+    trading_dates: list[str] | None = None,
+    max_trading_days: int = 3,
+) -> list[dict[str, Any]]:
+    """Keep hits published within the last N trading days; retain undated hits at the tail."""
+    dates = trading_dates if trading_dates is not None else load_nifty_trading_dates()
+    window = _recency_window_dates(as_of_date, dates, max_trading_days=max_trading_days)
+    in_window: list[dict[str, Any]] = []
+    undated: list[dict[str, Any]] = []
+    for row in hits:
+        pub = _parse_pub_date_from_result(row)
+        if pub is None:
+            undated.append(row)
+            continue
+        if pub.isoformat() in window:
+            in_window.append(row)
+    return in_window + undated
+
+
+def _recency_score_adjustment(
+    result: dict[str, Any],
+    *,
+    as_of_date: str,
+    trading_dates: list[str],
+) -> float:
+    pub = _parse_pub_date_from_result(result)
+    if pub is None:
+        return 0.0
+    as_of = str(as_of_date)[:10]
+    if pub.isoformat() == as_of:
+        return 3.0
+    window = _recency_window_dates(as_of, trading_dates, max_trading_days=3)
+    if pub.isoformat() in window:
+        return 1.0
+    return -2.0
 
 
 def _matches_source_domain(url: str, source: ExternalPredictionSource) -> bool:
@@ -126,7 +241,13 @@ def _matches_source_domain(url: str, source: ExternalPredictionSource) -> bool:
     return False
 
 
-def _relevance_score(result: dict[str, Any], source: ExternalPredictionSource) -> float:
+def _relevance_score(
+    result: dict[str, Any],
+    source: ExternalPredictionSource,
+    *,
+    as_of_date: str | None = None,
+    trading_dates: list[str] | None = None,
+) -> float:
     blob = " ".join(
         str(result.get(key) or "") for key in ("title", "content", "url")
     ).lower()
@@ -150,12 +271,18 @@ def _relevance_score(result: dict[str, Any], source: ExternalPredictionSource) -
         score += 1.5
     title = str(result.get("title") or "")
     score += _url_rank_adjustment(url, title)
+    if as_of_date:
+        dates = trading_dates if trading_dates is not None else load_nifty_trading_dates()
+        score += _recency_score_adjustment(result, as_of_date=as_of_date, trading_dates=dates)
     return score
 
 
 def filter_searxng_hits_for_source(
     hits: list[dict[str, Any]],
     source: ExternalPredictionSource,
+    *,
+    as_of_date: str | None = None,
+    trading_dates: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Keep hits on source domains; prefer forecast-signal URLs."""
     domain_ok: list[dict[str, Any]] = []
@@ -174,7 +301,16 @@ def filter_searxng_hits_for_source(
         )
     ]
     pool = with_signal or domain_ok
-    return sorted(pool, key=lambda row: _relevance_score(row, source), reverse=True)
+    return sorted(
+        pool,
+        key=lambda row: _relevance_score(
+            row,
+            source,
+            as_of_date=as_of_date,
+            trading_dates=trading_dates,
+        ),
+        reverse=True,
+    )
 
 
 def rank_search_results(
@@ -182,11 +318,83 @@ def rank_search_results(
     source: ExternalPredictionSource,
     *,
     limit: int | None = None,
+    as_of_date: str | None = None,
+    trading_dates: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     cap = limit if limit is not None else _discovery_url_limit()
-    filtered = filter_searxng_hits_for_source(results, source)
-    ranked = sorted(filtered, key=lambda row: _relevance_score(row, source), reverse=True)
+    filtered = filter_searxng_hits_for_source(
+        results,
+        source,
+        as_of_date=as_of_date,
+        trading_dates=trading_dates,
+    )
+    ranked = sorted(
+        filtered,
+        key=lambda row: _relevance_score(
+            row,
+            source,
+            as_of_date=as_of_date,
+            trading_dates=trading_dates,
+        ),
+        reverse=True,
+    )
     return ranked[:cap]
+
+
+def _search_query_with_passes(
+    source: ExternalPredictionSource,
+    query: str,
+    *,
+    limit: int,
+    pipeline: PipelineLogger | None = None,
+) -> tuple[list[dict[str, Any]], bool, str, list[str]]:
+    """Run one query with progressive domain widening; return rows, exhausted flag, pass name."""
+    domain_filter_exhausted = False
+    rejected_sample: list[str] = []
+    for pass_name, allowed_domains in discovery_search_passes(source):
+        query_stats: dict[str, Any] = {}
+        rows = search_finance(
+            query,
+            limit=limit,
+            allowed_domains=allowed_domains or None,
+            time_range="day",
+            stats=query_stats,
+        )
+        raw_count = int(query_stats.get("raw_count") or 0)
+        rejected_sample = list(query_stats.get("rejected_hosts_sample") or [])
+        if pass_name == "trusted" and rows:
+            rows = _filter_trusted_with_attribution(rows, source)
+        if rows:
+            if pipeline and pass_name != "native":
+                pipeline.info(
+                    "searxng",
+                    f"Discovery pass '{pass_name}' returned {len(rows)} hit(s)",
+                    source_id=source.id,
+                    query=query,
+                )
+            return rows, domain_filter_exhausted, pass_name, rejected_sample
+        if raw_count > 0:
+            domain_filter_exhausted = True
+        elif pass_name == "native":
+            # No raw hits at all — widening allowlist won't help; skip to next query.
+            break
+    return [], domain_filter_exhausted, "", rejected_sample
+
+
+def _filter_trusted_with_attribution(
+    rows: list[dict[str, Any]],
+    source: ExternalPredictionSource,
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if has_stronger_attribution(
+            str(row.get("url") or ""),
+            source=source,
+            title=str(row.get("title") or ""),
+            content=str(row.get("content") or ""),
+        )
+    ]
 
 
 def search_source_results_with_outcome(
@@ -198,12 +406,22 @@ def search_source_results_with_outcome(
 ) -> SearxngSearchOutcome:
     collected: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
-    queries = format_queries(source, horizon_days=horizon_days)
-    allowed_domains = _source_allowed_domains(source)
+    context = build_horizon_context(horizon_days=horizon_days)
+    as_of_date = context["today"]
+    trading_dates = load_nifty_trading_dates()
+    primary_queries = format_queries(source, horizon_days=horizon_days)
+    fallback_queries = build_fallback_queries(
+        source,
+        horizon_days=horizon_days,
+        as_of_date=as_of_date,
+        trading_dates=trading_dates,
+    )
     queries_run = 0
     queries_failed = 0
     domain_filter_exhausted = False
-    if not allowed_domains:
+    discovery_pass = ""
+    passes = discovery_search_passes(source)
+    if not passes:
         if pipeline:
             pipeline.warn(
                 "searxng",
@@ -216,55 +434,88 @@ def search_source_results_with_outcome(
             queries_failed=0,
             domain_filter_exhausted=False,
         )
+
+    def _run_query_batch(query_list: list[str], *, label: str) -> None:
+        nonlocal queries_run, queries_failed, domain_filter_exhausted, discovery_pass
+        if not query_list:
+            return
+        if pipeline and label == "fallback":
+            pipeline.info(
+                "searxng",
+                f"Running {len(query_list)} fallback quer{'y' if len(query_list) == 1 else 'ies'} for {source.display_name}",
+                source_id=source.id,
+            )
+        for query in query_list:
+            queries_run += 1
+            if pipeline:
+                pipeline.info("searxng", f"Query: {query}", source_id=source.id)
+            try:
+                rows, exhausted, pass_name, rejected_sample = _search_query_with_passes(
+                    source,
+                    query,
+                    limit=limit,
+                    pipeline=pipeline,
+                )
+            except Exception as exc:
+                queries_failed += 1
+                if pipeline:
+                    pipeline.warn("searxng", f"Search failed: {exc}", source_id=source.id, query=query)
+                logger.debug("search failed for %s query=%r: %s", source.id, query, exc)
+                continue
+            if exhausted:
+                domain_filter_exhausted = True
+            if pipeline:
+                raw_hint = ""
+                if not rows and rejected_sample:
+                    raw_hint = f" — sample hosts: {', '.join(rejected_sample[:3])}"
+                if not rows and exhausted:
+                    msg = f"Got 0 result(s) after domain filter{raw_hint}"
+                else:
+                    msg = f"Got {len(rows)} result(s) for query"
+                    if pass_name:
+                        msg += f" (pass={pass_name})"
+                pipeline.info(
+                    "searxng",
+                    msg,
+                    source_id=source.id,
+                    query=query,
+                )
+            if pass_name and not discovery_pass:
+                discovery_pass = pass_name
+            rows = filter_results_by_recency(
+                rows,
+                as_of_date=as_of_date,
+                trading_dates=trading_dates,
+            )
+            for row in rows:
+                url = str(row.get("url") or "")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                collected.append(row)
+
     if pipeline:
         pipeline.info(
             "searxng",
-            f"Searching {source.display_name} ({len(queries)} queries)",
+            f"Searching {source.display_name} ({len(primary_queries)} queries)",
             source_id=source.id,
         )
-    for query in queries:
-        queries_run += 1
-        if pipeline:
-            pipeline.info("searxng", f"Query: {query}", source_id=source.id)
-        try:
-            query_stats: dict[str, int] = {}
-            rows = search_finance(
-                query,
-                limit=limit,
-                allowed_domains=allowed_domains or None,
-                stats=query_stats,
-            )
-        except Exception as exc:
-            queries_failed += 1
-            if pipeline:
-                pipeline.warn("searxng", f"Search failed: {exc}", source_id=source.id, query=query)
-            logger.debug("search failed for %s query=%r: %s", source.id, query, exc)
-            continue
-        if pipeline:
-            raw_count = query_stats.get("raw_count", len(rows))
-            if not rows and raw_count > 0:
-                domain_filter_exhausted = True
-                msg = f"Got 0 result(s) after domain filter ({raw_count} raw)"
-            else:
-                msg = f"Got {len(rows)} result(s) for query"
-            pipeline.info(
-                "searxng",
-                msg,
-                source_id=source.id,
-                query=query,
-            )
-        for row in rows:
-            url = str(row.get("url") or "")
-            if not url or url in seen_urls:
-                continue
-            seen_urls.add(url)
-            collected.append(row)
-    ranked = rank_search_results(collected, source)
+    _run_query_batch(primary_queries, label="primary")
+    if not collected and fallback_queries:
+        _run_query_batch(fallback_queries, label="fallback")
+
+    ranked = rank_search_results(
+        collected,
+        source,
+        as_of_date=as_of_date,
+        trading_dates=trading_dates,
+    )
     outcome = SearxngSearchOutcome(
         hits=ranked,
         queries_run=queries_run,
         queries_failed=queries_failed,
         domain_filter_exhausted=domain_filter_exhausted,
+        discovery_pass=discovery_pass,
     )
     if pipeline:
         if outcome.all_queries_failed:
@@ -288,6 +539,7 @@ def search_source_results_with_outcome(
                 f"Ranked {len(ranked)} candidate article(s) for {source.display_name}",
                 source_id=source.id,
                 queries_failed=queries_failed,
+                discovery_pass=discovery_pass or None,
             )
     return outcome
 
@@ -371,6 +623,75 @@ def filter_discovery_urls(
     return urls
 
 
+def probe_searxng_for_source(
+    source: ExternalPredictionSource,
+    *,
+    horizon_days: int = 14,
+) -> dict[str, Any]:
+    """Diagnostic: compare SearXNG hits across domain passes for each query."""
+    from trade_integrations.dataflows.searxng_finance import search_finance as raw_search
+
+    primary_queries = format_queries(source, horizon_days=horizon_days)
+    fallback_queries = build_fallback_queries(source, horizon_days=horizon_days)
+    report: dict[str, Any] = {
+        "source_id": source.id,
+        "display_name": source.display_name,
+        "kind": source.kind,
+        "domains": list(source.domains or []),
+        "search_queries": list(source.search_queries or []),
+        "primary_queries": primary_queries,
+        "fallback_queries": fallback_queries,
+        "passes": [name for name, _ in discovery_search_passes(source)],
+        "query_results": [],
+    }
+    for query in (primary_queries[:3] or primary_queries):
+        entry: dict[str, Any] = {"query": query, "passes": []}
+        for pass_name, allowed_domains in discovery_search_passes(source):
+            stats: dict[str, Any] = {}
+            try:
+                rows = raw_search(
+                    query,
+                    limit=8,
+                    allowed_domains=allowed_domains or None,
+                    time_range="day",
+                    stats=stats,
+                )
+                if pass_name == "trusted" and rows:
+                    rows = _filter_trusted_with_attribution(rows, source)
+            except Exception as exc:
+                entry["passes"].append(
+                    {
+                        "pass": pass_name,
+                        "allowed_domains": list(allowed_domains),
+                        "error": str(exc),
+                    }
+                )
+                continue
+            entry["passes"].append(
+                {
+                    "pass": pass_name,
+                    "allowed_domains": list(allowed_domains),
+                    "raw_count": stats.get("raw_count", len(rows)),
+                    "accepted_count": len(rows),
+                    "rejected_hosts_sample": stats.get("rejected_hosts_sample") or [],
+                    "accepted_hosts": [
+                        _domain(urlparse(str(row.get("url") or "")).hostname or "")
+                        for row in rows[:5]
+                    ],
+                    "sample_titles": [str(row.get("title") or "")[:80] for row in rows[:3]],
+                }
+            )
+        report["query_results"].append(entry)
+    outcome = search_source_results_with_outcome(source, horizon_days=horizon_days)
+    report["outcome"] = {
+        "ranked_hits": len(outcome.hits),
+        "queries_run": outcome.queries_run,
+        "domain_filter_exhausted": outcome.domain_filter_exhausted,
+        "discovery_pass": outcome.discovery_pass,
+    }
+    return report
+
+
 def discover_source_with_results(
     source: ExternalPredictionSource,
     *,
@@ -429,7 +750,7 @@ def discover_sources_parallel(
     out: dict[str, SearxngDiscoveryResult] = {
         source.id: SearxngDiscoveryResult() for source in sources
     }
-    max_workers = min(8, len(sources))
+    max_workers = min(2, len(sources))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
             pool.submit(
@@ -598,5 +919,14 @@ def extract_via_searxng_fallback(
                     source_id=source.id,
                 )
             return record
+        if record.fetch_status == "stale":
+            if pipeline:
+                pipeline.info(
+                    "searxng",
+                    f"Article outside recency window ({record.published_at or 'unknown'}) — trying next hit",
+                    source_id=source.id,
+                    url=url[:120],
+                )
+            continue
 
     return last_record
