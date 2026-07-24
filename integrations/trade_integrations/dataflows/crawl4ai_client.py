@@ -269,15 +269,136 @@ def _scroll_before_screenshot() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _env_enabled(name: str, *, default: bool = True) -> bool:
+    raw = os.environ.get(name, "1" if default else "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _remove_consent_popups() -> bool:
+    return _env_enabled("CRAWL4AI_REMOVE_CONSENT_POPUPS", default=True)
+
+
+def _remove_overlay_elements() -> bool:
+    return _env_enabled("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", default=True)
+
+
+# Shared helpers for optional consent / overlay dismiss blocks (Crawl4AI js_code slot).
+_POPUP_DISMISS_JS_HELPERS = """
+  const visible = (el) => {
+    if (!el) return false;
+    const s = window.getComputedStyle(el);
+    return s.display !== "none" && s.visibility !== "hidden" && parseFloat(s.opacity || "1") > 0;
+  };
+  const clickVisible = (selector) => {
+    for (const el of document.querySelectorAll(selector)) {
+      if (visible(el)) {
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  };
+  const removeMatching = (selector) => {
+    document.querySelectorAll(selector).forEach((el) => el.remove());
+  };
+""".strip()
+
+_CONSENT_DISMISS_JS_BODY = """
+  const closeSelectors = [
+    'button[class*="close" i]',
+    'span[class*="close" i]',
+    'a[class*="close" i]',
+    '[aria-label*="close" i]',
+    '[title*="close" i]',
+    '.close_icon',
+    '.close-btn',
+    '.modal-close',
+    '.popup-close',
+    '.notNow',
+    '.no-thanks',
+    '[class*="dismiss" i]',
+  ];
+  for (const selector of closeSelectors) {
+    if (clickVisible(selector)) break;
+  }
+
+  const dismissPatterns = [
+    /^accept\\s*(all)?(\\s*cookies)?$/i,
+    /^allow\\s*(all)?(\\s*cookies)?$/i,
+    /^skip$/i,
+    /^not now$/i,
+    /^no thanks$/i,
+    /^continue reading$/i,
+    /^close$/i,
+    /^×$/,
+    /^✕$/,
+  ];
+  for (const el of document.querySelectorAll('button, a, span[role="button"]')) {
+    const text = (el.textContent || "").trim();
+    if (text.length > 0 && text.length <= 40 && dismissPatterns.some((p) => p.test(text)) && visible(el)) {
+      el.click();
+      break;
+    }
+  }
+""".strip()
+
+_OVERLAY_DISMISS_JS_BODY = """
+  const overlaySelectors = [
+    ".blk_overlay",
+    ".popup_container",
+    "#webpushBanner",
+    ".modal_popup",
+    ".popupBox",
+    "#myModal",
+    ".paywall-overlay",
+    '[class*="app-download" i]',
+    '[id*="app-download" i]',
+    '[class*="subscription-modal" i]',
+    '[class*="login-modal" i]',
+    '[class*="newsletter" i][class*="popup" i]',
+  ];
+  for (const selector of overlaySelectors) removeMatching(selector);
+""".strip()
+
+_POPUP_DISMISS_JS_TAIL = """
+  document.body.style.overflow = "";
+  document.body.style.overflowY = "";
+  document.documentElement.style.overflow = "";
+  document.documentElement.style.overflowY = "";
+  await new Promise((resolve) => setTimeout(resolve, 200));
+""".strip()
+
+
+def _popup_dismiss_js(*, consent: bool, overlay: bool) -> str | None:
+    """Build site-specific dismiss JS gated by env flags (runs in Crawl4AI js_code slot)."""
+    if not consent and not overlay:
+        return None
+    parts = [_POPUP_DISMISS_JS_HELPERS]
+    if consent:
+        parts.append(_CONSENT_DISMISS_JS_BODY)
+    if overlay:
+        parts.append(_OVERLAY_DISMISS_JS_BODY)
+    parts.append(_POPUP_DISMISS_JS_TAIL)
+    body = "\n  ".join(parts)
+    return f"(async () => {{\n  {body}\n}})();"
+
+
 def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
     from crawl4ai import CacheMode, CrawlerRunConfig
 
+    remove_consent = _remove_consent_popups()
+    remove_overlay = _remove_overlay_elements()
     kwargs: dict[str, Any] = {
         "cache_mode": CacheMode.BYPASS,
         "word_count_threshold": 5,
         "screenshot": screenshot,
         "delay_before_return_html": _delay_before_return_html(),
+        "remove_consent_popups": remove_consent,
+        "remove_overlay_elements": remove_overlay,
     }
+    dismiss_js = _popup_dismiss_js(consent=remove_consent, overlay=remove_overlay)
+    if dismiss_js:
+        kwargs["js_code"] = dismiss_js
     if screenshot and _scroll_before_screenshot():
         kwargs["scan_full_page"] = True
         kwargs["delay_before_return_html"] = max(

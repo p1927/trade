@@ -325,7 +325,27 @@ def run_exploratory_browse(
             entry_url=current_url[:120],
         )
 
-    for step_idx in range(1, step_limit + 1):
+    try:
+        from trade_integrations.observability.loop_guard import LoopGuard
+    except ImportError:
+        LoopGuard = None  # type: ignore[misc, assignment]
+
+    loop = (
+        LoopGuard(
+            f"browse:{source.id}",
+            module="ingest",
+            max_iterations=step_limit,
+            warn_every=0,
+        )
+        if LoopGuard is not None
+        else None
+    )
+
+    step_idx = 0
+    while loop is None or loop.tick():
+        step_idx += 1
+        if loop is None and step_idx > step_limit:
+            break
         norm = _normalize_url(current_url)
         if norm in visited:
             break

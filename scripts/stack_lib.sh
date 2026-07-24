@@ -445,13 +445,17 @@ stack_nautilus_watch_required() {
 }
 
 stack_sync_nautilus_registry_quiet() {
-  local py root
+  local py root log_dir
   root="$(stack_root)"
+  log_dir="$(stack_log_dir)"
   py="$(stack_pick_python)"
-  PYTHONPATH="$root/integrations" "$py" -c "
+  if ! PYTHONPATH="$root/integrations" "$py" -c "
 from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
 sync_nautilus_registry_from_watches(restart_if_changed=False)
-" 2>/dev/null || true
+" 2>>"$log_dir/nautilus-watch.log"; then
+    echo "[stack] WARN: Nautilus registry sync failed — launch may use stale agent list" >&2
+    return 1
+  fi
 }
 
 stack_purge_nautilus_watch_processes() {
@@ -1778,7 +1782,7 @@ stack_start_nautilus_watch() {
   if [[ -f "$agent_id_file" ]]; then
     bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
   fi
-  if stack_nautilus_pid_valid "$existing"; then
+  if (( ! skip_adopt )) && stack_nautilus_pid_valid "$existing"; then
     if stack_nautilus_registry_has_agents && [[ -n "$(stack_read_pid "$pidfile")" ]]; then
       stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch --registry"
       echo "[stack] Nautilus watch already running (pid $existing, registry mode)"
@@ -1794,13 +1798,24 @@ stack_start_nautilus_watch() {
       echo "[stack] Nautilus watch already running (pid $existing${bound_agent:+, agent $bound_agent})"
       return 0
     fi
+  elif (( skip_adopt )) && stack_nautilus_pid_valid "$existing"; then
+    echo "[stack] clearing surviving Nautilus watch (pid $existing) before forced restart ..."
+    stack_purge_nautilus_watch_processes
+    existing=""
+    bound_agent=""
   elif [[ -n "$existing" ]]; then
     echo "[stack] clearing stale Nautilus watch pid $existing"
     rm -f "$pidfile" "$agent_id_file"
   fi
 
   local cmd=("$launch_script")
-  stack_sync_nautilus_registry_quiet
+  if (( skip_adopt )); then
+    stack_kill_orphan_trade_pgrep "nautilus_openalgo_bridge.runtime.run_watch_node" "Nautilus watch orphan"
+  fi
+  if ! stack_sync_nautilus_registry_quiet; then
+    echo "[stack] aborting Nautilus launch — registry sync failed" >&2
+    return 1
+  fi
   if stack_nautilus_registry_has_agents; then
     cmd+=(--registry)
   elif [[ -n "$agent_id" ]]; then

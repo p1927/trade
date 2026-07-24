@@ -48,9 +48,13 @@ _reload_app_inner() {
   return "$ok"
 }
 
-_reload_nautilus() {
+_reload_nautilus_inner() {
   echo "[stack] restarting Nautilus watch ..."
   stack_restart_nautilus_watch
+}
+
+_reload_nautilus() {
+  stack_with_lock _reload_nautilus_inner
 }
 
 case "$TARGET" in
@@ -72,7 +76,7 @@ case "$TARGET" in
   all)
     _reload_env
     _reload_app
-    stack_restart_nautilus_watch
+    _reload_nautilus
     ;;
   -h|--help|help)
     cat <<'EOF'

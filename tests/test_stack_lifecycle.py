@@ -319,15 +319,19 @@ def test_stack_start_nautilus_watch_passes_agent_id_when_registry_empty():
         mkdir -p log
         echo '{"agents":[],"node_pid":null}' > log/nautilus-watch.agents.json
         stack_reconcile_nautilus_watch_pid() { return 0; }
+        stack_sync_nautilus_registry_quiet() { return 0; }
         stack_adopt_running_nautilus_watch() { return 1; }
-        stack_nautilus_pid_valid() { return 1; }
+        stack_nautilus_pid_valid() {
+          [[ "${1:-}" == "4242" ]] && return 0
+          return 1
+        }
         stack_launch_detached() {
           echo "LAUNCH:$*"
           echo 4242 > "$1"
           return 0
         }
-        export -f stack_reconcile_nautilus_watch_pid stack_adopt_running_nautilus_watch \\
-          stack_nautilus_pid_valid stack_launch_detached
+        export -f stack_reconcile_nautilus_watch_pid stack_sync_nautilus_registry_quiet \\
+          stack_adopt_running_nautilus_watch stack_nautilus_pid_valid stack_launch_detached
         stack_start_nautilus_watch aa_flagtest 2>&1 | tee /tmp/nautilus_launch_test.out
         grep -q 'LAUNCH:.*--agent-id aa_flagtest' /tmp/nautilus_launch_test.out
         """

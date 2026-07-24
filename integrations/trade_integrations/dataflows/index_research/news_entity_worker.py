@@ -1138,6 +1138,12 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         except Exception as exc:
             logger.debug("worker last wiki compaction summary write failed: %s", exc)
     _persist_maintenance_manifest(ticker=ticker, result=result)
+    try:
+        from trade_integrations.observability.hooks import emit_entity_worker_complete
+
+        emit_entity_worker_complete(ticker, result)
+    except ImportError:
+        pass
     return result
 
 

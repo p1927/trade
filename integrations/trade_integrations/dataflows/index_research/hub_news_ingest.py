@@ -468,4 +468,17 @@ def run_hub_news_ingest(
     except Exception as exc:
         out["pipeline"] = {"error": str(exc)[:200]}
 
+    try:
+        from trade_integrations.observability.hooks import emit_ingest_complete
+
+        emit_ingest_complete(
+            ticker=sym,
+            mode=ingest_mode,
+            sources=out.get("sources") if isinstance(out.get("sources"), dict) else {},
+            totals=out.get("totals") if isinstance(out.get("totals"), dict) else {},
+            blocked=bool(out.get("blocked")),
+        )
+    except ImportError:
+        pass
+
     return out

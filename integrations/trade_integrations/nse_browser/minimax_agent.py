@@ -151,7 +151,15 @@ def chat_completions_create(**kwargs: Any) -> Any:
     model = str(normalized.get("model") or _model())
     if _is_minimax_model(model):
         apply_minimax_request_payload(normalized)
-    return _queued_create(_client(), **normalized)
+    try:
+        from trade_integrations.observability.hooks import llm_call_span
+
+        with llm_call_span(provider="minimax", model=model, tier="pipeline") as llm_meta:
+            result = _queued_create(_client(), **normalized)
+            llm_meta["messages"] = len(normalized.get("messages") or [])
+            return result
+    except ImportError:
+        return _queued_create(_client(), **normalized)
 
 
 def _strip_html(html: str) -> str:

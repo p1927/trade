@@ -171,6 +171,56 @@ def test_browser_profile_tiers_cdp_before_stealth(monkeypatch: pytest.MonkeyPatc
     assert next_browser_profile("cdp") == "stealth"
 
 
+def test_run_config_enables_popup_dismiss_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.crawl4ai_client import _run_config
+
+    monkeypatch.delenv("CRAWL4AI_REMOVE_CONSENT_POPUPS", raising=False)
+    monkeypatch.delenv("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", raising=False)
+    cfg = _run_config(screenshot=True)
+    assert cfg.remove_consent_popups is True
+    assert cfg.remove_overlay_elements is True
+    assert cfg.js_code
+    assert "popup_container" in cfg.js_code
+    assert "dismissPatterns" in cfg.js_code
+
+
+def test_run_config_popup_dismissal_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.crawl4ai_client import _run_config
+
+    monkeypatch.setenv("CRAWL4AI_REMOVE_CONSENT_POPUPS", "0")
+    monkeypatch.setenv("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", "0")
+    cfg = _run_config(screenshot=True)
+    assert cfg.remove_consent_popups is False
+    assert cfg.remove_overlay_elements is False
+    assert not cfg.js_code
+
+
+def test_run_config_consent_only_omits_overlay_removal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.crawl4ai_client import _run_config
+
+    monkeypatch.setenv("CRAWL4AI_REMOVE_CONSENT_POPUPS", "1")
+    monkeypatch.setenv("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", "0")
+    cfg = _run_config(screenshot=True)
+    assert cfg.remove_consent_popups is True
+    assert cfg.remove_overlay_elements is False
+    assert cfg.js_code
+    assert "dismissPatterns" in cfg.js_code
+    assert "popup_container" not in cfg.js_code
+
+
+def test_run_config_overlay_only_omits_consent_clicks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trade_integrations.dataflows.crawl4ai_client import _run_config
+
+    monkeypatch.setenv("CRAWL4AI_REMOVE_CONSENT_POPUPS", "0")
+    monkeypatch.setenv("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", "1")
+    cfg = _run_config(screenshot=True)
+    assert cfg.remove_consent_popups is False
+    assert cfg.remove_overlay_elements is True
+    assert cfg.js_code
+    assert "popup_container" in cfg.js_code
+    assert "dismissPatterns" not in cfg.js_code
+
+
 def test_filter_searxng_hits_rejects_off_domain() -> None:
     from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
         filter_searxng_hits_for_source,
