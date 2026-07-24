@@ -292,7 +292,7 @@ def _rule_telemetry(
 
 def _market_open() -> bool | None:
     try:
-        from nautilus_openalgo_bridge.market_hours import is_bridge_market_open
+        from nautilus_openalgo_bridge.config import is_bridge_market_open
 
         return bool(is_bridge_market_open())
     except Exception:
