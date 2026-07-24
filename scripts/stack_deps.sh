@@ -419,6 +419,15 @@ def curl_ok(url: str) -> bool:
     except Exception:
         return False
 
+def searxng_ok(url: str) -> bool:
+    # SearXNG botdetection logs ERROR when X-Real-IP / X-Forwarded-For is missing.
+    req = urllib.request.Request(url, headers={"X-Real-IP": "127.0.0.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return 200 <= resp.status < 500
+    except Exception:
+        return False
+
 def redis_ok() -> bool:
     url = os.environ.get("NAUTILUS_REDIS_URL", "redis://127.0.0.1:6379/0")
     try:
@@ -438,7 +447,7 @@ openalgo = os.environ.get("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
 searxng = os.environ.get("SEARXNG_BASE_URL", "http://localhost:5556").rstrip("/")
 
 payload = {
-    "searxng": {"ok": curl_ok(f"{searxng}/")},
+    "searxng": {"ok": searxng_ok(f"{searxng}/healthz") or searxng_ok(f"{searxng}/")},
     "redis": {"ok": redis_ok()},
     "openalgo": {"ok": curl_ok(f"{openalgo}/")},
     "vibe_api": {"ok": curl_ok(f"http://127.0.0.1:{api_port}/health")},

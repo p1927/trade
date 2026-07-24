@@ -267,10 +267,7 @@ check_tradingagents_config() {
 # ── SearXNG (Docker) ─────────────────────────────────────────────────────────
 
 probe_searxng() {
-  local base
-  base="$(searxng_url)"
-  base="${base%/}"
-  http_ok "$base/" || http_ok "$base/search?q=test&format=json"
+  stack_probe_searxng
 }
 
 ensure_searxng() {

@@ -171,6 +171,16 @@ stack_searxng_url() {
   echo "${SEARXNG_BASE_URL:-http://localhost:5556}"
 }
 
+# SearXNG botdetection expects X-Real-IP (or X-Forwarded-For) on every request.
+stack_searxng_real_ip() {
+  echo "127.0.0.1"
+}
+
+stack_searxng_http_ok() {
+  local url="$1"
+  curl -sf -o /dev/null -m 3 -H "X-Real-IP: $(stack_searxng_real_ip)" "$url" 2>/dev/null
+}
+
 stack_http_ok() {
   curl -sf -o /dev/null -m 3 "$1" 2>/dev/null
 }
@@ -233,7 +243,7 @@ _searxng_run_engine_probe() {
   local lang="${SEARXNG_DEFAULT_LANG:-en-IN}"
   local body probe_err curl_rc
 
-  body="$(curl -s -m 12 -H "X-Real-IP: 127.0.0.1" -H "Accept-Language: ${lang},en;q=0.9" \
+  body="$(curl -s -m 12 -H "X-Real-IP: $(stack_searxng_real_ip)" -H "Accept-Language: ${lang},en;q=0.9" \
     "$probe_url" 2>&1)" || curl_rc=$?
   if [[ -n "${curl_rc:-}" ]]; then
     echo "[stack] SearXNG ${label}: request failed — ${body:-curl exit ${curl_rc}}" >&2
@@ -252,8 +262,7 @@ stack_probe_searxng_health() {
   local base
   base="$(stack_searxng_url)"
   base="${base%/}"
-  curl -sf -o /dev/null -m 3 -H "X-Real-IP: 127.0.0.1" \
-    "$base/healthz" 2>/dev/null
+  stack_searxng_http_ok "$base/healthz"
 }
 
 stack_probe_searxng_engines() {

@@ -106,6 +106,17 @@ def test_searxng_probe_engine_match_is_case_insensitive():
     assert "exit:1" in proc.stdout
 
 
+def test_stack_searxng_http_ok_includes_real_ip_header():
+    proc = _bash(
+        """
+        source scripts/stack_docker_lib.sh
+        declare -f stack_searxng_http_ok
+        """
+    )
+    assert proc.returncode == 0
+    assert "X-Real-IP" in proc.stdout
+
+
 def test_searxng_remediation_hint_dns():
     proc = _bash(
         """
@@ -215,5 +226,202 @@ def test_stack_bootstrap_session_writes_json():
         test -f log/stack.session && grep -q session_id log/stack.session && echo ok
         """
     )
+    assert proc.returncode == 0
+    assert "ok" in proc.stdout
+
+
+def test_stack_nautilus_registry_has_agents_false_when_empty():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        stack_load_env
+        mkdir -p log
+        echo '{"agents":[],"node_pid":null}' > log/nautilus-watch.agents.json
+        stack_nautilus_registry_has_agents && echo has || echo no
+        """
+    )
+    assert proc.returncode == 0
+    assert "no" in proc.stdout
+
+
+def test_stack_nautilus_registry_has_agents_false_for_blank_agent_rows():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        stack_load_env
+        mkdir -p log
+        echo '{"agents":[{}],"node_pid":null}' > log/nautilus-watch.agents.json
+        stack_nautilus_registry_has_agents && echo has || echo no
+        """
+    )
+    assert proc.returncode == 0
+    assert "no" in proc.stdout
+
+
+def test_stack_nautilus_registry_has_agents_true_when_populated():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        stack_load_env
+        mkdir -p log
+        echo '{"agents":[{"agent_id":"aa_live"}],"node_pid":null}' > log/nautilus-watch.agents.json
+        stack_nautilus_registry_has_agents && echo has || echo no
+        """
+    )
+    assert proc.returncode == 0
+    assert "has" in proc.stdout
+
+
+def test_stack_nautilus_watch_required_false_when_idle():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        export NAUTILUS_WATCH_ENABLE=true
+        stack_load_env
+        mkdir -p log
+        echo '{"agents":[],"node_pid":null}' > log/nautilus-watch.agents.json
+        stack_primary_nautilus_agent_id() { return 0; }
+        export -f stack_primary_nautilus_agent_id
+        stack_nautilus_watch_required && echo required || echo idle
+        """
+    )
+    assert proc.returncode == 0
+    assert "idle" in proc.stdout
+
+
+def test_stack_nautilus_watch_required_true_when_registry_has_agents():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        export NAUTILUS_WATCH_ENABLE=true
+        stack_load_env
+        mkdir -p log
+        echo '{"agents":[{"agent_id":"aa_live"}],"node_pid":null}' > log/nautilus-watch.agents.json
+        stack_nautilus_watch_required && echo required || echo idle
+        """
+    )
+    assert proc.returncode == 0
+    assert "required" in proc.stdout
+
+
+def test_stack_start_nautilus_watch_passes_agent_id_when_registry_empty():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        export NAUTILUS_WATCH_ENABLE=true
+        stack_load_env
+        mkdir -p log
+        echo '{"agents":[],"node_pid":null}' > log/nautilus-watch.agents.json
+        stack_reconcile_nautilus_watch_pid() { return 0; }
+        stack_adopt_running_nautilus_watch() { return 1; }
+        stack_nautilus_pid_valid() { return 1; }
+        stack_launch_detached() {
+          echo "LAUNCH:$*"
+          echo 4242 > "$1"
+          return 0
+        }
+        export -f stack_reconcile_nautilus_watch_pid stack_adopt_running_nautilus_watch \\
+          stack_nautilus_pid_valid stack_launch_detached
+        stack_start_nautilus_watch aa_flagtest 2>&1 | tee /tmp/nautilus_launch_test.out
+        grep -q 'LAUNCH:.*--agent-id aa_flagtest' /tmp/nautilus_launch_test.out
+        """
+    )
+    assert proc.returncode == 0
+
+
+def test_stack_status_shows_nautilus_idle_when_not_required():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        export NAUTILUS_WATCH_ENABLE=true
+        stack_load_env
+        mkdir -p log/claims
+        echo '{"agents":[],"node_pid":null}' > log/nautilus-watch.agents.json
+        stack_primary_nautilus_agent_id() { return 0; }
+        stack_nautilus_watch_required() { return 1; }
+        stack_nautilus_pid_valid() { return 1; }
+        stack_reconcile_for_status() { return 0; }
+        stack_http_ok() { return 0; }
+        stack_port_listener_pid() { echo ""; }
+        stack_pid_alive() { return 1; }
+        stack_process_in_trade_repo() { return 0; }
+        stack_claim_pid() { echo ""; }
+        stack_status_hub_docker() { return 0; }
+        stack_probe_llm_wiki() { return 0; }
+        export -f stack_primary_nautilus_agent_id stack_nautilus_watch_required \\
+          stack_nautilus_pid_valid stack_reconcile_for_status stack_http_ok \\
+          stack_port_listener_pid stack_pid_alive stack_process_in_trade_repo \\
+          stack_claim_pid stack_status_hub_docker stack_probe_llm_wiki
+        stack_status_vibe_stack 2>&1 | tee /tmp/nautilus_status_test.out
+        grep -q 'idle (no agents registered)' /tmp/nautilus_status_test.out
+        """
+    )
+    assert proc.returncode == 0
+
+
+def test_stack_start_nautilus_watch_syncs_registry_without_agent_id():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        export NAUTILUS_WATCH_ENABLE=true
+        stack_load_env
+        mkdir -p log
+        echo '{"agents":[{"agent_id":"aa_sync"}],"node_pid":null}' > log/nautilus-watch.agents.json
+        sync_calls=0
+        stack_sync_nautilus_registry_quiet() { sync_calls=$((sync_calls + 1)); }
+        stack_reconcile_nautilus_watch_pid() { return 0; }
+        stack_adopt_running_nautilus_watch() { return 1; }
+        stack_nautilus_pid_valid() { return 1; }
+        stack_launch_detached() {
+          echo "LAUNCH:$*"
+          echo 4242 > "$1"
+          return 0
+        }
+        export -f stack_sync_nautilus_registry_quiet stack_reconcile_nautilus_watch_pid \\
+          stack_adopt_running_nautilus_watch stack_nautilus_pid_valid stack_launch_detached
+        stack_start_nautilus_watch 2>&1 | tee /tmp/nautilus_sync_test.out
+        test "$sync_calls" -eq 1
+        grep -q 'LAUNCH:.*--registry' /tmp/nautilus_sync_test.out
+        """
+    )
+    assert proc.returncode == 0
+
+
+def test_stack_restart_nautilus_watch_purges_and_skips_adopt():
+    proc = _bash(
+        """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        stack_load_env
+        purge=0
+        ensure_skip=0
+        stack_purge_nautilus_watch_processes() { purge=1; }
+        stack_ensure_nautilus_watch() {
+          if [[ "${STACK_NAUTILUS_SKIP_ADOPT:-}" == "1" ]]; then
+            ensure_skip=1
+          fi
+          return 0
+        }
+        export -f stack_purge_nautilus_watch_processes stack_ensure_nautilus_watch
+        stack_restart_nautilus_watch
+        test "$purge" -eq 1
+        test "$ensure_skip" -eq 1
+        echo ok
+        """
+    )
+    assert proc.returncode == 0
+    assert "ok" in proc.stdout
+
+
+def test_reload_vibe_stack_bash_syntax_valid():
+    proc = _bash("bash -n scripts/reload_vibe_stack.sh && echo ok")
     assert proc.returncode == 0
     assert "ok" in proc.stdout

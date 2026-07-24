@@ -416,6 +416,58 @@ stack_nautilus_registry_present() {
   [[ -f "$(stack_log_dir)/nautilus-watch.agents.json" ]]
 }
 
+stack_nautilus_registry_has_agents() {
+  local reg_file py
+  reg_file="$(stack_log_dir)/nautilus-watch.agents.json"
+  [[ -f "$reg_file" ]] || return 1
+  py="$(stack_pick_python)"
+  "$py" -c "
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+data = json.loads(p.read_text(encoding='utf-8'))
+agents = [
+    row for row in (data.get('agents') or [])
+    if str(row.get('agent_id') or '').strip()
+]
+raise SystemExit(0 if agents else 1)
+" "$reg_file" 2>/dev/null
+}
+
+stack_nautilus_watch_required() {
+  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
+    return 1
+  fi
+  if stack_nautilus_registry_has_agents; then
+    return 0
+  fi
+  [[ -n "$(stack_primary_nautilus_agent_id)" ]]
+}
+
+stack_sync_nautilus_registry_quiet() {
+  local py root
+  root="$(stack_root)"
+  py="$(stack_pick_python)"
+  PYTHONPATH="$root/integrations" "$py" -c "
+from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
+sync_nautilus_registry_from_watches(restart_if_changed=False)
+" 2>/dev/null || true
+}
+
+stack_purge_nautilus_watch_processes() {
+  stack_stop_nautilus_watch
+  stack_kill_orphan_trade_pgrep "nautilus_openalgo_bridge.runtime.run_watch_node" "Nautilus watch"
+  sleep 0.5
+}
+
+stack_restart_nautilus_watch() {
+  stack_purge_nautilus_watch_processes
+  STACK_NAUTILUS_SKIP_ADOPT=1 stack_ensure_nautilus_watch
+  local rc=$?
+  unset STACK_NAUTILUS_SKIP_ADOPT
+  return "$rc"
+}
+
 stack_listener_matches_claim() {
   local claimed_pid="$1" port="$2"
   local listener ppid
@@ -588,21 +640,25 @@ stack_sync_service_claim() {
 }
 
 stack_reconcile_nautilus_watch_pid() {
-  local py root
+  local py root st_alive st_pid
   root="$(stack_root)"
   py="$(stack_pick_python)"
-  PYTHONPATH="$root/integrations" "$py" -c "
+  read -r st_alive st_pid < <(
+    PYTHONPATH="$root/integrations" "$py" -c "
 from trade_integrations.autonomous_agents.nautilus_watch import (
     get_watch_process_status,
     reconcile_stale_watch_pid,
 )
 reconcile_stale_watch_pid()
 st = get_watch_process_status(reconcile=False)
-if st.get('alive'):
-    print(f\"[stack] Nautilus watch pid={st.get('pid')} (alive — left running)\")
-elif st.get('enabled'):
-    print('[stack] Nautilus watch not running (registry reconciled if stale)')
-" 2>/dev/null || true
+print(bool(st.get('alive')), st.get('pid') or '')
+" 2>/dev/null || echo "False"
+  )
+  if [[ "$st_alive" == "True" ]]; then
+    echo "[stack] Nautilus watch pid=${st_pid} (alive — left running)"
+  elif stack_nautilus_watch_required; then
+    echo "[stack] Nautilus watch not running (stale pid cleared — run trade heal if agents are registered)"
+  fi
 }
 
 stack_sync_nautilus_registry_pid() {
@@ -1453,7 +1509,7 @@ stack_ensure_vibe_stack() {
 stack_ensure_nautilus_watch() {
   local agent_id="${1:-$(stack_primary_nautilus_agent_id)}"
   stack_reconcile_nautilus_watch_pid
-  if [[ -z "$agent_id" ]] && ! stack_nautilus_registry_present; then
+  if ! stack_nautilus_watch_required; then
     return 0
   fi
   if stack_redis_enabled; then
@@ -1602,13 +1658,15 @@ PY
     fi
   elif [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
     echo "  · Nautilus watch  disabled (NAUTILUS_WATCH_ENABLE=0)"
-  else
+  elif stack_nautilus_watch_required; then
     if [[ -n "$registry_summary" ]]; then
       echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (not running, agents: ${registry_summary})"
     else
       echo "  ✗ Nautilus watch  pid=${nautilus_pid:-none} (not running)"
     fi
     ok=0
+  else
+    echo "  · Nautilus watch  idle (no agents registered)"
   fi
 
   if declare -f stack_print_llm_wiki_status >/dev/null 2>&1; then
@@ -1651,7 +1709,7 @@ stack_nautilus_python() {
 }
 
 stack_start_nautilus_watch() {
-  local root log_dir pidfile logfile agent_id_file agent_id launch_script
+  local root log_dir pidfile logfile agent_id_file agent_id launch_script skip_adopt=0
   root="$(stack_root)"
   log_dir="$(stack_log_dir)"
   pidfile="$log_dir/nautilus-watch.pid"
@@ -1660,8 +1718,16 @@ stack_start_nautilus_watch() {
   agent_id="${NAUTILUS_AGENT_ID:-}"
   launch_script="$root/scripts/run_nautilus_watch.sh"
 
+  if [[ "${STACK_NAUTILUS_SKIP_ADOPT:-0}" == "1" || "${STACK_NAUTILUS_SKIP_ADOPT:-}" == "true" ]]; then
+    skip_adopt=1
+  fi
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --no-adopt)
+        skip_adopt=1
+        shift
+        ;;
       --agent-id)
         agent_id="${2:-}"
         shift 2
@@ -1686,7 +1752,19 @@ stack_start_nautilus_watch() {
 
   stack_reconcile_nautilus_watch_pid
 
-  if stack_adopt_running_nautilus_watch; then
+  existing="$(stack_read_pid "$pidfile")"
+  bound_agent=""
+  if [[ -f "$agent_id_file" ]]; then
+    bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
+  fi
+  if stack_nautilus_pid_valid "$existing" && [[ -n "$agent_id" && -n "$bound_agent" && "$bound_agent" != "$agent_id" ]]; then
+    echo "[stack] Nautilus watch bound to $bound_agent — restarting for $agent_id ..."
+    stack_stop_nautilus_watch
+    existing=""
+    bound_agent=""
+  fi
+
+  if (( ! skip_adopt )) && stack_adopt_running_nautilus_watch; then
     echo "[stack] Nautilus watch already running (pid $(stack_read_pid "$pidfile"), registry mode)"
     return 0
   fi
@@ -1697,20 +1775,16 @@ stack_start_nautilus_watch() {
   fi
 
   existing="$(stack_read_pid "$pidfile")"
-  bound_agent=""
   if [[ -f "$agent_id_file" ]]; then
     bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
   fi
   if stack_nautilus_pid_valid "$existing"; then
-    if [[ -f "$log_dir/nautilus-watch.agents.json" ]] && [[ -n "$(stack_read_pid "$pidfile")" ]]; then
+    if stack_nautilus_registry_has_agents && [[ -n "$(stack_read_pid "$pidfile")" ]]; then
       stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch --registry"
       echo "[stack] Nautilus watch already running (pid $existing, registry mode)"
       return 0
     fi
-    if [[ -n "$agent_id" && -n "$bound_agent" && "$bound_agent" != "$agent_id" ]]; then
-      echo "[stack] Nautilus watch bound to $bound_agent — restarting for $agent_id ..."
-      stack_stop_nautilus_watch
-    elif [[ -n "$agent_id" && -z "$bound_agent" ]]; then
+    if [[ -n "$agent_id" && -z "$bound_agent" ]]; then
       echo "$agent_id" >"$agent_id_file"
       stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch"
       echo "[stack] Nautilus watch already running (pid $existing) — bound to $agent_id"
@@ -1725,53 +1799,18 @@ stack_start_nautilus_watch() {
     rm -f "$pidfile" "$agent_id_file"
   fi
 
-  echo "[stack] starting Nautilus watch node ..."
   local cmd=("$launch_script")
-  if [[ -n "$agent_id" ]]; then
-    "$(stack_pick_python)" - "$root" "$agent_id" <<'PY' 2>/dev/null || true
-import sys
-from pathlib import Path
-root = Path(sys.argv[1])
-agent_id = sys.argv[2]
-sys.path.insert(0, str(root / "integrations"))
-try:
-    from trade_integrations.autonomous_agents.nautilus_watch import add_agent_to_registry
-    add_agent_to_registry(agent_id)
-except Exception:
-    pass
-PY
-  fi
-  py="$(stack_pick_python)"
-  if [[ -z "$agent_id" ]]; then
-    if [[ ! -f "$log_dir/nautilus-watch.agents.json" ]]; then
-      echo "[stack] skip Nautilus watch — no agents in registry yet"
-      return 0
-    fi
-    if ! "$py" -c "
-import json, sys
-from pathlib import Path
-p = Path(sys.argv[1])
-data = json.loads(p.read_text())
-sys.exit(0 if (data.get('agents') or []) else 1)
-" "$log_dir/nautilus-watch.agents.json" 2>/dev/null; then
-      echo "[stack] skip Nautilus watch — registry empty (await plan approval / watches)"
-      return 0
-    fi
-  fi
-  if [[ -f "$log_dir/nautilus-watch.agents.json" ]]; then
-    if "$py" -c "
-import json, sys
-from pathlib import Path
-p = Path(sys.argv[1])
-data = json.loads(p.read_text())
-sys.exit(0 if (data.get('agents') or []) else 1)
-" "$log_dir/nautilus-watch.agents.json" 2>/dev/null; then
-      cmd+=(--registry)
-    fi
+  stack_sync_nautilus_registry_quiet
+  if stack_nautilus_registry_has_agents; then
+    cmd+=(--registry)
   elif [[ -n "$agent_id" ]]; then
     cmd+=(--agent-id "$agent_id")
     echo "$agent_id" >"$agent_id_file"
+  else
+    echo "[stack] skip Nautilus watch — no agents in registry yet"
+    return 0
   fi
+  echo "[stack] starting Nautilus watch node ..."
   STACK_LAUNCH_SERVICE=nautilus-watch
   stack_launch_detached "$pidfile" "$logfile" "$root" "${cmd[@]}"
   unset STACK_LAUNCH_SERVICE

@@ -42,7 +42,15 @@ _reload_app_inner() {
   stack_start_openalgo || ok=1
   stack_start_vibe_api || ok=1
   stack_start_vibe_ui || ok=1
+  if stack_nautilus_watch_required; then
+    stack_ensure_nautilus_watch || ok=1
+  fi
   return "$ok"
+}
+
+_reload_nautilus() {
+  echo "[stack] restarting Nautilus watch ..."
+  stack_restart_nautilus_watch
 }
 
 case "$TARGET" in
@@ -54,17 +62,7 @@ case "$TARGET" in
     _reload_app
     ;;
   nautilus)
-    stack_reconcile_nautilus_watch_pid
-    local watch_pid
-    watch_pid="$(stack_read_pid "$(stack_log_dir)/nautilus-watch.pid")"
-    if stack_nautilus_pid_valid "$watch_pid"; then
-      echo "[stack] Nautilus watch already running (pid $watch_pid)"
-      stack_sync_nautilus_claim
-    else
-      echo "[stack] restarting Nautilus watch ..."
-      stack_stop_nautilus_watch
-      stack_ensure_nautilus_watch || true
-    fi
+    _reload_nautilus
     ;;
   hub)
     echo "[stack] ensuring hub Docker tier ..."
@@ -74,8 +72,7 @@ case "$TARGET" in
   all)
     _reload_env
     _reload_app
-    stack_stop_nautilus_watch
-    stack_ensure_nautilus_watch || true
+    stack_restart_nautilus_watch
     ;;
   -h|--help|help)
     cat <<'EOF'
