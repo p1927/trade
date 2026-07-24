@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from trade_integrations.watch_registry.api import mcp_list_watches
+from trade_integrations.watch_registry.baselines import prune_owner_baselines, seed_owner_baseline
+from trade_integrations.watch_registry.scope import (
+    OWNER_KIND_AUTONOMOUS,
+    OWNER_KIND_SESSION,
+    nautilus_owner_id,
+    symbols_for_owner,
+)
 
-# Baseline LTP cache keyed by "{watch_id}:{symbol}" — mirrors poll_loop seeding.
+logger = logging.getLogger(__name__)
+
+# Per-owner symbol baselines — same semantics as Nautilus poll_loop / WatchActor.
 _baseline_ltp_cache: dict[str, float] = {}
 _baseline_oi_cache: dict[str, float] = {}
 _baseline_volume_cache: dict[str, float] = {}
@@ -17,8 +27,25 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _cache_key(watch_id: str, symbol: str) -> str:
-    return f"{watch_id}:{symbol.upper()}"
+def _resolve_nautilus_owner(
+    *,
+    session_id: str | None = None,
+    agent_id: str | None = None,
+) -> str | None:
+    """Map API owner params to Nautilus owner id (``aa_*`` or ``ws_{session}``)."""
+    if agent_id:
+        aid = str(agent_id).strip()
+        if not aid:
+            return None
+        if aid.startswith("aa_"):
+            return aid
+        return nautilus_owner_id(owner_kind=OWNER_KIND_AUTONOMOUS, owner_id=aid)
+    if session_id:
+        sid = str(session_id).strip()
+        if not sid:
+            return None
+        return nautilus_owner_id(owner_kind=OWNER_KIND_SESSION, owner_id=sid)
+    return None
 
 
 def _move_pct(baseline: float, current: float) -> float:
@@ -33,6 +60,27 @@ def _format_rule_condition_text(rule: dict[str, Any]) -> str:
     return format_watch_spec_summary({"rules": [rule]})
 
 
+def _synthetic_watches_from_agent(agent_id: str) -> list[dict[str, Any]]:
+    """Build ephemeral watch rows from agent watch_spec when registry is empty."""
+    try:
+        from trade_integrations.autonomous_agents.store import get_agent
+    except Exception:
+        return []
+    agent = get_agent(agent_id) or {}
+    raw = agent.get("watch_spec") or (agent.get("mandate_config") or {}).get("watch_spec")
+    if not isinstance(raw, dict) or not raw.get("rules"):
+        return []
+    return [
+        {
+            "watch_id": f"agent:{agent_id}",
+            "label": "strategy watch",
+            "symbols": list(agent.get("symbols") or []),
+            "watch_spec": raw,
+            "last_fired_at": None,
+        }
+    ]
+
+
 def _resolve_owner_watches(
     *,
     session_id: str | None = None,
@@ -43,14 +91,7 @@ def _resolve_owner_watches(
         listed = mcp_list_watches(agent_id=agent_id)
         watches = list(listed.get("watches") or [])
         if not watches:
-            try:
-                from trade_integrations.watch_registry.store import migrate_agent_watch_spec_to_registry
-
-                migrate_agent_watch_spec_to_registry(agent_id)
-                listed = mcp_list_watches(agent_id=agent_id)
-                watches = list(listed.get("watches") or [])
-            except Exception:
-                pass
+            watches = _synthetic_watches_from_agent(agent_id)
         return watches
     if session_id:
         listed = mcp_list_watches(session_id=session_id)
@@ -79,11 +120,11 @@ def _poll_quotes(symbols: list[str]) -> dict[str, Any]:
 
         return OpenAlgoQuoteFeed().poll(symbols=symbols)
     except Exception:
+        logger.warning("watch telemetry quote poll failed", exc_info=True)
         return {}
 
 
-def _seed_baseline(watch_id: str, symbol: str, quote: Any, *, field: str) -> float | None:
-    key = _cache_key(watch_id, symbol)
+def _seed_baseline(nautilus_owner: str, symbol: str, quote: Any, *, field: str) -> float | None:
     if field == "ltp":
         cache = _baseline_ltp_cache
         value = quote.ltp
@@ -95,25 +136,34 @@ def _seed_baseline(watch_id: str, symbol: str, quote: Any, *, field: str) -> flo
         value = quote.volume
     else:
         return None
-    if value is None:
-        return cache.get(key)
-    if key not in cache:
-        cache[key] = float(value)
-    return cache.get(key)
+    return seed_owner_baseline(cache, nautilus_owner=nautilus_owner, symbol=symbol, value=value)
 
 
-def _resolve_baseline_ltp(watch_id: str, rule: dict[str, Any], quote: Any) -> float | None:
+def _resolve_baseline_ltp(nautilus_owner: str, rule: dict[str, Any], quote: Any) -> float | None:
+    symbol = rule.get("symbol") or quote.symbol
+    # Match Nautilus evaluate_rule: seeded cache wins over rule.baseline_ltp.
+    cached = seed_owner_baseline(
+        _baseline_ltp_cache,
+        nautilus_owner=nautilus_owner,
+        symbol=str(symbol or ""),
+        value=None,
+    )
+    if cached is not None:
+        return cached
+    seeded = _seed_baseline(nautilus_owner, symbol, quote, field="ltp")
+    if seeded is not None:
+        return seeded
     raw = rule.get("baseline_ltp")
     if raw is not None:
         try:
             return float(raw)
         except (TypeError, ValueError):
             pass
-    return _seed_baseline(watch_id, rule.get("symbol") or quote.symbol, quote, field="ltp")
+    return None
 
 
 def _rule_telemetry(
-    watch_id: str,
+    nautilus_owner: str,
     rule: dict[str, Any],
     quotes: dict[str, Any],
 ) -> dict[str, Any]:
@@ -152,7 +202,7 @@ def _rule_telemetry(
     current: dict[str, Any] = {"ltp": ltp}
 
     if metric == "spot_move_pct":
-        baseline = _resolve_baseline_ltp(watch_id, rule, quote)
+        baseline = _resolve_baseline_ltp(nautilus_owner, rule, quote)
         if baseline is None or baseline <= 0:
             return {
                 "symbol": symbol,
@@ -214,7 +264,7 @@ def _rule_telemetry(
         }
 
     if metric == "oi_change_pct":
-        oi_base = _seed_baseline(watch_id, symbol, quote, field="oi")
+        oi_base = _seed_baseline(nautilus_owner, symbol, quote, field="oi")
         if oi_base is None or oi_base <= 0 or quote.oi is None:
             current["oi"] = quote.oi
             return {
@@ -249,7 +299,7 @@ def _rule_telemetry(
         }
 
     if metric == "volume_spike_pct":
-        vol_base = _seed_baseline(watch_id, symbol, quote, field="volume")
+        vol_base = _seed_baseline(nautilus_owner, symbol, quote, field="volume")
         if vol_base is None or vol_base <= 0 or quote.volume is None:
             current["volume"] = quote.volume
             return {
@@ -304,20 +354,28 @@ def build_watches_live_snapshot(
     session_id: str | None = None,
     agent_id: str | None = None,
 ) -> dict[str, Any]:
+    nautilus_owner = _resolve_nautilus_owner(session_id=session_id, agent_id=agent_id)
     watches = _resolve_owner_watches(session_id=session_id, agent_id=agent_id)
+    if nautilus_owner:
+        sync_telemetry_baselines_for_owner(
+            nautilus_owner,
+            active_symbols=set(_collect_symbols(watches)),
+        )
     symbols = _collect_symbols(watches)
     quotes = _poll_quotes(symbols)
+    quotes_ok = (not symbols) or bool(quotes)
 
     snapshots: list[dict[str, Any]] = []
     for watch in watches:
         watch_id = str(watch.get("watch_id") or "")
         spec = watch.get("watch_spec") or {}
         rules_out: list[dict[str, Any]] = []
+        owner_key = nautilus_owner or ""
         for row in spec.get("rules") or []:
             if not isinstance(row, dict):
                 continue
             try:
-                rules_out.append(_rule_telemetry(watch_id, row, quotes))
+                rules_out.append(_rule_telemetry(owner_key, row, quotes))
             except Exception:
                 rules_out.append(
                     {
@@ -341,9 +399,10 @@ def build_watches_live_snapshot(
         )
 
     return {
-        "status": "ok",
+        "status": "ok" if quotes_ok else "degraded",
         "fetched_at": _now_iso(),
         "market_open": _market_open(),
+        "quotes_ok": quotes_ok,
         "watches": snapshots,
         "count": len(snapshots),
     }
@@ -354,3 +413,20 @@ def clear_telemetry_baseline_cache() -> None:
     _baseline_ltp_cache.clear()
     _baseline_oi_cache.clear()
     _baseline_volume_cache.clear()
+
+
+def sync_telemetry_baselines_for_owner(
+    nautilus_owner: str,
+    *,
+    active_symbols: set[str] | frozenset[str] | None = None,
+) -> None:
+    """Drop cached baselines for symbols no longer watched by this owner."""
+    owner = str(nautilus_owner or "").strip()
+    if not owner:
+        return
+    active = active_symbols if active_symbols is not None else set(symbols_for_owner(owner))
+    prune_owner_baselines(
+        (_baseline_ltp_cache, _baseline_oi_cache, _baseline_volume_cache),
+        nautilus_owner=owner,
+        active_symbols=active,
+    )

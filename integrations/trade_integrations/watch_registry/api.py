@@ -63,6 +63,14 @@ def mcp_list_watches(
         kind = OWNER_KIND_SESSION
         oid = session_id
     rows = list_watches(owner_kind=kind, owner_id=oid, active_only=True)
+    if kind == OWNER_KIND_AUTONOMOUS and oid and not rows:
+        try:
+            from trade_integrations.watch_registry.store import migrate_agent_watch_spec_to_registry
+
+            migrate_agent_watch_spec_to_registry(oid)
+            rows = list_watches(owner_kind=kind, owner_id=oid, active_only=True)
+        except Exception:
+            pass
     return {"status": "ok", "watches": rows, "count": len(rows)}
 
 

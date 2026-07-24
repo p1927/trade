@@ -174,4 +174,213 @@ def test_empty_owner_returns_empty_watches(hub_tmp: Path):
 
     result = build_watches_live_snapshot()
     assert result["status"] == "ok"
+    assert result["quotes_ok"] is True
     assert result["watches"] == []
+
+
+def test_degraded_when_quotes_fail(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.watch_registry import create_watch, telemetry
+
+    telemetry.clear_telemetry_baseline_cache()
+    create_watch(
+        owner_kind="session",
+        owner_id="sess_degraded",
+        vibe_session_id="sess_degraded",
+        watch_spec=_sample_spec(),
+    )
+
+    def fail_poll(*, symbols):
+        raise RuntimeError("openalgo down")
+
+    monkeypatch.setattr(
+        "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",
+        lambda self, symbols: fail_poll(symbols=symbols),
+    )
+
+    result = telemetry.build_watches_live_snapshot(session_id="sess_degraded")
+    assert result["status"] == "degraded"
+    assert result["quotes_ok"] is False
+    assert result["watches"][0]["rules"][0]["quote_available"] is False
+
+
+def test_baseline_evicted_on_delete(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.watch_registry import create_watch, delete_watch, telemetry
+    from trade_integrations.watch_registry.baselines import owner_baseline_key
+
+    telemetry.clear_telemetry_baseline_cache()
+    watch = create_watch(
+        owner_kind="session",
+        owner_id="sess_evict",
+        vibe_session_id="sess_evict",
+        watch_spec=_sample_spec(),
+    )
+
+    monkeypatch.setattr(
+        "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",
+        lambda self, symbols: {sym: _mock_quote(sym, 100.0) for sym in symbols},
+    )
+    telemetry.build_watches_live_snapshot(session_id="sess_evict")
+    key = owner_baseline_key("ws_sess_evict", "NIFTY")
+    assert key in telemetry._baseline_ltp_cache
+
+    assert delete_watch(watch["watch_id"]) is True
+    assert key not in telemetry._baseline_ltp_cache
+
+
+def test_shared_baseline_across_watches_same_owner(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.watch_registry import create_watch, telemetry
+
+    telemetry.clear_telemetry_baseline_cache()
+    spec = _sample_spec(threshold=0.5)
+    create_watch(
+        owner_kind="session",
+        owner_id="sess_shared",
+        vibe_session_id="sess_shared",
+        watch_spec=spec,
+        label="watch a",
+    )
+    create_watch(
+        owner_kind="session",
+        owner_id="sess_shared",
+        vibe_session_id="sess_shared",
+        watch_spec=spec,
+        label="watch b",
+    )
+
+    calls = {"n": 0}
+
+    def fake_poll(*, symbols):
+        calls["n"] += 1
+        ltp = 24_000.0 if calls["n"] == 1 else 24_120.0
+        return {sym: _mock_quote(sym, ltp) for sym in symbols}
+
+    monkeypatch.setattr(
+        "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",
+        lambda self, symbols: fake_poll(symbols=symbols),
+    )
+
+    first = telemetry.build_watches_live_snapshot(session_id="sess_shared")
+    second = telemetry.build_watches_live_snapshot(session_id="sess_shared")
+    move_a = first["watches"][0]["rules"][0]["current"].get("move_pct")
+    move_b = first["watches"][1]["rules"][0]["current"].get("move_pct")
+    assert move_a == move_b == pytest.approx(0.0, abs=0.001)
+
+    fired_a = second["watches"][0]["rules"][0]["distance"]["fired"]
+    fired_b = second["watches"][1]["rules"][0]["distance"]["fired"]
+    assert fired_a is True
+    assert fired_b is True
+    assert (
+        second["watches"][0]["rules"][0]["current"]["move_pct"]
+        == second["watches"][1]["rules"][0]["current"]["move_pct"]
+    )
+
+
+def test_baseline_evicted_on_update_when_symbol_removed(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.watch_registry import create_watch, telemetry, update_watch
+    from trade_integrations.watch_registry.baselines import owner_baseline_key
+
+    telemetry.clear_telemetry_baseline_cache()
+    watch = create_watch(
+        owner_kind="session",
+        owner_id="sess_upd",
+        vibe_session_id="sess_upd",
+        watch_spec=_sample_spec(),
+    )
+
+    monkeypatch.setattr(
+        "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",
+        lambda self, symbols: {sym: _mock_quote(sym, 100.0) for sym in symbols},
+    )
+    telemetry.build_watches_live_snapshot(session_id="sess_upd")
+    key = owner_baseline_key("ws_sess_upd", "NIFTY")
+    assert key in telemetry._baseline_ltp_cache
+
+    update_watch(
+        watch["watch_id"],
+        watch_spec={
+            "rules": [
+                {
+                    "symbol": "BANKNIFTY",
+                    "metric": "spot_move_pct",
+                    "threshold": 0.5,
+                    "direction": "either",
+                }
+            ]
+        },
+    )
+    assert key not in telemetry._baseline_ltp_cache
+
+
+def test_seeded_baseline_wins_over_rule_baseline_ltp(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.watch_registry import create_watch, telemetry
+
+    telemetry.clear_telemetry_baseline_cache()
+    create_watch(
+        owner_kind="session",
+        owner_id="sess_rule",
+        vibe_session_id="sess_rule",
+        watch_spec={
+            "rules": [
+                {
+                    "symbol": "NIFTY",
+                    "metric": "spot_move_pct",
+                    "threshold": 0.5,
+                    "direction": "either",
+                    "baseline_ltp": 30_000.0,
+                }
+            ]
+        },
+    )
+
+    calls = {"n": 0}
+
+    def fake_poll(*, symbols):
+        calls["n"] += 1
+        ltp = 24_000.0 if calls["n"] == 1 else 24_120.0
+        return {sym: _mock_quote(sym, ltp) for sym in symbols}
+
+    monkeypatch.setattr(
+        "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",
+        lambda self, symbols: fake_poll(symbols=symbols),
+    )
+
+    first = telemetry.build_watches_live_snapshot(session_id="sess_rule")
+    second = telemetry.build_watches_live_snapshot(session_id="sess_rule")
+    assert first["watches"][0]["rules"][0]["current"]["baseline_ltp"] == pytest.approx(24_000.0)
+    assert second["watches"][0]["rules"][0]["distance"]["fired"] is True
+
+
+def test_synthetic_agent_baseline_persists_across_polls(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    from trade_integrations.autonomous_agents.store import save_agent
+    from trade_integrations.watch_registry import telemetry
+
+    telemetry.clear_telemetry_baseline_cache()
+    agent_id = "aa_synth_base"
+    save_agent(
+        {
+            "id": agent_id,
+            "type": "autonomous_agent.instance",
+            "status": "running",
+            "symbols": ["NIFTY"],
+            "vibe_session_id": "sess_synth",
+            "watch_spec": _sample_spec(threshold=0.5),
+        }
+    )
+
+    calls = {"n": 0}
+
+    def fake_poll(*, symbols):
+        calls["n"] += 1
+        ltp = 24_000.0 if calls["n"] == 1 else 24_120.0
+        return {sym: _mock_quote(sym, ltp) for sym in symbols}
+
+    monkeypatch.setattr(
+        "nautilus_openalgo_bridge.data_feed.OpenAlgoQuoteFeed.poll",
+        lambda self, symbols: fake_poll(symbols=symbols),
+    )
+
+    first = telemetry.build_watches_live_snapshot(agent_id=agent_id)
+    second = telemetry.build_watches_live_snapshot(agent_id=agent_id)
+    assert first["watches"][0]["rules"][0]["current"]["move_pct"] == pytest.approx(0.0, abs=0.001)
+    assert second["watches"][0]["rules"][0]["distance"]["fired"] is True
+

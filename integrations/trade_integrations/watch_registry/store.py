@@ -23,6 +23,36 @@ from trade_integrations.watch_registry.scope import (
 logger = logging.getLogger(__name__)
 
 _WATCH_DIR = "watches"
+
+
+def _log_nautilus_sync_result(result: dict[str, Any], *, action: str) -> None:
+    if str(result.get("status") or "") == "partial" or result.get("nautilus_ok") is False:
+        logger.warning(
+            "Nautilus watch not running after %s (agents=%s) — run: trade heal",
+            action,
+            result.get("agent_ids"),
+        )
+
+
+def _sync_telemetry_baselines_for_watch_record(watch: dict[str, Any]) -> None:
+    try:
+        from trade_integrations.watch_registry.telemetry import sync_telemetry_baselines_for_owner
+
+        sync_telemetry_baselines_for_owner(
+            nautilus_owner_id(
+                owner_kind=str(watch.get("owner_kind") or ""),
+                owner_id=str(watch.get("owner_id") or ""),
+            )
+        )
+    except Exception:
+        logger.warning(
+            "telemetry baseline sync failed for owner %s/%s",
+            watch.get("owner_kind"),
+            watch.get("owner_id"),
+            exc_info=True,
+        )
+
+
 _INDEX_FILE = "index.json"
 
 
@@ -185,7 +215,10 @@ def create_watch(
     _save_index(index)
 
     _sync_owner_handoff(owner_kind, owner_id)
-    sync_nautilus_registry_from_watches(restart_if_changed=True)
+    _log_nautilus_sync_result(
+        sync_nautilus_registry_from_watches(restart_if_changed=True),
+        action="create_watch",
+    )
     return watch
 
 
@@ -195,13 +228,17 @@ def update_watch(watch_id: str, *, watch_spec: dict[str, Any] | None = None, lab
         return None
     if watch_spec is not None:
         watch["watch_spec"] = dict(watch_spec)
-        watch["symbols"] = list(symbols_for_watch(watch))
+        watch["symbols"] = list(symbols_for_watch({"watch_spec": watch["watch_spec"]}))
     if label is not None:
         watch["label"] = str(label).strip() or None
     watch["updated_at"] = _now_iso()
     _write_watch(watch)
     _sync_owner_handoff(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
-    sync_nautilus_registry_from_watches(restart_if_changed=True)
+    _log_nautilus_sync_result(
+        sync_nautilus_registry_from_watches(restart_if_changed=True),
+        action="update_watch",
+    )
+    _sync_telemetry_baselines_for_watch_record(watch)
     return watch
 
 
@@ -225,7 +262,11 @@ def delete_watch(watch_id: str) -> bool:
     _save_index(index)
 
     _sync_owner_handoff(str(watch.get("owner_kind") or ""), str(watch.get("owner_id") or ""))
-    sync_nautilus_registry_from_watches(restart_if_changed=True)
+    _log_nautilus_sync_result(
+        sync_nautilus_registry_from_watches(restart_if_changed=True),
+        action="delete_watch",
+    )
+    _sync_telemetry_baselines_for_watch_record(watch)
     return True
 
 
@@ -246,6 +287,16 @@ def record_watch_fired(watch_id: str, message: str) -> dict[str, Any] | None:
     watch["last_alert_message"] = str(message or "")[:500]
     watch["updated_at"] = _now_iso()
     _write_watch(watch)
+    try:
+        from trade_integrations.observability.hooks import emit_watch_registry_event
+
+        emit_watch_registry_event(
+            "watch_fired",
+            watch_id=watch_id,
+            detail={"message": watch["last_alert_message"], "owner_id": watch.get("owner_id")},
+        )
+    except ImportError:
+        pass
     if watch.get("one_shot"):
         delete_watch(watch_id)
     return watch
@@ -476,7 +527,8 @@ def sync_nautilus_registry_from_watches(*, restart_if_changed: bool = False) -> 
             nautilus_ok = False
             try:
                 nw._launch_watch(use_registry=True)
-                nautilus_ok = True
+                relaunch_pid = nw._read_pid()
+                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
             except Exception:
                 logger.exception(
                     "failed to relaunch Nautilus after watch registry sync (agents=%s) — see log/nautilus-watch.log",
@@ -486,6 +538,56 @@ def sync_nautilus_registry_from_watches(*, restart_if_changed: bool = False) -> 
                     nw.ensure_nautilus_watch_for_running_agents()
                 except Exception:
                     logger.exception("recovery ensure_nautilus_watch_for_running_agents failed after relaunch error")
+                relaunch_pid = nw._read_pid()
+                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            if not nautilus_ok:
+                return {
+                    "status": "partial",
+                    "owners": len(agents),
+                    "agent_ids": new_ids,
+                    "nautilus_ok": False,
+                }
+        elif new_ids:
+            nautilus_ok = False
+            try:
+                nw._launch_watch(use_registry=True)
+                relaunch_pid = nw._read_pid()
+                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            except Exception:
+                logger.exception(
+                    "failed to start Nautilus after watch registry sync (agents=%s, node was down)",
+                    new_ids,
+                )
+                try:
+                    nw.ensure_nautilus_watch_for_running_agents()
+                except Exception:
+                    logger.exception("recovery ensure_nautilus_watch_for_running_agents failed after start error")
+                relaunch_pid = nw._read_pid()
+                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            if not nautilus_ok:
+                return {
+                    "status": "partial",
+                    "owners": len(agents),
+                    "agent_ids": new_ids,
+                    "nautilus_ok": False,
+                }
+    elif restart_if_changed and new_ids:
+        live_pid = nw._read_pid()
+        if live_pid is None or not nw._process_alive(live_pid):
+            nautilus_ok = False
+            try:
+                nw._launch_watch(use_registry=True)
+                relaunch_pid = nw._read_pid()
+                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            except Exception:
+                logger.exception(
+                    "failed to start Nautilus after watch registry sync (agents=%s, unchanged registry, node down)",
+                    new_ids,
+                )
+                try:
+                    nw.ensure_nautilus_watch_for_running_agents()
+                except Exception:
+                    logger.exception("recovery ensure_nautilus_watch_for_running_agents failed after start error")
                 relaunch_pid = nw._read_pid()
                 nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
             if not nautilus_ok:
