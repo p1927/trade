@@ -62,7 +62,7 @@ def ensure_openalgo_env(*, root: Path | None = None) -> dict[str, str]:
 
 
 def _stack_auto_heal_enabled() -> bool:
-    return os.getenv("STACK_AUTO_HEAL", "1").strip().lower() not in {"0", "false", "no", "off"}
+    return os.getenv("STACK_AUTO_HEAL", "0").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _dev_mode_flagged(*, root: Path | None = None) -> bool:
@@ -70,18 +70,43 @@ def _dev_mode_flagged(*, root: Path | None = None) -> bool:
     if not mode_file.is_file():
         return False
     try:
-        return mode_file.read_text(encoding="utf-8").strip() == "dev"
+        return mode_file.read_text(encoding="utf-8").strip() in {"dev", "booting"}
     except OSError:
         return False
 
 
-def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
-    """Heal hub + app tier via ``trade heal`` when OpenAlgo is unreachable."""
-    if not _stack_auto_heal_enabled():
+def _probe_vibe_stack(*, root: Path) -> bool:
+    """Return True when OpenAlgo and Vibe API respond."""
+    cfg = ensure_openalgo_env(root=root)
+    host = cfg["host"].rstrip("/")
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{host}/", timeout=3) as resp:
+            if not (200 <= getattr(resp, "status", 200) < 500):
+                return False
+    except Exception:
         return False
 
+    from trade_integrations.stack_ports import vibe_backend_url
+
+    api_base = vibe_backend_url(root=root).rstrip("/")
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{api_base}/health", timeout=3) as resp:
+            return 200 <= getattr(resp, "status", 200) < 500
+    except Exception:
+        return False
+
+
+def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
+    """Probe OpenAlgo + Vibe API; optionally run one ``trade heal`` when STACK_AUTO_HEAL=1."""
     base = root or trade_repo_root()
-    if _dev_mode_flagged(root=base):
+    if _probe_vibe_stack(root=base):
+        return True
+
+    if not _stack_auto_heal_enabled() or _dev_mode_flagged(root=base):
         return False
 
     trade_cli = base / "trade"
@@ -91,27 +116,6 @@ def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
     import subprocess
 
     subprocess.run(
-        [str(trade_cli), "heal", "--hub-only"],
-        cwd=str(base),
-        timeout=120,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    cfg = ensure_openalgo_env(root=base)
-    host = cfg["host"].rstrip("/")
-
-    try:
-        import urllib.request
-
-        with urllib.request.urlopen(f"{host}/", timeout=3) as resp:
-            if 200 <= getattr(resp, "status", 200) < 500:
-                return True
-    except Exception:
-        pass
-
-    subprocess.run(
         [str(trade_cli), "heal"],
         cwd=str(base),
         timeout=180,
@@ -119,10 +123,41 @@ def ensure_vibe_stack_heal(*, root: Path | None = None) -> bool:
         capture_output=True,
         text=True,
     )
-    try:
-        import urllib.request
+    return _probe_vibe_stack(root=base)
 
-        with urllib.request.urlopen(f"{host}/", timeout=20) as resp:
-            return 200 <= getattr(resp, "status", 200) < 500
-    except Exception:
-        return False
+
+class StackUnavailableError(RuntimeError):
+    """Raised when the Vibe stack is down and auto-heal is disabled."""
+
+
+def stack_unavailable_message(*, root: Path | None = None) -> str:
+    base = root or trade_repo_root()
+    return (
+        "Vibe stack is not reachable (OpenAlgo and/or Vibe API /health failed).\n"
+        f"  Fix: cd {base} && trade doctor && trade up\n"
+        "  Or dev mode: trade dev\n"
+        "  Status: trade status --json\n"
+        "  Auto-heal is off by default (STACK_AUTO_HEAL=0)."
+    )
+
+
+def load_stack_instance_manifest(*, root: Path | None = None) -> dict:
+    """Read ``log/stack.instance.json`` written by ``stack_write_instance_manifest``."""
+    path = (root or trade_repo_root()) / "log" / "stack.instance.json"
+    if not path.is_file():
+        return {}
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except OSError:
+        return {}
+
+
+def require_vibe_stack(*, root: Path | None = None) -> None:
+    """Raise ``StackUnavailableError`` when the stack is not ready and auto-heal is off."""
+    base = root or trade_repo_root()
+    if ensure_vibe_stack_heal(root=base):
+        return
+    raise StackUnavailableError(stack_unavailable_message(root=base))

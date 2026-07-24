@@ -4,12 +4,12 @@
 # from Bing bot-detection ("Document is empty"). The bing web engine on categories=news works
 # reliably for the same headlines — use that for hub ingest instead.
 #
-# DuckDuckGo / mojeek / qwant: disabled while container IP is CAPTCHA- or 403-blocked.
-# Re-enable after solving CAPTCHA from the container network —
-# see https://docs.searxng.org/admin/answer-captcha.html
+# DuckDuckGo: primary for automated JSON queries; fall back to bing when DDG CAPTCHA-blocks
+# the container IP — see https://docs.searxng.org/admin/answer-captcha.html
 use_default_settings:
   engines:
     keep_only:
+      - duckduckgo
       - bing
 
 server:
