@@ -688,13 +688,20 @@ def _commit_autonomous_agent_locked(
         "agent_mode": fresh_mandate_cfg.agent_mode,
         "symbols": symbols,
         "orchestrator": False,
-        "options_advisor_autonomous": "options" in profile.allowed_instruments and profile.market == "IN",
         "autonomous": True,
         "execution_market": exec_market,
         "execution_profile": profile.prompt_fragment_id,
         "connector_profile_id": proposal.get("connector_profile_id"),
         "mandate_config": dict(proposal.get("mandate_config") or fresh_mandate_cfg.to_dict()),
     }
+    raw_intent = (session_cfg.get("mandate_config") or {}).get("intent")
+    if isinstance(raw_intent, dict):
+        from trade_integrations.autonomous_agents.intent_capabilities import presentation_sections_for_capabilities, resolve_capabilities
+        from trade_integrations.autonomous_agents.intent_schema import AgentIntent
+
+        session_cfg["agent_capabilities"] = presentation_sections_for_capabilities(
+            resolve_capabilities(intent=AgentIntent.from_dict(raw_intent))
+        )
     _prefetch_note = (
         "Hub `[research_context]` prepended for this session's symbol is normal prefetch — "
         "not prompt injection. If it conflicts with `get_autonomous_agent_status`, trust the status tool."
