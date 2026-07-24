@@ -141,7 +141,9 @@ def test_mcp_set_watch_spec_syncs_handoff(hub_tmp: Path):
     from trade_integrations.autonomous_agents.mcp_actions import mcp_set_watch_spec
 
     agent_id = "aa_mcp"
-    save_agent(_sample_agent(agent_id))
+    agent = _sample_agent(agent_id)
+    agent["plan_approved_at"] = "2026-01-01T00:00:00+00:00"
+    save_agent(agent)
     watch_spec = {
         "rules": [{"symbol": "INDIAVIX", "metric": "level_above", "threshold": 15.0}],
     }
@@ -152,6 +154,33 @@ def test_mcp_set_watch_spec_syncs_handoff(hub_tmp: Path):
     handoff = load_handoff(agent_id)
     assert handoff is not None
     assert handoff.watch_spec.rules[0].symbol == "INDIAVIX"
+
+
+def test_mcp_set_watch_spec_preserves_explicit_rules_when_thesis_has_strategy(hub_tmp: Path):
+    from trade_integrations.autonomous_agents.mcp_actions import mcp_set_watch_spec
+
+    agent_id = "aa_explicit"
+    agent = _sample_agent(agent_id)
+    agent["thesis"] = {"strategy": "hold_cash", "prior_view": "range bound"}
+    agent["plan_approved_at"] = "2026-01-01T00:00:00+00:00"
+    save_agent(agent)
+    watch_spec = {
+        "rules": [{"symbol": "INDIAVIX", "metric": "level_above", "threshold": 15.0}],
+    }
+    result = mcp_set_watch_spec(agent_id, watch_spec)
+    assert result["status"] == "ok"
+    assert result["watch_spec"]["rules"][0]["symbol"] == "INDIAVIX"
+
+
+def test_mcp_set_watch_spec_deferred_activation_flag(hub_tmp: Path):
+    from trade_integrations.autonomous_agents.mcp_actions import mcp_set_watch_spec
+
+    agent_id = "aa_pending"
+    save_agent(_sample_agent(agent_id))
+    result = mcp_set_watch_spec(agent_id, strategy="hold_cash", spot_move_pct=0.009)
+    assert result["status"] == "ok"
+    assert result["handoff_synced"] is False
+    assert result["watch_spec_pending_activation"] is True
 
 
 def test_build_handoff_shell_from_agent(hub_tmp: Path):

@@ -18,6 +18,51 @@ from nautilus_openalgo_bridge.models import BridgeSignal, QuoteSnapshot, WatchAl
 logger = logging.getLogger(__name__)
 
 
+def _obs_emit(event: str, *, level: str = "info", agent_id: str = "", **detail: Any) -> None:
+    try:
+        from trade_integrations.observability.emitter import emit
+
+        payload = dict(detail)
+        if level == "error":
+            emit("watch", event, level="error", agent_id=agent_id, **payload)
+        elif level == "warn":
+            emit("watch", event, level="warn", agent_id=agent_id, **payload)
+        else:
+            emit("watch", event, level="info", agent_id=agent_id, **payload)
+    except ImportError:
+        return
+
+
+def _obs_dispatch_result(agent_id: str, result: dict[str, Any], *, alert: WatchAlert | None = None) -> None:
+    status = str(result.get("status") or "")
+    if status == "skipped":
+        _obs_emit(
+            "vibe_dispatch_skipped",
+            level="warn",
+            agent_id=agent_id,
+            skip_reason=str(result.get("reason") or "unknown"),
+            symbol=str(getattr(alert, "symbol", "") or ""),
+            signal=str(getattr(alert, "signal", "") or ""),
+        )
+    elif status == "error":
+        _obs_emit(
+            "vibe_dispatch_failed",
+            level="error",
+            agent_id=agent_id,
+            error=str(result.get("error") or "unknown"),
+            symbol=str(getattr(alert, "symbol", "") or ""),
+        )
+    elif status == "dispatched":
+        _obs_emit(
+            "vibe_dispatch_sent",
+            level="info",
+            agent_id=agent_id,
+            session_id=str(result.get("session_id") or ""),
+            symbol=str(getattr(alert, "symbol", "") or ""),
+            signal=str(getattr(alert, "signal", "") or ""),
+        )
+
+
 def get_agent(agent_id: str) -> dict[str, Any]:
     """Load agent JSON without importing trade_integrations (Nautilus venv safe)."""
     return load_agent_json(agent_id)
@@ -186,20 +231,30 @@ async def dispatch_thesis_alert(
 ) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent:
-        return {"status": "error", "error": f"agent not found: {agent_id}"}
+        result = {"status": "error", "error": f"agent not found: {agent_id}"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
     if str(agent.get("status")) != "running":
-        return {"status": "skipped", "reason": "agent_not_running"}
+        result = {"status": "skipped", "reason": "agent_not_running"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
     session_id = str(agent.get("vibe_session_id") or "").strip()
     if not session_id:
-        return {"status": "error", "error": "agent has no vibe_session_id"}
+        result = {"status": "error", "error": "agent has no vibe_session_id"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
     if agent.get("streaming"):
-        return {"status": "skipped", "reason": "turn_in_flight"}
+        result = {"status": "skipped", "reason": "turn_in_flight"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
 
     try:
         from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
         if not is_plan_approved(agent):
-            return {"status": "skipped", "reason": "plan_not_approved"}
+            result = {"status": "skipped", "reason": "plan_not_approved"}
+            _obs_dispatch_result(agent_id, result, alert=alert)
+            return result
     except ImportError:
         pass
 
@@ -218,7 +273,7 @@ async def dispatch_thesis_alert(
     agent["last_bridge_alert_at"] = alert.fired_at
     save_agent(agent)
     try:
-        result = await caller(session_id, prompt)
+        api_result = await caller(session_id, prompt)
         try:
             from trade_integrations.watch_registry.store import record_owner_alert_fired
 
@@ -234,13 +289,17 @@ async def dispatch_thesis_alert(
         latest["last_bridge_alert_at"] = alert.fired_at
         _mark_vibe_dispatched(latest)
         save_agent(latest)
-        return {"status": "dispatched", "session_id": session_id, "result": result}
+        result = {"status": "dispatched", "session_id": session_id, "result": api_result}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
     except RuntimeError as exc:
         logger.warning("Vibe thesis dispatch failed for %s: %s", agent_id, exc)
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
-        return {"status": "error", "error": str(exc)}
+        result = {"status": "error", "error": str(exc)}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
 
 
 def dispatch_thesis_alert_sync(
@@ -263,19 +322,47 @@ async def dispatch_quant_alert(
 ) -> dict[str, Any]:
     agent = get_agent(agent_id)
     if not agent:
-        return {"status": "error", "error": f"agent not found: {agent_id}"}
+        result = {"status": "error", "error": f"agent not found: {agent_id}"}
+        _obs_emit("quant_dispatch_failed", level="error", agent_id=agent_id, error=result["error"])
+        return result
     if str(agent.get("status")) != "running":
-        return {"status": "skipped", "reason": "agent_not_running"}
+        result = {"status": "skipped", "reason": "agent_not_running"}
+        _obs_emit(
+            "quant_dispatch_skipped",
+            level="warn",
+            agent_id=agent_id,
+            skip_reason=result["reason"],
+            alert_type=alert_type,
+        )
+        return result
     session_id = str(agent.get("vibe_session_id") or "").strip()
     if not session_id:
-        return {"status": "error", "error": "agent has no vibe_session_id"}
+        result = {"status": "error", "error": "agent has no vibe_session_id"}
+        _obs_emit("quant_dispatch_failed", level="error", agent_id=agent_id, error=result["error"])
+        return result
     if agent.get("streaming"):
-        return {"status": "skipped", "reason": "turn_in_flight"}
+        result = {"status": "skipped", "reason": "turn_in_flight"}
+        _obs_emit(
+            "quant_dispatch_skipped",
+            level="warn",
+            agent_id=agent_id,
+            skip_reason=result["reason"],
+            alert_type=alert_type,
+        )
+        return result
 
     from trade_integrations.autonomous_agents.mandate_config import is_observe_agent
 
     if is_observe_agent(agent):
-        return {"status": "skipped", "reason": "observe_quant_disabled"}
+        result = {"status": "skipped", "reason": "observe_quant_disabled"}
+        _obs_emit(
+            "quant_dispatch_skipped",
+            level="warn",
+            agent_id=agent_id,
+            skip_reason=result["reason"],
+            alert_type=alert_type,
+        )
+        return result
 
     prompt = build_quant_alert_block(alert_type, message, delta) + build_full_reasoning_prompt(
         agent=agent,
@@ -288,12 +375,26 @@ async def dispatch_quant_alert(
     agent["last_revision_at"] = datetime.now(timezone.utc).isoformat()
     save_agent(agent)
     try:
-        result = await caller(session_id, prompt)
-        return {"status": "dispatched", "session_id": session_id, "result": result}
+        api_result = await caller(session_id, prompt)
+        _obs_emit(
+            "quant_dispatch_sent",
+            level="info",
+            agent_id=agent_id,
+            session_id=session_id,
+            alert_type=alert_type,
+        )
+        return {"status": "dispatched", "session_id": session_id, "result": api_result}
     except RuntimeError as exc:
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
+        _obs_emit(
+            "quant_dispatch_failed",
+            level="error",
+            agent_id=agent_id,
+            error=str(exc),
+            alert_type=alert_type,
+        )
         return {"status": "error", "error": str(exc)}
 
 
@@ -353,27 +454,39 @@ async def dispatch_watch_alert(
 
     agent = get_agent(agent_id)
     if not agent:
-        return {"status": "error", "error": f"agent not found: {agent_id}"}
+        result = {"status": "error", "error": f"agent not found: {agent_id}"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
     if str(agent.get("status")) != "running":
-        return {"status": "skipped", "reason": "agent_not_running"}
+        result = {"status": "skipped", "reason": "agent_not_running"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
 
     session_id = str(agent.get("vibe_session_id") or "").strip()
     if not session_id:
-        return {"status": "error", "error": "agent has no vibe_session_id"}
+        result = {"status": "error", "error": "agent has no vibe_session_id"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
 
     if agent.get("streaming"):
-        return {"status": "skipped", "reason": "turn_in_flight"}
+        result = {"status": "skipped", "reason": "turn_in_flight"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
 
     try:
         from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
         if not is_plan_approved(agent):
-            return {"status": "skipped", "reason": "plan_not_approved"}
+            result = {"status": "skipped", "reason": "plan_not_approved"}
+            _obs_dispatch_result(agent_id, result, alert=alert)
+            return result
     except ImportError:
         pass
 
     if alert.signal == BridgeSignal.REVIEW_NEEDED and _within_vibe_dispatch_cooldown(agent):
-        return {"status": "skipped", "reason": "skip_if_unchanged_gate"}
+        result = {"status": "skipped", "reason": "skip_if_unchanged_gate"}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
 
     prompt = build_alert_turn_prompt(agent=agent, alert=alert, quotes=quotes)
     caller = make_vibe_message_client(config)
@@ -388,7 +501,7 @@ async def dispatch_watch_alert(
     save_agent(agent)
 
     try:
-        result = await caller(session_id, prompt)
+        api_result = await caller(session_id, prompt)
         try:
             from trade_integrations.watch_registry.store import record_owner_alert_fired
 
@@ -405,13 +518,17 @@ async def dispatch_watch_alert(
         latest["last_bridge_alert"] = alert.to_dict()
         _mark_vibe_dispatched(latest)
         save_agent(latest)
-        return {"status": "dispatched", "session_id": session_id, "result": result}
+        result = {"status": "dispatched", "session_id": session_id, "result": api_result}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
     except RuntimeError as exc:
         logger.warning("Vibe dispatch failed for %s: %s", agent_id, exc)
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
-        return {"status": "error", "error": str(exc)}
+        result = {"status": "error", "error": str(exc)}
+        _obs_dispatch_result(agent_id, result, alert=alert)
+        return result
 
 
 def dispatch_watch_alert_sync(
@@ -447,7 +564,9 @@ async def _dispatch_session_watch_alert(
         except Exception:
             pass
     if not session_id:
-        return {"status": "error", "error": "session watch has no vibe_session_id"}
+        result = {"status": "error", "error": "session watch has no vibe_session_id"}
+        _obs_dispatch_result(nautilus_owner, result, alert=alert)
+        return result
 
     prompt = (
         build_bridge_alert_block(alert, quotes)
@@ -456,7 +575,7 @@ async def _dispatch_session_watch_alert(
     )
     caller = make_vibe_message_client(config)
     try:
-        result = await caller(session_id, prompt)
+        api_result = await caller(session_id, prompt)
         try:
             from trade_integrations.watch_registry.store import record_owner_alert_fired
 
@@ -467,10 +586,14 @@ async def _dispatch_session_watch_alert(
             )
         except Exception:
             pass
-        return {"status": "dispatched", "session_id": session_id, "result": result}
+        result = {"status": "dispatched", "session_id": session_id, "result": api_result}
+        _obs_dispatch_result(nautilus_owner, result, alert=alert)
+        return result
     except RuntimeError as exc:
         logger.warning("Vibe dispatch failed for session owner %s: %s", nautilus_owner, exc)
-        return {"status": "error", "error": str(exc)}
+        result = {"status": "error", "error": str(exc)}
+        _obs_dispatch_result(nautilus_owner, result, alert=alert)
+        return result
 
 
 def ping_vibe_backend(config: BridgeConfig | None = None) -> dict[str, Any]:

@@ -211,7 +211,28 @@ def _run_once_impl(
     handoff = load_handoff(agent_id) if agent_id else None
     context_generation = handoff.context_generation if handoff else None
     quotes = _poll_quotes(poll_symbols, context_generation=context_generation)
-    alerts = evaluate_watch_spec(spec, quotes, baselines=baselines or {})
+    quote_baselines = dict(baselines or {})
+    oi_baselines: dict[str, float] = {}
+    volume_baselines: dict[str, float] = {}
+    from trade_integrations.watch_registry.baselines import seed_quote_symbol_baselines
+
+    for symbol, snap in quotes.items():
+        seed_quote_symbol_baselines(
+            ltp_baselines=quote_baselines,
+            symbol=symbol,
+            ltp=snap.ltp,
+            oi=snap.oi,
+            volume=snap.volume,
+            oi_baselines=oi_baselines,
+            volume_baselines=volume_baselines,
+        )
+    alerts = evaluate_watch_spec(
+        spec,
+        quotes,
+        baselines=quote_baselines,
+        oi_baselines=oi_baselines,
+        volume_baselines=volume_baselines,
+    )
     if handoff:
         try:
             client = get_openalgo_client(cfg)
@@ -273,6 +294,25 @@ def _run_once_impl(
         else []
     )
 
+    try:
+        from trade_integrations.observability.hooks import emit_poll_tick
+
+        skipped = sum(
+            1
+            for row in dispatch_results
+            if isinstance(row, dict) and row.get("reason") == "outside_market_hours"
+        )
+        emit_poll_tick(
+            agent_id=agent_id,
+            alert_count=len(alerts),
+            dispatch_count=len(
+                [r for r in dispatch_results if r.get("status") in {"dispatched", "queued"}]
+            ),
+            skipped_outside_hours=skipped,
+        )
+    except ImportError:
+        pass
+
     return {
         "quotes": {k: v.to_dict() for k, v in quotes.items()},
         "alerts": [a.to_dict() for a in alerts],
@@ -329,6 +369,8 @@ def run_poll_loop(
     rest_feed = OpenAlgoQuoteFeed()
     spec = _resolve_watch_spec(agent_id)
     baselines: dict[str, float] = {}
+    oi_baselines: dict[str, float] = {}
+    volume_baselines: dict[str, float] = {}
     last_alert_at: dict[str, float] = {}
     last_handoff_mtime: float | None = handoff_mtime(agent_id) if agent_id else None
     last_agent_mtime: float | None = _agent_mtime(agent_id) if agent_id else None
@@ -344,8 +386,22 @@ def run_poll_loop(
     from nautilus_openalgo_bridge.market_hours import closed_market_poll_interval_sec, is_market_open_for_market
 
     loop_market = _poll_loop_market(agent_id)
+    poll_iterations = 0
 
     while True:
+        poll_iterations += 1
+        if poll_iterations % 60 == 0:
+            try:
+                from trade_integrations.observability.hooks import safe_emit
+
+                safe_emit(
+                    "watch",
+                    "poll_loop_heartbeat",
+                    agent_id=agent_id or "",
+                    detail={"iterations": poll_iterations, "market": loop_market},
+                )
+            except ImportError:
+                pass
         if not is_market_open_for_market(loop_market):
             if once:
                 logger.info("market closed (%s) — exiting poll loop", loop_market)
@@ -377,9 +433,25 @@ def run_poll_loop(
             rest_feed=rest_feed,
         )
         for symbol, snap in quotes.items():
-            baselines.setdefault(symbol, snap.ltp)
+            from trade_integrations.watch_registry.baselines import seed_quote_symbol_baselines
 
-        alerts = evaluate_watch_spec(spec, quotes, baselines=baselines)
+            seed_quote_symbol_baselines(
+                ltp_baselines=baselines,
+                symbol=symbol,
+                ltp=snap.ltp,
+                oi=snap.oi,
+                volume=snap.volume,
+                oi_baselines=oi_baselines,
+                volume_baselines=volume_baselines,
+            )
+
+        alerts = evaluate_watch_spec(
+            spec,
+            quotes,
+            baselines=baselines,
+            oi_baselines=oi_baselines,
+            volume_baselines=volume_baselines,
+        )
         if handoff:
             try:
                 client = get_openalgo_client(cfg)
@@ -393,6 +465,8 @@ def run_poll_loop(
 
         now = time.time()
         gate_minutes = spec.gate.skip_if_unchanged_minutes if spec.gate else 30
+        tick_dispatch_count = 0
+        tick_skipped_outside = 0
 
         for alert in alerts:
             key = f"{alert.symbol}:{alert.rule.metric if alert.rule else alert.signal.value}"
@@ -406,6 +480,8 @@ def run_poll_loop(
 
                 result = dispatch_exit_intent(agent_id, alert, underlying=handoff.underlying if handoff else None)
                 logger.info("EXIT intent: %s", result.get("status"))
+                if result.get("status") in {"queued", "dispatched"}:
+                    tick_dispatch_count += 1
                 continue
 
             if not trigger_vibe or not agent_id:
@@ -416,10 +492,26 @@ def run_poll_loop(
                 from nautilus_openalgo_bridge.vibe_trigger import dispatch_thesis_alert_sync
 
                 if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
+                    tick_skipped_outside += 1
+                    try:
+                        from trade_integrations.observability.hooks import safe_emit
+
+                        safe_emit(
+                            "watch",
+                            "vibe_dispatch_skipped",
+                            level="warn",
+                            agent_id=agent_id,
+                            skip_reason="outside_market_hours",
+                            symbol=alert.symbol,
+                            signal=alert.signal.value,
+                        )
+                    except ImportError:
+                        pass
                     continue
                 result = dispatch_thesis_alert_sync(agent_id, alert, quotes=quotes)
                 if result.get("status") == "dispatched":
                     last_vibe_dispatch_at = now
+                    tick_dispatch_count += 1
                 continue
 
             if alert.signal != BridgeSignal.REVIEW_NEEDED:
@@ -430,12 +522,40 @@ def run_poll_loop(
             from nautilus_openalgo_bridge.market_hours import is_agent_watch_session_open
 
             if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
+                tick_skipped_outside += 1
+                try:
+                    from trade_integrations.observability.hooks import safe_emit
+
+                    safe_emit(
+                        "watch",
+                        "vibe_dispatch_skipped",
+                        level="warn",
+                        agent_id=agent_id,
+                        skip_reason="outside_market_hours",
+                        symbol=alert.symbol,
+                        signal=alert.signal.value,
+                    )
+                except ImportError:
+                    pass
                 continue
             from nautilus_openalgo_bridge.vibe_trigger import dispatch_watch_alert_sync
 
             result = dispatch_watch_alert_sync(agent_id, alert, quotes=quotes)
             if result.get("status") == "dispatched":
                 last_vibe_dispatch_at = now
+                tick_dispatch_count += 1
+
+        try:
+            from trade_integrations.observability.hooks import emit_poll_tick
+
+            emit_poll_tick(
+                agent_id=agent_id,
+                alert_count=len(alerts),
+                dispatch_count=tick_dispatch_count,
+                skipped_outside_hours=tick_skipped_outside,
+            )
+        except ImportError:
+            pass
 
         if once:
             return 0

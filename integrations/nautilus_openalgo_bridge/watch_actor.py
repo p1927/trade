@@ -216,6 +216,17 @@ class WatchActor(Actor):
             ts_event=ts_event,
         )
         self.log.warning(f"WATCH ALERT [{signal_name}]: {alert.message}")
+        try:
+            from trade_integrations.observability.hooks import emit_watch_signal
+
+            emit_watch_signal(
+                agent_id=self._agent_id,
+                signal=signal_name,
+                symbol=str(alert.symbol or ""),
+                message=str(alert.message or ""),
+            )
+        except ImportError:
+            pass
 
     def on_quote_tick(self, tick: QuoteTick) -> None:
         from nautilus_openalgo_bridge.market_hours import is_market_open_for_market
@@ -225,7 +236,9 @@ class WatchActor(Actor):
         symbol = str(tick.instrument_id.symbol)
         ltp = tick.bid_price.as_double()
         self._latest_ltp[symbol] = ltp
-        self._baselines.setdefault(symbol, ltp)
+        from trade_integrations.watch_registry.baselines import seed_symbol_baseline
+
+        seed_symbol_baseline(self._baselines, symbol, ltp)
         snap = QuoteSnapshot(symbol=symbol, exchange=self._market, ltp=ltp)
         quotes = {symbol: snap}
         alerts = evaluate_watch_spec(
