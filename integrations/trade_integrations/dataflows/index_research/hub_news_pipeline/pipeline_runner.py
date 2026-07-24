@@ -73,6 +73,7 @@ DEFAULT_STEP_ORDER: list[str] = [
 ]
 
 RESOLVER_THROUGH = "step_07_event_distill_bridge"
+MAINTAINER_THROUGH = "step_04_ref_enrich_llm"
 
 
 def register_step(step_id: str, fn: StepFn) -> None:

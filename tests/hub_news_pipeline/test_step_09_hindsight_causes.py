@@ -183,6 +183,20 @@ def test_annotate_cause_indicator_snaps_weekend_publish_day():
     assert row["actual_factor_delta"] is not None
 
 
+def test_annotate_cause_indicator_caps_as_of_to_last_session():
+    frame = _sample_frame()
+    row = annotate_cause_indicator(
+        {"factor": "oil_brent", "mechanism": "crude", "direction_hint": "bearish"},
+        cause_index=0,
+        publish_day="2026-03-10",
+        frame=frame,
+        as_of="2026-03-16",
+    )
+    assert row is not None
+    assert row["window_end"] == "2026-03-14"
+    assert row["actual_factor_delta"] is not None
+
+
 def test_ref_needs_hindsight_with_duplicate_factors():
     ref = {
         "structured_enrichment": {

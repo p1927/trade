@@ -66,8 +66,8 @@ Steps **02/02b** failures do **not** abort — set `enrichment_mode=snippet_fall
 | 07 | [step-05-07-bridge-distill.md](2026-07-24-hub-news-enrichment-step-05-07-bridge-distill.md) | refactor | **Done** | 06 | Distill hints + `structured_enrichment` on ref |
 | 08 | [step-08-temporal-attribution.md](2026-07-24-hub-news-enrichment-step-08-temporal-attribution.md) | implement | **Done** | 07 | Prediction read-path filters |
 | 09 | [step-09-hindsight-causes.md](2026-07-24-hub-news-enrichment-step-09-hindsight-causes.md) | implement | **Done** | 08 | Did cited causes align with move? |
-| 10 | [step-10-backfill-maintainer.md](2026-07-24-hub-news-enrichment-step-10-backfill-maintainer.md) | migrate | **Pending** | 04 | Capped maintainer backfill |
-| UI | [step-ui-hub-cards.md](2026-07-24-hub-news-enrichment-step-ui-hub-cards.md) | implement | **Pending** | 07 | Hub cards for causes/timeline |
+| 10 | [step-10-backfill-maintainer.md](2026-07-24-hub-news-enrichment-step-10-backfill-maintainer.md) | migrate | **Done** | 04 | Capped maintainer backfill |
+| UI | [step-ui-hub-cards.md](2026-07-24-hub-news-enrichment-step-ui-hub-cards.md) | implement | **Done** | 07 | Hub cards for causes/timeline |
 
 ## Execution order (locked — sequential, no skips)
 

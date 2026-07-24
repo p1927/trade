@@ -35,15 +35,101 @@ def _parse_json_dict(raw: Any) -> dict[str, Any]:
     return {}
 
 
+def _normalize_reference_for_hub(ref: dict[str, Any]) -> dict[str, Any]:
+    """Include pipeline enrichment fields on each reference for Hub UI."""
+    structured = ref.get("structured_enrichment")
+    article = ref.get("article_enrichment")
+    structured_dict = dict(structured) if isinstance(structured, dict) else {}
+    article_dict = dict(article) if isinstance(article, dict) else {}
+
+    cause_indicators = [
+        row
+        for row in (
+            structured_dict.get("cause_indicators")
+            or article_dict.get("cause_indicators")
+            or []
+        )
+        if isinstance(row, dict)
+    ]
+    future_events = [
+        row
+        for row in (
+            structured_dict.get("future_events") or article_dict.get("future_events") or []
+        )
+        if isinstance(row, dict)
+    ]
+    article_opinions = [
+        row
+        for row in (
+            structured_dict.get("article_opinions") or article_dict.get("article_opinions") or []
+        )
+        if isinstance(row, dict)
+    ]
+    hindsight = [row for row in (ref.get("hindsight_causes") or []) if isinstance(row, dict)]
+    enrichment_mode = str(
+        structured_dict.get("enrichment_mode")
+        or article_dict.get("enrichment_mode")
+        or ref.get("enrichment_mode")
+        or ""
+    )[:32]
+
+    return {
+        "ref_id": str(ref.get("ref_id") or ref.get("url") or "")[:120],
+        "title": str(ref.get("title") or ref.get("raw_title") or "")[:300],
+        "url": str(ref.get("url") or ""),
+        "source": str(ref.get("source") or ref.get("publisher") or ref.get("vendor") or ""),
+        "published_at": str(ref.get("published_at") or ""),
+        "vendor": str(ref.get("vendor") or ref.get("publisher") or ""),
+        "publisher": str(ref.get("publisher") or ref.get("vendor") or ""),
+        "enrichment_mode": enrichment_mode,
+        "cause_indicators": cause_indicators[:12],
+        "future_events": future_events[:12],
+        "article_opinions": article_opinions[:8],
+        "hindsight_causes": hindsight[:12],
+    }
+
+
+def _aggregate_enrichment_fields(references: list[dict[str, Any]]) -> dict[str, Any]:
+    causes: list[dict[str, Any]] = []
+    futures: list[dict[str, Any]] = []
+    opinions: list[dict[str, Any]] = []
+    modes: set[str] = set()
+    for ref in references:
+        for row in ref.get("cause_indicators") or []:
+            if isinstance(row, dict):
+                causes.append(row)
+        for row in ref.get("future_events") or []:
+            if isinstance(row, dict):
+                futures.append(row)
+        for row in ref.get("article_opinions") or []:
+            if isinstance(row, dict):
+                opinions.append(row)
+        mode = str(ref.get("enrichment_mode") or "").strip()
+        if mode:
+            modes.add(mode)
+    return {
+        "cause_indicators": causes[:24],
+        "future_events": futures[:24],
+        "article_opinions": opinions[:16],
+        "enrichment_modes": sorted(modes),
+    }
+
+
 def _normalize_news_item_for_hub(row: dict[str, Any]) -> dict[str, Any]:
     """Shape hub/staging rows for the /hub news inventory UI."""
     provenance = str(row.get("provenance") or "").strip().lower()
     if not provenance:
         provenance = "staging" if str(row.get("verification_status") or "") == "pending" else "distilled"
+    if provenance == "distilled_event":
+        provenance = "distilled"
 
     structured = _parse_json_dict(row.get("structured_summary"))
     event_meta = structured.get("event_meta") if isinstance(structured.get("event_meta"), dict) else {}
-    references = [r for r in (event_meta.get("references") or []) if isinstance(r, dict)]
+    references = [
+        _normalize_reference_for_hub(r)
+        for r in (event_meta.get("references") or [])
+        if isinstance(r, dict)
+    ]
 
     sources = [s for s in (row.get("sources") or []) if isinstance(s, dict)]
     url = str(row.get("url") or "").strip()
@@ -58,14 +144,20 @@ def _normalize_news_item_for_hub(row: dict[str, Any]) -> dict[str, Any]:
 
     if provenance == "staging" and not references:
         references = [
-            {
-                "ref_id": row.get("ref_id") or row.get("id") or row.get("canonical_story_id"),
-                "title": row.get("title") or "",
-                "url": url,
-                "source": row.get("source") or "staging",
-                "published_at": row.get("published_at") or "",
-            }
+            _normalize_reference_for_hub(
+                {
+                    "ref_id": row.get("ref_id") or row.get("id") or row.get("canonical_story_id"),
+                    "title": row.get("title") or "",
+                    "url": url,
+                    "source": row.get("source") or "staging",
+                    "published_at": row.get("published_at") or "",
+                    "article_enrichment": row.get("article_enrichment") or {},
+                    "structured_enrichment": row.get("structured_enrichment") or {},
+                }
+            )
         ]
+
+    enrichment_fields = _aggregate_enrichment_fields(references)
 
     ref_count = int(event_meta.get("ref_count") or len(references) or len(sources) or 1)
     consensus = row.get("consensus") if isinstance(row.get("consensus"), dict) else event_meta.get("consensus")
@@ -109,6 +201,10 @@ def _normalize_news_item_for_hub(row: dict[str, Any]) -> dict[str, Any]:
         "sources": sources[:12],
         "references": references[:20],
         "ref_count": ref_count,
+        "cause_indicators": enrichment_fields["cause_indicators"],
+        "future_events": enrichment_fields["future_events"],
+        "article_opinions": enrichment_fields["article_opinions"],
+        "enrichment_modes": enrichment_fields["enrichment_modes"],
         "timeline": [t for t in (timeline or []) if isinstance(t, dict)][:30],
         "consensus": consensus if isinstance(consensus, dict) else {},
         "predicted_impact": row.get("predicted_impact") or row.get("predicted") or {},

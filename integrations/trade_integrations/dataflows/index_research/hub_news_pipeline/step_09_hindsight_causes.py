@@ -154,6 +154,15 @@ def _snapped_session_day(
     return dates[idx]
 
 
+def _cap_session_day(frame: pd.DataFrame, day: str, cap_day: str) -> str | None:
+    dates = _trading_dates(frame)
+    idx = _session_index(dates, day, prefer="on_or_before")
+    cap_idx = _session_index(dates, cap_day, prefer="on_or_before")
+    if idx is None or cap_idx is None:
+        return None
+    return dates[min(idx, cap_idx)]
+
+
 def _nifty_return_pct(
     frame: pd.DataFrame,
     start_day: str,
@@ -272,7 +281,9 @@ def annotate_cause_indicator(
     dates = _trading_dates(frame)
     start_idx = dates.index(window_start)
     end_idx = min(len(dates) - 1, start_idx + max(sessions, 0))
-    window_end = min(dates[end_idx], as_of[:10])
+    window_end = _cap_session_day(frame, dates[end_idx], as_of)
+    if window_end is None:
+        return None
     if _parse_day(window_end) is None or _parse_day(window_end) < _parse_day(window_start):
         return None
 
@@ -329,9 +340,9 @@ def annotate_future_event(
         return None
 
     window_start = _session_window_end(frame, expected, sessions=-1) or expected
-    window_end = _session_window_end(frame, expected, sessions=post_sessions) or expected
-    end_day = min(window_end, as_of[:10])
-    if _parse_day(end_day) is None:
+    raw_window_end = _session_window_end(frame, expected, sessions=post_sessions) or expected
+    end_day = _cap_session_day(frame, raw_window_end, as_of)
+    if end_day is None:
         return None
 
     nifty_return = _nifty_return_pct(frame, window_start, end_day)

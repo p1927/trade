@@ -63,3 +63,88 @@ def test_recent_news_inventory_skips_staging_when_url_in_distilled(hub_tmp):
     assert "Unique staging only" in union_titles
     assert "Same story pending distill" not in staging_titles
     assert inventory.get("pending_count") == 2
+
+
+def test_normalize_news_item_includes_enrichment_fields():
+    from trade_integrations.hub_storage.hub_status import _normalize_news_item_for_hub
+
+    row = {
+        "canonical_story_id": "evt-enriched",
+        "provenance": "distilled_event",
+        "title": "RBI meets as FII sell",
+        "content_summary": "Markets weak ahead of policy.",
+        "published_at": "2026-03-15T10:00:00+00:00",
+        "verification_status": "approved",
+        "structured_summary": {
+            "event_meta": {
+                "references": [
+                    {
+                        "url": "https://news.example.com/rbi",
+                        "raw_title": "RBI meets",
+                        "structured_enrichment": {
+                            "enrichment_mode": "snippet_fallback",
+                            "cause_indicators": [
+                                {"factor": "fii_net_5d", "mechanism": "outflows", "direction_hint": "bearish"}
+                            ],
+                            "future_events": [
+                                {"event": "RBI MPC", "expected_date": "2026-03-20"}
+                            ],
+                            "article_opinions": [
+                                {"text": "NIFTY 25000", "reason_discarded": "article opinion not hub signal"}
+                            ],
+                        },
+                    }
+                ]
+            }
+        },
+    }
+    item = _normalize_news_item_for_hub(row)
+    assert item["provenance"] == "distilled"
+    assert len(item["cause_indicators"]) == 1
+    assert item["cause_indicators"][0]["factor"] == "fii_net_5d"
+    assert len(item["future_events"]) == 1
+    assert len(item["article_opinions"]) == 1
+    assert item["enrichment_modes"] == ["snippet_fallback"]
+    assert item["references"][0]["cause_indicators"]
+
+
+def test_normalize_reference_merges_article_enrichment_mode():
+    from trade_integrations.hub_storage.hub_status import _normalize_reference_for_hub
+
+    ref = _normalize_reference_for_hub(
+        {
+            "url": "https://news.example.com/a",
+            "structured_enrichment": {
+                "cause_indicators": [{"factor": "fii_net_5d"}],
+                "future_events": [],
+                "article_opinions": [],
+            },
+            "article_enrichment": {
+                "enrichment_mode": "full",
+                "cause_indicators": [],
+            },
+        }
+    )
+    assert ref["enrichment_mode"] == "full"
+    assert len(ref["cause_indicators"]) == 1
+
+
+def test_normalize_reference_falls_back_to_article_signals():
+    from trade_integrations.hub_storage.hub_status import _normalize_reference_for_hub
+
+    ref = _normalize_reference_for_hub(
+        {
+            "url": "https://news.example.com/b",
+            "structured_enrichment": {
+                "cause_indicators": [],
+                "future_events": [],
+                "article_opinions": [],
+            },
+            "article_enrichment": {
+                "enrichment_mode": "snippet_fallback",
+                "cause_indicators": [{"factor": "oil_brent", "direction_hint": "bearish"}],
+            },
+        }
+    )
+    assert ref["enrichment_mode"] == "snippet_fallback"
+    assert ref["cause_indicators"][0]["factor"] == "oil_brent"

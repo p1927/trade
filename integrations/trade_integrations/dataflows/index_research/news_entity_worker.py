@@ -857,6 +857,7 @@ def _persist_maintenance_manifest(*, ticker: str, result: dict[str, Any]) -> Non
         "staging_ttl_purge",
         "repair",
         "backfill",
+        "enrichment_backfill",
         "fact_adjudication",
         "wiki_backfill",
         "compact_events",
@@ -961,6 +962,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "staging_ttl_purge": staging_ttl,
             "repair": dict(skipped),
             "backfill": dict(skipped),
+            "enrichment_backfill": dict(skipped),
             "fact_adjudication": dict(skipped),
             "wiki_backfill": dict(skipped),
             "compact_events": dict(skipped),
@@ -1028,6 +1030,17 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
 
     repair = _safe_stage("repair", repair_leaked_distilled_summaries, ticker=ticker)
     backfill = _safe_stage("backfill", backfill_distilled_event_metadata, ticker=ticker)
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_10_backfill_maintainer import (
+        run_enrichment_backfill,
+    )
+
+    enrichment_backfill = _safe_stage(
+        "enrichment_backfill",
+        run_enrichment_backfill,
+        ticker=ticker,
+        lookback_days=min(lookback, 90),
+        limit=50,
+    )
     legacy_finalize = _safe_stage("legacy_finalize", _finalize_legacy_ssot_if_ready, ticker=ticker)
     fact_adjudication = _safe_stage(
         "fact_adjudication",
@@ -1109,6 +1122,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         staging_ttl,
         repair,
         backfill,
+        enrichment_backfill,
         fact_adjudication,
         wiki_backfill,
         compact_events,
@@ -1128,6 +1142,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         "staging_ttl_purge": staging_ttl,
         "repair": repair,
         "backfill": backfill,
+        "enrichment_backfill": enrichment_backfill,
         "fact_adjudication": fact_adjudication,
         "wiki_backfill": wiki_backfill,
         "compact_events": compact_events,
