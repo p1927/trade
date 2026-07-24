@@ -27,9 +27,10 @@ search:
     - json
 
 outgoing:
-  request_timeout: 15.0
-  max_request_timeout: 25.0
+  request_timeout: 8.0
+  max_request_timeout: 15.0
   enable_http2: false
+  retries: 1
 
 categories_as_tabs:
   general: General
@@ -43,5 +44,6 @@ engines:
       - general
       - finance
       - news
-    timeout: 15.0
+    timeout: 8.0
     enable_http2: false
+    retries: 1

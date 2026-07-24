@@ -127,7 +127,7 @@ def search_finance(
     (suffix rules). Otherwise use the global TRUSTED_FINANCE_DOMAINS filter.
     Optional ``stats`` receives ``raw_count`` (unique URLs before domain filter).
     """
-    category_attempts = [categories, "general", "news"]
+    category_attempts = ["news", "general", "finance"]
     engine_attempts = parse_engine_list(searxng_finance_engines()) or ["bing"]
     seen_urls: set[str] = set()
     raw_seen: set[str] = set()
@@ -138,11 +138,13 @@ def search_finance(
         for engine in engine_attempts:
             for attempt in range(2):
                 try:
+                    # Bing WEB ignores time_range (JS-only filters). Bing News supports day/week/month.
+                    tr = time_range if cat == "news" and time_range in {"day", "month", "year"} else None
                     payload = search_json(
                         query,
                         categories=cat,
                         engines=engine,
-                        time_range=time_range,
+                        time_range=tr,
                         timeout=REQUEST_TIMEOUT,
                     )
                 except RequestException as exc:
