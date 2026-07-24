@@ -254,6 +254,25 @@ def emit_watch_signal(
     )
 
 
+def emit_vibe_dispatch_skipped(
+    *,
+    agent_id: str,
+    skip_reason: str,
+    symbol: str = "",
+    signal: str = "",
+) -> None:
+    """Per-alert skip telemetry; feeds skip-storm detection via emitter hooks."""
+    safe_emit(
+        "watch",
+        "vibe_dispatch_skipped",
+        level="warn",
+        agent_id=agent_id,
+        skip_reason=skip_reason,
+        symbol=symbol,
+        signal=signal,
+    )
+
+
 def emit_poll_tick(
     *,
     agent_id: str | None,

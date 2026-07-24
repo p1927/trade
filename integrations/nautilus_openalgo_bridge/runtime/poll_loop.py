@@ -88,16 +88,31 @@ def _dispatch_alerts(
 
     outside_hours = not allow_vibe_alert_outside_market_hours()
 
+    def _skip_outside_hours(alert) -> None:
+        try:
+            from trade_integrations.observability.hooks import emit_vibe_dispatch_skipped
+
+            emit_vibe_dispatch_skipped(
+                agent_id=agent_id,
+                skip_reason="outside_market_hours",
+                symbol=str(getattr(alert, "symbol", "") or ""),
+                signal=str(getattr(getattr(alert, "signal", None), "value", "") or ""),
+            )
+        except ImportError:
+            pass
+
     for alert in alerts:
         if alert.signal == BridgeSignal.EXIT_NOW:
             dispatch_results.append(dispatch_exit_intent(agent_id, alert))
         elif alert.signal == BridgeSignal.THESIS_BROKEN:
             if outside_hours and not is_agent_watch_session_open(agent_id):
+                _skip_outside_hours(alert)
                 dispatch_results.append({"status": "skipped", "reason": "outside_market_hours"})
                 continue
             dispatch_results.append(dispatch_thesis_alert_sync(agent_id, alert, quotes=quotes))
         elif alert.signal == BridgeSignal.REVIEW_NEEDED:
             if outside_hours and not is_agent_watch_session_open(agent_id):
+                _skip_outside_hours(alert)
                 dispatch_results.append({"status": "skipped", "reason": "outside_market_hours"})
                 continue
             dispatch_results.append(dispatch_watch_alert_sync(agent_id, alert, quotes=quotes))
@@ -494,12 +509,9 @@ def run_poll_loop(
                 if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
                     tick_skipped_outside += 1
                     try:
-                        from trade_integrations.observability.hooks import safe_emit
+                        from trade_integrations.observability.hooks import emit_vibe_dispatch_skipped
 
-                        safe_emit(
-                            "watch",
-                            "vibe_dispatch_skipped",
-                            level="warn",
+                        emit_vibe_dispatch_skipped(
                             agent_id=agent_id,
                             skip_reason="outside_market_hours",
                             symbol=alert.symbol,
@@ -517,6 +529,17 @@ def run_poll_loop(
             if alert.signal != BridgeSignal.REVIEW_NEEDED:
                 continue
             if spec.gate and (now - last_vibe_dispatch_at) < gate_minutes * 60:
+                try:
+                    from trade_integrations.observability.hooks import emit_vibe_dispatch_skipped
+
+                    emit_vibe_dispatch_skipped(
+                        agent_id=agent_id,
+                        skip_reason="skip_if_unchanged_gate",
+                        symbol=alert.symbol,
+                        signal=alert.signal.value,
+                    )
+                except ImportError:
+                    pass
                 continue
             from nautilus_openalgo_bridge.config import allow_vibe_alert_outside_market_hours
             from nautilus_openalgo_bridge.market_hours import is_agent_watch_session_open
@@ -524,12 +547,9 @@ def run_poll_loop(
             if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
                 tick_skipped_outside += 1
                 try:
-                    from trade_integrations.observability.hooks import safe_emit
+                    from trade_integrations.observability.hooks import emit_vibe_dispatch_skipped
 
-                    safe_emit(
-                        "watch",
-                        "vibe_dispatch_skipped",
-                        level="warn",
+                    emit_vibe_dispatch_skipped(
                         agent_id=agent_id,
                         skip_reason="outside_market_hours",
                         symbol=alert.symbol,

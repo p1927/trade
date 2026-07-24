@@ -74,6 +74,17 @@ class BridgeSignalActor(Actor):
                 return
             if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
                 self.log.info("skip Vibe dispatch — outside market hours")
+                try:
+                    from trade_integrations.observability.hooks import emit_vibe_dispatch_skipped
+
+                    emit_vibe_dispatch_skipped(
+                        agent_id=agent_id,
+                        skip_reason="outside_market_hours",
+                        symbol=str(payload.get("symbol") or ""),
+                        signal=SIGNAL_REVIEW,
+                    )
+                except ImportError:
+                    pass
                 return
             self._dispatch_vibe_alert(agent_id, payload)
         elif name == SIGNAL_THESIS:
@@ -81,6 +92,17 @@ class BridgeSignalActor(Actor):
                 return
             if not allow_vibe_alert_outside_market_hours() and not is_agent_watch_session_open(agent_id):
                 self.log.info("skip thesis dispatch — outside market hours")
+                try:
+                    from trade_integrations.observability.hooks import emit_vibe_dispatch_skipped
+
+                    emit_vibe_dispatch_skipped(
+                        agent_id=agent_id,
+                        skip_reason="outside_market_hours",
+                        symbol=str(payload.get("symbol") or ""),
+                        signal=SIGNAL_THESIS,
+                    )
+                except ImportError:
+                    pass
                 return
             self._dispatch_thesis_alert(agent_id, payload)
         elif name == SIGNAL_EXIT:
