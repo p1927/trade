@@ -275,7 +275,9 @@ def resolve_issue(issue_id: str) -> bool:
         return True
 
 
-def open_issue_count() -> int:
+def open_issue_count(*, module: str | None = None) -> int:
     with _lock:
         _load_open_from_disk()
+        if module:
+            return sum(1 for issue in _open_cache.values() if issue.module == module)
         return len(_open_cache)
