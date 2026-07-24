@@ -99,6 +99,18 @@ def _bootstrap_watch_spec_ready(agent: dict) -> bool:
     ):
         if _coerce_watch_rules(spec_source.get("rules")):
             return True
+
+    from trade_integrations.autonomous_agents.watch_compiler import agent_has_user_watch_conditions
+
+    if agent_has_user_watch_conditions(agent):
+        return True
+
+    schedules = dict(agent.get("schedules") or {})
+    mc = agent.get("mandate_config") if isinstance(agent.get("mandate_config"), dict) else {}
+    if isinstance(mc, dict):
+        schedules.update(dict(mc.get("schedules") or {}))
+    if schedules.get("watch_ms"):
+        return True
     return False
 
 

@@ -169,6 +169,14 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _proposal_mandate_config_dict(mandate_cfg: MandateConfig, kwargs: dict[str, Any]) -> dict[str, Any]:
+    mc = mandate_cfg.to_dict()
+    raw_intent = kwargs.get("intent")
+    if isinstance(raw_intent, dict):
+        mc["intent"] = raw_intent
+    return mc
+
+
 def _build_mandate_config(
     draft: dict[str, Any],
     *,
@@ -378,12 +386,43 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     if resolved_instruments is None and "allowed_instruments" not in missing:
         missing.append("allowed_instruments")
 
+    intent_needs = kwargs.get("intent_needs_clarification")
+    if isinstance(intent_needs, list):
+        for field in intent_needs:
+            key = str(field).strip()
+            if key and key not in missing:
+                missing.append(key)
+
+    if isinstance(kwargs.get("intent"), dict):
+        draft.setdefault("mandate_config", {})
+        if isinstance(draft.get("mandate_config"), dict):
+            draft["mandate_config"] = {**draft["mandate_config"], "intent": kwargs["intent"]}
+
     mandate_cfg = _build_mandate_config(
         draft,
         mandate_text=mandate_text,
         execution_market=exec_market,
         allowed_instruments=resolved_instruments,
     )
+
+    schedule_watch_ms = draft["watch_interval_min"] * 60_000
+    schedule_research_ms = draft["research_interval_min"] * 60_000
+    watch_spec = mandate_cfg.watch_spec
+    raw_intent = kwargs.get("intent")
+    if isinstance(raw_intent, dict):
+        from trade_integrations.autonomous_agents.intent_schema import AgentIntent
+        from trade_integrations.autonomous_agents.watch_compiler import compile_watch_from_intent
+
+        intent_obj = AgentIntent.from_dict(raw_intent)
+        sched_patch, watch_spec = compile_watch_from_intent(intent_obj, symbols=draft["symbols"])
+        if sched_patch.get("watch_ms"):
+            schedule_watch_ms = int(sched_patch["watch_ms"])
+            draft["watch_interval_min"] = max(1, schedule_watch_ms // 60_000)
+        if sched_patch.get("research_ms"):
+            schedule_research_ms = int(sched_patch["research_ms"])
+            draft["research_interval_min"] = max(5, schedule_research_ms // 60_000)
+        mandate_cfg.watch_spec = watch_spec
+
     profile = resolve_profile(
         agent={
             "symbols": draft["symbols"],
@@ -418,11 +457,11 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
             "market_hours_only": mandate_cfg.market_hours_only,
             "max_open_positions": mandate_cfg.max_open_positions,
         },
-        "mandate_config": mandate_cfg.to_dict(),
-        "watch_spec": mandate_cfg.watch_spec,
+        "mandate_config": _proposal_mandate_config_dict(mandate_cfg, kwargs),
+        "watch_spec": watch_spec,
         "schedules": {
-            "watch_ms": draft["watch_interval_min"] * 60_000,
-            "research_ms": draft["research_interval_min"] * 60_000,
+            "watch_ms": schedule_watch_ms,
+            "research_ms": schedule_research_ms,
         },
         "alert_rules": mandate_cfg.alert_rules.to_dict(),
         "vibe_session_id": draft.get("vibe_session_id"),

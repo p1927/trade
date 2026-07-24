@@ -46,7 +46,7 @@ def test_registry_add_and_list(hub_tmp: Path, log_dir: Path, monkeypatch: pytest
     from trade_integrations.watch_registry.store import create_watch
 
     monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
-    monkeypatch.setattr(nw, "_stop_existing", lambda: None)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
     monkeypatch.setattr(nw, "_read_pid", lambda: None)
 
     for aid in ("aa_one", "aa_two"):
@@ -80,7 +80,7 @@ def test_registry_remove(hub_tmp: Path, log_dir: Path, monkeypatch: pytest.Monke
     from trade_integrations.watch_registry.store import create_watch
 
     monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
-    monkeypatch.setattr(nw, "_stop_existing", lambda: None)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
     monkeypatch.setattr(nw, "_read_pid", lambda: None)
 
     save_agent(
@@ -113,7 +113,7 @@ def test_registry_persisted_to_file(hub_tmp: Path, log_dir: Path, monkeypatch: p
     from trade_integrations.watch_registry.store import create_watch
 
     monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
-    monkeypatch.setattr(nw, "_stop_existing", lambda: None)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
     monkeypatch.setattr(nw, "_read_pid", lambda: None)
 
     save_agent(

@@ -54,6 +54,23 @@ def _infer_revision_source(agent: dict[str, Any]) -> str:
 def _normalize_agent_watch_spec(agent: dict[str, Any]) -> dict[str, Any] | None:
     """Resolve watch_spec with coerced rules; build from thesis strategy when missing."""
     from trade_integrations.autonomous_agents.bootstrap import _coerce_watch_rules
+    from trade_integrations.autonomous_agents.intent_store import load_intent_from_agent
+    from trade_integrations.autonomous_agents.watch_compiler import (
+        agent_has_user_watch_conditions,
+        compile_watch_from_intent,
+    )
+
+    if agent_has_user_watch_conditions(agent):
+        intent = load_intent_from_agent(agent)
+        if intent:
+            _, compiled = compile_watch_from_intent(
+                intent,
+                symbols=list(agent.get("symbols") or ["NIFTY"]),
+            )
+            rules = _coerce_watch_rules(compiled.get("rules"))
+            spec = dict(compiled)
+            spec["rules"] = rules
+            return spec
 
     for raw in (
         dict(agent.get("watch_spec") or {}),

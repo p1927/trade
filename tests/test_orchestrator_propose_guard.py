@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+AGENT_SRC = ROOT / "vibetrading" / "agent" / "src"
+if str(AGENT_SRC) not in sys.path:
+    sys.path.insert(0, str(AGENT_SRC))
 
 
 def test_assistant_claims_proposal_ready_detects_card_phrases() -> None:
@@ -16,7 +23,7 @@ def test_assistant_claims_proposal_ready_detects_card_phrases() -> None:
     assert not assistant_claims_proposal_ready("Which index do you prefer?")
 
 
-def test_nifty_paper_trade_defaults_to_options(agents_hub) -> None:
+def test_nifty_paper_trade_requires_instrument_clarification(agents_hub) -> None:
     from trade_integrations.autonomous_agents.orchestrator_intent import build_auto_propose_kwargs
 
     kwargs = build_auto_propose_kwargs(
@@ -26,15 +33,17 @@ def test_nifty_paper_trade_defaults_to_options(agents_hub) -> None:
     )
     assert kwargs is not None
     assert kwargs["symbols"] == ["NIFTY"]
-    assert kwargs.get("allowed_instruments") == ["options"]
+    assert "allowed_instruments" not in kwargs or kwargs.get("allowed_instruments") != ["options"]
+    assert "instruments" in (kwargs.get("intent_needs_clarification") or [])
 
 
-def test_auto_propose_nifty_without_options_keyword_is_ready(agents_hub, monkeypatch) -> None:
+def test_auto_propose_nifty_without_options_keyword_is_incomplete(agents_hub, monkeypatch) -> None:
     from trade_integrations.autonomous_agents.orchestrator_intent import (
         maybe_auto_propose_after_orchestrator_turn,
     )
 
     monkeypatch.setenv("ORCHESTRATOR_AUTO_PROPOSE", "1")
+    monkeypatch.setenv("INTENT_EXTRACTOR_LLM", "0")
     result = maybe_auto_propose_after_orchestrator_turn(
         orchestrator_session_id="orch_ready",
         user_message="Create autonomous agent for NIFTY paper trade ₹20k",
@@ -42,9 +51,9 @@ def test_auto_propose_nifty_without_options_keyword_is_ready(agents_hub, monkeyp
         tools_called=[],
     )
     assert result is not None
-    assert result["status"] == "ready"
+    assert result["status"] == "incomplete"
     assert result["proposal"]["symbols"] == ["NIFTY"]
-    assert result["proposal"]["mandate_config"]["allowed_instruments"] == ["options"]
+    assert "allowed_instruments" in (result["proposal"].get("missing_fields") or [])
 
 
 def test_emit_autonomous_proposal_emits_incomplete() -> None:
@@ -116,5 +125,23 @@ def agents_hub(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "trade_integrations.context.hub.get_hub_dir",
         lambda: hub,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.proposals.build_stack_health",
+        lambda: {"vibe_scheduler": "ok"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.execution.profile.resolve_profile",
+        lambda **kwargs: type(
+            "P",
+            (),
+            {
+                "backend": "openalgo",
+                "market": "IN",
+                "allowed_instruments": ("equity",),
+                "mode": "paper",
+                "prompt_fragment_id": "in_equity_paper",
+            },
+        )(),
     )
     return hub

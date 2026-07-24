@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 _LAUNCH_VERIFY_SEC = 2.0
 
 
+class NautilusWatchLifecycleError(RuntimeError):
+    """Raised when purge/start cannot reach a single desired watch process state."""
+
+
 def _fetch_market_context_generation(agent_id: str) -> str | None:
     """Fetch authoritative context_generation once for handoff stamping."""
     agent_id = str(agent_id or "").strip()
@@ -125,6 +129,54 @@ def _read_pid() -> int | None:
         return int(path.read_text(encoding="utf-8").strip())
     except ValueError:
         return None
+
+
+def list_live_watch_pids() -> list[int]:
+    """Live run_watch_node processes scoped to this trade repo."""
+    return sorted(
+        {
+            pid
+            for pid in _pgrep_watch_pids()
+            if _process_in_trade_repo(pid) and _process_alive(pid)
+        }
+    )
+
+
+def _write_service_claim(pid: int, command: str) -> None:
+    claims_dir = _log_dir() / "claims"
+    claims_dir.mkdir(parents=True, exist_ok=True)
+    claim = claims_dir / "nautilus-watch.claim"
+    started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    claim.write_text(
+        f"pid={pid}\nport=\nroot={_trade_root()}\nstarted_at={started}\ncommand={command}\n",
+        encoding="utf-8",
+    )
+
+
+def _launch_command_string(*, use_registry: bool, agent_id: str | None = None) -> str:
+    if use_registry and get_registry_agent_ids():
+        return "nautilus watch --registry"
+    if agent_id:
+        return f"nautilus watch --agent-id {agent_id}"
+    agents = get_registry_agent_ids()
+    if agents:
+        return f"nautilus watch --agent-id {agents[0]}"
+    return "nautilus watch"
+
+
+def _finalize_watch_launch(*, command: str, expected_pid: int | None = None) -> int:
+    """Bind pidfile, registry, and claim; fail if duplicate live nodes exist."""
+    pid = expected_pid if expected_pid is not None else _read_pid()
+    if pid is None or not _process_alive(pid):
+        raise NautilusWatchLifecycleError("Nautilus watch failed to stay up")
+    survivors = list_live_watch_pids()
+    if survivors and (len(survivors) > 1 or survivors[0] != pid):
+        raise NautilusWatchLifecycleError(f"duplicate Nautilus watch processes: {survivors}")
+    registry = load_registry()
+    registry["node_pid"] = pid
+    save_registry(registry)
+    _write_service_claim(pid, command)
+    return pid
 
 
 def _read_bound_agent_id() -> str | None:
@@ -328,26 +380,142 @@ def _watch_launch_script() -> Path:
     return script
 
 
-def _stop_existing() -> None:
+_WATCH_ORPHAN_PATTERN = "nautilus_openalgo_bridge.runtime.run_watch_node"
+_GRACE_KILL_WAIT_SEC = 7.5
+
+
+def _process_cmdline(pid: int) -> str:
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        return (out.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _process_in_trade_repo(pid: int) -> bool:
+    root = str(_trade_root())
+    args = _process_cmdline(pid)
+    if args and root in args:
+        return True
+    if args and any(token in args for token in ("cli._legacy", "cli.main", "app.py", "/vite")):
+        return True
+    try:
+        out = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        for line in (out.stdout or "").splitlines():
+            if line.startswith("n") and line[1:].startswith(root):
+                return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return False
+
+
+def _pgrep_watch_pids() -> list[int]:
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", _WATCH_ORPHAN_PATTERN],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[int] = []
+    for line in (out.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            pids.append(int(line))
+    return pids
+
+
+def _kill_pid_graceful(pid: int) -> None:
+    if not _process_alive(pid):
+        return
+    try:
+        os.kill(pid, 15)
+    except OSError:
+        return
+    deadline = time.monotonic() + _GRACE_KILL_WAIT_SEC
+    while time.monotonic() < deadline:
+        if not _process_alive(pid):
+            return
+        time.sleep(0.5)
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+
+
+def purge_nautilus_watch_processes() -> dict[str, Any]:
+    """Stop every Nautilus watch node for this repo (pidfile, registry pid, pgrep orphans)."""
+    reconcile_stale_watch_pid()
+    targets: set[int] = set()
     pid = _read_pid()
-    if pid is not None and _process_alive(pid):
-        try:
-            os.kill(pid, 15)
-        except OSError:
-            pass
+    if pid is not None:
+        targets.add(pid)
+    registry = load_registry()
+    reg_pid = registry.get("node_pid")
+    if isinstance(reg_pid, int):
+        targets.add(reg_pid)
+    for orphan in _pgrep_watch_pids():
+        if _process_in_trade_repo(orphan):
+            targets.add(orphan)
+
+    killed: list[int] = []
+    for target in sorted(targets):
+        if _process_alive(target):
+            logger.info("purging Nautilus watch process pid %s", target)
+            _kill_pid_graceful(target)
+            killed.append(target)
+
     _pidfile().unlink(missing_ok=True)
     _agent_id_file().unlink(missing_ok=True)
+    claim = _log_dir() / "claims" / "nautilus-watch.claim"
+    claim.unlink(missing_ok=True)
     registry = load_registry()
     registry["node_pid"] = None
     save_registry(registry)
 
+    time.sleep(0.5)
+    for orphan in _pgrep_watch_pids():
+        if _process_in_trade_repo(orphan) and _process_alive(orphan):
+            logger.info("purging surviving Nautilus watch orphan pid %s", orphan)
+            _kill_pid_graceful(orphan)
+            killed.append(orphan)
 
-def _launch_watch(*, use_registry: bool = True) -> None:
+    survivors = list_live_watch_pids()
+    if survivors:
+        logger.error("Nautilus purge incomplete — survivors: %s", survivors)
+    return {"purged": not survivors, "killed_pids": killed, "survivors": survivors}
+
+
+def _stop_existing() -> None:
+    purge_nautilus_watch_processes()
+
+
+def _launch_watch(*, use_registry: bool = True, agent_id: str | None = None) -> int:
+    if use_registry and not get_registry_agent_ids():
+        logger.info("skip Nautilus launch — no agents in registry")
+        return 0
     root = _trade_root()
     script = _watch_launch_script()
     cmd = [str(script)]
     if use_registry and get_registry_agent_ids():
         cmd.append("--registry")
+    elif agent_id:
+        cmd.extend(["--agent-id", agent_id])
     else:
         agents = get_registry_agent_ids()
         if agents:
@@ -363,11 +531,6 @@ def _launch_watch(*, use_registry: bool = True) -> None:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    registry = load_registry()
-    registry["node_pid"] = proc.pid
-    save_registry(registry)
-    _stamp_registry_handoff_contexts()
-
     time.sleep(_LAUNCH_VERIFY_SEC)
     if not _process_alive(proc.pid):
         tail = ""
@@ -376,13 +539,82 @@ def _launch_watch(*, use_registry: bool = True) -> None:
             tail = "\n".join(lines[-5:])
         except OSError:
             pass
-        _pidfile().unlink(missing_ok=True)
+        registry = load_registry()
         registry["node_pid"] = None
         save_registry(registry)
         raise RuntimeError(
             f"Nautilus watch exited immediately (pid {proc.pid}). "
             f"Check {log_path}. Recent log:\n{tail}"
         )
+    command = _launch_command_string(use_registry=use_registry, agent_id=agent_id)
+    pid = _finalize_watch_launch(command=command, expected_pid=proc.pid)
+    _stamp_registry_handoff_contexts()
+    return pid
+
+
+def run_stack_nautilus_start(*, agent_id: str | None = None, skip_adopt: bool = False) -> dict[str, Any]:
+    """Single stack/heal entry for start/adopt under the cross-process lifecycle lock."""
+    if not _watch_enabled():
+        return {"status": "skipped", "reason": "disabled"}
+
+    from trade_integrations.watch_registry.sync_lock import watch_registry_mutation_lock
+    from trade_integrations.watch_registry.store import _sync_nautilus_registry_from_watches_locked
+
+    agent_id = str(agent_id or "").strip() or None
+
+    with watch_registry_mutation_lock():
+        reconcile_stale_watch_pid()
+        existing = _read_pid()
+        bound = _read_bound_agent_id()
+
+        if (
+            existing is not None
+            and _process_alive(existing)
+            and agent_id
+            and bound
+            and bound != agent_id
+        ):
+            purge = purge_nautilus_watch_processes()
+            if purge.get("survivors"):
+                return {"status": "error", "reason": "purge_incomplete", **purge}
+            existing = None
+
+        if not skip_adopt and existing is not None and _process_alive(existing):
+            if get_registry_agent_ids():
+                command = "nautilus watch --registry"
+                _finalize_watch_launch(command=command, expected_pid=existing)
+                return {"status": "ok", "pid": existing, "adopted": True}
+            if agent_id and not bound:
+                _agent_id_file().write_text(agent_id, encoding="utf-8")
+                command = f"nautilus watch --agent-id {agent_id}"
+                _finalize_watch_launch(command=command, expected_pid=existing)
+                return {"status": "ok", "pid": existing, "adopted": True}
+            command = "nautilus watch"
+            _finalize_watch_launch(command=command, expected_pid=existing)
+            return {"status": "ok", "pid": existing, "adopted": True}
+
+        if skip_adopt and existing is not None and _process_alive(existing):
+            purge = purge_nautilus_watch_processes()
+            if purge.get("survivors"):
+                return {"status": "error", "reason": "purge_incomplete", **purge}
+
+        _sync_nautilus_registry_from_watches_locked(restart_if_changed=False)
+        registry_agents = get_registry_agent_ids()
+        if not registry_agents and not agent_id:
+            return {"status": "skipped", "reason": "no_agents"}
+
+        try:
+            pid = _launch_watch(
+                use_registry=bool(registry_agents),
+                agent_id=agent_id if not registry_agents else None,
+            )
+        except Exception as exc:
+            logger.exception("stack Nautilus start failed")
+            return {"status": "error", "reason": "launch_failed", "error": str(exc)}
+
+        if not pid:
+            return {"status": "skipped", "reason": "no_agents"}
+        return {"status": "ok", "pid": pid, "adopted": False}
 
 
 def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere: bool = True) -> str | None:

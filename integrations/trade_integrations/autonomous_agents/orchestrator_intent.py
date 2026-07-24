@@ -205,27 +205,6 @@ def orchestrator_has_propose_intent(user_message: str, assistant_text: str = "")
     return False
 
 
-def _should_default_index_options(symbols: list[str], text: str) -> bool:
-    """Default NIFTY/BANKNIFTY autonomous agents to options when instrument type is ambiguous."""
-    from trade_integrations.autonomous_agents.mandate_config import detect_observe_intent
-
-    if detect_observe_intent(text):
-        return False
-    sym0 = str(symbols[0] if symbols else "").strip().upper()
-    if sym0 not in _INDEX_SYMBOLS:
-        return False
-    lower = (text or "").lower()
-    if any(w in lower for w in ("equity", "stock", "shares", "etf", "not options", "no options")):
-        return False
-    if _instruments_clarified(text):
-        return True
-    return bool(
-        _has_create_intent(text)
-        or _has_symbol_plus_goal_intent(text)
-        or _PAPER_TRADE_RE.search(text)
-        or (_AUTONOMOUS_RE.search(text) and re.search(r"\b(agent|trade|watch)\b", text, re.I))
-    )
-
 
 def _default_symbol(*, text: str) -> str | None:
     if _US_HINT_RE.search(text) and not _IN_HINT_RE.search(text):
@@ -310,7 +289,7 @@ def build_auto_propose_kwargs(
 
     instruments_missing = latest and "allowed_instruments" in list(latest.get("missing_fields") or [])
     if instruments_missing and not _instruments_clarified(user_message):
-        if not (_should_default_index_options(symbols, text) or adjust_intent):
+        if not adjust_intent:
             return None
 
     if not (create_intent or symbol_goal_intent or adjust_intent or hallucinated):
@@ -367,9 +346,65 @@ def build_auto_propose_kwargs(
     if not kwargs.get("name"):
         kwargs["name"] = f"{sym0} autonomous"
 
-    if _should_default_index_options(symbols, text) and "allowed_instruments" not in kwargs:
-        kwargs["allowed_instruments"] = ["options"]
+    kwargs = _merge_intent_into_propose_kwargs(
+        kwargs,
+        user_message=user_message,
+        orchestrator_session_id=orchestrator_session_id,
+        latest=latest,
+    )
+    return kwargs
 
+
+def _load_prior_intent_from_latest(latest: dict[str, Any] | None) -> Any:
+    if not latest:
+        return None
+    mc = latest.get("mandate_config") if isinstance(latest.get("mandate_config"), dict) else {}
+    from trade_integrations.autonomous_agents.intent_store import load_intent_from_mandate_config
+
+    return load_intent_from_mandate_config(mc)
+
+
+def _merge_intent_into_propose_kwargs(
+    kwargs: dict[str, Any],
+    *,
+    user_message: str,
+    orchestrator_session_id: str,
+    latest: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Unified intent extraction — overrides legacy regex fields when explicit."""
+    try:
+        from trade_integrations.autonomous_agents.intent_extractor import extract_agent_intent
+        from trade_integrations.autonomous_agents.intent_merge import intent_to_propose_kwargs
+        from trade_integrations.autonomous_agents.mandate_config import observe_mandate_text
+
+        prior = _load_prior_intent_from_latest(latest)
+        result = extract_agent_intent(user_message, prior=prior, prefer_fast_path=True)
+        intent = result.intent
+        mapped = intent_to_propose_kwargs(intent)
+
+        for key, value in mapped.items():
+            if key == "intent":
+                kwargs["intent"] = value
+                continue
+            if value is None:
+                continue
+            if key == "allowed_instruments" and intent.needs_clarification:
+                if "instruments" in intent.needs_clarification:
+                    kwargs.pop("allowed_instruments", None)
+                    continue
+            kwargs[key] = value
+
+        if intent.engagement == "observe":
+            sym = (intent.symbols or kwargs.get("symbols") or ["NIFTY"])[0]
+            kwargs["agent_mode"] = "observe"
+            kwargs["mandate"] = observe_mandate_text(str(sym))
+        elif intent.clarified.get("engagement") and intent.engagement == "trade":
+            kwargs.pop("agent_mode", None)
+
+        kwargs["intent_source"] = result.source
+        kwargs["intent_needs_clarification"] = list(intent.needs_clarification or [])
+    except Exception:
+        logger.debug("intent merge into auto-propose kwargs failed", exc_info=True)
     return kwargs
 
 def maybe_auto_propose_after_orchestrator_turn(

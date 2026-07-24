@@ -418,10 +418,25 @@ def mcp_set_watch_spec(
         return {"status": "error", "error": f"agent not found: {agent_id}"}
     profile = resolve_profile(agent=agent)
 
+    from trade_integrations.autonomous_agents.watch_compiler import agent_has_user_watch_conditions
+
     explicit_rules = _has_explicit_watch_rules(watch_spec)
     strategy_name = None
-    if not explicit_rules:
+    if not explicit_rules and not agent_has_user_watch_conditions(agent):
         strategy_name = strategy or (watch_spec or {}).get("strategy") or (agent.get("thesis") or {}).get("strategy")
+    elif not explicit_rules and agent_has_user_watch_conditions(agent):
+        from trade_integrations.autonomous_agents.intent_schema import AgentIntent
+        from trade_integrations.autonomous_agents.intent_store import load_intent_from_agent
+        from trade_integrations.autonomous_agents.watch_compiler import compile_watch_from_intent
+
+        intent = load_intent_from_agent(agent)
+        if intent:
+            _, watch_spec = compile_watch_from_intent(
+                intent,
+                symbols=list(agent.get("symbols") or ["NIFTY"]),
+                spot=spot,
+            )
+            explicit_rules = _has_explicit_watch_rules(watch_spec)
 
     if strategy_name and not explicit_rules:
         from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent

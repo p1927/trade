@@ -475,6 +475,8 @@ def primary_instrument_from_mandate(
 ) -> PrimaryInstrument:
     """Choose primary instrument class when mandate lists both options and equity."""
     allowed = {str(x).strip().lower() for x in (mc.allowed_instruments or []) if str(x).strip()}
+    if "futures" in allowed and "options" not in allowed:
+        return "equity"
     if allowed == {"equity"} or (allowed and "options" not in allowed):
         return "equity"
     if allowed == {"options"} or (allowed and "equity" not in allowed):
@@ -570,7 +572,26 @@ def resolve_mandate_config(
             alert_spot_move_pct=alert_spot_move_pct,
         )
 
-    if not cfg.watch_spec.get("rules"):
+    has_stored_intent = isinstance(stored, dict) and isinstance(stored.get("intent"), dict)
+    if has_stored_intent:
+        from trade_integrations.autonomous_agents.intent_merge import instruments_to_allowed_instruments
+        from trade_integrations.autonomous_agents.intent_mandate import (
+            apply_intent_to_mandate,
+            intent_suppresses_default_spot_alert,
+        )
+        from trade_integrations.autonomous_agents.intent_schema import AgentIntent
+        from trade_integrations.autonomous_agents.watch_compiler import compile_watch_from_intent
+
+        intent = AgentIntent.from_dict(stored["intent"])
+        cfg = apply_intent_to_mandate(cfg, intent)
+        _, compiled = compile_watch_from_intent(intent, symbols=sym_list)
+        cfg.watch_spec = compiled
+        if intent_suppresses_default_spot_alert(intent):
+            cfg.alert_rules.spot_move_pct = 0.0
+        allowed_from_intent = instruments_to_allowed_instruments(intent.instruments)
+        if allowed_from_intent:
+            cfg.allowed_instruments = allowed_from_intent
+    elif not cfg.watch_spec.get("rules"):
         cfg.watch_spec = to_watch_spec(cfg, symbols=sym_list)
 
     explicit_from_stored: list[str] | None = None
@@ -579,18 +600,19 @@ def resolve_mandate_config(
         if isinstance(raw, list) and raw:
             explicit_from_stored = [str(x) for x in raw]
 
-    inferred = _infer_allowed_instruments(mandate_text, sym_list, is_us=is_us)
-    if inferred is not None:
-        cfg.allowed_instruments = inferred
-    else:
-        resolved = resolve_allowed_instruments(
-            sym_list,
-            mandate_text,
-            execution_market="US" if is_us else "IN",
-            explicit=explicit_from_stored,
-        )
-        if resolved is not None:
-            cfg.allowed_instruments = resolved
+    if not has_stored_intent:
+        inferred = _infer_allowed_instruments(mandate_text, sym_list, is_us=is_us)
+        if inferred is not None:
+            cfg.allowed_instruments = inferred
+        else:
+            resolved = resolve_allowed_instruments(
+                sym_list,
+                mandate_text,
+                execution_market="US" if is_us else "IN",
+                explicit=explicit_from_stored,
+            )
+            if resolved is not None:
+                cfg.allowed_instruments = resolved
 
     return cfg
 
