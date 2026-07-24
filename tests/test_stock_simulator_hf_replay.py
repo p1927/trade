@@ -22,6 +22,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(autouse=True)
 def _sim_env(monkeypatch):
     monkeypatch.setenv("STOCK_SIMULATOR_MODE", "replay")
+    monkeypatch.setenv("NSE_REPLAY_WEEK_MODE", "0")
     monkeypatch.setenv("NSE_REPLAY_DATE", "2024-04-15")
     monkeypatch.setenv("NSE_REPLAY_TIME", "10:30")
     monkeypatch.setenv("NSE_REPLAY_SPEED", "0")
@@ -76,6 +77,32 @@ def test_replay_service_banknifty_option_chain_uses_hf():
     assert chain["underlying"] == "BANKNIFTY"
     assert len(chain["chain"]) == 15  # 7 each side + ATM
     assert chain["simulated"] is True
+
+
+def test_nifty_option_intraday_ltp_changes():
+    from trade_integrations.stock_simulator.options.replay_store import OptionsReplayStore
+
+    store = OptionsReplayStore(REPO / "data/nse/historic_data")
+    chain_early = store.chain_at(
+        underlying="NIFTY",
+        exchange="NSE_INDEX",
+        spot=24000.0,
+        sim_ts=datetime(2026, 7, 2, 10, 30, tzinfo=IST),
+        strike_count=3,
+    )
+    chain_later = store.chain_at(
+        underlying="NIFTY",
+        exchange="NSE_INDEX",
+        spot=24000.0,
+        sim_ts=datetime(2026, 7, 2, 11, 0, tzinfo=IST),
+        strike_count=3,
+    )
+    assert chain_early is not None and chain_later is not None
+    assert chain_early["source"] == "hf_replay"
+    early_atm = chain_early["chain"][len(chain_early["chain"]) // 2]
+    later_atm = chain_later["chain"][len(chain_later["chain"]) // 2]
+    assert early_atm["strike"] == later_atm["strike"]
+    assert (early_atm["ce_ltp"], early_atm["pe_ltp"]) != (later_atm["ce_ltp"], later_atm["pe_ltp"])
 
 
 def test_expiry_to_file_stem_accepts_openalgo_format():

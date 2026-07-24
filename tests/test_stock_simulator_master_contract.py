@@ -108,6 +108,8 @@ def test_mc_fingerprint_after_download(monkeypatch):
             "python3",
             "-c",
             (
+                "import broker.stock_simulator.api._trade_path as _tp; "
+                "_tp.hydrate_simulator_env_from_db = lambda: None; "
                 "from broker.stock_simulator.database.master_contract_db import master_contract_download; "
                 "from database.master_contract_status_db import get_status; "
                 "from utils.auth_utils import should_download_master_contract; "
@@ -125,6 +127,7 @@ def test_mc_fingerprint_after_download(monkeypatch):
         env={
             **__import__("os").environ,
             "NSE_REPLAY_DATE": "2024-04-15",
+            "NSE_REPLAY_WEEK_MODE": "0",
             "NSE_REPLAY_DATA_ROOT": str(DATA_ROOT),
             "STOCK_SIMULATOR_MODE": "replay",
             "SIM_MC_UNDERLYINGS": "NIFTY",

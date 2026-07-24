@@ -15,6 +15,7 @@ def test_expiry_cache_replay_anchor_subprocess():
         **os.environ,
         "STOCK_SIMULATOR_MODE": "replay",
         "NSE_REPLAY_DATE": "2024-04-15",
+        "NSE_REPLAY_WEEK_MODE": "0",
     }
     script = """
 import broker.stock_simulator.api._trade_path as _tp

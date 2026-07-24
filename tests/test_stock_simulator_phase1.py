@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 @pytest.fixture(autouse=True)
 def _sim_env(monkeypatch):
     monkeypatch.setenv("STOCK_SIMULATOR_MODE", "replay")
+    monkeypatch.setenv("NSE_REPLAY_WEEK_MODE", "0")
     monkeypatch.setenv("NSE_REPLAY_DATE", "2021-03-25")
     monkeypatch.setenv("NSE_REPLAY_TIME", "09:15")
     monkeypatch.setenv("NSE_REPLAY_SPEED", "0")
