@@ -13,6 +13,7 @@ from trade_integrations.dataflows.index_research.external_predictions.curated_ur
 )
 from trade_integrations.dataflows.index_research.external_predictions.models import (
     ExternalPredictionSource,
+    SourceKind,
     utc_now_iso,
 )
 from trade_integrations.context.hub import get_hub_dir
@@ -93,7 +94,7 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         kind="media",
         domains=["moneycontrol.com"],
         search_queries=[
-            "Nifty 50 target {horizon} days",
+            "Nifty 50 target {horizon} days {today} {horizon_end}",
             "Nifty 50 forecast outlook {year}",
         ],
     ),
@@ -103,7 +104,7 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         kind="media",
         domains=["economictimes.indiatimes.com", "economictimes.com"],
         search_queries=[
-            "Nifty 50 target {horizon} days site:economictimes.indiatimes.com",
+            "Nifty 50 target {horizon} days {today} {horizon_end}",
             "Nifty 50 outlook forecast {year}",
         ],
     ),
@@ -113,7 +114,7 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         kind="media",
         domains=["livemint.com"],
         search_queries=[
-            "Nifty 50 target forecast {horizon} days site:livemint.com",
+            "Nifty 50 target forecast {horizon} days {today} {horizon_end}",
             "Nifty 50 outlook {year}",
         ],
     ),
@@ -122,8 +123,8 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         display_name="Motilal Oswal",
         kind="broker",
         search_queries=[
-            "Motilal Oswal Nifty 50 target {horizon} days",
-            "Motilal Oswal Nifty outlook {year}",
+            '"Motilal Oswal" Nifty 50 target forecast {today} {horizon_end}',
+            '"Motilal Oswal" Nifty 50 outlook {month_year} India brokerage',
         ],
         domains=["motilaloswal.com", "economictimes.indiatimes.com", "moneycontrol.com"],
         landing_urls=list(_BROKER_LANDING_URLS["motilal_oswal"]),
@@ -138,8 +139,8 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         display_name="ICICI Direct",
         kind="broker",
         search_queries=[
-            "ICICI Direct Nifty 50 target {horizon} days",
-            "ICICI Direct Nifty outlook forecast",
+            '"ICICI Direct" Nifty 50 target forecast {today} {horizon_end}',
+            '"ICICI Direct" Nifty 50 outlook {month_year} India brokerage',
         ],
         domains=["icicidirect.com", "economictimes.indiatimes.com", "moneycontrol.com"],
         landing_urls=list(_BROKER_LANDING_URLS["icici_direct"]),
@@ -154,8 +155,8 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         display_name="HDFC Securities",
         kind="broker",
         search_queries=[
-            "HDFC Securities Nifty 50 target {horizon} days",
-            "HDFC Securities Nifty outlook {year}",
+            '"HDFC Securities" Nifty 50 target forecast {today} {horizon_end}',
+            '"HDFC Securities" Nifty 50 outlook {month_year} India brokerage',
         ],
         domains=["hdfcsec.com", "economictimes.indiatimes.com", "moneycontrol.com"],
         landing_urls=list(_BROKER_LANDING_URLS["hdfc_securities"]),
@@ -171,8 +172,8 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         kind="global_bank",
         domains=["economictimes.indiatimes.com", "livemint.com", "moneycontrol.com"],
         search_queries=[
-            "Goldman Sachs India Nifty 50 target {year}",
-            "Goldman Sachs Nifty forecast India equity outlook",
+            '"Goldman Sachs" Nifty 50 target forecast {today} {horizon_end}',
+            '"Goldman Sachs" Nifty 50 outlook {month_year} India',
         ],
     ),
     _seed_source(
@@ -181,8 +182,8 @@ _SEED_SOURCES: tuple[ExternalPredictionSource, ...] = (
         kind="global_bank",
         domains=["economictimes.indiatimes.com", "livemint.com", "moneycontrol.com"],
         search_queries=[
-            "Morgan Stanley India Nifty 50 target {year}",
-            "Morgan Stanley Nifty forecast India outlook",
+            '"Morgan Stanley" Nifty 50 target forecast {today} {horizon_end}',
+            '"Morgan Stanley" Nifty 50 outlook {month_year} India',
         ],
     ),
 )
@@ -388,6 +389,7 @@ def merge_discovered_candidate(
     display_name: str,
     domain: str,
     snippet: str = "",
+    kind: SourceKind = "media",
 ) -> ExternalPredictionSource | None:
     """Register a discovery candidate without watchlisting."""
     registry = load_registry()
@@ -397,13 +399,15 @@ def merge_discovered_candidate(
     sid = _slugify(display_name or domain.split(".")[0])
     if any(s.id == sid for s in registry):
         return None
+    src_kind = kind if kind in {"media", "broker", "global_bank"} else "media"
+    name = display_name.strip() or domain
     candidate = ExternalPredictionSource(
         id=sid,
-        display_name=display_name.strip() or domain,
-        kind="media",
+        display_name=name,
+        kind=src_kind,  # type: ignore[arg-type]
         search_queries=[
-            f"{display_name or domain} Nifty 50 target {{horizon}} days",
-            f"Nifty 50 forecast {display_name or domain} {{year}}",
+            f'"{name}" Nifty 50 target forecast {{today}} {{horizon_end}}',
+            f'"{name}" Nifty 50 outlook {{month_year}} India',
         ],
         domains=[domain],
         watchlisted=False,
@@ -417,12 +421,31 @@ def merge_discovered_candidate(
 
 
 def format_queries(source: ExternalPredictionSource, *, horizon_days: int) -> list[str]:
-    year = str(datetime.now(timezone.utc).year)
-    out: list[str] = []
-    for template in source.search_queries or [f"{source.display_name} Nifty 50 target {{horizon}} days"]:
-        q = (
-            template.replace("{horizon}", str(horizon_days))
-            .replace("{year}", year)
-        )
-        out.append(q)
-    return out
+    from trade_integrations.dataflows.index_research.external_predictions.query_builder import (
+        build_horizon_queries,
+    )
+
+    return build_horizon_queries(source, horizon_days=horizon_days)
+
+
+def clear_invalid_listing_saved_paths(*, persist: bool = True) -> int:
+    """Mark saved navigation paths stale when they end on listing/topic pages."""
+    from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
+        is_listing_page_url,
+    )
+
+    cleared = 0
+    registry = load_registry()
+    for src in registry:
+        for attr in ("saved_paths", "approved_paths"):
+            traces = getattr(src, attr) or {}
+            for key, trace in list(traces.items()):
+                if trace is None or trace.stale:
+                    continue
+                final_url = str(trace.final_url or "").strip()
+                if final_url and is_listing_page_url(final_url):
+                    trace.stale = True
+                    cleared += 1
+    if persist and cleared:
+        save_registry(registry)
+    return cleared

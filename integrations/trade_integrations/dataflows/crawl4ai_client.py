@@ -264,6 +264,11 @@ def _make_crawler(profile: str) -> Any:
     return AsyncWebCrawler(config=config)
 
 
+def _scroll_before_screenshot() -> bool:
+    raw = os.environ.get("EXTERNAL_PREDICTIONS_SCROLL_BEFORE_SCREENSHOT", "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
     from crawl4ai import CacheMode, CrawlerRunConfig
 
@@ -273,6 +278,12 @@ def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
         "screenshot": screenshot,
         "delay_before_return_html": _delay_before_return_html(),
     }
+    if screenshot and _scroll_before_screenshot():
+        kwargs["scan_full_page"] = True
+        kwargs["delay_before_return_html"] = max(
+            float(kwargs["delay_before_return_html"] or 0),
+            1.5,
+        )
     if score_links:
         try:
             from crawl4ai import LinkPreviewConfig

@@ -7,6 +7,11 @@ from collections.abc import Callable
 from typing import Any
 
 from trade_integrations.dataflows.crawl4ai_client import crawl4ai_queue_stats
+from trade_integrations.dataflows.index_research.external_predictions.batch_url_dedup import (
+    BatchUrlRegistry,
+    assign_discovery_url_owners,
+    dedup_discovery_for_batch,
+)
 from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_fetcher import (
     crawl_sources_parallel,
     filter_markdown_for_extraction,
@@ -50,8 +55,12 @@ from trade_integrations.dataflows.index_research.external_predictions.models imp
     utc_now_iso,
 )
 from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
+    clear_invalid_listing_saved_paths,
     get_source,
     watchlisted_sources,
+)
+from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
+    classify_page_kind,
 )
 from trade_integrations.dataflows.index_research.external_predictions.store import (
     load_source_prediction,
@@ -219,6 +228,7 @@ def _record_from_crawl_group(
     fetch_method: str = "crawl4ai",
     navigation_steps: list[NavigationStep] | None = None,
     searxng_discovery: SearxngDiscoveryResult | None = None,
+    batch_registry: BatchUrlRegistry | None = None,
 ) -> ExternalPredictionRecord:
     sym = symbol.upper()
     prefix = ""
@@ -250,6 +260,8 @@ def _record_from_crawl_group(
         source_keywords(src, horizon_days=horizon_days),
         horizon_days=horizon_days,
         pipeline=pipeline,
+        batch_registry=batch_registry,
+        source=src,
     )
     if best is None:
         errors = [row.error_message for _, row in rows if row.error_message]
@@ -300,6 +312,12 @@ def _record_from_crawl_group(
                 return attempt
             if searxng_discovery is not None and searxng_discovery.all_queries_failed:
                 message = "SearXNG fallback skipped — all search queries failed"
+            elif (
+                searxng_discovery is not None
+                and searxng_discovery.domain_filter_exhausted
+                and not searxng_discovery.hits
+            ):
+                message = "SearXNG returned hits but none matched source domains"
             else:
                 message = f"SearXNG fallback ({searxng_trigger}) found no forecast"
         if pipeline:
@@ -316,6 +334,8 @@ def _record_from_crawl_group(
             error_prov["searxng_attempted"] = True
         if searxng_discovery is not None and searxng_discovery.all_queries_failed:
             error_prov["searxng_all_queries_failed"] = True
+        if searxng_discovery is not None and searxng_discovery.domain_filter_exhausted:
+            error_prov["searxng_domain_filter_exhausted"] = True
         record = ExternalPredictionRecord(
             source_id=src.id,
             symbol=sym,
@@ -355,6 +375,7 @@ def _record_from_crawl_group(
         "fetch_method": fetch_method,
         "navigation_mode": navigation_mode,
         "elapsed_ms": crawl.elapsed_ms,
+        "page_kind": classify_page_kind(url),
     }
     if record.fetch_status == "ok":
         persist_successful_exploratory_path(
@@ -364,6 +385,8 @@ def _record_from_crawl_group(
             steps=navigation_steps,
             pipeline=pipeline,
         )
+        if batch_registry is not None:
+            batch_registry.claim(url, src.id)
     if record.fetch_status == "ok":
         mid = record.target.mid
         if pipeline:
@@ -399,6 +422,7 @@ def refresh_source(
     source_total: int | None = None,
     crawl_group: dict[str, list[tuple[str, Any]]] | None = None,
     searxng_discovery: SearxngDiscoveryResult | None = None,
+    batch_registry: BatchUrlRegistry | None = None,
 ) -> ExternalPredictionRecord:
     src = get_source(source_id)
     if src is None:
@@ -412,7 +436,25 @@ def refresh_source(
             error_message=f"Unknown source {source_id}",
         )
 
+    from trade_integrations.dataflows.index_research.external_predictions.domain_utils import (
+        native_domains,
+    )
+
     sym = symbol.upper()
+    if not native_domains(src) and not (src.domains or []):
+        msg = f"No domains configured for {src.display_name}"
+        if pipeline:
+            pipeline.warn("source", msg, source_id=source_id)
+        record = ExternalPredictionRecord(
+            source_id=src.id,
+            symbol=sym,
+            horizon_days=horizon_days,
+            fetch_status="error",
+            error_message=msg,
+        )
+        _, attempt = persist_refresh_result(record, symbol=sym)
+        return attempt
+
     if pipeline:
         prefix = ""
         if source_index is not None and source_total is not None:
@@ -425,6 +467,15 @@ def refresh_source(
         )
 
     spot_val = spot if spot is not None else _fetch_spot(sym, pipeline)
+
+    if (
+        searxng_discovery is not None
+        and batch_registry is not None
+        and not batch_registry.attribution_owners_initialized
+    ):
+        batch_registry.set_attribution_owners(
+            assign_discovery_url_owners({src.id: searxng_discovery}, [src])
+        )
 
     if crawl_group is not None:
         rows = crawl_group.get(source_id, [])
@@ -454,6 +505,8 @@ def refresh_source(
             source_keywords(src, horizon_days=horizon_days),
             horizon_days=horizon_days,
             pipeline=None,
+            batch_registry=batch_registry,
+            source=src,
         )
         browse_from_landing = False
         if not browse_enabled_for_source(src):
@@ -506,6 +559,7 @@ def refresh_source(
             fetch_method=fetch_method,
             navigation_steps=navigation_steps,
             searxng_discovery=searxng_discovery,
+            batch_registry=batch_registry,
         )
         if used_fast and record.fetch_status != "ok":
             if exploratory_backup:
@@ -531,6 +585,7 @@ def refresh_source(
                     fetch_method=fetch_method,
                     navigation_steps=None,
                     searxng_discovery=searxng_discovery,
+                    batch_registry=batch_registry,
                 )
         elif used_fast and record.fetch_status == "ok":
             touch_path_success(src.id, horizon_days=horizon_days)
@@ -601,6 +656,17 @@ def refresh_all_external_predictions(
     internal = _internal_forecast(sym, horizon_days, pipeline)
     fetched_at = utc_now_iso()
     sources = watchlisted_sources()
+    try:
+        cleared = clear_invalid_listing_saved_paths(persist=True)
+        if pipeline and cleared:
+            pipeline.info(
+                "navigation",
+                f"Cleared {cleared} stale listing/topic saved path(s)",
+            )
+    except Exception as exc:
+        logger.debug("clear_invalid_listing_saved_paths skipped: %s", exc)
+
+    batch_registry = BatchUrlRegistry()
     if pipeline:
         pipeline.info("refresh", f"Watchlisted sources: {len(sources)}")
         stats = crawl4ai_queue_stats()
@@ -617,12 +683,18 @@ def refresh_all_external_predictions(
         horizon_days=horizon_days,
         pipeline=pipeline,
     )
+    discovery_by_source = dedup_discovery_for_batch(
+        discovery_by_source,
+        sources,
+        batch_registry,
+    )
     crawl_group = crawl_sources_parallel(
         sources,
         symbol=sym,
         horizon_days=horizon_days,
         pipeline=pipeline,
         discovery_urls=discovery_urls_map(discovery_by_source),
+        attribution_owners=batch_registry.attribution_owners,
     )
 
     refresh_attempt_failures = 0
@@ -638,6 +710,7 @@ def refresh_all_external_predictions(
                 source_total=len(sources),
                 crawl_group=crawl_group,
                 searxng_discovery=discovery_by_source.get(src.id),
+                batch_registry=batch_registry,
             )
         except Exception as exc:
             logger.exception("refresh failed for %s: %s", src.id, exc)
@@ -680,6 +753,7 @@ def refresh_all_external_predictions(
         horizon_days=horizon_days,
         internal_forecast=internal,
         fetched_at=fetched_at,
+        refresh_completed_at=utc_now_iso(),
         refresh_attempt_failures=refresh_attempt_failures,
     )
     ok_count = sum(1 for p in snapshot.predictions if p.fetch_status == "ok")

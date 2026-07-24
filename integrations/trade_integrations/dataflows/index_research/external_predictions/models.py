@@ -289,6 +289,7 @@ class ExternalPredictionSnapshot:
     symbol: str = "NIFTY"
     horizon_days: int = 14
     fetched_at: str = ""
+    refresh_completed_at: str = ""
     cache_ttl_hours: int = 24
     is_stale: bool = True
     sources: list[ExternalPredictionSource] = field(default_factory=list)
@@ -305,6 +306,7 @@ class ExternalPredictionSnapshot:
             "symbol": self.symbol,
             "horizon_days": self.horizon_days,
             "fetched_at": self.fetched_at,
+            "refresh_completed_at": self.refresh_completed_at,
             "cache_ttl_hours": self.cache_ttl_hours,
             "is_stale": self.is_stale,
             "sources": [s.to_dict() for s in self.sources],
@@ -338,6 +340,7 @@ class ExternalPredictionSnapshot:
             symbol=str(data.get("symbol") or "NIFTY").upper(),
             horizon_days=int(data.get("horizon_days") or 14),
             fetched_at=str(data.get("fetched_at") or ""),
+            refresh_completed_at=str(data.get("refresh_completed_at") or ""),
             cache_ttl_hours=int(data.get("cache_ttl_hours") or 24),
             is_stale=bool(data.get("is_stale", True)),
             sources=sources,

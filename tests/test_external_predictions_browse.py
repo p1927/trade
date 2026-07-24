@@ -202,7 +202,7 @@ def test_refresh_source_uses_browse_when_entry_urls_exist(
 
     source_registry.save_registry(registry)
 
-    browse_url = "https://www.moneycontrol.com/news/nifty-browse.html"
+    browse_url = "https://www.moneycontrol.com/news/business/markets/nifty-forecast_articleshow/12345678.html"
     browse_trace = NavigationTrace(
         steps=[
             NavigationStep(action="goto", url="https://www.moneycontrol.com/markets"),
@@ -292,7 +292,7 @@ def test_approve_path_after_exploratory_refresh(hub_dir: Path, monkeypatch: pyte
 
     source_registry.save_registry(registry)
 
-    browse_url = "https://www.moneycontrol.com/news/nifty-browse.html"
+    browse_url = "https://www.moneycontrol.com/news/business/markets/nifty-forecast_articleshow/12345678.html"
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.refresh.run_exploratory_browse",
         lambda *args, **kwargs: BrowseResult(

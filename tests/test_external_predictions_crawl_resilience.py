@@ -683,3 +683,46 @@ def test_browse_skips_when_crawl_has_forecast(monkeypatch: pytest.MonkeyPatch) -
         crawl_group={"moneycontrol": [crawl_row]},
     )
     assert browse_calls == []
+
+
+def test_pick_best_prefers_articleshow_over_listing() -> None:
+    from trade_integrations.dataflows.crawl4ai_client import CrawlPageResult
+    from trade_integrations.dataflows.index_research.external_predictions.crawl4ai_fetcher import (
+        pick_best_crawl_result,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionSource,
+    )
+
+    listing_md = (
+        "Nifty 50 outlook remains positive. Resistance near the 24,000 mark. "
+        "Support at 23,800. Target 23900 for the index this week. " * 4
+    )
+    article_md = (
+        "Motilal Oswal sees Nifty 50 target at 25,200 by month end. "
+        "The brokerage expects upside from earnings. Forecast outlook remains constructive. "
+        "Nifty 50 target 25200. " * 3
+    )
+    rows = [
+        (
+            "https://economictimes.indiatimes.com/topic/nifty-50",
+            CrawlPageResult(url="https://economictimes.indiatimes.com/topic/nifty-50", success=True, markdown=listing_md),
+        ),
+        (
+            "https://economictimes.indiatimes.com/markets/stocks/news/article-123/articleshow/123.cms",
+            CrawlPageResult(
+                url="https://economictimes.indiatimes.com/markets/stocks/news/article-123/articleshow/123.cms",
+                success=True,
+                markdown=article_md,
+            ),
+        ),
+    ]
+    source = ExternalPredictionSource(
+        id="motilal_oswal",
+        display_name="Motilal Oswal",
+        kind="broker",
+        domains=["motilaloswal.com", "economictimes.indiatimes.com"],
+    )
+    best = pick_best_crawl_result(rows, horizon_days=14, source=source)
+    assert best is not None
+    assert "articleshow" in best[0]

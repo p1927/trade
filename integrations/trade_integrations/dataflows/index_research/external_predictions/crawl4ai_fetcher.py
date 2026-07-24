@@ -18,6 +18,9 @@ from trade_integrations.dataflows.crawl4ai_client import (
 from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
     sort_urls_for_crawl,
 )
+from trade_integrations.dataflows.index_research.external_predictions.batch_url_dedup import (
+    dedupe_crawl_article_jobs,
+)
 from trade_integrations.dataflows.index_research.external_predictions.curated_urls import (
     curated_urls_for_source,
 )
@@ -35,8 +38,11 @@ from trade_integrations.dataflows.index_research.external_predictions.url_policy
     is_allowed_listing_url,
     is_allowed_url,
     is_candidate_article_url,
+    is_structured_forecast_hub_url,
+    link_has_forecast_signal,
     link_score,
     markdown_has_nifty50_forecast,
+    url_selection_penalty,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 
@@ -145,7 +151,7 @@ def resolve_source_urls(
     for raw in source.entry_urls or []:
         ordered_raw.append(str(raw or "").strip())
 
-    for extra in discovery_urls or []:
+    for extra in (discovery_urls or [])[: _discovery_urls_limit()]:
         ordered_raw.append(str(extra or "").strip())
 
     prior = load_source_prediction(source.id, symbol=symbol, horizon_days=horizon_days)
@@ -324,6 +330,7 @@ def crawl_sources_parallel(
     horizon_days: int = 14,
     pipeline: PipelineLogger | None = None,
     discovery_urls: dict[str, list[str]] | None = None,
+    attribution_owners: dict[str, str] | None = None,
 ) -> dict[str, list[tuple[str, CrawlPageResult]]]:
     """Crawl curated URLs; then top-ranked article candidates per source."""
     grouped: dict[str, list[tuple[str, CrawlPageResult]]] = {source.id: [] for source in sources}
@@ -357,8 +364,7 @@ def crawl_sources_parallel(
     source_by_id = {source.id: source for source in sources}
     per_source_limit = _article_candidates_limit()
 
-    article_jobs: list[tuple[str, str]] = []
-    seen_article_urls: set[str] = set()
+    article_candidates: list[tuple[str, str]] = []
     for (source_id, landing_url), result in zip(landing_jobs, landing_results):
         grouped[source_id].append((landing_url, result))
         if not result.success:
@@ -374,10 +380,13 @@ def crawl_sources_parallel(
             native_links=native_links if isinstance(native_links, list) else None,
             pipeline=pipeline,
         ):
-            if article_url in seen_article_urls:
-                continue
-            seen_article_urls.add(article_url)
-            article_jobs.append((source_id, article_url))
+            article_candidates.append((source_id, article_url))
+
+    article_jobs = dedupe_crawl_article_jobs(
+        article_candidates,
+        sources,
+        attribution_owners=attribution_owners,
+    )
 
     if article_jobs:
         if pipeline:
@@ -397,16 +406,46 @@ def crawl_sources_parallel(
     return grouped
 
 
+def _discovery_urls_limit() -> int:
+    raw = os.environ.get("EXTERNAL_PREDICTIONS_DISCOVERY_URLS", "5").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 5
+
+
+def _url_pick_tier(url: str) -> int:
+    if is_candidate_article_url(url).allowed or "/articleshow/" in url or "/blog/" in url:
+        return 1
+    if is_structured_forecast_hub_url(url):
+        return 2
+    return 3
+
+
 def pick_best_crawl_result(
     rows: list[tuple[str, CrawlPageResult]],
     keywords: list[str] | None = None,
     *,
     horizon_days: int = 14,
     pipeline: PipelineLogger | None = None,
+    batch_registry: Any | None = None,
+    source: ExternalPredictionSource | None = None,
 ) -> tuple[str, CrawlPageResult] | None:
-    """Prefer crawled pages with strong NIFTY 50 forecast signal in page body."""
-    candidates: list[tuple[str, CrawlPageResult, float]] = []
+    """Prefer forecast articles and structured hubs over listing/topic pages."""
+    candidates: list[tuple[str, CrawlPageResult, float, int]] = []
     for url, row in rows:
+        if batch_registry is not None and source is not None:
+            crawl_rows = batch_registry.filter_crawl_rows([(url, row)], source=source)
+            if not crawl_rows:
+                if pipeline:
+                    pipeline.info(
+                        "crawl4ai",
+                        "Skipped crawl (batch_url_claimed)",
+                        url=url[:120],
+                        source_id=source.id,
+                    )
+                continue
+            url, row = crawl_rows[0]
         if not row.success or not row.markdown.strip():
             continue
         policy = is_allowed_listing_url(url)
@@ -420,10 +459,18 @@ def pick_best_crawl_result(
             continue
         score = keyword_match_score(row.markdown, keywords, horizon_days=horizon_days)
         score += crawl_result_horizon_boost(row.markdown, horizon_days=horizon_days)
+        score += url_selection_penalty(url)
+        title_blob = f"{row.title or ''} {url}"
+        if link_has_forecast_signal(title_blob):
+            score += 1.5
+        tier = _url_pick_tier(url)
         if score >= MIN_KEYWORD_SCORE:
-            candidates.append((url, row, score))
+            candidates.append((url, row, score, tier))
 
     if not candidates:
         return None
-    best = max(candidates, key=lambda item: item[2])
+
+    best_tier = min(item[3] for item in candidates)
+    tier_pool = [item for item in candidates if item[3] == best_tier]
+    best = max(tier_pool, key=lambda item: item[2])
     return best[0], best[1]

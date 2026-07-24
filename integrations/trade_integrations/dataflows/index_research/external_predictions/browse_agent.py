@@ -23,6 +23,7 @@ from trade_integrations.dataflows.index_research.external_predictions.models imp
     utc_now_iso,
 )
 from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
+    classify_page_kind,
     is_allowed_listing_url,
     link_has_forecast_signal,
     link_score,
@@ -422,12 +423,14 @@ def run_exploratory_browse(
             steps_taken=len(steps),
         )
 
-    success = found_forecast or _page_has_forecast(
+    has_forecast = found_forecast or _page_has_forecast(
         last_row.markdown,
         url=last_url,
         horizon_days=horizon_days,
         keywords=keywords,
     )
+    page_kind = classify_page_kind(last_url)
+    success = has_forecast and page_kind in {"article", "hub"}
     return BrowseResult(
         success=success,
         trace=trace,

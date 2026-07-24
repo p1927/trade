@@ -315,6 +315,18 @@ def test_rebuild_snapshot_includes_refresh_rollup(hub_dir: Path) -> None:
     assert payload["had_errors"] is True
 
 
+def test_rebuild_snapshot_sets_refresh_completed_at_when_provided() -> None:
+    snap = rebuild_snapshot(
+        symbol="NIFTY",
+        horizon_days=14,
+        fetched_at="2026-07-23T10:00:00+00:00",
+        refresh_completed_at="2026-07-23T10:45:00+00:00",
+    )
+    assert snap.fetched_at == "2026-07-23T10:00:00+00:00"
+    assert snap.refresh_completed_at == "2026-07-23T10:45:00+00:00"
+    assert snap.to_dict()["refresh_completed_at"] == "2026-07-23T10:45:00+00:00"
+
+
 def test_validate_user_source_request_requires_domain_and_entry_urls() -> None:
     from trade_integrations.dataflows.index_research.external_predictions.source_validation import (
         validate_user_source_request,

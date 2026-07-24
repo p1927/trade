@@ -158,3 +158,62 @@ def is_article_url(url: str) -> bool:
     if any(h in path for h in listing_hints) and path.count("/") <= 4:
         return False
     return path.count("/") >= 4
+
+
+def is_structured_forecast_hub_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    if re.search(r"/market/nifty/?$", path):
+        return True
+    if "/blog/" in path and re.search(r"prediction|forecast|outlook", path, re.I):
+        return True
+    return False
+
+
+def is_listing_page_url(url: str) -> bool:
+    u = (url or "").strip()
+    if not u:
+        return False
+    if is_structured_forecast_hub_url(u):
+        return False
+    if is_article_url(u):
+        return False
+    path = urlparse(u).path.lower()
+    listing_hints = (
+        "/topic/",
+        "/markets/stocks/news",
+        "/market/stock-market-news",
+        "/news/tags/",
+        "/indices/nifty",
+    )
+    if any(h in path for h in listing_hints):
+        return True
+    if path in {"/market", "/markets", "/news"}:
+        return True
+    return path.count("/") <= 3
+
+
+def classify_page_kind(url: str) -> str:
+    if is_structured_forecast_hub_url(url):
+        return "hub"
+    if is_article_url(url):
+        return "article"
+    if is_listing_page_url(url):
+        return "listing"
+    return "other"
+
+
+def url_selection_penalty(url: str) -> float:
+    """Negative adjustments for generic listing/topic pages in pick_best ranking."""
+    path = urlparse(url).path.lower()
+    penalty = 0.0
+    if "/topic/" in path:
+        penalty -= 4.0
+    if "/markets/stocks/news" in path or path.rstrip("/") == "/market":
+        penalty -= 3.0
+    if "/news/tags/" in path:
+        penalty -= 2.0
+    if is_article_url(url):
+        penalty += 2.0
+    if is_structured_forecast_hub_url(url):
+        penalty += 1.5
+    return penalty

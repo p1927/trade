@@ -122,3 +122,65 @@ def test_list_active_nautilus_owners_includes_infra_paused_plan_approved(
     )
     owners = list_active_nautilus_owners()
     assert any(row.get("owner_id") == agent_id for row in owners)
+
+
+def test_sync_nautilus_registry_recovers_after_relaunch_failure(
+    hub_tmp: Path,
+    log_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from trade_integrations.autonomous_agents import nautilus_watch as nw
+    from trade_integrations.watch_registry import create_watch
+    from trade_integrations.watch_registry import store as wr_store
+
+    class _PidState:
+        live: int | None = None
+
+        def read_pid(self) -> int | None:
+            return self.live
+
+        def process_alive(self, pid: int) -> bool:
+            return self.live is not None and int(pid) == int(self.live)
+
+        def stop(self) -> None:
+            self.live = None
+
+    state = _PidState()
+    sync_results: list[dict] = []
+    real_sync = wr_store.sync_nautilus_registry_from_watches
+
+    def _capture_sync(**kwargs: object) -> dict:
+        result = real_sync(**kwargs)
+        sync_results.append(result)
+        return result
+
+    monkeypatch.setattr(wr_store, "sync_nautilus_registry_from_watches", _capture_sync)
+    monkeypatch.setattr(nw, "_read_pid", state.read_pid)
+    monkeypatch.setattr(nw, "_process_alive", state.process_alive)
+    monkeypatch.setattr(nw, "_stop_existing", state.stop)
+
+    def _fail_launch(**_: object) -> None:
+        raise RuntimeError("launch failed")
+
+    monkeypatch.setattr(nw, "_launch_watch", _fail_launch)
+    monkeypatch.setattr(nw, "ensure_nautilus_watch_for_running_agents", lambda: 0)
+
+    create_watch(
+        owner_kind="session",
+        owner_id="sess_recover",
+        vibe_session_id="sess_recover",
+        watch_spec=_sample_spec(),
+    )
+    state.live = 9999
+
+    create_watch(
+        owner_kind="session",
+        owner_id="sess_recover2",
+        vibe_session_id="sess_recover2",
+        watch_spec=_sample_spec(),
+    )
+
+    partial = [row for row in sync_results if row.get("status") == "partial"]
+    assert partial, sync_results
+    assert partial[-1].get("nautilus_ok") is False
+    assert "ws_sess_recover2" in (partial[-1].get("agent_ids") or [])

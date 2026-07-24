@@ -56,12 +56,12 @@ def mcp_list_watches(
 ) -> dict[str, Any]:
     kind = owner_kind
     oid = owner_id
-    if session_id and not oid:
-        kind = OWNER_KIND_SESSION
-        oid = session_id
-    if agent_id and not oid:
+    if not oid and agent_id:
         kind = OWNER_KIND_AUTONOMOUS
         oid = agent_id
+    elif not oid and session_id:
+        kind = OWNER_KIND_SESSION
+        oid = session_id
     rows = list_watches(owner_kind=kind, owner_id=oid, active_only=True)
     return {"status": "ok", "watches": rows, "count": len(rows)}
 

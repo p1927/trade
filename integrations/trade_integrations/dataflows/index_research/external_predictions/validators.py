@@ -8,7 +8,11 @@ from typing import Any
 
 from trade_integrations.dataflows.index_research.external_predictions.models import (
     ExternalPredictionRecord,
+    ExternalPredictionSource,
     ExternalPredictionTarget,
+)
+from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
+    is_listing_page_url,
 )
 
 _NIFTY50 = re.compile(r"nifty\s*50|nifty50", re.I)
@@ -47,6 +51,12 @@ _HORIZON_TABLE_STYLES = frozenset({"next_week_table", "next_month_table"})
 
 MIN_INDEX_LEVEL = 15_000.0
 MAX_INDEX_LEVEL = 35_000.0
+
+_LOW_CONFIDENCE_DENIAL = re.compile(
+    r"no explicit|not a .* research|does not (?:state|provide|contain)|no forecast|"
+    r"not an? (?:broker|analyst)|aggregator|topic page",
+    re.I,
+)
 
 
 def _level_tokens(level: float) -> set[str]:
@@ -203,6 +213,7 @@ def validate_record(
     *,
     body: str,
     used_regex_only: bool = False,
+    source: ExternalPredictionSource | None = None,
 ) -> ExternalPredictionRecord:
     """Apply index-only and horizon checks; may downgrade fetch_status to not_found."""
     text = body or ""
@@ -258,6 +269,31 @@ def validate_record(
 
     record = reject_resistance_only_target(record, text)
     if record.fetch_status != "ok" and record.error_message == "resistance_not_target":
+        return record
+
+    prov_url = str((record.provenance or {}).get("url") or "")
+    if is_listing_page_url(prov_url) and not _NIFTY_TARGET_PARAGRAPH.search(text):
+        hub_ok = is_structured_nifty_forecast_hub(
+            text,
+            title=str((record.provenance or {}).get("title") or ""),
+            url=prov_url,
+            provenance=record.provenance,
+        )
+        if not hub_ok:
+            record.fetch_status = "not_found"
+            record.error_message = "listing_page_not_forecast"
+            return record
+
+    if source and source.kind in {"broker", "global_bank"} and "/topic/" in prov_url.lower():
+        if not _NIFTY_TARGET_PARAGRAPH.search(text):
+            record.fetch_status = "not_found"
+            record.error_message = "listing_page_not_forecast"
+            return record
+
+    rationale_blob = " ".join(record.rationale_bullets or [])
+    if record.confidence == "low" and _LOW_CONFIDENCE_DENIAL.search(rationale_blob):
+        record.fetch_status = "not_found"
+        record.error_message = "low_confidence_denies_forecast"
         return record
 
     record.fetch_status = "ok"

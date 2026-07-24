@@ -473,8 +473,26 @@ def sync_nautilus_registry_from_watches(*, restart_if_changed: bool = False) -> 
         if live_pid is not None and nw._process_alive(live_pid):
             logger.info("watch registry changed %s → %s — restarting Nautilus", old_ids, new_ids)
             nw._stop_existing()
+            nautilus_ok = False
             try:
                 nw._launch_watch(use_registry=True)
+                nautilus_ok = True
             except Exception:
-                logger.exception("failed to relaunch Nautilus after watch registry sync")
-    return {"status": "ok", "owners": len(agents), "agent_ids": new_ids}
+                logger.exception(
+                    "failed to relaunch Nautilus after watch registry sync (agents=%s) — see log/nautilus-watch.log",
+                    new_ids,
+                )
+                try:
+                    nw.ensure_nautilus_watch_for_running_agents()
+                except Exception:
+                    logger.exception("recovery ensure_nautilus_watch_for_running_agents failed after relaunch error")
+                relaunch_pid = nw._read_pid()
+                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            if not nautilus_ok:
+                return {
+                    "status": "partial",
+                    "owners": len(agents),
+                    "agent_ids": new_ids,
+                    "nautilus_ok": False,
+                }
+    return {"status": "ok", "owners": len(agents), "agent_ids": new_ids, "nautilus_ok": True}

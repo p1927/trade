@@ -9,6 +9,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from trade_integrations.dataflows.article_body import fetch_article_body
+from trade_integrations.dataflows.index_research.external_predictions.domain_utils import (
+    attribution_name_tokens,
+    native_domains,
+    normalize_domain,
+    url_matches_bank_topic,
+)
 from trade_integrations.dataflows.index_research.external_predictions.models import (
     ExternalPredictionRecord,
     ExternalPredictionSource,
@@ -19,12 +25,32 @@ from trade_integrations.dataflows.index_research.external_predictions.source_reg
 from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
     is_allowed_url,
     is_candidate_article_url,
+    is_listing_page_url,
     link_has_forecast_signal,
 )
 from trade_integrations.dataflows.index_research.pipeline_log import PipelineLogger
 from trade_integrations.dataflows.searxng_finance import search_finance
 
 logger = logging.getLogger(__name__)
+
+_DISCOVERY_URL_LIMIT = 5
+
+
+def _discovery_url_limit() -> int:
+    return _DISCOVERY_URL_LIMIT
+
+
+def _url_rank_adjustment(url: str, title: str = "") -> float:
+    adj = 0.0
+    path = urlparse(url).path.lower()
+    if "/articleshow/" in path or "/blog/" in path:
+        adj += 2.0
+    if is_listing_page_url(url):
+        adj -= 3.0
+    if link_has_forecast_signal(f"{title} {url}"):
+        adj += 1.0
+    return adj
+
 
 _RELEVANCE_TERMS = (
     "nifty",
@@ -42,6 +68,7 @@ class SearxngSearchOutcome:
     hits: list[dict[str, Any]] = field(default_factory=list)
     queries_run: int = 0
     queries_failed: int = 0
+    domain_filter_exhausted: bool = False
 
     @property
     def all_queries_failed(self) -> bool:
@@ -59,6 +86,7 @@ class SearxngDiscoveryResult:
     queries_run: int = 0
     queries_failed: int = 0
     discovery_failed: bool = False
+    domain_filter_exhausted: bool = False
 
     @property
     def all_queries_failed(self) -> bool:
@@ -69,12 +97,30 @@ def _domain(host: str) -> str:
     return (host or "").lower().removeprefix("www.")
 
 
+def _normalize_source_domain(domain: str) -> str:
+    return normalize_domain(domain)
+
+
+def _source_allowed_domains(source: ExternalPredictionSource) -> tuple[str, ...]:
+    native = native_domains(source)
+    if native:
+        return native
+    syndicated: list[str] = []
+    for domain in source.domains or []:
+        norm = normalize_domain(domain)
+        if norm:
+            syndicated.append(norm)
+    return tuple(dict.fromkeys(syndicated))
+
+
 def _matches_source_domain(url: str, source: ExternalPredictionSource) -> bool:
     host = _domain(urlparse(url).hostname or "")
     if not host:
         return False
     for domain in source.domains:
-        d = domain.lower().removeprefix("www.")
+        d = _normalize_source_domain(domain)
+        if not d:
+            continue
         if host == d or host.endswith(f".{d}"):
             return True
     return False
@@ -96,10 +142,14 @@ def _relevance_score(result: dict[str, Any], source: ExternalPredictionSource) -
     for term in _RELEVANCE_TERMS:
         if term in blob:
             score += 0.5
-    if source.display_name.lower() in blob:
-        score += 1.0
+    if any(token in blob for token in attribution_name_tokens(source)):
+        score += 2.0 if source.kind == "global_bank" else 1.0
+    if source.kind == "global_bank" and url_matches_bank_topic(url, source):
+        score += 2.5
     if re.search(r"\d{1,2}[,.]?\d{3,5}", blob):
         score += 1.5
+    title = str(result.get("title") or "")
+    score += _url_rank_adjustment(url, title)
     return score
 
 
@@ -131,11 +181,12 @@ def rank_search_results(
     results: list[dict[str, Any]],
     source: ExternalPredictionSource,
     *,
-    limit: int = 3,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
+    cap = limit if limit is not None else _discovery_url_limit()
     filtered = filter_searxng_hits_for_source(results, source)
     ranked = sorted(filtered, key=lambda row: _relevance_score(row, source), reverse=True)
-    return ranked[:limit]
+    return ranked[:cap]
 
 
 def search_source_results_with_outcome(
@@ -148,8 +199,23 @@ def search_source_results_with_outcome(
     collected: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     queries = format_queries(source, horizon_days=horizon_days)
+    allowed_domains = _source_allowed_domains(source)
     queries_run = 0
     queries_failed = 0
+    domain_filter_exhausted = False
+    if not allowed_domains:
+        if pipeline:
+            pipeline.warn(
+                "searxng",
+                f"No domains configured for {source.display_name} — skipping SearXNG discovery",
+                source_id=source.id,
+            )
+        return SearxngSearchOutcome(
+            hits=[],
+            queries_run=0,
+            queries_failed=0,
+            domain_filter_exhausted=False,
+        )
     if pipeline:
         pipeline.info(
             "searxng",
@@ -161,7 +227,13 @@ def search_source_results_with_outcome(
         if pipeline:
             pipeline.info("searxng", f"Query: {query}", source_id=source.id)
         try:
-            rows = search_finance(query, limit=limit)
+            query_stats: dict[str, int] = {}
+            rows = search_finance(
+                query,
+                limit=limit,
+                allowed_domains=allowed_domains or None,
+                stats=query_stats,
+            )
         except Exception as exc:
             queries_failed += 1
             if pipeline:
@@ -169,9 +241,15 @@ def search_source_results_with_outcome(
             logger.debug("search failed for %s query=%r: %s", source.id, query, exc)
             continue
         if pipeline:
+            raw_count = query_stats.get("raw_count", len(rows))
+            if not rows and raw_count > 0:
+                domain_filter_exhausted = True
+                msg = f"Got 0 result(s) after domain filter ({raw_count} raw)"
+            else:
+                msg = f"Got {len(rows)} result(s) for query"
             pipeline.info(
                 "searxng",
-                f"Got {len(rows)} result(s) for query",
+                msg,
                 source_id=source.id,
                 query=query,
             )
@@ -181,17 +259,27 @@ def search_source_results_with_outcome(
                 continue
             seen_urls.add(url)
             collected.append(row)
-    ranked = rank_search_results(collected, source, limit=3)
+    ranked = rank_search_results(collected, source)
     outcome = SearxngSearchOutcome(
         hits=ranked,
         queries_run=queries_run,
         queries_failed=queries_failed,
+        domain_filter_exhausted=domain_filter_exhausted,
     )
     if pipeline:
         if outcome.all_queries_failed:
             pipeline.warn(
                 "searxng",
                 f"All {queries_run} SearXNG queries failed for {source.display_name}",
+                source_id=source.id,
+            )
+        elif len(collected) > 0 and len(ranked) == 0:
+            pipeline.warn(
+                "searxng",
+                (
+                    f"Rank/forecast filter removed all {len(collected)} SearXNG hit(s) "
+                    f"for {source.display_name}"
+                ),
                 source_id=source.id,
             )
         else:
@@ -262,9 +350,10 @@ def filter_discovery_urls(
     results: list[dict[str, Any]],
     source: ExternalPredictionSource,
     *,
-    limit: int = 3,
+    limit: int | None = None,
 ) -> list[str]:
     """Return allowlisted article URLs from SearXNG hits."""
+    cap = limit if limit is not None else _discovery_url_limit()
     urls: list[str] = []
     seen: set[str] = set()
     for row in results:
@@ -277,7 +366,7 @@ def filter_discovery_urls(
             continue
         seen.add(url)
         urls.append(url)
-        if len(urls) >= limit:
+        if len(urls) >= cap:
             break
     return urls
 
@@ -294,11 +383,21 @@ def discover_source_with_results(
         pipeline=pipeline,
     )
     urls = filter_discovery_urls(outcome.hits, source)
+    if pipeline and outcome.hits and not urls:
+        pipeline.warn(
+            "searxng",
+            (
+                f"URL policy removed all {len(outcome.hits)} ranked hit(s) "
+                f"for {source.display_name}"
+            ),
+            source_id=source.id,
+        )
     return SearxngDiscoveryResult(
         urls=urls,
         hits=list(outcome.hits),
         queries_run=outcome.queries_run,
         queries_failed=outcome.queries_failed,
+        domain_filter_exhausted=outcome.domain_filter_exhausted,
     )
 
 

@@ -308,7 +308,7 @@ def extract_forecast(
                 break
             continue
 
-        validated = validate_record(record, body=body, used_regex_only=False)
+        validated = validate_record(record, body=body, used_regex_only=False, source=source)
         last_record = validated
         if validated.fetch_status != "ok":
             err = validated.error_message or "validation_failed"
@@ -452,7 +452,7 @@ def _extract_from_screenshot_tables(
     )
     if not any(v is not None for v in (record.target.low, record.target.mid, record.target.high)):
         return None
-    validated = validate_record(record, body=body, used_regex_only=False)
+    validated = validate_record(record, body=body, used_regex_only=False, source=source)
     if validated.fetch_status != "ok":
         return validated
     if screenshot_artifacts is not None:

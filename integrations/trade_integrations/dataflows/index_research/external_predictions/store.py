@@ -208,6 +208,7 @@ def rebuild_snapshot(
     horizon_days: int,
     internal_forecast: dict[str, Any] | None = None,
     fetched_at: str | None = None,
+    refresh_completed_at: str | None = None,
     refresh_attempt_failures: int = 0,
 ) -> ExternalPredictionSnapshot:
     from trade_integrations.dataflows.index_research.external_predictions.source_registry import (
@@ -234,10 +235,12 @@ def rebuild_snapshot(
     ts = utc_now_iso() if fetched_at is None else fetched_at
     ttl = cache_ttl_hours()
     rollup = rollup_refresh_status(predictions)
+    completed_at = str(refresh_completed_at or "").strip()
     snapshot = ExternalPredictionSnapshot(
         symbol=sym,
         horizon_days=horizon_days,
         fetched_at=ts,
+        refresh_completed_at=completed_at,
         cache_ttl_hours=ttl,
         is_stale=is_snapshot_stale(ts, ttl_hours=ttl),
         sources=sources,

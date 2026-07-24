@@ -6,14 +6,15 @@ from typing import Final
 
 # Web-research-backed listing/topic pages that publish NIFTY 50 index level targets.
 # Crawl4AI uses these instead of generic marketing hubs (careers, F&O, etc.).
+# Broker sources prefer native research URLs first; syndication is fallback only.
 CURATED_URLS_BY_SOURCE: Final[dict[str, tuple[str, ...]]] = {
     "moneycontrol": (
         "https://www.moneycontrol.com/news/tags/nifty.html",
         "https://www.moneycontrol.com/news/business/markets/",
     ),
     "economictimes": (
-        "https://economictimes.indiatimes.com/topic/nifty-50",
         "https://economictimes.indiatimes.com/markets/indices/nifty-50",
+        "https://economictimes.indiatimes.com/topic/nifty-50",
         "https://economictimes.indiatimes.com/topic/goldman-sachs-nifty",
         "https://economictimes.indiatimes.com/topic/morgan-stanley-nifty",
         "https://economictimes.indiatimes.com/markets/stocks/news",
@@ -23,23 +24,28 @@ CURATED_URLS_BY_SOURCE: Final[dict[str, tuple[str, ...]]] = {
         "https://www.livemint.com/market",
     ),
     "motilal_oswal": (
+        "https://www.motilaloswal.com/research-and-reports",
         "https://economictimes.indiatimes.com/topic/nifty-50",
         "https://www.moneycontrol.com/news/tags/nifty.html",
     ),
     "icici_direct": (
+        "https://www.icicidirect.com/research/equity",
         "https://economictimes.indiatimes.com/topic/nifty-50",
         "https://www.moneycontrol.com/news/tags/nifty.html",
     ),
     "hdfc_securities": (
+        "https://www.hdfcsec.com/research-and-reports",
         "https://economictimes.indiatimes.com/topic/nifty-50",
         "https://www.moneycontrol.com/news/tags/nifty.html",
     ),
     "goldman_sachs": (
         "https://economictimes.indiatimes.com/topic/goldman-sachs-nifty",
+        "https://www.moneycontrol.com/news/tags/goldman-sachs.html",
         "https://www.livemint.com/market/stock-market-news",
     ),
     "morgan_stanley": (
         "https://economictimes.indiatimes.com/topic/morgan-stanley-nifty",
+        "https://www.moneycontrol.com/news/tags/morgan-stanley.html",
         "https://www.livemint.com/market/stock-market-news",
     ),
 }

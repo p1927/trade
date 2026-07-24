@@ -153,6 +153,20 @@ def persist_successful_exploratory_path(
     steps: list[NavigationStep] | None = None,
     pipeline: PipelineLogger | None = None,
 ) -> NavigationTrace | None:
+    from trade_integrations.dataflows.index_research.external_predictions.url_policy import (
+        classify_page_kind,
+    )
+
+    page_kind = classify_page_kind(url)
+    if page_kind == "listing":
+        if pipeline:
+            pipeline.info(
+                "navigation",
+                "Skipped auto-save — final URL is a listing/topic page",
+                source_id=source_id,
+                url=url[:120],
+            )
+        return None
     trace = save_auto_path(
         source_id,
         horizon_days=horizon_days,

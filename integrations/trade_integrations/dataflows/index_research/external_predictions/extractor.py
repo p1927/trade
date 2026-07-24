@@ -445,6 +445,11 @@ def extract_prediction_from_text(
                 if pipeline:
                     pipeline.info("extract", "Regex fallback found numeric target", source_id=source.id)
 
+        if not has_prediction and model_name == "minimax":
+            record.fetch_status = "not_found"
+            record.error_message = "llm_denies_prediction"
+            return record
+
         if not has_prediction and not any(
             v is not None for v in (target.low, target.mid, target.high)
         ):
@@ -551,6 +556,7 @@ def extract_prediction_from_text(
             attempt_record,
             body=text,
             used_regex_only=used_regex_target and model_name == "regex",
+            source=source,
         )
         last_record = validated
         if validated.fetch_status == "ok":
