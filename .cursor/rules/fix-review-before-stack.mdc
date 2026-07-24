@@ -20,7 +20,22 @@ Use for:
 - Any non-trivial implementation batch (>1 file or behavior change)
 - **Always after fixing review findings**
 
-**Plan gate:** Reporting a plan, phase, or todo list "complete" without convergence rounds on the implementation diff is **invalid** — same bar as review fixes. Implementation alone (code written + pytest once) is not completion.
+**Plan gate:** Reporting a plan, phase, sub-phase, task, or todo list "complete" without convergence rounds on the implementation diff is **invalid** — same bar as review fixes. Implementation alone (code written + pytest once) is not completion.
+
+### Mandatory checkpoints (never skip)
+
+Run the full convergence loop **before** any of the following:
+
+| Checkpoint | Minimum rounds | Then you may |
+|------------|----------------|--------------|
+| Marking a **plan task** done | 2× Pass 2→3 on that task's diff | Start the next task in the same phase |
+| Marking a **phase / sub-phase** done | 2× Pass 2→3 on the phase diff | Start phase N+1 |
+| Reporting **plan implementation** complete | 3× Program Pass 2→3 on combined plan diff | Commit, close todos, or unrelated work |
+| Moving to the **next module** in a step-named pipeline | 2× Pass 2→3 on that step's diff | Wire or implement the next step |
+
+**Forbidden transitions without convergence:** "tests passed once" → next phase; "code looks good" → plan complete; fixing Bugbot findings without Pass 2→3 on the **fix** diff; marking todos complete without citing convergence rounds.
+
+**Agent self-check before any "done" message:** Can I cite `Convergence round N: …` and `pytest … exit 0` from **this session**? If no → keep working.
 
 ```
 Pass 0 — Research + label (CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN)

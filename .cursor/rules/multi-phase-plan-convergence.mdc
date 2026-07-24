@@ -11,6 +11,27 @@ Works with `subagent-driven-development`, `fix-review-before-stack`, `review-evi
 
 ---
 
+## Convergence gate (read first — mandatory)
+
+**Implementation is not done when code is written.** Every agent must run the mistake convergence loop (`fix-review-before-stack`) at these gates — **before** advancing:
+
+```
+Task done     → 2× Pass 2→3 on task diff     → then next task
+Phase done    → 2× Pass 2→3 on phase diff    → then phase N+1
+Step module   → 2× Pass 2→3 on step diff      → then wire next step
+All phases    → 3× Program Pass 2→3           → then report plan complete
+```
+
+**Invalid transitions (forbidden):**
+- pytest passed once → start next phase
+- todos marked complete → skip convergence
+- Bugbot findings fixed → report done without Pass 2→3 on the **fix** diff
+- "Will run convergence later" → start unrelated work or next phase
+
+If you cannot cite convergence round counts + verification exit codes from **this session**, you are **not** allowed to say the task, phase, or plan is complete.
+
+---
+
 ## Trigger
 
 User says **approved**, **implement the plan**, **LGTM**, or equivalent after reviewing a spec/plan draft.
@@ -93,7 +114,9 @@ Follow `subagent-driven-development`:
 
 1. Read **one phase subplan**; todos for all its tasks.
 2. **One implementer subagent per task** (sequential within phase).
-3. After **each task** — mandatory **implementation convergence loop**:
+3. After **each task** — mandatory **implementation convergence loop** (see `fix-review-before-stack` **Mandatory checkpoints** — **2× Pass 2→3 minimum** on the task diff before the next task):
+
+**You may not mark a task complete or start the next task until** convergence rounds are cited with verification exit codes from **this session**.
 
 ```
 Task Pass 0 — Research + label (CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN)
@@ -107,10 +130,7 @@ Task Pass 4 — Fix CONFIRMED / user-approved items → Task Pass 2 on NEW diff
 
 **Stop task when:** ≥2 full Task Pass 2→3 cycles **and** 0 new **CONFIRMED** on latest diff **and** verification exit 0 this session.
 
-4. Task reviewer subagent (spec ✅ + quality) before next task.
-5. After all tasks in phase — phase pytest scope exits 0; phase-level Bugbot clean; final whole-branch reviewer on capable model.
-6. Record in `.superpowers/sdd/progress.md`.
-7. **Do not start phase N+1** until phase N completion gate passes.
+**Phase completion gate:** After all tasks in a phase, run **one additional** 2× Pass 2→3 cycle on the **combined phase diff** before starting phase N+1. Cite round counts in the phase summary.
 
 ---
 
@@ -189,6 +209,7 @@ Re-read every Bugbot finding in primary sources before labeling CONFIRMED.
 - Parallel implementer subagents on the same phase
 - Mixing cleanup/migration into an implement phase without an explicit migration gate task
 - Reporting "done" without fresh verification exit codes
+- **Starting phase N+1 while phase N convergence rounds are uncited or incomplete**
 
 ---
 
