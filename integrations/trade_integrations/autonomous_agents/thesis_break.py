@@ -166,8 +166,42 @@ async def dispatch_thesis_break_revision(
     new_plan_widget_id: str | None = None,
 ) -> dict[str, Any]:
     """Enqueue a strategy-revision turn for the agent tied to this open position."""
+
+    def _obs(result: dict[str, Any], *, obs_agent_id: str = "") -> dict[str, Any]:
+        resolved_id = obs_agent_id or str(result.get("agent_id") or "")
+        if not resolved_id:
+            try:
+                from trade_integrations.observability.hooks import safe_emit
+
+                safe_emit(
+                    "watch",
+                    "thesis_break_skipped",
+                    level="warn",
+                    detail={
+                        "reason": str(result.get("reason") or result.get("error") or ""),
+                        "underlying": underlying,
+                        "widget_id": widget_id,
+                    },
+                )
+            except ImportError:
+                pass
+            return result
+        try:
+            from trade_integrations.observability.hooks import emit_full_reasoning_dispatch
+
+            status = str(result.get("status") or "")
+            emit_full_reasoning_dispatch(
+                agent_id=resolved_id,
+                turn_kind="strategy_revision",
+                dispatched=status == "dispatched",
+                reason=str(result.get("reason") or result.get("error") or ""),
+            )
+        except ImportError:
+            pass
+        return result
+
     if not is_agent_session_active():
-        return {"status": "skipped", "reason": "no_running_agent"}
+        return _obs({"status": "skipped", "reason": "no_running_agent"})
 
     agent_id = resolve_running_agent_for_symbol(underlying, widget_id=widget_id)
     if not agent_id:
@@ -176,23 +210,23 @@ async def dispatch_thesis_break_revision(
             underlying,
             widget_id,
         )
-        return {"status": "skipped", "reason": "agent_not_resolved"}
+        return _obs({"status": "skipped", "reason": "agent_not_resolved"})
 
     from trade_integrations.autonomous_agents.store import get_agent, save_agent
     from trade_integrations.autonomous_agents.watch import _session_service
 
     agent = get_agent(agent_id)
     if not agent or str(agent.get("status") or "") != "running":
-        return {"status": "skipped", "reason": "agent_not_running"}
+        return _obs({"status": "skipped", "reason": "agent_not_running", "agent_id": agent_id})
     if agent.get("streaming"):
-        return {"status": "skipped", "reason": "turn_in_flight"}
+        return _obs({"status": "skipped", "reason": "turn_in_flight", "agent_id": agent_id})
 
     try:
         from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
         if not is_plan_approved(agent):
             logger.info("thesis break skipped for %s: plan not approved", agent_id)
-            return {"status": "skipped", "reason": "plan_not_approved"}
+            return _obs({"status": "skipped", "reason": "plan_not_approved", "agent_id": agent_id})
     except ImportError:
         pass
 
@@ -206,11 +240,11 @@ async def dispatch_thesis_break_revision(
     svc = _session_service()
     session_id = str(agent.get("vibe_session_id") or "").strip()
     if not svc or not session_id:
-        return {
+        return _obs({
             "status": "error",
             "error": "session_runtime_unavailable",
             "agent_id": agent_id,
-        }
+        })
 
     pending.append(
         {
@@ -231,10 +265,10 @@ async def dispatch_thesis_break_revision(
         latest = get_agent(agent_id) or agent
         latest["pending_alerts"] = []
         save_agent(latest)
-        return {"status": "dispatched", "agent_id": agent_id, "session_id": session_id}
+        return _obs({"status": "dispatched", "agent_id": agent_id, "session_id": session_id})
     except Exception as exc:
         logger.warning("thesis break dispatch failed for %s: %s", agent_id, exc)
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
-        return {"status": "error", "error": str(exc), "agent_id": agent_id}
+        return _obs({"status": "error", "error": str(exc), "agent_id": agent_id})

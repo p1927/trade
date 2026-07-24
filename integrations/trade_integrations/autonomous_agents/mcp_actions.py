@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -343,24 +344,86 @@ def mcp_record_decision(
     return response
 
 
+def _coerce_watch_spec_dict(value: object) -> dict[str, Any] | None:
+    """Normalize watch_spec whether passed as dict or JSON string."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("watch_spec JSON must be an object")
+        return parsed
+    raise ValueError(f"watch_spec must be dict or JSON string, got {type(value).__name__}")
+
+
+def _has_explicit_watch_rules(watch_spec: dict[str, Any] | None) -> bool:
+    if not watch_spec:
+        return False
+    from trade_integrations.autonomous_agents.bootstrap import _coerce_watch_rules
+
+    return bool(_coerce_watch_rules(watch_spec.get("rules")))
+
+
+def _apply_watch_spec_scalar_overrides(
+    watch_spec: dict[str, Any],
+    *,
+    spot_move_pct: float | None = None,
+    cooldown_sec: int | None = None,
+    skip_if_unchanged_minutes: int | None = None,
+) -> dict[str, Any]:
+    if spot_move_pct is not None:
+        from trade_integrations.autonomous_agents.bootstrap import _coerce_watch_rules
+
+        coerced = _coerce_watch_rules(watch_spec.get("rules"))
+        for rule in coerced:
+            if rule.get("metric") == "spot_move_pct":
+                rule["threshold"] = float(spot_move_pct)
+        if coerced:
+            watch_spec["rules"] = coerced
+    if cooldown_sec is not None:
+        watch_spec["cooldown_sec"] = int(cooldown_sec)
+    if skip_if_unchanged_minutes is not None:
+        gate = dict(watch_spec.get("gate") or {})
+        gate["skip_if_unchanged_minutes"] = int(skip_if_unchanged_minutes)
+        watch_spec["gate"] = gate
+    return watch_spec
+
+
 def mcp_set_watch_spec(
     agent_id: str,
-    watch_spec: dict[str, Any] | None = None,
+    watch_spec: dict[str, Any] | str | None = None,
     *,
     strategy: str | None = None,
     spot: float | None = None,
     target: float | None = None,
     stop: float | None = None,
+    spot_move_pct: float | None = None,
+    cooldown_sec: int | None = None,
+    skip_if_unchanged_minutes: int | None = None,
 ) -> dict[str, Any]:
     from datetime import datetime, timezone
+
+    try:
+        watch_spec = _coerce_watch_spec_dict(watch_spec)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return {"status": "error", "error": f"watch_spec JSON invalid or truncated: {exc}"}
 
     agent = get_agent(agent_id)
     if not agent:
         return {"status": "error", "error": f"agent not found: {agent_id}"}
     profile = resolve_profile(agent=agent)
 
-    strategy_name = strategy or (watch_spec or {}).get("strategy") or (agent.get("thesis") or {}).get("strategy")
-    if strategy_name:
+    explicit_rules = _has_explicit_watch_rules(watch_spec)
+    strategy_name = None
+    if not explicit_rules:
+        strategy_name = strategy or (watch_spec or {}).get("strategy") or (agent.get("thesis") or {}).get("strategy")
+
+    if strategy_name and not explicit_rules:
         from trade_integrations.autonomous_agents.mandate import mandate_config_from_agent
         from trade_integrations.autonomous_agents.strategy_watch_spec import (
             build_watch_spec_for_strategy,
@@ -368,6 +431,30 @@ def mcp_set_watch_spec(
         )
 
         mc = mandate_config_from_agent(agent)
+        if spot_move_pct is not None:
+            mc.alert_rules.spot_move_pct = float(spot_move_pct)
+        else:
+            effective_spot = spot
+            if effective_spot is None:
+                for src in (agent.get("last_decision") or {}, agent.get("thesis") or {}):
+                    raw = src.get("spot") if isinstance(src, dict) else None
+                    if raw is not None:
+                        try:
+                            effective_spot = float(raw)
+                            break
+                        except (TypeError, ValueError):
+                            continue
+            if mc.alert_rules.spot_move_points and effective_spot and float(effective_spot) > 0:
+                mc.alert_rules.spot_move_pct = (
+                    float(mc.alert_rules.spot_move_points) / float(effective_spot)
+                ) * 100.0
+        if cooldown_sec is not None:
+            mc.watch_spec["cooldown_sec"] = int(cooldown_sec)
+        if skip_if_unchanged_minutes is not None:
+            gate = dict(mc.watch_spec.get("gate") or {})
+            gate["skip_if_unchanged_minutes"] = int(skip_if_unchanged_minutes)
+            mc.watch_spec["gate"] = gate
+
         symbols = list(agent.get("symbols") or ["NIFTY"])
         watch_spec = build_watch_spec_for_strategy(
             strategy=str(strategy_name),
@@ -377,8 +464,23 @@ def mcp_set_watch_spec(
             target=target,
             stop=stop,
         )
+        watch_spec = _apply_watch_spec_scalar_overrides(
+            watch_spec,
+            spot_move_pct=spot_move_pct,
+            cooldown_sec=cooldown_sec,
+            skip_if_unchanged_minutes=skip_if_unchanged_minutes,
+        )
     elif not watch_spec:
         return {"status": "error", "error": "provide strategy name or explicit watch_spec"}
+    elif not explicit_rules:
+        return {"status": "error", "error": "provide strategy name or explicit watch_spec"}
+    else:
+        watch_spec = _apply_watch_spec_scalar_overrides(
+            watch_spec,
+            spot_move_pct=spot_move_pct,
+            cooldown_sec=cooldown_sec,
+            skip_if_unchanged_minutes=skip_if_unchanged_minutes,
+        )
 
     agent["watch_spec"] = watch_spec
     agent["watch_spec_updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -396,6 +498,7 @@ def mcp_set_watch_spec(
         pass
 
     handoff = None
+    pending_activation = False
     from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
 
     agent = get_agent(agent_id) or agent
@@ -405,6 +508,7 @@ def mcp_set_watch_spec(
     else:
         agent = get_agent(agent_id) or agent
         agent["watch_spec_pending_activation"] = True
+        pending_activation = True
         save_agent(agent)
 
     return {
@@ -413,6 +517,7 @@ def mcp_set_watch_spec(
         "watch_spec": watch_spec,
         "watch_summary": summary,
         "handoff_synced": handoff is not None,
+        "watch_spec_pending_activation": pending_activation,
     }
 
 

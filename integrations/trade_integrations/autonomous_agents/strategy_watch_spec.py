@@ -33,6 +33,8 @@ def build_watch_spec_for_strategy(
 
     key = _norm_strategy(strategy)
     spot_pct = float(mandate.alert_rules.spot_move_pct or 0.5)
+    if mandate.alert_rules.spot_move_points and spot and float(spot) > 0:
+        spot_pct = (float(mandate.alert_rules.spot_move_points) / float(spot)) * 100.0
     rules: list[dict[str, Any]] = []
     review_triggers = ["watch_rule_fired"]
 
@@ -41,7 +43,7 @@ def build_watch_spec_for_strategy(
             {
                 "symbol": focus,
                 "metric": "spot_move_pct",
-                "threshold": max(spot_pct, 1.0),
+                "threshold": spot_pct,
                 "direction": "either",
                 "exchange": exchange,
                 "label": f"{focus} entry setup",

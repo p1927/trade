@@ -122,6 +122,15 @@ def maybe_sync_watch_spec_on_revision(
     ):
         return {"status": "skipped", "reason": "watch_spec already aligned"}
 
+    existing_spec = dict(agent.get("watch_spec") or {})
+    from trade_integrations.autonomous_agents.bootstrap import _coerce_watch_rules
+
+    if (
+        _coerce_watch_rules(existing_spec.get("rules"))
+        and existing_spec.get("derived_from") != "strategy_watch_spec"
+    ):
+        return {"status": "skipped", "reason": "explicit watch rules preserved"}
+
     levels = extract_revision_levels(
         agent=agent,
         strategy=strategy,
@@ -159,7 +168,10 @@ def maybe_sync_watch_spec_on_revision(
 
     profile = resolve_profile(agent=agent)
     handoff_synced = False
-    if profile.uses_nautilus_watch:
+    pending_activation = False
+    from trade_integrations.autonomous_agents.plan_approval import is_plan_approved
+
+    if profile.uses_nautilus_watch and is_plan_approved(agent):
         try:
             from trade_integrations.watch_registry.store import create_watch, list_watches, update_watch
 
@@ -185,6 +197,9 @@ def maybe_sync_watch_spec_on_revision(
                 handoff_synced = sync_watch_spec_to_handoff(agent_id, watch_spec) is not None
         except Exception:
             handoff_synced = False
+    elif profile.uses_nautilus_watch:
+        agent["watch_spec_pending_activation"] = True
+        pending_activation = True
 
     return {
         "status": "ok",
@@ -192,4 +207,5 @@ def maybe_sync_watch_spec_on_revision(
         "watch_spec_updated_at": now,
         "watch_summary": format_watch_spec_summary(watch_spec),
         "handoff_synced": handoff_synced,
+        "watch_spec_pending_activation": pending_activation,
     }

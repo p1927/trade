@@ -107,6 +107,7 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     from trade_integrations.autonomous_agents.mandate_config import (
         detect_observe_intent,
         observe_mandate_text,
+        parse_points_alert_from_text,
     )
 
     symbols = _normalize_symbols(kwargs.get("symbols"))
@@ -136,10 +137,23 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
         else f"Paper trade {sym0} autonomously; research, watch, act when confident."
     )
 
+    mandate_text = str(kwargs.get("mandate") or "").strip() or default_mandate
+    alert_spot_move_pct = float(kwargs.get("alert_spot_move_pct") or 0.5)
+    alert_spot_move_points = kwargs.get("alert_spot_move_points")
+    if kwargs.get("alert_spot_move_pct") is None:
+        pct_from_points, points_from_text = parse_points_alert_from_text(
+            "\n".join(p for p in (user_blob, mandate_text) if p.strip())
+        )
+        if pct_from_points is not None:
+            alert_spot_move_pct = pct_from_points
+            alert_spot_move_points = points_from_text
+        elif points_from_text is not None:
+            alert_spot_move_points = points_from_text
+
     return {
         "symbols": symbols,
         "name": name or "Autonomous agent",
-        "mandate": str(kwargs.get("mandate") or "").strip() or default_mandate,
+        "mandate": mandate_text,
         "agent_mode": "observe" if observe else "trade",
         "budget_inr": float(kwargs.get("budget_inr") or DEFAULT_BUDGET_INR),
         "max_daily_loss_inr": float(kwargs.get("max_daily_loss_inr") or DEFAULT_MAX_DAILY_LOSS_INR),
@@ -149,7 +163,8 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
         "mode": str(kwargs.get("mode") or DEFAULT_MODE),
         "vibe_session_id": kwargs.get("vibe_session_id"),
         "orchestrator_session_id": kwargs.get("orchestrator_session_id"),
-        "alert_spot_move_pct": float(kwargs.get("alert_spot_move_pct") or 0.5),
+        "alert_spot_move_pct": alert_spot_move_pct,
+        "alert_spot_move_points": alert_spot_move_points,
         "user_text": kwargs.get("user_text"),
     }
 

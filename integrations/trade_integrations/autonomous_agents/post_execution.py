@@ -112,9 +112,23 @@ async def dispatch_post_execution_turn(
     order_state: dict[str, Any] | None = None,
     execution_status: str | None = None,
 ) -> dict[str, Any]:
+    def _obs_done(dispatched: bool, reason: str = "") -> dict[str, Any]:
+        try:
+            from trade_integrations.observability.hooks import emit_full_reasoning_dispatch
+
+            emit_full_reasoning_dispatch(
+                agent_id=agent_id,
+                turn_kind="post_execution",
+                dispatched=dispatched,
+                reason=reason,
+            )
+        except ImportError:
+            pass
+        return {"status": "error" if not dispatched and reason in {"agent_not_found", "no_session_service"} else "skipped", "reason": reason}
+
     agent = get_agent(agent_id)
     if not agent:
-        return {"status": "error", "error": f"agent not found: {agent_id}"}
+        return _obs_done(False, "agent_not_found")
 
     pre = dict(pre_snapshot or {})
     post = dict(reconcile_payload or {})
@@ -126,14 +140,14 @@ async def dispatch_post_execution_turn(
         execution_status=execution_status,
     )
     if not ok:
-        return {"status": "skipped", "reason": reason}
+        return _obs_done(False, reason)
 
     from trade_integrations.autonomous_agents.watch import _session_service
 
     session_id = str(agent.get("vibe_session_id") or "").strip()
     svc = _session_service()
     if not svc or not session_id:
-        return {"status": "error", "error": "no session service"}
+        return _obs_done(False, "no_session_service")
 
     prompt = build_post_execution_prompt(
         agent=agent,
@@ -149,12 +163,33 @@ async def dispatch_post_execution_turn(
 
     try:
         await svc.send_message(session_id, prompt)
+        try:
+            from trade_integrations.observability.hooks import emit_full_reasoning_dispatch
+
+            emit_full_reasoning_dispatch(
+                agent_id=agent_id,
+                turn_kind="post_execution",
+                dispatched=True,
+            )
+        except ImportError:
+            pass
         return {"status": "dispatched", "session_id": session_id}
     except Exception as exc:
         logger.warning("post_execution dispatch failed for %s: %s", agent_id, exc)
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
+        try:
+            from trade_integrations.observability.hooks import emit_full_reasoning_dispatch
+
+            emit_full_reasoning_dispatch(
+                agent_id=agent_id,
+                turn_kind="post_execution",
+                dispatched=False,
+                reason=str(exc)[:200],
+            )
+        except ImportError:
+            pass
         return {"status": "error", "error": str(exc)}
 
 

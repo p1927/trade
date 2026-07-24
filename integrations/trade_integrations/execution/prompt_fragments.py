@@ -8,6 +8,10 @@ from typing import Any
 # Registered Vibe tool: trading_place_order retained for legacy E2E scripts only.
 _US_ORDER_TOOL = "`execute_autonomous_basket(widget_id)` — routes through bridge → OpenAlgo Alpaca plugin"
 _US_ORDER_TOOL_LIVE = "`execute_autonomous_basket(widget_id)` or OpenAlgo MCP basket after user confirmation"
+_WATCH_SPEC_HINT = (
+    "Prefer `set_agent_watch_spec(agent_id=\"{agent_id}\", strategy=<strategy>, spot_move_pct=<pct>)` "
+    "— do **not** pass raw nested `watch_spec` dict unless necessary"
+)
 
 _FRAGMENTS: dict[str, str] = {
     "us_equity_paper": """## Required flow (US — Nautilus watch → OpenAlgo Alpaca plugin)
@@ -15,7 +19,7 @@ _FRAGMENTS: dict[str, str] = {
 2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")` — cite tool output for price
 3. Refine thesis; state confidence 0–100
 4. If confidence ≥ {threshold}: {order_tool} (paper only)
-5. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules with exchange US, gate}})` — Nautilus OpenAlgo watch owns alerts
+5. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<strategy>, spot_move_pct=<pct>)` — Nautilus OpenAlgo watch owns alerts
 6. On EXIT: `submit_bridge_execution_intent(agent_id="{agent_id}", action="EXIT", rationale=...)` or let Nautilus stop rules fire
 7. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP
 
@@ -40,7 +44,7 @@ Note: US options pipeline is limited — prefer equity until full US options sup
 4. Refine thesis; state confidence 0–100
 5. If confidence ≥ {threshold}: `execute_autonomous_basket(widget_id)` — routes through bridge → OpenAlgo (do not call `place_order` directly)
 6. On strategy change: **REVISE/ADJUST** — bridge builds leg diff from handoff vs widget; expect a **post_execution** turn after fills
-7. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})` — Nautilus maintains watch after handoff
+7. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<strategy>, spot_move_pct=<pct>)` — Nautilus maintains watch after handoff
 8. On EXIT: `submit_bridge_execution_intent(agent_id="{agent_id}", action="EXIT", rationale=...)` or let Nautilus stop rules fire
 9. After execution: cite `order_state` from progress snapshot before next REVISE
 10. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP
@@ -52,7 +56,7 @@ Do **not** use `get_autonomous_market_feedback` for watch alerts — Nautilus br
 3. `get_stock_trade_widget` / `get_stock_trade_plan` for NSE equity — cite prediction range and provenance in chat
 4. Refine thesis; state confidence 0–100
 5. If confidence ≥ {threshold}: `execute_autonomous_basket(widget_id)` — bridge → OpenAlgo only
-6. `set_agent_watch_spec(agent_id="{agent_id}", watch_spec={{rules, gate}})`
+6. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<strategy>, spot_move_pct=<pct>)`
 7. `record_autonomous_decision` with ENTER/REVISE/EXIT/HOLD/SKIP""",
     "in_options_live": """## Required flow (live)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
@@ -67,12 +71,12 @@ Do **not** use `get_autonomous_market_feedback` for watch alerts — Nautilus br
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_research_status(ticker="{focus}", asset_type="index")` — read hub context only; do not refresh unless stale
 3. `get_index_trade_plan(ticker="{focus}")` for outlook — **read only**, no widget
-4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)` — encode spot-move / schedule rules
+4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>, spot_move_pct=<pct>)` — encode spot-move / schedule rules
 5. `record_autonomous_decision` with decision=WATCH or SKIP and a concise market report in rationale — **no orders, no widgets**""",
     "us_equity_observe": """## Required flow (observe — US watch & report)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")` for live context
-3. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)`
+3. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>, spot_move_pct=<pct>)`
 4. `record_autonomous_decision` with WATCH or SKIP and a concise report — **no orders**""",
 }
 
@@ -153,7 +157,7 @@ _BOOTSTRAP_NOTE = (
 _REVISION_NOTE = (
     "**Nautilus alert revision** — re-evaluate thesis after a watcher fired. "
     "You may refresh hub research and emit **one** updated trade-plan widget if strategy changed. "
-    "Update watchers via `set_agent_watch_spec` with the new strategy name. No user confirmation needed."
+    "Update watchers via `set_agent_watch_spec` with strategy + scalar params (e.g. spot_move_pct). No user confirmation needed."
 )
 
 _OBSERVE_BOOTSTRAP_NOTE = (
@@ -197,13 +201,13 @@ def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: i
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_research_status(ticker="{focus}", asset_type="index")` — read hub once if complete
 3. `get_index_trade_plan(ticker="{focus}")` — outlook only, no widget
-4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)`
+4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>, spot_move_pct=<pct>)`
 5. `record_autonomous_decision` with WATCH or SKIP and initial report — **stop** (no plan approval)"""
     if fragment_id == "us_equity_observe":
         return f"""## Required flow (observe bootstrap — US)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")`
-3. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>)`
+3. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<watch_strategy>, spot_move_pct=<pct>)`
 4. `record_autonomous_decision` with WATCH or SKIP and initial report — **stop**"""
     if fragment_id == "in_equity_paper":
         return f"""## Required flow (bootstrap — India equity)
@@ -211,7 +215,7 @@ def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: i
 2. `get_research_status(ticker="{focus}", asset_type="stock")` — once; proceed when overall status is `complete`
 3. **One** `get_stock_trade_widget(ticker="{focus}")` — do not call plan + widget; do not call twice
 4. Refine thesis; confidence 0–100
-5. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)` — backend derives rules from strategy
+5. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>, spot_move_pct=<pct>)` — backend derives rules from strategy
 6. `record_autonomous_decision` with HOLD/SKIP/ENTER — **stop**; user approves plan next"""
     if fragment_id == "in_options_paper":
         return f"""## Required flow (bootstrap — India options)
@@ -219,14 +223,14 @@ def _bootstrap_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: i
 2. `get_research_status(ticker="{focus}", asset_type="options")` — once; proceed when overall status is `complete`
 3. **One** `get_options_trade_widget(ticker="{focus}")` — do not call twice
 4. Refine thesis; confidence 0–100
-5. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)` — strategy-specific Nautilus rules
+5. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>, spot_move_pct=<pct>)` — strategy-specific Nautilus rules
 6. `record_autonomous_decision` — **stop**; user approves plan next"""
     if fragment_id.startswith("us_"):
         return f"""## Required flow (bootstrap — US)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. `get_stock_browse("{focus}")` and/or `get_us_quote("{focus}")`
 3. Refine thesis; confidence 0–100
-4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)`
+4. `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>, spot_move_pct=<pct>)`
 5. `record_autonomous_decision` — **stop**"""
     template = _FRAGMENTS.get(fragment_id) or _FRAGMENTS["in_options_paper"]
     return template.format(
@@ -284,7 +288,7 @@ def _research_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: in
 2. {research} — refresh hub when stale; proceed when overall status is `complete`
 3. {widget} once — refresh plan/charges if strategy or legs changed
 4. Refine thesis; state confidence 0–100
-5. If strategy changed: `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>)`
+5. If strategy changed: `set_agent_watch_spec(agent_id="{agent_id}", strategy=<chosen_strategy_name>, spot_move_pct=<pct>)`
 6. `record_autonomous_decision` with REVISE | HOLD | ENTER (confidence ≥ {threshold} for entry)"""
 
 
@@ -298,7 +302,7 @@ def _revision_flow(fragment_id: str, *, agent_id: str, focus: str, threshold: in
     return f"""## Required flow (Nautilus revision)
 1. `get_autonomous_agent_status(agent_id="{agent_id}")`
 2. Re-evaluate alert + prior thesis
-3. If strategy changed: {widget} once + `set_agent_watch_spec(strategy=<new_strategy>)`
+3. If strategy changed: {widget} once + `set_agent_watch_spec(strategy=<new_strategy>, spot_move_pct=<pct>)`
 4. `record_autonomous_decision` with REVISE | EXIT | HOLD | ENTER (confidence ≥ {threshold} for entry)"""
 
 

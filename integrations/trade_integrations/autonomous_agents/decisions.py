@@ -93,4 +93,10 @@ def record_agent_decision(
         )
 
     audit = write_agent_audit("decision_recorded", detail=entry)
+    try:
+        from trade_integrations.observability.hooks import emit_autonomous_decision
+
+        emit_autonomous_decision(str(agent.get("id") or ""), entry)
+    except ImportError:
+        pass
     return {"status": "recorded", "decision": entry, "audit": _audit_payload(audit)}

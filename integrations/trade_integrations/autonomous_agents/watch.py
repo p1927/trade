@@ -155,6 +155,12 @@ async def run_watch_tick(agent_id: str) -> dict[str, Any]:
     """Run a lightweight watch tick; dispatch full reasoning if alerts fire."""
     result = await _run_watch_tick_impl(agent_id)
     try:
+        from trade_integrations.observability.hooks import emit_autonomous_watch_tick
+
+        emit_autonomous_watch_tick(agent_id, result if isinstance(result, dict) else {})
+    except ImportError:
+        pass
+    try:
         from trade_integrations.stock_simulator.integration import maybe_advance_sim_after_watch
 
         step_info = maybe_advance_sim_after_watch()
@@ -298,9 +304,24 @@ def _research_turn_recently_ran(agent: dict[str, Any], *, cooldown_min: float = 
 
 async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research") -> bool:
     """Enqueue a full reasoning turn on the agent's bound session. Returns True if dispatched."""
+
+    def _obs_done(dispatched: bool, reason: str = "") -> bool:
+        try:
+            from trade_integrations.observability.hooks import emit_full_reasoning_dispatch
+
+            emit_full_reasoning_dispatch(
+                agent_id=agent_id,
+                turn_kind=turn_kind,
+                dispatched=dispatched,
+                reason=reason,
+            )
+        except ImportError:
+            pass
+        return dispatched
+
     agent = get_agent(agent_id)
     if not agent or str(agent.get("status")) != "running":
-        return False
+        return _obs_done(False, "agent_not_running")
 
     from trade_integrations.autonomous_agents.turns import effective_turn_kind
 
@@ -316,21 +337,21 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
                     effective,
                     agent_id,
                 )
-                return False
+                return _obs_done(False, "plan_not_approved")
         except ImportError:
             pass
 
     if turn_kind == "research" and effective == "research" and _research_turn_recently_ran(agent):
         logger.info("skip research turn for %s: recent full reasoning within cooldown", agent_id)
-        return False
+        return _obs_done(False, "research_cooldown")
 
     if str(agent.get("bootstrap_status") or "") in {"pending", "running"} and turn_kind == "research":
         logger.info("skip research turn for %s: bootstrap still in flight", agent_id)
-        return False
+        return _obs_done(False, "bootstrap_in_flight")
 
     if agent.get("streaming"):
         logger.info("skip full reasoning for %s: turn already in flight", agent_id)
-        return False
+        return _obs_done(False, "turn_in_flight")
 
     prefetch_note = ""
     if effective in {"strategy_revision", "research", "post_execution", "watch_report"}:
@@ -349,7 +370,7 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
     session_id = str(agent.get("vibe_session_id") or "")
     if not svc or not session_id:
         logger.warning("no session service for autonomous agent %s", agent_id)
-        return False
+        return _obs_done(False, "no_session_service")
 
     from trade_integrations.autonomous_agents.turns import build_autonomous_turn_prompt
 
@@ -365,9 +386,10 @@ async def dispatch_full_reasoning(agent_id: str, *, turn_kind: str = "research")
 
     try:
         await svc.send_message(session_id, prompt)
-        return True
+        return _obs_done(True)
     except Exception:
         latest = get_agent(agent_id) or agent
         latest["streaming"] = False
         save_agent(latest)
+        _obs_done(False, "dispatch_failed")
         raise

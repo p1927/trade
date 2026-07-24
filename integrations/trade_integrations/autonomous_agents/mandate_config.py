@@ -28,6 +28,25 @@ _TRADE_INTENT_RE = re.compile(
     r"option\s+chain|straddle|strangle|iron\s+condor|budget|max\s+loss)\b",
     re.I,
 )
+_POINTS_ALERT_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*(?:pt|pts|point|points)\b",
+    re.I,
+)
+
+
+def parse_points_alert_from_text(
+    text: str,
+    *,
+    spot: float | None = None,
+) -> tuple[float | None, float | None]:
+    """Return (spot_move_pct, spot_move_points) when mandate mentions N-point alerts."""
+    match = _POINTS_ALERT_RE.search(str(text or ""))
+    if not match:
+        return None, None
+    points = float(match.group(1))
+    if spot is not None and float(spot) > 0:
+        return (points / float(spot)) * 100.0, points
+    return None, points
 
 
 def detect_observe_intent(text: str) -> bool:
@@ -57,6 +76,7 @@ def observe_mandate_text(symbol: str) -> str:
 @dataclass
 class AlertRules:
     spot_move_pct: float = 0.5
+    spot_move_points: float | None = None
     vix_above: float | None = None
     vix_below: float | None = None
     thesis_break: bool = True
@@ -73,8 +93,10 @@ class AlertRules:
         vix_above = payload.get("vix_above")
         vix_below = payload.get("vix_below")
         pnl_loss = payload.get("pnl_loss_inr")
+        spot_points = payload.get("spot_move_points")
         return cls(
             spot_move_pct=float(payload.get("spot_move_pct") or 0.5),
+            spot_move_points=(float(spot_points) if spot_points is not None else None),
             vix_above=(float(vix_above) if vix_above is not None else None),
             vix_below=(float(vix_below) if vix_below is not None else None),
             thesis_break=bool(payload.get("thesis_break", True)),
@@ -289,6 +311,12 @@ def parse_mandate_from_text(
     text = (mandate_text or "").lower()
     cfg = MandateConfig(confidence_threshold=confidence_threshold)
     cfg.alert_rules.spot_move_pct = alert_spot_move_pct
+    pct_from_points, points_from_text = parse_points_alert_from_text(mandate_text)
+    if pct_from_points is not None:
+        cfg.alert_rules.spot_move_pct = pct_from_points
+        cfg.alert_rules.spot_move_points = points_from_text
+    elif points_from_text is not None:
+        cfg.alert_rules.spot_move_points = points_from_text
     if cfg.alert_rules.pnl_loss_inr is None:
         cfg.alert_rules.pnl_loss_inr = max_daily_loss_inr * 0.75
 
