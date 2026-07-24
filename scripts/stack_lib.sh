@@ -327,12 +327,20 @@ stack_reconcile_stale_claims() {
           continue
         fi
       fi
-      if [[ -n "$port" ]] && stack_http_ok "http://127.0.0.1:${port}/"; then
-        listener="$(stack_port_listener_pid "$port")"
-        if [[ -n "$listener" ]]; then
-          stack_write_claim "$service" "$listener" "$port" "$(stack_read_claim_field "$service" "command" 2>/dev/null || echo adopted)"
+      if [[ -n "$port" ]]; then
+        local port_ok=0
+        if [[ "$service" == "vibe-api" ]]; then
+          stack_vibe_api_http_ok "$port" && port_ok=1
+        elif stack_http_ok "http://127.0.0.1:${port}/"; then
+          port_ok=1
         fi
-        continue
+        if (( port_ok )); then
+          listener="$(stack_port_listener_pid "$port")"
+          if [[ -n "$listener" ]]; then
+            stack_write_claim "$service" "$listener" "$port" "$(stack_read_claim_field "$service" "command" 2>/dev/null || echo adopted)"
+          fi
+          continue
+        fi
       fi
     fi
     listener=""
@@ -459,13 +467,19 @@ sync_nautilus_registry_from_watches(restart_if_changed=False)
 }
 
 stack_purge_nautilus_watch_processes() {
-  stack_stop_nautilus_watch
-  stack_kill_orphan_trade_pgrep "nautilus_openalgo_bridge.runtime.run_watch_node" "Nautilus watch"
-  sleep 0.5
+  local py root log_dir
+  root="$(stack_root)"
+  log_dir="$(stack_log_dir)"
+  py="$(stack_pick_python)"
+  stack_stop_claimed "Nautilus watch" "nautilus-watch" "$log_dir/nautilus-watch.pid" || true
+  if ! PYTHONPATH="$root/integrations" "$py" -m trade_integrations.autonomous_agents.nautilus_watch_cli stack-purge 2>>"$log_dir/nautilus-watch.log"; then
+    echo "[stack] WARN: Nautilus purge failed — see $log_dir/nautilus-watch.log" >&2
+    return 1
+  fi
 }
 
 stack_restart_nautilus_watch() {
-  stack_purge_nautilus_watch_processes
+  stack_purge_nautilus_watch_processes || return 1
   STACK_NAUTILUS_SKIP_ADOPT=1 stack_ensure_nautilus_watch
   local rc=$?
   unset STACK_NAUTILUS_SKIP_ADOPT
@@ -738,15 +752,19 @@ stack_clear_instance_manifest() {
 }
 
 stack_service_up() {
-  local port="$1"
+  local port="$1" service="${2:-}"
+  if [[ "$service" == "vibe-api" ]]; then
+    stack_vibe_api_http_ok "$port"
+    return
+  fi
   stack_http_ok "http://127.0.0.1:${port}/"
 }
 
 stack_wait_for_service_port() {
-  local port="$1" attempts="${2:-20}"
+  local port="$1" attempts="${2:-20}" service="${3:-}"
   local i listener
   for ((i = 1; i <= attempts; i++)); do
-    if stack_service_up "$port"; then
+    if stack_service_up "$port" "$service"; then
       return 0
     fi
     listener="$(stack_port_listener_pid "$port")"
@@ -756,7 +774,7 @@ stack_wait_for_service_port() {
     fi
     return 1
   done
-  stack_service_up "$port"
+  stack_service_up "$port" "$service"
 }
 
 # Start a detached process; writes the child PID to pidfile and claims it (STACK_LAUNCH_SERVICE).
@@ -786,7 +804,7 @@ stack_launch_detached() {
   local existing
   existing="$(stack_read_pid "$pidfile")"
   if stack_pid_alive "$existing"; then
-    if [[ -z "$expect_port" ]] || stack_service_up "$expect_port"; then
+    if [[ -z "$expect_port" ]] || stack_service_up "$expect_port" "$service"; then
       if [[ -n "$service" ]]; then
         stack_write_claim "$service" "$existing" "$expect_port" "$*"
       fi
@@ -796,7 +814,7 @@ stack_launch_detached() {
     if [[ -n "$expect_port" ]]; then
       stack_sync_pidfile_from_port "$pidfile" "$expect_port"
       existing="$(stack_read_pid "$pidfile")"
-      if [[ -n "$existing" ]] && stack_wait_for_service_port "$expect_port" 20; then
+      if [[ -n "$existing" ]] && stack_wait_for_service_port "$expect_port" 20 "$service"; then
         if [[ -n "$service" ]]; then
           stack_write_claim "$service" "$existing" "$expect_port" "$*"
         fi
@@ -831,7 +849,7 @@ stack_launch_detached() {
       stack_write_pidfile "$pidfile" "$listener"
     fi
   fi
-  if stack_pid_alive "$owner_pid" || { [[ -n "$expect_port" ]] && stack_service_up "$expect_port"; }; then
+  if stack_pid_alive "$owner_pid" || { [[ -n "$expect_port" ]] && stack_service_up "$expect_port" "$service"; }; then
     if [[ -n "$service" ]]; then
       stack_write_claim "$service" "$owner_pid" "$expect_port" "$*"
     fi
@@ -1028,8 +1046,8 @@ stack_start_vibe_api() {
   base="http://127.0.0.1:$port"
   agent_dir="$root/vibetrading/agent"
 
-  if stack_http_ok "$base/" && stack_api_index_prediction_ok "$port"; then
-    if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/"; then
+  if stack_vibe_api_http_ok "$port" && stack_api_index_prediction_ok "$port"; then
+    if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/health"; then
       echo "[stack] Vibe API already up at $base (pid $(stack_claim_pid vibe-api))"
       return 0
     fi
@@ -1038,23 +1056,19 @@ stack_start_vibe_api() {
     return 0
   fi
 
-  # Root responds but index probe failed — often a busy worker (SSE analysis).
-  if stack_http_ok "$base/" && stack_vibe_api_listener_alive "$port"; then
-    if stack_vibe_api_http_ok "$port"; then
-      if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/"; then
-        echo "[stack] Vibe API on :$port is busy but healthy — leaving it running"
-        return 0
-      fi
-      stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli.main serve"
-      echo "[stack] Vibe API on :$port is busy but healthy — leaving running (synced claim)"
+  # /health ok but index probe failed — often a busy worker (SSE analysis).
+  if stack_vibe_api_http_ok "$port" && stack_vibe_api_listener_alive "$port"; then
+    if stack_adopt_running_service "vibe-api" "$port" "$pidfile" "$base/health"; then
+      echo "[stack] Vibe API on :$port is busy but healthy — leaving it running"
       return 0
     fi
-    echo "[stack] Vibe API on :$port listens but /health failed — use: trade restart --force" >&2
-    return 1
+    stack_sync_service_claim "vibe-api" "$pidfile" "$port" "cli.main serve"
+    echo "[stack] Vibe API on :$port is busy but healthy — leaving running (synced claim)"
+    return 0
   fi
 
-  if stack_http_ok "$base/"; then
-    echo "[stack] Vibe API on :$port responds but is not ready — use: trade restart --force" >&2
+  if stack_vibe_api_listener_alive "$port" && ! stack_vibe_api_http_ok "$port"; then
+    echo "[stack] Vibe API on :$port listens but /health failed — use: trade restart --force" >&2
     return 1
   fi
 
@@ -1079,7 +1093,7 @@ stack_start_vibe_api() {
     "$pidfile" "$logfile" "$agent_dir" \
     "$py" -m cli.main "${serve_args[@]}"
   unset STACK_LAUNCH_EXPECT_PORT STACK_LAUNCH_SERVICE
-  stack_wait_for_url "Vibe API" "$base/" 60
+  stack_wait_for_url "Vibe API" "$base/health" 60
   stack_sync_pidfile_from_port "$pidfile" "$port"
   stack_write_claim "vibe-api" "$(stack_read_pid "$pidfile")" "$port" "cli.main serve"
 }
@@ -1713,14 +1727,11 @@ stack_nautilus_python() {
 }
 
 stack_start_nautilus_watch() {
-  local root log_dir pidfile logfile agent_id_file agent_id launch_script skip_adopt=0
+  local root log_dir logfile agent_id skip_adopt=0 py rc
   root="$(stack_root)"
   log_dir="$(stack_log_dir)"
-  pidfile="$log_dir/nautilus-watch.pid"
   logfile="$log_dir/nautilus-watch.log"
-  agent_id_file="$log_dir/nautilus-watch.agent_id"
   agent_id="${NAUTILUS_AGENT_ID:-}"
-  launch_script="$root/scripts/run_nautilus_watch.sh"
 
   if [[ "${STACK_NAUTILUS_SKIP_ADOPT:-0}" == "1" || "${STACK_NAUTILUS_SKIP_ADOPT:-}" == "true" ]]; then
     skip_adopt=1
@@ -1756,91 +1767,25 @@ stack_start_nautilus_watch() {
 
   stack_reconcile_nautilus_watch_pid
 
-  existing="$(stack_read_pid "$pidfile")"
-  bound_agent=""
-  if [[ -f "$agent_id_file" ]]; then
-    bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
-  fi
-  if stack_nautilus_pid_valid "$existing" && [[ -n "$agent_id" && -n "$bound_agent" && "$bound_agent" != "$agent_id" ]]; then
-    echo "[stack] Nautilus watch bound to $bound_agent — restarting for $agent_id ..."
-    stack_stop_nautilus_watch
-    existing=""
-    bound_agent=""
-  fi
-
-  if (( ! skip_adopt )) && stack_adopt_running_nautilus_watch; then
-    echo "[stack] Nautilus watch already running (pid $(stack_read_pid "$pidfile"), registry mode)"
-    return 0
-  fi
-
+  local launch_script="$root/scripts/run_nautilus_watch.sh"
   if [[ ! -x "$launch_script" ]]; then
     echo "[stack] missing $launch_script" >&2
     return 1
   fi
 
-  existing="$(stack_read_pid "$pidfile")"
-  if [[ -f "$agent_id_file" ]]; then
-    bound_agent="$(tr -d '[:space:]' <"$agent_id_file")"
-  fi
-  if (( ! skip_adopt )) && stack_nautilus_pid_valid "$existing"; then
-    if stack_nautilus_registry_has_agents && [[ -n "$(stack_read_pid "$pidfile")" ]]; then
-      stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch --registry"
-      echo "[stack] Nautilus watch already running (pid $existing, registry mode)"
-      return 0
-    fi
-    if [[ -n "$agent_id" && -z "$bound_agent" ]]; then
-      echo "$agent_id" >"$agent_id_file"
-      stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch"
-      echo "[stack] Nautilus watch already running (pid $existing) — bound to $agent_id"
-      return 0
-    else
-      stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch"
-      echo "[stack] Nautilus watch already running (pid $existing${bound_agent:+, agent $bound_agent})"
-      return 0
-    fi
-  elif (( skip_adopt )) && stack_nautilus_pid_valid "$existing"; then
-    echo "[stack] clearing surviving Nautilus watch (pid $existing) before forced restart ..."
-    stack_purge_nautilus_watch_processes
-    existing=""
-    bound_agent=""
-  elif [[ -n "$existing" ]]; then
-    echo "[stack] clearing stale Nautilus watch pid $existing"
-    rm -f "$pidfile" "$agent_id_file"
-  fi
+  py="$(stack_pick_python)"
+  local -a cli_args=(stack-start)
+  (( skip_adopt )) && cli_args+=(--skip-adopt)
+  [[ -n "$agent_id" ]] && cli_args+=(--agent-id "$agent_id")
 
-  local cmd=("$launch_script")
-  if (( skip_adopt )); then
-    stack_kill_orphan_trade_pgrep "nautilus_openalgo_bridge.runtime.run_watch_node" "Nautilus watch orphan"
-  fi
-  if ! stack_sync_nautilus_registry_quiet; then
-    echo "[stack] aborting Nautilus launch — registry sync failed" >&2
-    return 1
-  fi
-  if stack_nautilus_registry_has_agents; then
-    cmd+=(--registry)
-  elif [[ -n "$agent_id" ]]; then
-    cmd+=(--agent-id "$agent_id")
-    echo "$agent_id" >"$agent_id_file"
-  else
-    echo "[stack] skip Nautilus watch — no agents in registry yet"
-    return 0
-  fi
-  echo "[stack] starting Nautilus watch node ..."
-  STACK_LAUNCH_SERVICE=nautilus-watch
-  stack_launch_detached "$pidfile" "$logfile" "$root" "${cmd[@]}"
-  unset STACK_LAUNCH_SERVICE
-
-  sleep 2
-  existing="$(stack_read_pid "$pidfile")"
-  if ! stack_nautilus_pid_valid "$existing"; then
-    echo "[stack] Nautilus watch failed to stay up — see $logfile" >&2
+  if ! PYTHONPATH="$root/integrations" "$py" -m trade_integrations.autonomous_agents.nautilus_watch_cli "${cli_args[@]}" >>"$logfile" 2>&1; then
+    echo "[stack] Nautilus watch failed to start — see $logfile" >&2
     tail -8 "$logfile" 2>/dev/null >&2 || true
-    rm -f "$pidfile" "$agent_id_file"
+    rm -f "$log_dir/nautilus-watch.pid" "$log_dir/nautilus-watch.agent_id"
     stack_release_claim "nautilus-watch"
     return 1
   fi
-  stack_sync_nautilus_registry_pid "$existing"
-  stack_write_claim "nautilus-watch" "$existing" "" "${cmd[*]}"
+  return 0
 }
 
 stack_stop_nautilus_watch() {

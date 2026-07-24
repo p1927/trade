@@ -489,7 +489,7 @@ check_vibe_ready() {
 probe_vibe_http() {
   local api="${VIBE_BACKEND_PORT}"
   local ui="${VIBE_FRONTEND_PORT}"
-  http_ok "http://127.0.0.1:${api}/" && http_ok "http://127.0.0.1:${ui}/"
+  http_ok "http://127.0.0.1:${api}/health" && http_ok "http://127.0.0.1:${ui}/"
 }
 
 daemon_vibe_running() {

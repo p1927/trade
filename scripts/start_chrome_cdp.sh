@@ -3,7 +3,11 @@
 set -euo pipefail
 
 PORT="${1:-9222}"
-PROFILE_DIR="${TMPDIR:-/tmp}/chrome-cdp-${PORT}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DEFAULT_PROFILE="${ROOT}/log/chrome-cdp-profile"
+PROFILE_DIR="${CRAWL4AI_CDP_PROFILE_DIR:-$DEFAULT_PROFILE}"
+
+mkdir -p "${PROFILE_DIR}"
 
 echo "Starting Chrome with remote debugging on port ${PORT}"
 echo "Profile dir: ${PROFILE_DIR}"

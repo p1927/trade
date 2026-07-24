@@ -22,3 +22,20 @@ def test_stack_lib_bash_syntax():
         path = root / script
         result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
         assert result.returncode == 0, f"{script}: {result.stderr}"
+
+
+def test_stack_start_vibe_api_uses_health_not_root():
+    root = Path(__file__).resolve().parents[1]
+    stack_lib = (root / "scripts" / "stack_lib.sh").read_text()
+    block = stack_lib.split("stack_start_vibe_api")[1].split("stack_start_vibe_ui")[0]
+    assert 'stack_http_ok "$base/"' not in block
+    assert "$base/health" in block
+    assert "stack_vibe_api_http_ok" in block
+
+
+def test_stack_reconcile_stale_claims_vibe_api_uses_health():
+    root = Path(__file__).resolve().parents[1]
+    stack_lib = (root / "scripts" / "stack_lib.sh").read_text()
+    block = stack_lib.split("stack_reconcile_stale_claims")[1].split("stack_service_for_pid")[0]
+    assert '"$service" == "vibe-api"' in block
+    assert "stack_vibe_api_http_ok" in block

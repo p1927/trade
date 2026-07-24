@@ -52,6 +52,7 @@ Research:
 Data (historic / prediction cold tier):
   data ingest [--offline] [--incremental] [--audit]   Load historic_data + cold tier
   data audit [--write]                              Prediction factor coverage audit
+  sim-data extend [--dry-run]                       Append-only HF NIFTY replay extend
 
 Tiered APIs (queue + hub cache):
   tiered-api status [--json]   Per-source daily budget, queue depth, config
@@ -343,6 +344,29 @@ EOF
         ;;
       *)
         echo "Unknown data subcommand: $sub (try: ingest, audit)" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+
+  sim-data)
+    _stack_trade_prelude sim-data
+    sub="${1:-extend}"
+    shift || true
+    py="$ROOT/.venv/bin/python"
+    [[ -x "$py" ]] || py="python3"
+    case "$sub" in
+      extend)
+        exec "$py" "$ROOT/scripts/extend_hf_replay.py" "$@"
+        ;;
+      -h|--help|help|"")
+        cat <<'EOF'
+Usage:
+  trade sim-data extend [--dry-run] [--index-only] [--options-only]
+EOF
+        ;;
+      *)
+        echo "Unknown sim-data subcommand: $sub (try: extend)" >&2
         exit 1
         ;;
     esac

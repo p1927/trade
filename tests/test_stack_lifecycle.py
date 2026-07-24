@@ -183,7 +183,20 @@ def test_stack_status_does_not_start_services():
         stack_start_nautilus_watch() { echo STARTED_NAUTILUS; return 1; }
         stack_ensure_dependencies() { echo STARTED_ENSURE; return 1; }
         stack_ensure_hub_docker() { echo STARTED_HUB; return 1; }
-        export -f stack_start_nautilus_watch stack_ensure_dependencies stack_ensure_hub_docker
+        stack_reconcile_for_status() { return 0; }
+        stack_port_listener_pid() { echo ""; }
+        stack_pid_alive() { return 1; }
+        stack_process_in_trade_repo() { return 0; }
+        stack_claim_pid() { echo ""; }
+        stack_nautilus_watch_required() { return 1; }
+        stack_nautilus_pid_valid() { return 1; }
+        stack_status_hub_docker() { return 0; }
+        stack_probe_llm_wiki() { return 0; }
+        curl() { echo "000"; return 0; }
+        export -f stack_start_nautilus_watch stack_ensure_dependencies stack_ensure_hub_docker \\
+          stack_reconcile_for_status stack_port_listener_pid stack_pid_alive \\
+          stack_process_in_trade_repo stack_claim_pid stack_nautilus_watch_required \\
+          stack_nautilus_pid_valid stack_status_hub_docker stack_probe_llm_wiki curl
         stack_status_vibe_stack 2>&1 | tee /tmp/stack_status_test.out
         if grep -q STARTED /tmp/stack_status_test.out; then exit 1; fi
         echo ok
@@ -309,31 +322,30 @@ def test_stack_nautilus_watch_required_true_when_registry_has_agents():
     assert "required" in proc.stdout
 
 
-def test_stack_start_nautilus_watch_passes_agent_id_when_registry_empty():
+def test_stack_start_nautilus_watch_delegates_to_python_cli():
     proc = _bash(
         """
         source scripts/stack_lib.sh
         STACK_ROOT="$PWD"
         export NAUTILUS_WATCH_ENABLE=true
         stack_load_env
-        mkdir -p log
-        echo '{"agents":[],"node_pid":null}' > log/nautilus-watch.agents.json
+        mkdir -p log .test-bin
+        echo '{"agents":[{"agent_id":"aa_flagtest"}],"node_pid":null}' > log/nautilus-watch.agents.json
         stack_reconcile_nautilus_watch_pid() { return 0; }
-        stack_sync_nautilus_registry_quiet() { return 0; }
-        stack_adopt_running_nautilus_watch() { return 1; }
-        stack_nautilus_pid_valid() {
-          [[ "${1:-}" == "4242" ]] && return 0
-          return 1
-        }
-        stack_launch_detached() {
-          echo "LAUNCH:$*"
-          echo 4242 > "$1"
-          return 0
-        }
-        export -f stack_reconcile_nautilus_watch_pid stack_sync_nautilus_registry_quiet \\
-          stack_adopt_running_nautilus_watch stack_nautilus_pid_valid stack_launch_detached
-        stack_start_nautilus_watch aa_flagtest 2>&1 | tee /tmp/nautilus_launch_test.out
-        grep -q 'LAUNCH:.*--agent-id aa_flagtest' /tmp/nautilus_launch_test.out
+        cat > .test-bin/python3 << 'SHIM'
+#!/bin/bash
+if [[ " $* " == *" nautilus_watch_cli stack-start "* ]]; then
+  echo "[stack] starting Nautilus watch node ..."
+  echo "[stack] Nautilus watch running (pid 4242)"
+  exit 0
+fi
+exec /usr/bin/env python3 "$@"
+SHIM
+        chmod +x .test-bin/python3
+        stack_pick_python() { echo "$PWD/.test-bin/python3"; }
+        export -f stack_reconcile_nautilus_watch_pid stack_pick_python
+        stack_start_nautilus_watch aa_flagtest 2>&1 | tee log/nautilus-cli-delegate.log
+        grep -q 'starting Nautilus watch node' log/nautilus-cli-delegate.log
         """
     )
     assert proc.returncode == 0
@@ -365,35 +377,6 @@ def test_stack_status_shows_nautilus_idle_when_not_required():
           stack_claim_pid stack_status_hub_docker stack_probe_llm_wiki
         stack_status_vibe_stack 2>&1 | tee /tmp/nautilus_status_test.out
         grep -q 'idle (no agents registered)' /tmp/nautilus_status_test.out
-        """
-    )
-    assert proc.returncode == 0
-
-
-def test_stack_start_nautilus_watch_syncs_registry_without_agent_id():
-    proc = _bash(
-        """
-        source scripts/stack_lib.sh
-        STACK_ROOT="$PWD"
-        export NAUTILUS_WATCH_ENABLE=true
-        stack_load_env
-        mkdir -p log
-        echo '{"agents":[{"agent_id":"aa_sync"}],"node_pid":null}' > log/nautilus-watch.agents.json
-        sync_calls=0
-        stack_sync_nautilus_registry_quiet() { sync_calls=$((sync_calls + 1)); }
-        stack_reconcile_nautilus_watch_pid() { return 0; }
-        stack_adopt_running_nautilus_watch() { return 1; }
-        stack_nautilus_pid_valid() { return 1; }
-        stack_launch_detached() {
-          echo "LAUNCH:$*"
-          echo 4242 > "$1"
-          return 0
-        }
-        export -f stack_sync_nautilus_registry_quiet stack_reconcile_nautilus_watch_pid \\
-          stack_adopt_running_nautilus_watch stack_nautilus_pid_valid stack_launch_detached
-        stack_start_nautilus_watch 2>&1 | tee /tmp/nautilus_sync_test.out
-        test "$sync_calls" -eq 1
-        grep -q 'LAUNCH:.*--registry' /tmp/nautilus_sync_test.out
         """
     )
     assert proc.returncode == 0
