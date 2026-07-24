@@ -69,7 +69,13 @@ def _research_asset_type(
     market: str,
     primary: PrimaryInstrument,
     trade_symbols: tuple[str, ...],
+    intent_instruments: frozenset[str] | None = None,
 ) -> ResearchAssetType:
+    intent = intent_instruments or frozenset()
+    if "index" in intent:
+        return "index"
+    if "options" in intent:
+        return "options"
     if market == "US":
         return "stock"
     sym0 = trade_symbols[0] if trade_symbols else "NIFTY"
@@ -80,11 +86,22 @@ def _research_asset_type(
         index_eligible = is_index_research_eligible(sym0)
     except Exception:
         index_eligible = sym0 in {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"}
-    if index_eligible:
+    if "futures" in intent:
+        return "index" if index_eligible else "stock"
+    if index_eligible and ("equity" not in intent or "index" in intent):
         return "index"
     if primary == "equity":
         return "stock"
     return "options"
+
+
+def _intent_instruments_from_agent(agent: dict[str, Any]) -> frozenset[str]:
+    mc = agent.get("mandate_config") if isinstance(agent.get("mandate_config"), dict) else {}
+    raw = mc.get("intent") if isinstance(mc.get("intent"), dict) else agent.get("intent")
+    if not isinstance(raw, dict):
+        return frozenset()
+    instruments = raw.get("instruments") or []
+    return frozenset(str(x).strip().lower() for x in instruments if str(x).strip())
 
 
 def resolve_agent_routing(agent: dict[str, Any], *, mode: str | None = None) -> AgentRoutingContext:
@@ -114,11 +131,15 @@ def resolve_agent_routing(agent: dict[str, Any], *, mode: str | None = None) -> 
         fragment = profile.prompt_fragment_id
 
     watch_symbols = _watch_symbols_from_agent(agent, trade_symbols)
+    intent_instruments = _intent_instruments_from_agent(agent)
     research_asset = _research_asset_type(
         market=market,
         primary=primary,
         trade_symbols=trade_symbols,
+        intent_instruments=intent_instruments,
     )
+    allowed_set = {str(x).strip().lower() for x in profile.allowed_instruments if str(x).strip()}
+    uses_options = market == "IN" and "options" in allowed_set and research_asset == "options"
 
     return AgentRoutingContext(
         market=market,  # type: ignore[arg-type]
@@ -129,8 +150,8 @@ def resolve_agent_routing(agent: dict[str, Any], *, mode: str | None = None) -> 
         primary_instrument=primary,
         prompt_fragment_id=fragment,
         research_asset_type=research_asset,
-        uses_strategy_scorer=(market == "IN" and primary == "options"),
-        uses_options_advisor=(market == "IN" and primary == "options"),
+        uses_strategy_scorer=uses_options,
+        uses_options_advisor=uses_options,
         profile=profile,
     )
 

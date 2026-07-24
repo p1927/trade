@@ -98,6 +98,7 @@ def test_loop_guard_emits_limit(obs_paths):
     events_file, _ = obs_paths
     guard = LoopGuard("test_loop", module="system", max_iterations=2, strict=False)
     assert guard.tick() is True
+    assert guard.tick() is True
     assert guard.tick() is False
     rows = read_jsonl_tail(events_file, limit=20)
     assert any(r.get("event") == "loop_limit_reached" for r in rows)
@@ -105,6 +106,7 @@ def test_loop_guard_emits_limit(obs_paths):
 
 def test_loop_guard_strict_raises(obs_paths):
     guard = LoopGuard("strict_loop", max_iterations=1, strict=True)
+    assert guard.tick() is True
     with pytest.raises(LoopLimitReached):
         guard.tick()
 

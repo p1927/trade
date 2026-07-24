@@ -31,7 +31,7 @@ class LoopGuard:
         self._limit_logged = False
 
     def tick(self) -> bool:
-        """Advance one iteration. Returns False when limit reached."""
+        """Advance one iteration. Returns False once iteration exceeds max_iterations."""
         self.iteration += 1
         if self.warn_every and self.iteration % self.warn_every == 0:
             emit(
@@ -48,17 +48,18 @@ class LoopGuard:
                 detail={"loop_name": self.loop_name, "iteration": self.iteration},
             )
 
-        if self.iteration >= self.max_iterations and not self._limit_logged:
-            self._limit_logged = True
-            emit(
-                self.module,
-                "loop_limit_reached",
-                level="error",
-                detail={"loop_name": self.loop_name, "iteration": self.iteration},
-            )
-            if self.strict:
-                raise LoopLimitReached(
-                    f"{self.loop_name} exceeded {self.max_iterations} iterations"
+        if self.iteration > self.max_iterations:
+            if not self._limit_logged:
+                self._limit_logged = True
+                emit(
+                    self.module,
+                    "loop_limit_reached",
+                    level="error",
+                    detail={"loop_name": self.loop_name, "iteration": self.iteration},
                 )
+                if self.strict:
+                    raise LoopLimitReached(
+                        f"{self.loop_name} exceeded {self.max_iterations} iterations"
+                    )
             return False
-        return self.iteration < self.max_iterations
+        return True
