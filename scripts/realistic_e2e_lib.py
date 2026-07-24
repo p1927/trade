@@ -538,10 +538,7 @@ def stop_autonomous_agents_session() -> None:
 
 
 def ensure_stack_healthy(*, timeout_sec: int = 120) -> bool:
-    """Wait for OpenAlgo + Vibe API after trade heal (E2E preflight)."""
-    import subprocess
-
-    subprocess.run([str(ROOT / "trade"), "heal"], cwd=ROOT, check=False, capture_output=True)
+    """Wait for OpenAlgo + Vibe API (poll only — no heal subprocess loop)."""
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         try:
@@ -552,7 +549,6 @@ def ensure_stack_healthy(*, timeout_sec: int = 120) -> bool:
             return True
         except Exception:
             time.sleep(3)
-            subprocess.run([str(ROOT / "trade"), "heal"], cwd=ROOT, check=False, capture_output=True)
     return False
 
 
@@ -627,8 +623,9 @@ def wait_for_registry_watches(
 
 
 def ensure_nautilus_watch_running(*, timeout_sec: int = 60) -> bool:
-    """Ensure Nautilus watch node is up via trade heal."""
+    """Ensure Nautilus watch node is up via trade heal and Python lifecycle authority."""
     import subprocess
+    import sys
 
     reg_path = ROOT / "log" / "nautilus-watch.agents.json"
     if reg_path.is_file():
@@ -638,6 +635,9 @@ def ensure_nautilus_watch_running(*, timeout_sec: int = 60) -> bool:
                 reg_path.unlink(missing_ok=True)
         except Exception:
             pass
+
+    env_base = os.environ.copy()
+    env_base["PYTHONPATH"] = f"{INTEGRATIONS}{os.pathsep}{env_base.get('PYTHONPATH', '')}"
 
     for attempt in range(3):
         subprocess.run([str(ROOT / "trade"), "heal"], cwd=ROOT, check=False, capture_output=True)
@@ -653,18 +653,19 @@ def ensure_nautilus_watch_running(*, timeout_sec: int = 60) -> bool:
                 pass
             time.sleep(3)
 
-        launch = ROOT / "scripts" / "run_nautilus_watch.sh"
-        if launch.is_file():
-            env = os.environ.copy()
-            env["PYTHONPATH"] = f"{INTEGRATIONS}{os.pathsep}{ROOT / 'tradingagents'}{os.pathsep}{env.get('PYTHONPATH', '')}"
-            subprocess.Popen(
-                [str(launch)],
-                cwd=ROOT,
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(5)
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "trade_integrations.autonomous_agents.nautilus_watch_cli",
+                "stack-start",
+            ],
+            cwd=ROOT,
+            env=env_base,
+            check=False,
+            capture_output=True,
+        )
+        time.sleep(5)
     return False
 
 

@@ -216,10 +216,16 @@ def _default_symbol(*, text: str) -> str | None:
 
 def _infer_mandate(text: str, symbols: list[str]) -> str:
     sym = symbols[0] if symbols else "NIFTY"
-    from trade_integrations.autonomous_agents.mandate_config import detect_observe_intent, observe_mandate_text
+    from trade_integrations.autonomous_agents.mandate_config import observe_mandate_text
 
-    if detect_observe_intent(text):
-        return observe_mandate_text(sym)
+    try:
+        from trade_integrations.autonomous_agents.intent_extractor import fast_path_extract_intent_delta
+
+        delta = fast_path_extract_intent_delta(text)
+        if delta and delta.engagement == "observe":
+            return observe_mandate_text(sym)
+    except Exception:
+        pass
     parts: list[str] = [f"Paper trade {sym} autonomously"]
     if _INTRADAY_RE.search(text):
         parts.append("intraday (flat by close)")
@@ -327,13 +333,6 @@ def build_auto_propose_kwargs(
         kwargs["watch_interval_min"] = int(watch_match.group(1))
 
     if "mandate" not in kwargs:
-        kwargs["mandate"] = _infer_mandate(user_message, symbols)
-
-    from trade_integrations.autonomous_agents.mandate_config import detect_observe_intent
-
-    if detect_observe_intent(text):
-        kwargs["agent_mode"] = "observe"
-        kwargs["allowed_instruments"] = ["equity"]
         kwargs["mandate"] = _infer_mandate(user_message, symbols)
 
     kwargs["user_text"] = user_message

@@ -75,9 +75,26 @@ def _stock_presentable(widget: dict[str, Any]) -> bool:
     return bool(rec.get("action") or rec.get("legs"))
 
 
-def is_widget_presentable(widget: dict[str, Any], intent: str) -> bool:
+def is_widget_presentable(
+    widget: dict[str, Any],
+    intent: str,
+    *,
+    session_config: dict[str, Any] | None = None,
+) -> bool:
     if not widget or intent == "none":
         return False
+    if session_config is not None:
+        try:
+            from trade_integrations.autonomous_agents.intent_capabilities import (
+                prefetch_widget_intent_allowed,
+                resolve_capabilities,
+            )
+
+            caps = resolve_capabilities(session_config=session_config)
+            if not prefetch_widget_intent_allowed(intent, caps):
+                return False
+        except Exception:
+            return False
 
     asset = widget.get("asset_type", "options")
 

@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENT_SRC = ROOT / "vibetrading" / "agent" / "src"
-if str(AGENT_SRC) not in sys.path:
-    sys.path.insert(0, str(AGENT_SRC))
+AGENT_ROOT = ROOT / "vibetrading" / "agent"
+if str(AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(AGENT_ROOT))
 
 
 def test_assistant_claims_proposal_ready_detects_card_phrases() -> None:

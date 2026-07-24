@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from trade_integrations.watch_registry.nautilus_signature import nautilus_registry_signature
+
 logger = logging.getLogger(__name__)
 
 _LAUNCH_VERIFY_SEC = 2.0
@@ -373,6 +375,61 @@ def get_watch_process_status(*, reconcile: bool = True) -> dict[str, str | int |
     }
 
 
+def reconcile_nautilus_service_claim() -> dict[str, Any]:
+    """Align pidfile, registry node_pid, and stack claim with the live watch process."""
+    from trade_integrations.watch_registry.sync_lock import watch_registry_mutation_lock
+
+    with watch_registry_mutation_lock():
+        reconcile_stale_watch_pid()
+        registry = load_registry()
+        reg_pid = registry.get("node_pid")
+        pidfile_pid = _read_pid()
+        live_pids = list_live_watch_pids()
+
+        if len(live_pids) > 1:
+            purge = purge_nautilus_watch_processes()
+            survivors = list(purge.get("survivors") or [])
+            if survivors:
+                return {
+                    "status": "error",
+                    "reason": "duplicate_processes",
+                    "survivors": survivors,
+                }
+            return {"status": "idle", "pid": None, "source": "purged_duplicates"}
+
+        pid: int | None = None
+        source = "idle"
+        if len(live_pids) == 1:
+            pid = live_pids[0]
+            source = "live"
+        elif pidfile_pid is not None and _process_alive(pidfile_pid):
+            pid = pidfile_pid
+            source = "pidfile"
+        elif isinstance(reg_pid, int) and _process_alive(reg_pid):
+            pid = reg_pid
+            source = "registry"
+
+        if pid is not None and _process_alive(pid):
+            try:
+                command = _launch_command_string(
+                    use_registry=bool(get_registry_agent_ids()),
+                    agent_id=_read_bound_agent_id(),
+                )
+                bound_pid = _finalize_watch_launch(command=command, expected_pid=pid)
+            except NautilusWatchLifecycleError as exc:
+                return {"status": "error", "reason": "finalize_failed", "error": str(exc)}
+            return {"status": "ok", "pid": bound_pid, "source": source}
+
+        if pidfile_pid is not None and not _process_alive(pidfile_pid):
+            _pidfile().unlink(missing_ok=True)
+        claim = _log_dir() / "claims" / "nautilus-watch.claim"
+        claim.unlink(missing_ok=True)
+        if isinstance(reg_pid, int) and not _process_alive(reg_pid):
+            registry["node_pid"] = None
+            save_registry(registry)
+        return {"status": "idle", "pid": None, "source": source}
+
+
 def _watch_launch_script() -> Path:
     script = _trade_root() / "scripts" / "run_nautilus_watch.sh"
     if not script.is_file():
@@ -564,6 +621,10 @@ def run_stack_nautilus_start(*, agent_id: str | None = None, skip_adopt: bool = 
 
     with watch_registry_mutation_lock():
         reconcile_stale_watch_pid()
+        pre_registry = load_registry()
+        pre_ids = sorted(get_registry_agent_ids())
+        pre_sig = nautilus_registry_signature(pre_registry.get("agents") or [])
+
         existing = _read_pid()
         bound = _read_bound_agent_id()
 
@@ -579,7 +640,22 @@ def run_stack_nautilus_start(*, agent_id: str | None = None, skip_adopt: bool = 
                 return {"status": "error", "reason": "purge_incomplete", **purge}
             existing = None
 
-        if not skip_adopt and existing is not None and _process_alive(existing):
+        _sync_nautilus_registry_from_watches_locked(restart_if_changed=False)
+
+        post_ids = sorted(get_registry_agent_ids())
+        post_sig = nautilus_registry_signature(list_registry_agents())
+        registry_changed = pre_ids != post_ids or pre_sig != post_sig
+
+        existing = _read_pid()
+        bound = _read_bound_agent_id()
+
+        if registry_changed and existing is not None and _process_alive(existing):
+            purge = purge_nautilus_watch_processes()
+            if purge.get("survivors"):
+                return {"status": "error", "reason": "purge_incomplete", **purge}
+            existing = None
+
+        if not skip_adopt and not registry_changed and existing is not None and _process_alive(existing):
             if get_registry_agent_ids():
                 command = "nautilus watch --registry"
                 _finalize_watch_launch(command=command, expected_pid=existing)
@@ -598,7 +674,6 @@ def run_stack_nautilus_start(*, agent_id: str | None = None, skip_adopt: bool = 
             if purge.get("survivors"):
                 return {"status": "error", "reason": "purge_incomplete", **purge}
 
-        _sync_nautilus_registry_from_watches_locked(restart_if_changed=False)
         registry_agents = get_registry_agent_ids()
         if not registry_agents and not agent_id:
             return {"status": "skipped", "reason": "no_agents"}
@@ -633,12 +708,14 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
         pass
 
     reconcile_stale_watch_pid()
+    sync_result: dict[str, Any] | None = None
     try:
         from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
 
-        sync_nautilus_registry_from_watches(restart_if_changed=False)
+        sync_result = sync_nautilus_registry_from_watches(restart_if_changed=True)
     except Exception:
         logger.warning("watch registry sync failed for %s", agent_id, exc_info=True)
+        sync_result = None
 
     if not is_agent_in_registry(agent_id):
         try:
@@ -655,7 +732,8 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
     _stamp_handoff_market_context(agent_id)
 
     pid = _read_pid()
-    if pid is not None and _process_alive(pid):
+    sync_ok = sync_result is not None and sync_result.get("nautilus_ok") is not False
+    if pid is not None and _process_alive(pid) and sync_ok:
         if is_agent_in_registry(agent_id):
             logger.info("Nautilus watch alive — agent %s in registry (pid %s)", agent_id, pid)
             return None
@@ -667,15 +745,33 @@ def ensure_nautilus_watch_for_agent(agent_id: str, *, restart_if_bound_elsewhere
             )
 
     try:
-        if pid is not None and _process_alive(pid) and restart_if_bound_elsewhere:
-            _stop_existing()
-        _launch_watch(use_registry=True)
-        logger.info(
-            "started Nautilus watch registry=%s (pid %s)",
-            get_registry_agent_ids(),
-            _read_pid(),
+        need_restart = (
+            pid is not None
+            and _process_alive(pid)
+            and restart_if_bound_elsewhere
+            and not is_agent_in_registry(agent_id)
         )
-        return None
+        result = run_stack_nautilus_start(agent_id=agent_id, skip_adopt=need_restart)
+        if result.get("status") == "ok":
+            logger.info(
+                "started Nautilus watch registry=%s (pid %s)",
+                get_registry_agent_ids(),
+                result.get("pid") or _read_pid(),
+            )
+            return None
+        if result.get("status") == "skipped":
+            reason = str(result.get("reason") or "")
+            if reason == "disabled":
+                return None
+            return (
+                f"Nautilus watch not started ({reason}). "
+                f"Run: trade start nautilus-watch --registry"
+            )
+        reason = str(result.get("reason") or result.get("error") or "unknown")
+        return (
+            f"Nautilus watch not started ({reason}). "
+            f"Run: trade start nautilus-watch --registry"
+        )
     except Exception as exc:
         logger.warning("failed to start Nautilus watch for %s: %s", agent_id, exc, exc_info=True)
         return (
@@ -690,10 +786,11 @@ def ensure_nautilus_watch_for_running_agents() -> int:
         return 0
 
     reconcile_stale_watch_pid()
+    sync_result: dict[str, Any] | None = None
     try:
         from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
 
-        sync_nautilus_registry_from_watches(restart_if_changed=True)
+        sync_result = sync_nautilus_registry_from_watches(restart_if_changed=True)
     except Exception:
         logger.debug("ensure_nautilus_watch_for_running_agents registry sync failed", exc_info=True)
 
@@ -701,14 +798,15 @@ def ensure_nautilus_watch_for_running_agents() -> int:
     if not agent_ids:
         return 0
 
+    sync_ok = sync_result is None or sync_result.get("nautilus_ok") is not False
     pid = _read_pid()
-    if pid is not None and _process_alive(pid):
+    if pid is not None and _process_alive(pid) and sync_ok:
         return len(agent_ids)
 
-    started = 0
     try:
-        _launch_watch(use_registry=True)
-        started = 1
+        result = run_stack_nautilus_start()
+        if result.get("status") == "ok" and not result.get("adopted"):
+            return 1
     except Exception as exc:
         logger.warning("ensure_nautilus_watch_for_running_agents failed: %s", exc)
-    return started
+    return 0

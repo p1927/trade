@@ -17,6 +17,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("stack-purge", help="Purge all Nautilus watch processes; exit 1 if survivors remain")
 
+    sub.add_parser(
+        "stack-reconcile-claim",
+        help="Align pidfile, registry node_pid, and stack claim with live watch process",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "stack-start":
@@ -41,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("[stack] NAUTILUS_WATCH_ENABLE=0 — skip Nautilus watch node")
             return 0
         print(json.dumps(result), file=sys.stderr)
+        if result.get("reason") == "purge_incomplete":
+            return 2
         return 1
 
     if args.command == "stack-purge":
@@ -52,6 +59,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"[stack] Nautilus purge incomplete — survivors: {result.get('survivors')}",
                 file=sys.stderr,
             )
+            return 1
+        return 0
+
+    if args.command == "stack-reconcile-claim":
+        from trade_integrations.autonomous_agents.nautilus_watch import reconcile_nautilus_service_claim
+
+        result = reconcile_nautilus_service_claim()
+        pid = result.get("pid")
+        if result.get("status") == "ok" and pid:
+            print(f"[stack] Nautilus watch claim reconciled (pid {pid}, source={result.get('source')})")
+            return 0
+        if result.get("status") == "error":
+            print(json.dumps(result), file=sys.stderr)
             return 1
         return 0
 

@@ -68,7 +68,7 @@ def test_ensure_nautilus_watch_skips_launch_when_node_alive(
     monkeypatch.setattr(nw, "is_agent_in_registry", lambda aid: aid == "aa_live")
     monkeypatch.setattr(
         "trade_integrations.watch_registry.store.sync_nautilus_registry_from_watches",
-        lambda **kw: None,
+        lambda **kw: {"status": "ok", "nautilus_ok": True},
     )
     monkeypatch.setattr(nw, "_stamp_handoff_market_context", lambda agent_id: None)
 
@@ -107,7 +107,7 @@ def test_ensure_nautilus_watch_stamps_handoff_context(
     monkeypatch.setattr(nw, "is_agent_in_registry", lambda aid: aid == "aa_live")
     monkeypatch.setattr(
         "trade_integrations.watch_registry.store.sync_nautilus_registry_from_watches",
-        lambda **kw: None,
+        lambda **kw: {"status": "ok", "nautilus_ok": True},
     )
     monkeypatch.setattr(nw, "_launch_watch", lambda **kw: 424242)
 
@@ -287,6 +287,37 @@ def test_watch_registry_mutation_lock_is_reentrant_same_thread(
 
 
 @pytest.mark.unit
+def test_run_stack_does_not_adopt_when_registry_changed_after_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = {
+        "node_pid": 4242,
+        "agents": [{"agent_id": "aa_old", "market": "IN", "symbols": ["NIFTY"]}],
+    }
+    _wire_nautilus_paths(tmp_path, monkeypatch, registry=registry, pid=4242)
+    adopted: list[bool] = []
+
+    def _sync_locked(**kw):
+        registry["agents"] = [{"agent_id": "aa_new", "market": "IN", "symbols": ["BANKNIFTY"]}]
+        nw.save_registry(registry)
+
+    monkeypatch.setattr(nw, "reconcile_stale_watch_pid", lambda: False)
+    monkeypatch.setattr(nw, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(nw, "_finalize_watch_launch", lambda **kw: adopted.append(True) or 4242)
+    monkeypatch.setattr(nw, "_launch_watch", lambda **kw: 5555)
+    monkeypatch.setattr(
+        "trade_integrations.watch_registry.store._sync_nautilus_registry_from_watches_locked",
+        _sync_locked,
+    )
+
+    result = nw.run_stack_nautilus_start()
+    assert result["status"] == "ok"
+    assert result["pid"] == 5555
+    assert result["adopted"] is False
+    assert adopted == []
+
+
+@pytest.mark.unit
 def test_nautilus_watch_cli_stack_purge_exits_one_on_survivors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -297,3 +328,66 @@ def test_nautilus_watch_cli_stack_purge_exits_one_on_survivors(
         lambda: {"purged": False, "killed_pids": [], "survivors": [4242]},
     )
     assert cli.main(["stack-purge"]) == 1
+
+
+@pytest.mark.unit
+def test_reconcile_nautilus_service_claim_binds_live_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_dir = _wire_nautilus_paths(
+        tmp_path,
+        monkeypatch,
+        registry={
+            "node_pid": 4242,
+            "agents": [{"agent_id": "ws_sess", "market": "IN", "symbols": ["NIFTY"]}],
+        },
+        pid=4242,
+    )
+    monkeypatch.setattr(nw, "reconcile_stale_watch_pid", lambda: False)
+    monkeypatch.setattr(nw, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(nw, "list_live_watch_pids", lambda: [4242])
+
+    result = nw.reconcile_nautilus_service_claim()
+    assert result["status"] == "ok"
+    assert result["pid"] == 4242
+    claim = log_dir / "claims" / "nautilus-watch.claim"
+    assert claim.is_file()
+
+
+@pytest.mark.unit
+def test_reconcile_nautilus_service_claim_purges_duplicate_live_pids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _wire_nautilus_paths(
+        tmp_path,
+        monkeypatch,
+        registry={"node_pid": 4242, "agents": [{"agent_id": "ws_sess", "market": "IN", "symbols": ["NIFTY"]}]},
+        pid=4242,
+    )
+    purged: list[bool] = []
+    monkeypatch.setattr(nw, "reconcile_stale_watch_pid", lambda: False)
+    monkeypatch.setattr(nw, "_process_alive", lambda pid: pid in {4242, 4343})
+    monkeypatch.setattr(nw, "list_live_watch_pids", lambda: [4242, 4343])
+    monkeypatch.setattr(
+        nw,
+        "purge_nautilus_watch_processes",
+        lambda: purged.append(True) or {"purged": True, "killed_pids": [4242, 4343], "survivors": []},
+    )
+
+    result = nw.reconcile_nautilus_service_claim()
+    assert purged == [True]
+    assert result["status"] == "idle"
+    assert result["source"] == "purged_duplicates"
+
+
+@pytest.mark.unit
+def test_nautilus_watch_cli_stack_start_exits_two_on_purge_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trade_integrations.autonomous_agents import nautilus_watch_cli as cli
+
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.nautilus_watch.run_stack_nautilus_start",
+        lambda **kw: {"status": "error", "reason": "purge_incomplete", "survivors": [4242]},
+    )
+    assert cli.main(["stack-start"]) == 2

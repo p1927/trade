@@ -129,7 +129,12 @@ def _apply_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     user_blob = "\n".join(
         p for p in (str(kwargs.get("user_text") or ""), str(kwargs.get("mandate") or "")) if p.strip()
     )
-    observe = str(kwargs.get("agent_mode") or "").lower() == "observe" or detect_observe_intent(user_blob)
+    raw_intent = kwargs.get("intent")
+    observe = str(kwargs.get("agent_mode") or "").lower() == "observe"
+    if not observe and isinstance(raw_intent, dict) and str(raw_intent.get("engagement") or "").lower() == "observe":
+        observe = True
+    if not observe and not isinstance(raw_intent, dict):
+        observe = detect_observe_intent(user_blob)
     sym0 = symbols[0] if symbols else "NIFTY"
     default_mandate = (
         observe_mandate_text(sym0)
@@ -193,7 +198,11 @@ def _build_mandate_config(
     if allowed_instruments:
         stored = {**stored, "allowed_instruments": allowed_instruments}
     text = mandate_text or str(draft.get("mandate") or "")
-    observe = str(draft.get("agent_mode") or "").lower() == "observe" or detect_observe_intent(text)
+    observe = str(draft.get("agent_mode") or "").lower() == "observe"
+    if not observe and isinstance(stored.get("intent"), dict):
+        observe = str(stored["intent"].get("engagement") or "").lower() == "observe"
+    if not observe and not isinstance(stored.get("intent"), dict):
+        observe = detect_observe_intent(text)
     if observe:
         stored = {**stored, "agent_mode": "observe", "revision_policy": "user_guidance_only"}
     return resolve_mandate_config(
@@ -494,6 +503,18 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
     if routing_errors:
         proposal["status"] = "incomplete"
 
+    from trade_integrations.autonomous_agents.intent_proposal import (
+        clarifying_prompt_for_missing,
+        intent_from_proposal,
+    )
+
+    proposal_intent = intent_from_proposal(proposal)
+    if proposal.get("status") == "incomplete" and missing:
+        proposal["clarifying_prompt"] = clarifying_prompt_for_missing(
+            list(missing),
+            intent=proposal_intent,
+        )
+
     if orch_sid:
         mark_superseded_proposals(orch_sid, except_proposal_id=proposal_id)
 
@@ -505,7 +526,8 @@ def propose_autonomous_agent(**kwargs: Any) -> dict[str, Any]:
             "proposal_id": proposal_id,
             "missing_fields": missing,
             "proposal": proposal,
-            "message": f"Ask user for: {', '.join(missing)}",
+            "clarifying_prompt": proposal.get("clarifying_prompt"),
+            "message": proposal.get("clarifying_prompt") or f"Ask user for: {', '.join(missing)}",
         }
 
     if routing_errors:
@@ -671,6 +693,7 @@ def _commit_autonomous_agent_locked(
         "execution_market": exec_market,
         "execution_profile": profile.prompt_fragment_id,
         "connector_profile_id": proposal.get("connector_profile_id"),
+        "mandate_config": dict(proposal.get("mandate_config") or fresh_mandate_cfg.to_dict()),
     }
     _prefetch_note = (
         "Hub `[research_context]` prepended for this session's symbol is normal prefetch — "

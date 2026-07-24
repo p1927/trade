@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from trade_integrations.autonomous_agents.intent_schema import AgentIntent, WatchCondition
+
+logger = logging.getLogger(__name__)
 
 
 def _watch_exchange_for_symbol(symbol: str) -> str:
@@ -147,14 +150,21 @@ def _normalize_compiled_rules(rules: list[dict[str, Any]], *, spot: float | None
     out: list[dict[str, Any]] = []
     for row in rules:
         patched = dict(row)
-        if patched.pop("_points_mode", None) and spot and float(spot) > 0:
+        if patched.pop("_points_mode", None):
+            if not (spot and float(spot) > 0):
+                logger.warning(
+                    "skip points-based watch rule without spot price: %s",
+                    patched.get("label") or patched.get("symbol"),
+                )
+                continue
             points = float(patched.get("threshold") or 0)
             patched["threshold"] = (points / float(spot)) * 100.0
             patched["metric"] = "spot_move_pct"
         try:
             validated = WatchRule.from_dict(patched)
             out.append(validated.to_dict())
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
+            logger.warning("skip invalid compiled watch rule %s: %s", patched, exc)
             continue
     return out
 
@@ -207,6 +217,4 @@ def agent_has_user_watch_conditions(agent: dict[str, Any]) -> bool:
     from trade_integrations.autonomous_agents.intent_schema import AgentIntent
 
     intent = AgentIntent.from_dict(raw)
-    if not intent.watch_conditions:
-        return False
-    return bool(intent.clarified.get("watch_conditions") or intent.clarified.get("schedules"))
+    return bool(intent.watch_conditions)

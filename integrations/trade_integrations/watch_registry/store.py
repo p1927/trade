@@ -529,27 +529,20 @@ def _sync_nautilus_registry_from_watches_locked(*, restart_if_changed: bool = Fa
     old_ids = sorted(nw.get_registry_agent_ids())
     old_agents = list(registry.get("agents") or [])
 
-    def _symbol_signature(agent_rows: list[dict[str, Any]]) -> tuple[tuple[str, tuple[str, ...]], ...]:
-        return tuple(
-            sorted(
-                (
-                    str(row.get("agent_id") or ""),
-                    tuple(sorted(str(s).upper() for s in (row.get("symbols") or []) if str(s).strip())),
-                )
-                for row in agent_rows
-                if row.get("agent_id")
-            )
-        )
+    from trade_integrations.watch_registry.nautilus_signature import nautilus_registry_signature
+    from trade_integrations.watch_registry.scope import combined_watch_spec_for_owner
 
-    old_sig = _symbol_signature(old_agents)
+    old_sig = nautilus_registry_signature(old_agents)
     agents = []
     now = _now_iso()
     for row in rows:
+        noid = str(row["agent_id"])
         agents.append(
             {
-                "agent_id": row["agent_id"],
+                "agent_id": noid,
                 "market": row.get("market") or "IN",
                 "symbols": row.get("symbols") or [],
+                "watch_spec": combined_watch_spec_for_owner(noid),
                 "bound_at": now,
                 "owner_kind": row.get("owner_kind"),
                 "vibe_session_id": row.get("vibe_session_id"),
@@ -559,10 +552,20 @@ def _sync_nautilus_registry_from_watches_locked(*, restart_if_changed: bool = Fa
     registry["node_agent_ids"] = sorted(str(r["agent_id"]) for r in rows)
     nw.save_registry(registry)
     new_ids = sorted(nw.get_registry_agent_ids())
-    new_sig = _symbol_signature(agents)
+    new_sig = nautilus_registry_signature(agents)
 
     for row in rows:
         _sync_owner_handoff(str(row.get("owner_kind") or ""), str(row.get("owner_id") or ""))
+
+    def _unified_nautilus_start(*, skip_adopt: bool = True) -> bool:
+        start_result = nw.run_stack_nautilus_start(skip_adopt=skip_adopt)
+        status = str(start_result.get("status") or "")
+        if status == "ok":
+            relaunch_pid = start_result.get("pid") or nw._read_pid()
+            return relaunch_pid is not None and nw._process_alive(relaunch_pid)
+        if status == "skipped" and start_result.get("reason") == "no_agents":
+            return True
+        return False
 
     if restart_if_changed and (old_ids != new_ids or old_sig != new_sig):
         live_pid = nw._read_pid()
@@ -580,22 +583,7 @@ def _sync_nautilus_registry_from_watches_locked(*, restart_if_changed: bool = Fa
                 }
             if not new_ids:
                 return {"status": "ok", "owners": 0, "agent_ids": [], "nautilus_ok": True}
-            nautilus_ok = False
-            try:
-                nw._launch_watch(use_registry=True)
-                relaunch_pid = nw._read_pid()
-                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
-            except Exception:
-                logger.exception(
-                    "failed to relaunch Nautilus after watch registry sync (agents=%s) — see log/nautilus-watch.log",
-                    new_ids,
-                )
-                try:
-                    nw.ensure_nautilus_watch_for_running_agents()
-                except Exception:
-                    logger.exception("recovery ensure_nautilus_watch_for_running_agents failed after relaunch error")
-                relaunch_pid = nw._read_pid()
-                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            nautilus_ok = _unified_nautilus_start(skip_adopt=True)
             if not nautilus_ok:
                 return {
                     "status": "partial",
@@ -604,22 +592,7 @@ def _sync_nautilus_registry_from_watches_locked(*, restart_if_changed: bool = Fa
                     "nautilus_ok": False,
                 }
         elif new_ids:
-            nautilus_ok = False
-            try:
-                nw._launch_watch(use_registry=True)
-                relaunch_pid = nw._read_pid()
-                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
-            except Exception:
-                logger.exception(
-                    "failed to start Nautilus after watch registry sync (agents=%s, node was down)",
-                    new_ids,
-                )
-                try:
-                    nw.ensure_nautilus_watch_for_running_agents()
-                except Exception:
-                    logger.exception("recovery ensure_nautilus_watch_for_running_agents failed after start error")
-                relaunch_pid = nw._read_pid()
-                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            nautilus_ok = _unified_nautilus_start(skip_adopt=True)
             if not nautilus_ok:
                 return {
                     "status": "partial",
@@ -630,22 +603,7 @@ def _sync_nautilus_registry_from_watches_locked(*, restart_if_changed: bool = Fa
     elif restart_if_changed and new_ids:
         live_pid = nw._read_pid()
         if live_pid is None or not nw._process_alive(live_pid):
-            nautilus_ok = False
-            try:
-                nw._launch_watch(use_registry=True)
-                relaunch_pid = nw._read_pid()
-                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
-            except Exception:
-                logger.exception(
-                    "failed to start Nautilus after watch registry sync (agents=%s, unchanged registry, node down)",
-                    new_ids,
-                )
-                try:
-                    nw.ensure_nautilus_watch_for_running_agents()
-                except Exception:
-                    logger.exception("recovery ensure_nautilus_watch_for_running_agents failed after start error")
-                relaunch_pid = nw._read_pid()
-                nautilus_ok = relaunch_pid is not None and nw._process_alive(relaunch_pid)
+            nautilus_ok = _unified_nautilus_start(skip_adopt=False)
             if not nautilus_ok:
                 return {
                     "status": "partial",

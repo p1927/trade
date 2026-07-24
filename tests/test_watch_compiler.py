@@ -46,6 +46,18 @@ def test_price_level_rules() -> None:
     assert metrics == {"level_above", "level_below"}
 
 
+def test_price_move_points_without_spot_skips_rule() -> None:
+    intent = AgentIntent(
+        symbols=["NIFTY"],
+        watch_conditions=[
+            WatchCondition(kind="price_move", symbol="NIFTY", params={"points": 50}),
+        ],
+        clarified={"watch_conditions": True},
+    )
+    _, spec = compile_watch_from_intent(intent)
+    assert spec["rules"] == []
+
+
 def test_price_move_points_with_spot() -> None:
     intent = AgentIntent(
         symbols=["NIFTY"],

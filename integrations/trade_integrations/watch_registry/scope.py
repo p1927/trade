@@ -93,16 +93,25 @@ def combined_watch_spec_for_owner(
         watches = list_watches_for_nautilus_owner(nautilus_owner)
     rules: list[dict[str, Any]] = []
     cooldown = 300
+    gate_minutes: int | None = None
     for watch in watches:
         if str(watch.get("status") or "active") != "active":
             continue
         spec = watch.get("watch_spec") if isinstance(watch.get("watch_spec"), dict) else {}
         cooldown = int(spec.get("cooldown_sec") or watch.get("cooldown_sec") or cooldown)
+        gate = spec.get("gate") if isinstance(spec.get("gate"), dict) else {}
+        raw_minutes = gate.get("skip_if_unchanged_minutes")
+        if raw_minutes is not None:
+            minutes = int(raw_minutes)
+            gate_minutes = minutes if gate_minutes is None else min(gate_minutes, minutes)
         for row in spec.get("rules") or []:
             if isinstance(row, dict) and row.get("symbol"):
                 rules.append(dict(row))
-    return {
+    payload: dict[str, Any] = {
         "rules": rules,
         "cooldown_sec": cooldown,
         "review_triggers": ["watch_rule_fired", "thesis_break", "news_material"],
     }
+    if gate_minutes is not None:
+        payload["gate"] = {"skip_if_unchanged_minutes": gate_minutes}
+    return payload

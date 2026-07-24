@@ -64,6 +64,11 @@ Respond with this structure only (no audit IDs, no "next-turn expectation", no i
 
 
 def _footer_for_agent(agent: dict[str, Any]) -> str:
+    from trade_integrations.autonomous_agents.intent_turn_footer import format_agent_intent_turn_footer
+
+    unified = format_agent_intent_turn_footer(agent)
+    if unified:
+        return unified
     return _OBSERVE_AGENT_FOOTER if is_observe_agent(agent) else _RUNNING_AGENT_FOOTER
 
 

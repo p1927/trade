@@ -91,7 +91,14 @@ def test_list_active_nautilus_owners_includes_infra_paused_plan_approved(
     tmp_path: Path,
 ):
     from trade_integrations.autonomous_agents.store import save_agent
+    from trade_integrations.autonomous_agents import nautilus_watch as nw
     from trade_integrations.watch_registry import create_watch, list_active_nautilus_owners
+
+    monkeypatch.setattr(nw, "_launch_watch", lambda **_: 4242)
+    monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
+    monkeypatch.setattr(nw, "_read_pid", lambda: None)
+    monkeypatch.setattr(nw, "_process_alive", lambda pid: False)
+    monkeypatch.setattr(nw, "list_live_watch_pids", lambda: [])
 
     agents_dir = hub_tmp / "_data" / "autonomous_agents"
     agents_dir.mkdir(parents=True)
@@ -122,6 +129,44 @@ def test_list_active_nautilus_owners_includes_infra_paused_plan_approved(
     )
     owners = list_active_nautilus_owners()
     assert any(row.get("owner_id") == agent_id for row in owners)
+
+
+def test_sync_restarts_on_rule_only_watch_change(
+    hub_tmp: Path, log_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from trade_integrations.autonomous_agents import nautilus_watch as nw
+    from trade_integrations.watch_registry import create_watch, sync_nautilus_registry_from_watches, update_watch
+
+    monkeypatch.setattr(nw, "_read_pid", lambda: 4242)
+    monkeypatch.setattr(nw, "_process_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        nw,
+        "purge_nautilus_watch_processes",
+        lambda: {"purged": True, "killed_pids": [4242], "survivors": []},
+    )
+    unified_calls: list[dict] = []
+    monkeypatch.setattr(
+        nw,
+        "run_stack_nautilus_start",
+        lambda **kw: unified_calls.append(dict(kw)) or {"status": "ok", "pid": 5555},
+    )
+
+    watch = create_watch(
+        owner_kind="session",
+        owner_id="sess_rule",
+        vibe_session_id="sess_rule",
+        watch_spec=_sample_spec(),
+    )["watch"]
+    assert len(unified_calls) == 1
+
+    updated_spec = {
+        "rules": [{"symbol": "NIFTY", "metric": "spot_move_pct", "threshold": 1.5}],
+        "cooldown_sec": 300,
+    }
+    update_watch(watch["watch_id"], watch_spec=updated_spec)
+    result = sync_nautilus_registry_from_watches(restart_if_changed=True)
+    assert result["status"] == "ok"
+    assert len(unified_calls) == 2
 
 
 def test_sync_nautilus_registry_recovers_after_relaunch_failure(
@@ -276,6 +321,7 @@ def test_concurrent_create_watch_serializes_sync(hub_tmp: Path, log_dir: Path, m
     monkeypatch.setattr(nw, "_launch_watch", lambda **_: None)
     monkeypatch.setattr(nw, "purge_nautilus_watch_processes", lambda: {"purged": True, "killed_pids": [], "survivors": []})
     monkeypatch.setattr(nw, "_read_pid", lambda: None)
+    monkeypatch.setattr(nw, "run_stack_nautilus_start", lambda **kw: {"status": "ok", "pid": 4242})
 
     in_sync = {"n": 0, "max": 0}
     gate = threading.Lock()

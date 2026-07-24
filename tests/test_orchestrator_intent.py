@@ -50,10 +50,11 @@ def test_auto_propose_on_hallucinated_proposal_id(agents_hub, monkeypatch) -> No
     from trade_integrations.autonomous_agents.orchestrator_intent import maybe_auto_propose_after_orchestrator_turn
 
     monkeypatch.setenv("ORCHESTRATOR_AUTO_PROPOSE", "1")
+    monkeypatch.setenv("INTENT_EXTRACTOR_LLM", "0")
 
     result = maybe_auto_propose_after_orchestrator_turn(
         orchestrator_session_id="orch_h",
-        user_message="Create NIFTY intraday agent paper ₹20k",
+        user_message="Create NIFTY intraday options agent paper ₹20k",
         assistant_text="Proposal ID aap_deadbeef123 is ready for you.",
         tools_called=[],
     )
@@ -61,6 +62,24 @@ def test_auto_propose_on_hallucinated_proposal_id(agents_hub, monkeypatch) -> No
     assert result["status"] == "ready"
     assert result["proposal"]["symbols"] == ["NIFTY"]
     assert result["proposal"].get("auto_proposed") is True
+
+
+def test_auto_propose_nifty_without_instruments_is_incomplete(agents_hub, monkeypatch) -> None:
+    from trade_integrations.autonomous_agents.orchestrator_intent import maybe_auto_propose_after_orchestrator_turn
+
+    monkeypatch.setenv("ORCHESTRATOR_AUTO_PROPOSE", "1")
+    monkeypatch.setenv("INTENT_EXTRACTOR_LLM", "0")
+
+    result = maybe_auto_propose_after_orchestrator_turn(
+        orchestrator_session_id="orch_h2",
+        user_message="Create NIFTY intraday agent paper ₹20k",
+        assistant_text="Proposal ID aap_deadbeef123 is ready for you.",
+        tools_called=[],
+    )
+    assert result is not None
+    assert result["status"] == "incomplete"
+    missing = result["proposal"].get("missing_fields") or []
+    assert "instruments" in missing or "allowed_instruments" in missing
 
 
 def test_does_not_auto_propose_when_tool_called() -> None:
@@ -134,5 +153,23 @@ def agents_hub(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "trade_integrations.context.hub.get_hub_dir",
         lambda: hub,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.autonomous_agents.proposals.build_stack_health",
+        lambda: {"vibe_scheduler": "ok"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.execution.profile.resolve_profile",
+        lambda **kwargs: type(
+            "P",
+            (),
+            {
+                "backend": "openalgo",
+                "market": "IN",
+                "allowed_instruments": ("equity", "options"),
+                "mode": "paper",
+                "prompt_fragment_id": "in_options_paper",
+            },
+        )(),
     )
     return hub

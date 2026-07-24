@@ -68,9 +68,25 @@ def widget_instrument_class(widget: dict[str, Any]) -> str:
 def assert_widget_allowed(
     widget: dict[str, Any],
     mandate: MandateConfig,
+    *,
+    session: dict[str, Any] | None = None,
 ) -> None:
-    """Ensure widget instrument type is permitted by mandate."""
+    """Ensure widget instrument type is permitted by mandate and intent capabilities."""
     _assert_observe_allows_trading(mandate)
+    if session is not None:
+        from trade_integrations.autonomous_agents.intent_capabilities import (
+            prefetch_widget_intent_allowed,
+            resolve_capabilities,
+        )
+        from trade_integrations.trade_widgets.presentability import default_widget_intent
+
+        caps = resolve_capabilities(session_config=session)
+        widget_intent = str(widget.get("widget_intent") or default_widget_intent(widget))
+        if not prefetch_widget_intent_allowed(widget_intent, caps):
+            raise MandateViolation(
+                "capabilities_widgets",
+                "Agent intent does not allow this trade-plan widget.",
+            )
     inst = widget_instrument_class(widget)
     allowed = {str(x).strip().lower() for x in (mandate.allowed_instruments or []) if str(x).strip()}
     if not allowed:
@@ -100,6 +116,9 @@ def assert_can_execute(
 
     mandate = mandate or _mandate_from_session(session)
     _assert_observe_allows_trading(mandate)
+    from trade_integrations.autonomous_agents.intent_capabilities import assert_capabilities_allow
+
+    assert_capabilities_allow("execution", session_config=session)
 
     if mandate.market_hours_only and not is_trading_session_open(market=_session_market(session)):
         raise MandateViolation("outside_market_hours", "Market is closed for this agent's trading window")
