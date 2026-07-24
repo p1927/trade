@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from trade_integrations.http import RequestException
 
@@ -65,9 +66,38 @@ _UNTRUSTED_PE_URL_FRAGMENTS = (
 )
 
 
+def _host_from_result(result: dict[str, Any]) -> str:
+    return (urlparse(str(result.get("url") or "")).hostname or "").lower().removeprefix("www.")
+
+
+def _matches_allowed_domains(result: dict[str, Any], allowed_domains: tuple[str, ...]) -> bool:
+    host = _host_from_result(result)
+    if not host:
+        return False
+    for domain in allowed_domains:
+        d = domain.lower().removeprefix("www.")
+        if not d:
+            continue
+        if host == d or host.endswith(f".{d}"):
+            return True
+    return False
+
+
 def _trusted_result(result: dict[str, Any]) -> bool:
     url = str(result.get("url") or "").lower()
     return any(domain in url for domain in TRUSTED_FINANCE_DOMAINS)
+
+
+def _accept_search_result(
+    result: dict[str, Any],
+    *,
+    allowed_domains: tuple[str, ...] | None,
+) -> bool:
+    if allowed_domains is not None:
+        if not allowed_domains:
+            return False
+        return _matches_allowed_domains(result, allowed_domains)
+    return _trusted_result(result)
 
 
 def _trusted_nifty_pe_result(result: dict[str, Any]) -> bool:
@@ -87,11 +117,19 @@ def search_finance(
     *,
     limit: int = 8,
     categories: str = FINANCE_CATEGORY,
+    allowed_domains: tuple[str, ...] | None = None,
+    stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Query SearXNG JSON API (finance category when configured)."""
+    """Query SearXNG JSON API (finance category when configured).
+
+    When ``allowed_domains`` is set, keep hits whose URL host matches the allowlist
+    (suffix rules). Otherwise use the global TRUSTED_FINANCE_DOMAINS filter.
+    Optional ``stats`` receives ``raw_count`` (unique URLs before domain filter).
+    """
     category_attempts = [categories, "general", "news"]
     engine_attempts = parse_engine_list(searxng_finance_engines()) or ["bing"]
     seen_urls: set[str] = set()
+    raw_seen: set[str] = set()
     collected: list[dict[str, Any]] = []
 
     for cat in category_attempts:
@@ -117,12 +155,18 @@ def search_finance(
 
                 for row in payload.get("results") or []:
                     link = str(row.get("url") or "")
-                    if not link or link in seen_urls:
+                    if not link:
+                        continue
+                    if link not in raw_seen:
+                        raw_seen.add(link)
+                    if link in seen_urls:
                         continue
                     seen_urls.add(link)
-                    if _trusted_result(row):
+                    if _accept_search_result(row, allowed_domains=allowed_domains):
                         collected.append(row)
                     if len(collected) >= limit:
+                        if stats is not None:
+                            stats["raw_count"] = len(raw_seen)
                         return collected[:limit]
 
                 reason = engine_unresponsive_reason(payload, engine)
@@ -139,6 +183,8 @@ def search_finance(
                     )
                 break
 
+    if stats is not None:
+        stats["raw_count"] = len(raw_seen)
     return collected[:limit]
 
 
