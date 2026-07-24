@@ -12,8 +12,9 @@ When a written implementation plan exists under `docs/superpowers/plans/`, **alw
 1. Read the plan once; create todos for all tasks.
 2. **One implementer subagent per task** (sequential, never parallel implementers).
 3. After each task: run `review-package`, dispatch **task reviewer** subagent; fix loop until spec ✅ and quality approved.
-4. After all tasks: dispatch **final whole-branch code reviewer**.
-5. Track progress in `.superpowers/sdd/progress.md` (recover from `git log` if lost).
+4. After all tasks: run **program-level mistakes convergence** per `multi-phase-plan-convergence` Step 5 (**minimum three Pass 2→3 cycles** on the full plan diff) — this is mandatory before reporting plan complete.
+5. After program convergence passes: dispatch **final whole-branch code reviewer**.
+6. Track progress in `.superpowers/sdd/progress.md` (recover from `git log` if lost).
 
 ## Dispatch rules
 

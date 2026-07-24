@@ -114,6 +114,44 @@ Task Pass 4 — Fix CONFIRMED / user-approved items → Task Pass 2 on NEW diff
 
 ---
 
+## Step 5 — Program completion gate (MANDATORY — no exceptions)
+
+When **all phases/tasks** in an approved plan are implemented, the **very next step** before reporting plan complete, committing final work, or starting unrelated tasks is the **program-level mistakes convergence loop**. Skipping this invalidates the plan completion claim.
+
+```
+Program Pass 2 — Full-plan author audit
+  - git diff / git log for entire plan scope line-by-line
+  - Full scoped verification suite (exit codes from this session)
+  - Symmetry grep: parallel paths introduced by the plan (API vs batch, session vs agent, list vs live)
+
+Program Pass 3 — Adversarial review (Bugbot on plan diff OR manual mistake checklist)
+  - Label every finding CONFIRMED / HYPOTHESIS / BY DESIGN / UNKNOWN
+  - Re-read primary sources; subagent output is discovery only
+
+Program Pass 4 — Fix CONFIRMED items → return to Program Pass 2 on NEW diff
+```
+
+**Stop program only when:**
+
+1. **Minimum three full Program Pass 2→3 cycles** completed on the latest diff (not two — three is mandatory for plan completion).
+2. **Zero new CONFIRMED** issues in plan-touched code on the latest diff.
+3. Verification commands cited from **this session** with exit codes.
+
+**Report format (required in final plan summary):**
+
+`Program convergence round 1: N CONFIRMED → fixed` / `round 2: …` / `round 3: Pass 3 — 0 new CONFIRMED`
+
+**Forbidden after plan implementation:**
+
+- Reporting "plan done" or "all todos complete" without program convergence rounds cited
+- Moving to the next plan or unrelated work with open CONFIRMED rows from Program Pass 3
+- Single-pass Bugbot or self-review only
+- Citing verification from a prior session
+
+Works with `fix-review-before-stack` (task-level loops) — program gate runs **after** all task/phase gates pass, on the **combined plan diff**.
+
+---
+
 ## Bugbot invocation (implementation Pass 3)
 
 ```text
@@ -147,6 +185,7 @@ Re-read every Bugbot finding in primary sources before labeling CONFIRMED.
 - Starting implementation before index + all required subplans exist
 - Skipping plan-level convergence on multi-phase work
 - Single-pass review before marking a task or phase done
+- **Reporting plan complete or closing plan todos without Step 5 program convergence (minimum three rounds)**
 - Parallel implementer subagents on the same phase
 - Mixing cleanup/migration into an implement phase without an explicit migration gate task
 - Reporting "done" without fresh verification exit codes

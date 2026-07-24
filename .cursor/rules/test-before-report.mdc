@@ -54,4 +54,4 @@ Verification is mandatory after each logical chunk of work, not only at session 
 
 ## Non-trivial changes
 
-For multi-file or behavior-changing work, **one test run is necessary but not sufficient**. Complete the convergence loop in `fix-review-before-stack` before telling the user the work is done.
+For multi-file or behavior-changing work, **one test run is necessary but not sufficient**. Complete the convergence loop in `fix-review-before-stack` before telling the user the work is done — including after **approved plan implementation** (phase task, phase complete, or full plan complete).
