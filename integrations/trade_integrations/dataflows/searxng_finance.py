@@ -118,7 +118,8 @@ def search_finance(
     limit: int = 8,
     categories: str = FINANCE_CATEGORY,
     allowed_domains: tuple[str, ...] | None = None,
-    stats: dict[str, int] | None = None,
+    time_range: str | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Query SearXNG JSON API (finance category when configured).
 
@@ -130,6 +131,7 @@ def search_finance(
     engine_attempts = parse_engine_list(searxng_finance_engines()) or ["bing"]
     seen_urls: set[str] = set()
     raw_seen: set[str] = set()
+    rejected_hosts: list[str] = []
     collected: list[dict[str, Any]] = []
 
     for cat in category_attempts:
@@ -140,6 +142,7 @@ def search_finance(
                         query,
                         categories=cat,
                         engines=engine,
+                        time_range=time_range,
                         timeout=REQUEST_TIMEOUT,
                     )
                 except RequestException as exc:
@@ -164,9 +167,14 @@ def search_finance(
                     seen_urls.add(link)
                     if _accept_search_result(row, allowed_domains=allowed_domains):
                         collected.append(row)
+                    else:
+                        host = _host_from_result(row)
+                        if host and host not in rejected_hosts:
+                            rejected_hosts.append(host)
                     if len(collected) >= limit:
                         if stats is not None:
                             stats["raw_count"] = len(raw_seen)
+                            stats["rejected_hosts_sample"] = rejected_hosts[:5]
                         return collected[:limit]
 
                 reason = engine_unresponsive_reason(payload, engine)
@@ -185,6 +193,7 @@ def search_finance(
 
     if stats is not None:
         stats["raw_count"] = len(raw_seen)
+        stats["rejected_hosts_sample"] = rejected_hosts[:5]
     return collected[:limit]
 
 

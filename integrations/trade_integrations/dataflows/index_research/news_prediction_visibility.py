@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+from trade_integrations.dataflows.index_research.hub_news_pipeline.step_08_temporal_attribution import (
+    enriched_prediction_value_score,
+    has_cause_indicators,
+    strip_article_opinions,
+)
+
+
+def enriched_single_ref_min_score() -> float:
+    try:
+        return max(0.0, min(1.0, float(os.getenv("HUB_NEWS_ENRICHED_SINGLE_REF_MIN_SCORE", "0.72"))))
+    except ValueError:
+        return 0.72
 
 
 def event_ref_count(record: dict[str, Any]) -> int:
@@ -23,11 +37,16 @@ def event_ref_count(record: dict[str, Any]) -> int:
 
 
 def visible_for_prediction_attribution(record: dict[str, Any]) -> bool:
-    """Soft-create policy: hide single-ref SSOT events from Prediction until a 2nd ref."""
+    """Soft-create policy: hide single-ref SSOT events unless enriched + corroborated."""
     if str(record.get("provenance") or "") == "staging":
         return True
-    return event_ref_count(record) >= 2
+    if event_ref_count(record) >= 2:
+        return True
+    score = enriched_prediction_value_score(record)
+    if score >= enriched_single_ref_min_score() and has_cause_indicators(record):
+        return True
+    return False
 
 
 def filter_prediction_attribution_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [row for row in items if visible_for_prediction_attribution(row)]
+    return [strip_article_opinions(row) for row in items if visible_for_prediction_attribution(row)]

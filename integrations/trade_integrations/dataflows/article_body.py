@@ -120,13 +120,15 @@ def _extract_body_from_html(html_text: str) -> str:
     return _normalize_whitespace(text)[:max_article_chars()]
 
 
-def _read_cache(url: str) -> str | None:
+def _read_cache_payload(url: str) -> dict[str, Any] | None:
     path = _cache_dir() / f"{_url_hash(url)}.json"
     if not path.is_file():
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
         return None
     fetched_at = str(payload.get("fetched_at") or "")
     if fetched_at:
@@ -139,16 +141,35 @@ def _read_cache(url: str) -> str | None:
         except ValueError:
             pass
     body = str(payload.get("body") or "").strip()
-    return body or None
+    if not body:
+        return None
+    return payload
 
 
-def _write_cache(url: str, body: str) -> None:
+def _read_cache(url: str) -> str | None:
+    payload = _read_cache_payload(url)
+    if not payload:
+        return None
+    return str(payload.get("body") or "").strip() or None
+
+
+def _read_cache_published_meta(url: str) -> str:
+    payload = _read_cache_payload(url)
+    if not payload:
+        return ""
+    return str(payload.get("published_meta") or "").strip()
+
+
+def _write_cache(url: str, body: str, *, published_meta: str = "") -> None:
     path = _cache_dir() / f"{_url_hash(url)}.json"
     payload = {
         "url": url,
         "body": body[:max_article_chars()],
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+    meta = (published_meta or "").strip()
+    if meta:
+        payload["published_meta"] = meta[:80]
     try:
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except OSError as exc:
@@ -193,6 +214,48 @@ def fetch_article_body(
 
     _write_cache(link, body)
     return body
+
+
+def fetch_article_body_with_html(url: str) -> tuple[str | None, str]:
+    """Fetch article text and raw HTML for trusted domains; (None, '') on skip/fail."""
+    if not article_fetch_enabled():
+        return None, ""
+    link = (url or "").strip()
+    if not link.startswith(("http://", "https://")):
+        return None, ""
+    if not _domain_allowed(link):
+        return None, ""
+
+    cached = _read_cache_payload(link)
+    if cached:
+        meta = str(cached.get("published_meta") or "").strip()
+        return str(cached.get("body") or "").strip() or None, meta
+
+    try:
+        resp = get(link, headers={"User-Agent": _UA}, timeout=15.0)
+        resp.raise_for_status()
+    except RequestException as exc:
+        logger.debug("article fetch failed for %s: %s", link[:80], exc)
+        return None, ""
+
+    encoding = resp.encoding or resp.apparent_encoding or "utf-8"
+    try:
+        html_text = resp.content.decode(encoding, errors="replace")
+    except LookupError:
+        html_text = resp.text
+
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_03_datetime_normalize import (
+        extract_published_meta_from_html,
+    )
+
+    published_meta = extract_published_meta_from_html(html.unescape(html_text))
+    body = _extract_body_from_html(html.unescape(html_text))
+    if len(body) < 120:
+        logger.debug("article body too short for %s", link[:80])
+        return None, html_text
+
+    _write_cache(link, body, published_meta=published_meta)
+    return body, html_text
 
 
 def enrich_ref_summary_from_url(ref: dict[str, Any]) -> dict[str, Any]:

@@ -291,9 +291,50 @@ def resolve_staging_group(
 
     from trade_integrations.dataflows.index_research.news_claim_extraction import enrich_ref_with_claims
     from trade_integrations.dataflows.article_body import enrich_ref_summary_from_url
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.pipeline_runner import (
+        RESOLVER_THROUGH,
+        hub_news_pipeline_enabled,
+        run_ref_pipeline,
+    )
 
-    enriched = [enrich_ref_with_claims(dict(r)) for r in kept]
-    enriched = [enrich_ref_summary_from_url(r) for r in enriched]
+    if hub_news_pipeline_enabled():
+        enriched = []
+        for row in kept:
+            payload = dict(row)
+            payload["_relevance_prefiltered"] = True
+            ctx = run_ref_pipeline(
+                payload,
+                ticker=sym,
+                through=RESOLVER_THROUGH,
+                skip_if_prefiltered=True,
+            )
+            if not ctx.should_continue:
+                rid = str(row.get("ref_id") or "").strip()
+                if rid:
+                    mark_ref_discarded(
+                        rid,
+                        reason=ctx.discard_reason or "pipeline_discarded",
+                        restore_payload=dict(row),
+                        source_kind="pipeline_gate",
+                    )
+                continue
+            payload = dict(ctx.ref)
+            payload.pop("_relevance_prefiltered", None)
+            payload.pop("_force_re_enrich", None)
+            payload.pop("_raw_html_meta_published", None)
+            if ctx.trace_dicts():
+                payload["pipeline_step_trace"] = ctx.trace_dicts()
+            enriched.append(payload)
+    else:
+        enriched = [enrich_ref_with_claims(dict(r)) for r in kept]
+        enriched = [enrich_ref_summary_from_url(r) for r in enriched]
+
+    if not enriched:
+        return ResolveDecision(
+            action="discard",
+            reason="all_refs_irrelevant_or_pipeline_discarded",
+            tier="t0",
+        )
     ref = _pick_primary_ref(enriched)
 
     if adjudication_summary is None:

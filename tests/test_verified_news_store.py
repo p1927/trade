@@ -123,6 +123,8 @@ def test_build_snapshot_from_hub(hub_tmp):
             "predicted_impact": {"return_pct": -1.0, "nifty_points": -250},
         }
     )
-    snap = store.build_snapshot_from_hub(ticker="NIFTY", horizon_days=14, spot=25000)
+    snap = store.build_snapshot_from_hub(ticker="NIFTY", horizon_days=14, spot=25000, prediction_date="2026-07-16")
     assert snap["summary"]["source"] == "hub_events"
     assert len(snap["items"]) == 1
+    assert snap.get("prediction_date") == "2026-07-16"
+    assert "prediction_attribution" in snap["items"][0]

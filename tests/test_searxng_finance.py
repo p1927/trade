@@ -250,6 +250,82 @@ def test_search_source_outcome_skips_when_no_domains(monkeypatch) -> None:
     assert outcome.hits == []
 
 
+def test_search_source_widens_domains_for_broker(monkeypatch) -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
+        search_source_results_with_outcome,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionSource,
+    )
+
+    source = ExternalPredictionSource(
+        id="motilal_oswal",
+        display_name="Motilal Oswal",
+        kind="broker",
+        domains=["motilaloswal.com", "economictimes.indiatimes.com"],
+        search_queries=['"{source_name}" Nifty 50 target {today}'],
+    )
+    calls: list[tuple[str, ...] | None] = []
+
+    def fake_search_finance(query, **kwargs):
+        allowed = kwargs.get("allowed_domains")
+        calls.append(allowed)
+        stats = kwargs.get("stats")
+        if allowed == ("motilaloswal.com",):
+            if stats is not None:
+                stats["raw_count"] = 5
+            return []
+        if stats is not None:
+            stats["raw_count"] = 2
+        return [
+            {
+                "url": "https://economictimes.indiatimes.com/markets/stocks/news/nifty-outlook",
+                "title": "Motilal Oswal sees Nifty at 26500",
+                "content": "Nifty 50 target forecast",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.search_finance",
+        fake_search_finance,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.build_fallback_queries",
+        lambda *args, **kwargs: [],
+    )
+
+    outcome = search_source_results_with_outcome(source, horizon_days=14)
+    assert outcome.hits
+    assert ("motilaloswal.com",) in calls
+    assert ("motilaloswal.com", "economictimes.indiatimes.com") in calls
+
+
+def test_apply_publish_recency_gate_marks_stale() -> None:
+    from trade_integrations.dataflows.index_research.external_predictions.models import (
+        ExternalPredictionRecord,
+        ExternalPredictionTarget,
+    )
+    from trade_integrations.dataflows.index_research.external_predictions.validators import (
+        apply_publish_recency_gate,
+    )
+
+    record = ExternalPredictionRecord(
+        source_id="livemint",
+        symbol="NIFTY",
+        horizon_days=14,
+        as_of="2026-07-23",
+        published_at="2026-07-01",
+        target=ExternalPredictionTarget(mid=25000.0),
+        fetch_status="ok",
+    )
+    gated = apply_publish_recency_gate(
+        record,
+        trading_dates=[f"2026-07-{day:02d}" for day in range(1, 32)],
+    )
+    assert gated.fetch_status == "stale"
+    assert gated.error_message == "published_outside_recency_window"
+
+
 def test_search_source_outcome_tracks_domain_filter_exhausted(monkeypatch) -> None:
     from trade_integrations.dataflows.index_research.external_predictions.fetcher import (
         search_source_results_with_outcome,
@@ -276,6 +352,10 @@ def test_search_source_outcome_tracks_domain_filter_exhausted(monkeypatch) -> No
     monkeypatch.setattr(
         "trade_integrations.dataflows.index_research.external_predictions.fetcher.search_finance",
         fake_search_finance,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.external_predictions.fetcher.build_fallback_queries",
+        lambda *args, **kwargs: [],
     )
 
     pl = PipelineLogger()

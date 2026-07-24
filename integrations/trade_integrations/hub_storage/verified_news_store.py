@@ -423,8 +423,13 @@ def build_snapshot_from_hub(
     spot: float | None = None,
     include_rejected: bool = False,
     limit: int = 20,
+    prediction_date: str | None = None,
 ) -> dict[str, Any]:
     """Materialize UI snapshot from hub events SSOT (no re-verification)."""
+    from trade_integrations.dataflows.company_research.market import india_trading_date_iso
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_08_temporal_attribution import (
+        prepare_items_for_prediction_attribution,
+    )
     from trade_integrations.hub_storage.news_events_store import (
         count_events_by_status,
         distilled_event_to_headline_dict,
@@ -432,6 +437,7 @@ def build_snapshot_from_hub(
     )
 
     sym = ticker.strip().upper()
+    pred_day = (prediction_date or india_trading_date_iso())[:10]
     pool = [
         distilled_event_to_headline_dict(event)
         for event in list_events(
@@ -448,11 +454,21 @@ def build_snapshot_from_hub(
     mix_limit = max(4, limit // 3)
     items = (reconciled_items[:mix_limit] + live_items)[:limit]
 
-    from trade_integrations.dataflows.index_research.news_prediction_visibility import (
-        filter_prediction_attribution_items,
-    )
+    try:
+        from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+        from trade_integrations.hub_storage.news_staging_store import staging_queue_stats
 
-    items = filter_prediction_attribution_items(items)
+        items = union_headlines_with_staging(items, ticker=ticker, limit=limit)
+        staging_pending = int(staging_queue_stats(ticker=ticker).get("queued") or 0)
+    except Exception:
+        staging_pending = 0
+
+    items = prepare_items_for_prediction_attribution(
+        items,
+        prediction_date=pred_day,
+        horizon_days=horizon_days,
+        ticker=sym,
+    )
 
     rejected_count = count_by_status(ticker=sym).get("rejected", 0)
     if include_rejected:
@@ -471,21 +487,13 @@ def build_snapshot_from_hub(
         1 for i in items if (i.get("actual_impact") or i.get("actual") or {}).get("nifty_points") is not None
     )
     total_reconciled = len(reconciled_items)
-    staging_pending = 0
-    try:
-        from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
-        from trade_integrations.hub_storage.news_staging_store import staging_queue_stats
-
-        items = union_headlines_with_staging(items, ticker=ticker, limit=limit)
-        staging_pending = int(staging_queue_stats(ticker=ticker).get("queued") or 0)
-    except Exception:
-        pass
     staging_live = sum(1 for i in items if i.get("provenance") == "staging")
     return {
         "status": "ok",
         "as_of": _now_iso(),
         "ticker": ticker,
         "horizon_days": horizon_days,
+        "prediction_date": pred_day,
         "spot": spot,
         "items": items,
         "summary": {

@@ -269,6 +269,7 @@ def search_json(
     *,
     categories: str = "news",
     engines: str | None = None,
+    time_range: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
     """Queued SearXNG JSON search — blocks until the global drain slot is available."""
@@ -287,6 +288,8 @@ def search_json(
             params["categories"] = categories
         if engines:
             params["engines"] = engines
+        if time_range:
+            params["time_range"] = time_range
         try:
             resp = get(
                 url,

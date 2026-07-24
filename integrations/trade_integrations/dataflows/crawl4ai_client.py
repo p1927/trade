@@ -144,6 +144,81 @@ def _cdp_url() -> str:
     return os.environ.get("CRAWL4AI_CDP_URL", "").strip()
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _cdp_profile_dir() -> Path:
+    raw = os.environ.get("CRAWL4AI_CDP_PROFILE_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    return _repo_root() / "log" / "chrome-cdp-profile"
+
+
+def _cdp_port() -> int:
+    raw = os.environ.get("CRAWL4AI_CDP_PORT", "9222").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 9222
+
+
+def cdp_is_ready() -> bool:
+    cdp = _cdp_url()
+    if not cdp:
+        return False
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{cdp.rstrip('/')}/json/version", timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def ensure_cdp_ready(*, pipeline: Any | None = None) -> bool:
+    """Start local Chrome CDP when configured but not reachable."""
+    if not _cdp_url():
+        return False
+    if cdp_is_ready():
+        return True
+
+    script = _repo_root() / "scripts" / "start_chrome_cdp.sh"
+    if not script.is_file():
+        logger.warning("CDP configured but %s missing", script)
+        return False
+
+    profile_dir = _cdp_profile_dir()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    port = _cdp_port()
+    if pipeline:
+        pipeline.info("crawl4ai", f"Starting Chrome CDP on port {port}")
+    else:
+        logger.info("Starting Chrome CDP on port %s", port)
+
+    import subprocess
+
+    env = os.environ.copy()
+    env["CRAWL4AI_CDP_PROFILE_DIR"] = str(profile_dir)
+    try:
+        subprocess.Popen(
+            ["bash", str(script), str(port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+    except OSError as exc:
+        logger.warning("Could not start Chrome CDP: %s", exc)
+        return False
+
+    deadline = time.time() + 20.0
+    while time.time() < deadline:
+        if cdp_is_ready():
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def _proxy_url_raw() -> str:
     return (os.environ.get("CRAWL4AI_PROXY") or os.environ.get("HTTP_PROXY") or "").strip()
 
@@ -282,7 +357,7 @@ def _remove_overlay_elements() -> bool:
     return _env_enabled("CRAWL4AI_REMOVE_OVERLAY_ELEMENTS", default=True)
 
 
-# Shared helpers for optional consent / overlay dismiss blocks (Crawl4AI js_code slot).
+# Shared helpers + multi-pass dismiss (runs in Crawl4AI js_code slot, after scan_full_page scroll).
 _POPUP_DISMISS_JS_HELPERS = """
   const visible = (el) => {
     if (!el) return false;
@@ -290,82 +365,114 @@ _POPUP_DISMISS_JS_HELPERS = """
     return s.display !== "none" && s.visibility !== "hidden" && parseFloat(s.opacity || "1") > 0;
   };
   const clickVisible = (selector) => {
+    let clicked = false;
     for (const el of document.querySelectorAll(selector)) {
       if (visible(el)) {
         el.click();
-        return true;
+        clicked = true;
       }
     }
-    return false;
+    return clicked;
   };
   const removeMatching = (selector) => {
     document.querySelectorAll(selector).forEach((el) => el.remove());
   };
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 """.strip()
 
 _CONSENT_DISMISS_JS_BODY = """
-  const closeSelectors = [
-    'button[class*="close" i]',
-    'span[class*="close" i]',
-    'a[class*="close" i]',
-    '[aria-label*="close" i]',
-    '[title*="close" i]',
-    '.close_icon',
-    '.close-btn',
-    '.modal-close',
-    '.popup-close',
-    '.notNow',
-    '.no-thanks',
-    '[class*="dismiss" i]',
-  ];
-  for (const selector of closeSelectors) {
-    if (clickVisible(selector)) break;
-  }
-
-  const dismissPatterns = [
-    /^accept\\s*(all)?(\\s*cookies)?$/i,
-    /^allow\\s*(all)?(\\s*cookies)?$/i,
-    /^skip$/i,
-    /^not now$/i,
-    /^no thanks$/i,
-    /^continue reading$/i,
-    /^close$/i,
-    /^×$/,
-    /^✕$/,
-  ];
-  for (const el of document.querySelectorAll('button, a, span[role="button"]')) {
-    const text = (el.textContent || "").trim();
-    if (text.length > 0 && text.length <= 40 && dismissPatterns.some((p) => p.test(text)) && visible(el)) {
-      el.click();
-      break;
+    if (typeof window.OneTrust !== "undefined") {
+      try {
+        if (typeof window.OneTrust.AllowAll === "function") window.OneTrust.AllowAll();
+        if (typeof window.OneTrust.RejectAll === "function") { /* prefer AllowAll */ }
+      } catch (e) {}
     }
-  }
+    const consentSelectors = [
+      "#onetrust-accept-btn-handler",
+      "#accept-recommended-btn-handler",
+      "#onetrust-pc-btn-handler",
+      "#truste-consent-button",
+      ".fc-cta-consent",
+      ".fc-button.fc-cta-consent.fc-primary-button",
+      ".accept_recommended_btn",
+      ".privacy_policy_button",
+      '[data-testid="accept-all"]',
+      'button[id*="accept" i]',
+      'button[class*="accept" i]',
+      'button[class*="agree" i]',
+      'button[class*="close" i]',
+      'span[class*="close" i]',
+      'a[class*="close" i]',
+      '[aria-label*="close" i]',
+      '[title*="close" i]',
+      ".close_icon",
+      ".close-btn",
+      ".modal-close",
+      ".popup-close",
+      ".notNow",
+      ".no-thanks",
+      '[class*="dismiss" i]',
+    ];
+    for (const selector of consentSelectors) {
+      clickVisible(selector);
+    }
+    const dismissPatterns = [
+      /^accept\\s*(all)?(\\s*cookies)?$/i,
+      /^allow\\s*(all)?(\\s*cookies)?$/i,
+      /^i\\s*agree$/i,
+      /^agree$/i,
+      /^skip$/i,
+      /^not now$/i,
+      /^no thanks$/i,
+      /^continue reading$/i,
+      /^close$/i,
+      /^×$/,
+      /^✕$/,
+    ];
+    for (const el of document.querySelectorAll("button, a, span[role='button'], div[role='button']")) {
+      const text = (el.textContent || "").trim();
+      if (text.length > 0 && text.length <= 48 && dismissPatterns.some((p) => p.test(text)) && visible(el)) {
+        el.click();
+      }
+    }
 """.strip()
 
 _OVERLAY_DISMISS_JS_BODY = """
-  const overlaySelectors = [
-    ".blk_overlay",
-    ".popup_container",
-    "#webpushBanner",
-    ".modal_popup",
-    ".popupBox",
-    "#myModal",
-    ".paywall-overlay",
-    '[class*="app-download" i]',
-    '[id*="app-download" i]',
-    '[class*="subscription-modal" i]',
-    '[class*="login-modal" i]',
-    '[class*="newsletter" i][class*="popup" i]',
-  ];
-  for (const selector of overlaySelectors) removeMatching(selector);
+    const overlaySelectors = [
+      "#onetrust-consent-sdk",
+      "#onetrust-banner-sdk",
+      ".onetrust-pc-dark-filter",
+      "#onetrust-pc-sdk",
+      ".blk_overlay",
+      ".popup_container",
+      "#webpushBanner",
+      ".modal_popup",
+      ".popupBox",
+      "#myModal",
+      ".paywall-overlay",
+      '[class*="cookie-consent" i]',
+      '[class*="cookie-banner" i]',
+      '[class*="consent-banner" i]',
+      '[class*="app-download" i]',
+      '[id*="app-download" i]',
+      '[class*="subscription-modal" i]',
+      '[class*="login-modal" i]',
+      '[class*="newsletter" i][class*="popup" i]',
+    ];
+    for (const selector of overlaySelectors) removeMatching(selector);
+    document.body.classList.remove("ot-overflow-hidden");
+    document.documentElement.classList.remove("ot-overflow-hidden");
 """.strip()
 
-_POPUP_DISMISS_JS_TAIL = """
-  document.body.style.overflow = "";
-  document.body.style.overflowY = "";
-  document.documentElement.style.overflow = "";
-  document.documentElement.style.overflowY = "";
-  await new Promise((resolve) => setTimeout(resolve, 200));
+_POPUP_DISMISS_ONCE_BODY = """
+  async function dismissOnce() {
+    __CONSENT__
+    __OVERLAY__
+    document.body.style.overflow = "";
+    document.body.style.overflowY = "";
+    document.documentElement.style.overflow = "";
+    document.documentElement.style.overflowY = "";
+  }
 """.strip()
 
 
@@ -373,13 +480,25 @@ def _popup_dismiss_js(*, consent: bool, overlay: bool) -> str | None:
     """Build site-specific dismiss JS gated by env flags (runs in Crawl4AI js_code slot)."""
     if not consent and not overlay:
         return None
-    parts = [_POPUP_DISMISS_JS_HELPERS]
-    if consent:
-        parts.append(_CONSENT_DISMISS_JS_BODY)
-    if overlay:
-        parts.append(_OVERLAY_DISMISS_JS_BODY)
-    parts.append(_POPUP_DISMISS_JS_TAIL)
-    body = "\n  ".join(parts)
+    once_body = _POPUP_DISMISS_ONCE_BODY.replace(
+        "__CONSENT__",
+        _CONSENT_DISMISS_JS_BODY if consent else "",
+    ).replace(
+        "__OVERLAY__",
+        _OVERLAY_DISMISS_JS_BODY if overlay else "",
+    )
+    body = "\n  ".join([_POPUP_DISMISS_JS_HELPERS, once_body, """
+  for (let pass = 0; pass < 3; pass += 1) {
+    await dismissOnce();
+    await sleep(350);
+  }
+  window.scrollTo(0, 0);
+  await sleep(400);
+  for (let pass = 0; pass < 2; pass += 1) {
+    await dismissOnce();
+    await sleep(350);
+  }
+""".strip()])
     return f"(async () => {{\n  {body}\n}})();"
 
 
@@ -395,10 +514,26 @@ def _run_config(*, score_links: bool = False, screenshot: bool = False) -> Any:
         "delay_before_return_html": _delay_before_return_html(),
         "remove_consent_popups": remove_consent,
         "remove_overlay_elements": remove_overlay,
+        "locale": "en-IN",
+        "timezone_id": "Asia/Kolkata",
     }
+    try:
+        from crawl4ai import GeolocationConfig
+
+        kwargs["geolocation"] = GeolocationConfig(
+            latitude=19.0760,
+            longitude=72.8777,
+            accuracy=100,
+        )
+    except ImportError:
+        logger.debug("GeolocationConfig unavailable; crawl without India geo hints")
     dismiss_js = _popup_dismiss_js(consent=remove_consent, overlay=remove_overlay)
     if dismiss_js:
         kwargs["js_code"] = dismiss_js
+    if screenshot:
+        # Full-page stitch re-scrolls after dismiss and re-captures fixed cookie modals.
+        kwargs["force_viewport_screenshot"] = True
+        kwargs["screenshot_wait_for"] = 0.75
     if screenshot and _scroll_before_screenshot():
         kwargs["scan_full_page"] = True
         kwargs["delay_before_return_html"] = max(
@@ -458,6 +593,39 @@ def _screenshots_enabled() -> bool:
     }
 
 
+def _finalize_crawl_result(
+    *,
+    url: str,
+    batch_profile: str,
+    markdown: str,
+    title: str,
+    metadata: dict[str, Any],
+    elapsed_ms: float,
+) -> CrawlPageResult:
+    from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
+        is_akamai_wrapped_markdown,
+    )
+
+    if is_akamai_wrapped_markdown(markdown, url):
+        return CrawlPageResult(
+            url=url,
+            success=False,
+            markdown=markdown,
+            title=title,
+            error_message="Akamai wrapped response (geo edge)",
+            elapsed_ms=elapsed_ms,
+            metadata={**metadata, "akamai_wrapped": True, "browser_profile": batch_profile},
+        )
+    return CrawlPageResult(
+        url=url,
+        success=True,
+        markdown=markdown,
+        title=title,
+        elapsed_ms=elapsed_ms,
+        metadata=metadata,
+    )
+
+
 async def crawl_urls_parallel(
     urls: list[str],
     *,
@@ -471,7 +639,7 @@ async def crawl_urls_parallel(
     """Fetch URLs concurrently via one shared AsyncWebCrawler process."""
     from trade_integrations.dataflows.index_research.external_predictions.crawl_resilience import (
         is_blocklisted_crawl_domain,
-        is_bot_block_error,
+        is_crawl_bot_blocked,
     )
     from trade_integrations.dataflows import source_availability
 
@@ -494,6 +662,14 @@ async def crawl_urls_parallel(
     parallel = max_parallel or _max_parallel()
     want_screenshot = _screenshots_enabled() if capture_screenshot is None else capture_screenshot
     profile = browser_profile or primary_browser_profile()
+    if profile == "cdp" or any(is_blocklisted_crawl_domain(u) for u in cleaned):
+        if _cdp_url() and not ensure_cdp_ready(pipeline=pipeline):
+            msg = f"CDP endpoint at {_cdp_url()} is not ready after startup"
+            if pipeline:
+                pipeline.warn("crawl4ai", msg)
+            return [CrawlPageResult(url=u, success=False, error_message=msg) for u in cleaned]
+        if any(is_blocklisted_crawl_domain(u) for u in cleaned) and "cdp" in browser_profile_tiers():
+            profile = "cdp"
     if pipeline:
         pipeline.info(
             "crawl4ai",
@@ -551,13 +727,13 @@ async def crawl_urls_parallel(
                                 f"OK ({len(markdown)} chars, {elapsed_ms:.0f}ms)",
                                 url=url,
                             )
-                        return CrawlPageResult(
+                        return _finalize_crawl_result(
                             url=url,
-                            success=True,
+                            batch_profile=batch_profile,
                             markdown=markdown,
                             title=title,
-                            elapsed_ms=elapsed_ms,
                             metadata=metadata,
+                            elapsed_ms=elapsed_ms,
                         )
                     error_message = str(getattr(result, "error_message", "") or "Crawl failed")
                     if pipeline:
@@ -609,8 +785,12 @@ async def crawl_urls_parallel(
                     continue
                 if row.success and (row.markdown or "").strip():
                     continue
-                if is_bot_block_error(row.error_message):
-                    blocked_urls.append(url)
+                if not is_crawl_bot_blocked(row, url):
+                    continue
+                if is_blocklisted_crawl_domain(url) and profile == "cdp":
+                    # Akamai-heavy domains (e.g. moneycontrol.com) do not improve on stealth.
+                    continue
+                blocked_urls.append(url)
             next_profile = next_browser_profile(profile)
             if blocked_urls and next_profile:
                 if pipeline:

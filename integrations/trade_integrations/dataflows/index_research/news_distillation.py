@@ -43,6 +43,10 @@ def _reference_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "published_at": str(row.get("published_at") or ""),
         "fetched_at": _now_iso(),
         "extracted_claims": list(row.get("extracted_claims") or []),
+        "article_enrichment": dict(row.get("article_enrichment") or {}),
+        "structured_enrichment": dict(row.get("structured_enrichment") or {}),
+        "pipeline_distill_hints": str(row.get("pipeline_distill_hints") or ""),
+        "adjudication": dict(row.get("adjudication") or {}) if isinstance(row.get("adjudication"), dict) else {},
     }
 
 
@@ -242,6 +246,9 @@ def _llm_distill(
             f"title: {ref.get('raw_title') or ref.get('title')}, "
             f"summary: {(ref.get('raw_summary') or ref.get('summary') or '')[:800]}"
         )
+        hints = str(ref.get("pipeline_distill_hints") or "").strip()
+        if hints:
+            context_lines.append(f"enrichment:\n{hints[:1200]}")
     previous_content = strip_minimax_thinking(previous_content)
     story = f"title: {previous_title}\nsummary: {previous_content}"
     tape = format_market_context_for_prompt(market_context)
@@ -482,6 +489,24 @@ def distill_event(
     }
     if adjudication_summary:
         event_meta["adjudication_summary"] = dict(adjudication_summary)
+
+    merged_causes: list[dict[str, Any]] = []
+    merged_future: list[dict[str, Any]] = []
+    for ref in normalized_refs:
+        ref_structured = ref.get("structured_enrichment")
+        if not isinstance(ref_structured, dict):
+            continue
+        for row in ref_structured.get("cause_indicators") or []:
+            if isinstance(row, dict) and row not in merged_causes:
+                merged_causes.append(row)
+        for row in ref_structured.get("future_events") or []:
+            if isinstance(row, dict) and row not in merged_future:
+                merged_future.append(row)
+    if merged_causes:
+        event_meta["cause_indicators"] = merged_causes[:20]
+    if merged_future:
+        event_meta["future_events"] = merged_future[:20]
+
     if previous:
         prior_timeline = list(prior_meta.get("timeline") or [])
         prior_refs = list(prior_meta.get("references") or [])

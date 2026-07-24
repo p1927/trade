@@ -373,11 +373,12 @@ def test_resolve_news_impact_prefers_snapshot_and_hydrates_tags(hub_tmp, monkeyp
         encoding="utf-8",
     )
 
-    report = engine.resolve_news_impact(ticker="NIFTY", doc=None, limit=8)
+    report = engine.resolve_news_impact(ticker="NIFTY", doc=None, limit=8, prediction_date="2026-07-16")
     assert len(report.get("items") or []) == 1
     tags = (report["items"][0].get("tags") or {})
     assert "us_markets" in tags.get("topics", [])
     assert "sp500" in tags.get("factors", [])
+    assert "prediction_attribution" in report["items"][0]
 
 
 def test_resolve_news_impact_returns_hub_empty_without_live_collect(hub_tmp, monkeypatch):

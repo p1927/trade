@@ -5,6 +5,12 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _legacy_enrich_path(monkeypatch):
+    """Resolver tests target T0–T4 logic; disable hub news pipeline by default."""
+    monkeypatch.setenv("HUB_NEWS_PIPELINE_ENABLED", "0")
+
+
 @pytest.fixture
 def hub_tmp(tmp_path, monkeypatch):
     from trade_integrations.context import hub as hub_mod

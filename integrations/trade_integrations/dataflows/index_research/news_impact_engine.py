@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from trade_integrations.context.hub import get_hub_dir
+from trade_integrations.dataflows.company_research.market import india_trading_date_iso
 from trade_integrations.dataflows.index_research.horizon import resolve_horizon
 from trade_integrations.dataflows.index_research.horizon_dates import resolve_maturity_trading_date
 from trade_integrations.dataflows.index_research.news_collect import collect_headlines_for_day
@@ -19,9 +20,6 @@ from trade_integrations.dataflows.index_research.news_dedup import (
     story_key_from_row,
 )
 from trade_integrations.dataflows.index_research.news_enrichment import enrich_headline
-from trade_integrations.dataflows.index_research.news_prediction_visibility import (
-    filter_prediction_attribution_items,
-)
 from trade_integrations.dataflows.index_research.news_verification import (
     is_approved_status,
     verify_enriched_news,
@@ -348,7 +346,7 @@ def ingest_headlines_for_day(
     except Exception:
         pass
 
-    today = (day or datetime.now(timezone.utc).date().isoformat())[:10]
+    today = (day or india_trading_date_iso())[:10]
     frame = load_aligned_factor_history(days=120)
 
     if macro_factors is None:
@@ -508,14 +506,39 @@ def hydrate_news_item_from_hub(item: dict[str, Any], *, ticker: str = "NIFTY") -
     return out
 
 
+def _hydrate_hub_rows(
+    rows: list[dict[str, Any]],
+    *,
+    ticker: str,
+    limit: int,
+    union_staging: bool = True,
+) -> list[dict[str, Any]]:
+    sym = ticker.strip().upper()
+    if union_staging:
+        try:
+            from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+
+            rows = union_headlines_with_staging(rows, ticker=sym, limit=limit)
+        except Exception:
+            pass
+    return [hydrate_news_item_from_hub(row, ticker=sym) for row in rows[:limit]]
+
+
 def resolve_news_impact(
     *,
     ticker: str = "NIFTY",
     doc: Any | None = None,
     limit: int = 12,
     hydrate_from_hub: bool = True,
+    prediction_date: str | None = None,
+    horizon_days: int = 14,
 ) -> dict[str, Any]:
     """Unified news_impact for analysis/UI: embedded doc → snapshot file → hub records."""
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_08_temporal_attribution import (
+        prediction_date_from_doc,
+        prepare_items_for_prediction_attribution,
+    )
+
     sym = ticker.strip().upper()
     embedded = getattr(doc, "news_impact", None) if doc is not None else None
     if not isinstance(embedded, dict):
@@ -529,18 +552,23 @@ def resolve_news_impact(
         if snap and snap.get("items"):
             report = dict(snap)
         else:
-            report = build_snapshot_from_hub(ticker=sym, limit=limit)
+            report = build_snapshot_from_hub(
+                ticker=sym,
+                limit=limit,
+                horizon_days=horizon_days,
+                prediction_date=prediction_date or prediction_date_from_doc(doc),
+            )
 
     items = list(report.get("items") or [])[:limit]
-    try:
-        from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
-
-        items = union_headlines_with_staging(items, ticker=sym, limit=limit)
-    except Exception:
-        pass
     if hydrate_from_hub:
-        items = [hydrate_news_item_from_hub(row, ticker=sym) for row in items]
-    items = filter_prediction_attribution_items(items)
+        items = _hydrate_hub_rows(items, ticker=sym, limit=limit, union_staging=True)
+    pred_day = (prediction_date or prediction_date_from_doc(doc))[:10]
+    items = prepare_items_for_prediction_attribution(
+        items,
+        prediction_date=pred_day,
+        horizon_days=horizon_days,
+        ticker=sym,
+    )
     report["items"] = items[:limit]
     summary = dict(report.get("summary") or {})
     summary["approved_count"] = sum(1 for i in items if i.get("verification_status") == "approved")
@@ -561,24 +589,42 @@ def resolve_news_impact(
     return _apply_hub_empty_status(report)
 
 
-def list_recent_verified_headlines(*, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
+def list_recent_verified_headlines(
+    *,
+    ticker: str = "NIFTY",
+    limit: int = 12,
+    prediction_date: str | None = None,
+    horizon_days: int = 14,
+) -> list[dict[str, Any]]:
     """Recent approved/partial headlines regardless of calendar day (playground fallback)."""
-    from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_08_temporal_attribution import (
+        prepare_items_for_prediction_attribution,
+    )
 
     rows = list_verified_records(
         status=["approved", "partial"],
         limit=limit,
         ticker=ticker,
     )
-    rows = union_headlines_with_staging(rows, ticker=ticker, limit=limit)
-    rows = filter_prediction_attribution_items(
-        [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
+    hydrated = _hydrate_hub_rows(rows, ticker=ticker, limit=limit)
+    return prepare_items_for_prediction_attribution(
+        hydrated,
+        prediction_date=prediction_date,
+        horizon_days=horizon_days,
+        ticker=ticker,
     )
-    return rows
 
 
-def list_approved_for_date(day: str, *, ticker: str = "NIFTY", limit: int = 12) -> list[dict[str, Any]]:
-    from trade_integrations.dataflows.index_research.news_entity_worker import union_headlines_with_staging
+def list_approved_for_date(
+    day: str,
+    *,
+    ticker: str = "NIFTY",
+    limit: int = 12,
+    horizon_days: int = 14,
+) -> list[dict[str, Any]]:
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_08_temporal_attribution import (
+        prepare_items_for_prediction_attribution,
+    )
 
     rows = list_verified_records(
         status=["approved", "partial"],
@@ -586,11 +632,13 @@ def list_approved_for_date(day: str, *, ticker: str = "NIFTY", limit: int = 12) 
         limit=limit,
         ticker=ticker,
     )
-    rows = union_headlines_with_staging(rows, ticker=ticker, limit=limit)
-    rows = filter_prediction_attribution_items(
-        [hydrate_news_item_from_hub(row, ticker=ticker) for row in rows]
+    hydrated = _hydrate_hub_rows(rows, ticker=ticker, limit=limit)
+    return prepare_items_for_prediction_attribution(
+        hydrated,
+        prediction_date=day[:10],
+        horizon_days=horizon_days,
+        ticker=ticker,
     )
-    return rows
 
 
 def to_headline_dict(item: dict[str, Any]) -> dict[str, Any]:
@@ -618,7 +666,7 @@ def ingest_headline_rows(
     horizon = resolve_horizon(horizon_days)
     frame = load_aligned_factor_history(days=120)
     trading_dates = frame["date"].astype(str).str[:10].tolist() if not frame.empty else []
-    today = (collection_day or datetime.now(timezone.utc).date().isoformat())[:10]
+    today = (collection_day or india_trading_date_iso())[:10]
 
     if macro_factors is None:
         feature_cols = [c for c in frame.columns if c not in {"date", "close"}]
@@ -760,8 +808,16 @@ def headlines_for_prediction_date(
         key=lambda r: publish_day_from_value(str(r.get("published_at") or "")),
         reverse=True,
     )
-    return filter_prediction_attribution_items(
-        [hydrate_news_item_from_hub(row, ticker=ticker) for row in safe[:limit]]
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_08_temporal_attribution import (
+        prepare_items_for_prediction_attribution,
+    )
+
+    hydrated = _hydrate_hub_rows(safe[:limit], ticker=ticker, limit=limit, union_staging=False)
+    return prepare_items_for_prediction_attribution(
+        hydrated,
+        prediction_date=pred,
+        horizon_days=horizon_days,
+        ticker=ticker,
     )
 
 
@@ -783,7 +839,12 @@ def headlines_for_day(
     """
     sym = ticker.strip().upper()
     target = day[:10]
-    rows = list_approved_for_date(target, ticker=sym, limit=limit)
+    rows = list_verified_records(
+        status=["approved", "partial"],
+        publish_day=target,
+        limit=limit,
+        ticker=sym,
+    )
     if not rows and ingest_if_missing:
         ingest_headlines_for_day(
             ticker=sym,
@@ -793,15 +854,28 @@ def headlines_for_day(
             macro_factors=macro_factors,
             headline_limit=max(limit, 12),
         )
-        rows = list_approved_for_date(target, ticker=sym, limit=limit)
+        rows = list_verified_records(
+            status=["approved", "partial"],
+            publish_day=target,
+            limit=limit,
+            ticker=sym,
+        )
     if not rows and allow_live_collect:
         raw = merge_raw_headlines(
             collect_headlines_for_day(target, ticker=sym, limit=limit),
             ticker=sym,
         )
         rows = [to_headline_dict(r) for r in raw if r.get("title")]
-    return filter_prediction_attribution_items(
-        [hydrate_news_item_from_hub(row, ticker=sym) for row in rows[:limit]]
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_08_temporal_attribution import (
+        prepare_items_for_prediction_attribution,
+    )
+
+    hydrated = _hydrate_hub_rows(rows[:limit], ticker=sym, limit=limit, union_staging=False)
+    return prepare_items_for_prediction_attribution(
+        hydrated,
+        prediction_date=target,
+        horizon_days=horizon_days,
+        ticker=sym,
     )
 
 

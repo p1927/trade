@@ -865,6 +865,7 @@ def _persist_maintenance_manifest(*, ticker: str, result: dict[str, Any]) -> Non
         "rollup",
         "index_rebuild",
         "news_impact_refresh",
+        "hindsight_causes",
         "index_news_sync",
     ):
         part = result.get(key)
@@ -968,6 +969,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "rollup": dict(skipped),
             "index_rebuild": dict(skipped),
             "news_impact_refresh": dict(skipped),
+            "hindsight_causes": dict(skipped),
             "index_news_sync": dict(skipped),
             "pipeline_paused": True,
             "pause_reason": pause.get("pause_reason") or "",
@@ -1084,6 +1086,16 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         merge_stats=merge_stats,
     )
     news_impact = _refresh_news_impact_cache(ticker=ticker)
+    from trade_integrations.dataflows.index_research.hub_news_pipeline.step_09_hindsight_causes import (
+        run_hindsight_causes_backfill,
+    )
+
+    hindsight_causes = _safe_stage(
+        "hindsight_causes",
+        run_hindsight_causes_backfill,
+        ticker=ticker,
+        lookback_days=lookback,
+    )
     index_news_sync = _safe_stage(
         "index_news_sync",
         _sync_index_news_after_maintenance,
@@ -1105,6 +1117,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         rollup,
         index_rebuild,
         news_impact,
+        hindsight_causes,
         index_news_sync,
     )
     result = {
@@ -1123,6 +1136,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         "rollup": rollup,
         "index_rebuild": index_rebuild,
         "news_impact_refresh": news_impact,
+        "hindsight_causes": hindsight_causes,
         "index_news_sync": index_news_sync,
         "had_errors": any(_part_had_errors(part) for part in stages),
     }

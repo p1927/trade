@@ -175,6 +175,45 @@ def get_market_context_for_pipeline(
     return refresh_index_market_context(ticker=ticker, persist=True)
 
 
+def get_market_context_as_of(
+    publish_day: str,
+    *,
+    ticker: str = "NIFTY",
+    history_days: int | None = None,
+) -> dict[str, Any]:
+    """Factor panel row as-of publish_day for temporal attribution (no live OpenAlgo quotes)."""
+    from trade_integrations.dataflows.index_research.prediction_miss_analysis import (
+        factor_snapshot_at,
+    )
+    from trade_integrations.dataflows.index_research.sources.history_loader import (
+        load_aligned_factor_history,
+    )
+
+    day = (publish_day or "")[:10]
+    bundle: dict[str, Any] = {
+        "as_of": day,
+        "ticker": ticker.strip().upper(),
+        "quotes": {},
+        "factors": {},
+        "source": "hub_factors_as_of",
+    }
+    if not day:
+        return bundle
+    try:
+        days = history_days if history_days is not None else factor_history_days_for_context()
+        frame = load_aligned_factor_history(days=max(days, 30))
+        if frame is None or frame.empty:
+            return bundle
+        feature_cols = _factor_feature_columns(frame)
+        keys = tuple(k for k in _FACTOR_KEYS if k in MACRO_FACTOR_KEYS)
+        snap = factor_snapshot_at(day, frame, feature_cols, keys=keys)
+        bundle["factors"] = {k: round(float(v), 4) for k, v in snap.items() if v is not None}
+        bundle["factors_ok"] = len(bundle["factors"])
+    except Exception as exc:
+        logger.debug("market context as-of %s failed: %s", day, exc)
+    return bundle
+
+
 def format_market_context_for_prompt(bundle: dict[str, Any] | None) -> str:
     """Compact tape summary for MiniMax prompts."""
     if not bundle:
