@@ -309,6 +309,15 @@ _NEWS_MIGRATION_ACTION = (
 )
 
 
+def _news_maintainer_summary() -> dict[str, Any]:
+    """Last maintenance run manifest from worker_last.json."""
+    worker = load_worker_last_summary() or {}
+    last = worker.get("last_maintenance")
+    if not isinstance(last, dict):
+        return {"present": False}
+    return {"present": True, **last}
+
+
 def _build_hub_gates(*, migration_state: dict[str, Any]) -> dict[str, Any]:
     """Fail-closed rollup for hub readiness — consumers need not inspect nested migration fields."""
     blocking: list[dict[str, Any]] = []
@@ -399,6 +408,7 @@ def build_hub_status(*, entity_id: str = "NIFTY") -> dict[str, Any]:
         "hub_dir": str(hub),
         "paths": _hub_paths(),
         "gates": gates,
+        "news_maintainer": _news_maintainer_summary(),
         "news_staging": {
             "entity_pipeline_enabled": is_entity_pipeline_enabled(),
             "pipeline_paused": bool(pause.get("pipeline_paused")) or migration_gate_active,

@@ -54,12 +54,12 @@ ensure_hub_news_migrations
 
 | Phase | Plan file | Type | Depends on | Status |
 |-------|-----------|------|------------|--------|
-| 0 | [2026-07-23-hub-maintainer-phase-0-audit.md](./2026-07-23-hub-maintainer-phase-0-audit.md) | Plan gate | — | Pending |
-| 1 | [2026-07-23-hub-maintainer-phase-1-ssot-alignment.md](./2026-07-23-hub-maintainer-phase-1-ssot-alignment.md) | Implement | Phase 0 | Pending |
-| 2 | [2026-07-23-hub-maintainer-phase-2-enrichment-dedup.md](./2026-07-23-hub-maintainer-phase-2-enrichment-dedup.md) | Implement | Phase 1 | Pending |
-| 3 | [2026-07-23-hub-maintainer-phase-3-bridge-docs.md](./2026-07-23-hub-maintainer-phase-3-bridge-docs.md) | Migrate + cleanup | Phase 2 | Pending |
-| 4 | [2026-07-23-hub-maintainer-phase-4-hub-ui.md](./2026-07-23-hub-maintainer-phase-4-hub-ui.md) | Implement | Phase 1 | Pending |
-| 5 | [2026-07-23-hub-maintainer-phase-5-injection-sync.md](./2026-07-23-hub-maintainer-phase-5-injection-sync.md) | Implement | Phase 2, 3 | Pending |
+| 0 | [2026-07-23-hub-maintainer-phase-0-audit.md](./2026-07-23-hub-maintainer-phase-0-audit.md) | Plan gate | — | **Done** |
+| 1 | [2026-07-23-hub-maintainer-phase-1-ssot-alignment.md](./2026-07-23-hub-maintainer-phase-1-ssot-alignment.md) | Implement | Phase 0 | **Done** |
+| 2 | [2026-07-23-hub-maintainer-phase-2-enrichment-dedup.md](./2026-07-23-hub-maintainer-phase-2-enrichment-dedup.md) | Implement | Phase 1 | **Done** |
+| 3 | [2026-07-23-hub-maintainer-phase-3-bridge-docs.md](./2026-07-23-hub-maintainer-phase-3-bridge-docs.md) | Migrate + cleanup | Phase 2 | **Done** |
+| 4 | [2026-07-23-hub-maintainer-phase-4-hub-ui.md](./2026-07-23-hub-maintainer-phase-4-hub-ui.md) | Implement | Phase 1 | **Done** |
+| 5 | [2026-07-23-hub-maintainer-phase-5-injection-sync.md](./2026-07-23-hub-maintainer-phase-5-injection-sync.md) | Implement | Phase 2, 3 | **Done** |
 
 Phases 4 may start after Phase 1 (UI does not require Phase 2 enrichment code). Phase 5 requires Phase 2 + bridge doc parity (Phase 3).
 

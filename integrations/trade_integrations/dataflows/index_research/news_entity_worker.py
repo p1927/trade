@@ -42,10 +42,11 @@ from trade_integrations.hub_storage.news_events_store import (
     distilled_event_to_headline_dict,
     get_event,
     list_events,
+    patch_event_meta,
     remove_events,
     upsert_event,
 )
-from trade_integrations.hub_storage.verified_news_store import get_verified_record, list_verified_records
+from trade_integrations.hub_storage.verified_news_store import get_verified_record
 
 logger = logging.getLogger(__name__)
 
@@ -731,7 +732,22 @@ def _part_had_errors(part: Any) -> bool:
         return False
     if part.get("status") == "error":
         return True
-    return int(part.get("errors") or 0) > 0
+    if part.get("synced") is False and part.get("skipped") is not True:
+        return True
+    if part.get("ok") is False and part.get("skipped") is not True:
+        return True
+    errors = part.get("errors")
+    if isinstance(errors, list):
+        return len(errors) > 0
+    return int(errors or 0) > 0
+
+
+def _maintenance_skipped(*, pause_reason: str = "") -> dict[str, Any]:
+    return {
+        "skipped": True,
+        "pipeline_paused": True,
+        "pause_reason": pause_reason,
+    }
 
 
 def _refresh_news_impact_cache(*, ticker: str) -> dict[str, Any]:
@@ -742,6 +758,129 @@ def _refresh_news_impact_cache(*, ticker: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("news_impact cache refresh failed: %s", exc)
         return {"status": "error", "error": str(exc)[:200]}
+
+
+def _list_maintainer_event_records(
+    *,
+    ticker: str,
+    limit: int = 5000,
+    include_rejected: bool = True,
+) -> list[dict[str, Any]]:
+    """Headline-shaped rows from events SSOT for maintainer repair/backfill."""
+    sym = ticker.strip().upper()
+    raw = list_events(ticker=sym, limit=limit, include_rejected=include_rejected)
+    return [distilled_event_to_headline_dict(event) for event in raw]
+
+
+def _finalize_legacy_ssot_if_ready(*, ticker: str, dry_run: bool = False) -> dict[str, Any]:
+    """Archive legacy records.parquet once events migration has no remaining rows."""
+    from trade_integrations.hub_storage.news_migrations import (
+        events_ssot_finalized,
+        finalize_events_ssot,
+        needs_news_migration,
+    )
+
+    sym = ticker.strip().upper()
+    if needs_news_migration(ticker=sym):
+        return {"skipped": True, "reason": "legacy_rows_remain", "ticker": sym}
+    if events_ssot_finalized():
+        return {"skipped": True, "reason": "already_finalized", "ticker": sym}
+    return finalize_events_ssot(dry_run=dry_run)
+
+
+def _maybe_rebuild_event_index(*, ticker: str, merge_stats: dict[str, Any]) -> dict[str, Any]:
+    rows_removed = int(merge_stats.get("rows_removed") or 0)
+    groups_merged = int(merge_stats.get("groups_merged") or 0)
+    if rows_removed <= 0 and groups_merged <= 0:
+        return {"skipped": True, "reason": "no_merge_activity"}
+    try:
+        from trade_integrations.hub_storage.news_event_index import rebuild_event_index
+
+        return rebuild_event_index(ticker=ticker.strip().upper())
+    except Exception as exc:
+        logger.warning("event index rebuild after maintainer skipped: %s", exc)
+        return {"status": "error", "error": str(exc)[:200]}
+
+
+def _sync_index_news_after_maintenance(
+    *,
+    ticker: str,
+    impact_refresh: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Refresh news_impact snapshot and embed into existing index research doc."""
+    import os
+
+    sym = ticker.strip().upper()
+    if os.getenv("INDEX_NEWS_SYNC_ON_MAINTAINER", "1").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return {"skipped": True, "reason": "INDEX_NEWS_SYNC_ON_MAINTAINER disabled"}
+
+    impact = impact_refresh if impact_refresh is not None else _refresh_news_impact_cache(ticker=sym)
+    if impact.get("status") == "error":
+        return {"synced": False, "status": "error", "news_impact_refresh": impact}
+
+    try:
+        from trade_integrations.context.hub import load_index_research_json, save_index_research
+        from trade_integrations.dataflows.news_hub_bridge import sync_news_impact_to_index_doc
+
+        doc = load_index_research_json(sym)
+        if doc is None:
+            return {
+                "synced": False,
+                "status": "error",
+                "reason": "no_index_doc",
+                "news_impact_refresh": impact,
+            }
+        doc.news_impact = sync_news_impact_to_index_doc(doc)
+        save_index_research(doc)
+        return {"synced": True, "ticker": sym, "news_impact_refresh": impact}
+    except Exception as exc:
+        logger.warning("index news sync after maintainer failed: %s", exc)
+        return {
+            "synced": False,
+            "status": "error",
+            "error": str(exc)[:200],
+            "news_impact_refresh": impact,
+        }
+
+
+def _persist_maintenance_manifest(*, ticker: str, result: dict[str, Any]) -> None:
+    stages = []
+    for key in (
+        "migration",
+        "legacy_finalize",
+        "staging",
+        "staging_ttl_purge",
+        "repair",
+        "backfill",
+        "fact_adjudication",
+        "wiki_backfill",
+        "compact_events",
+        "safety_sweep",
+        "cleanup",
+        "rollup",
+        "index_rebuild",
+        "news_impact_refresh",
+        "index_news_sync",
+    ):
+        part = result.get(key)
+        if isinstance(part, dict):
+            stages.append({"stage": key, **{k: v for k, v in part.items() if k != "stage"}})
+    manifest = {
+        "ticker": ticker.strip().upper(),
+        "mode": result.get("mode"),
+        "had_errors": bool(result.get("had_errors")),
+        "pipeline_paused": bool(result.get("pipeline_paused")),
+        "stages": stages,
+    }
+    try:
+        _patch_worker_last({"last_maintenance": manifest})
+    except Exception as exc:
+        logger.debug("maintenance manifest write failed: %s", exc)
 
 
 def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -803,6 +942,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         staging_ttl = purge_stale_pending_refs(ticker=ticker)
     except Exception as exc:
         logger.debug("staging ttl purge skipped: %s", exc)
+        staging_ttl = {"status": "error", "error": str(exc)[:200]}
 
     if pause.get("pipeline_paused"):
         reason = str(pause.get("pause_reason") or "")
@@ -811,23 +951,33 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             reason,
             pause.get("user_message") or pause.get("pause_reason") or "",
         )
-        skipped = {
-            "skipped": True,
-            "pipeline_paused": True,
-            "pause_reason": str(pause.get("pause_reason") or ""),
-        }
-        return {
+        skipped = _maintenance_skipped(pause_reason=reason)
+        paused_result = {
             "mode": mode,
             "migration": migration,
+            "legacy_finalize": dict(skipped),
             "staging": staging,
             "staging_ttl_purge": staging_ttl,
             "repair": dict(skipped),
             "backfill": dict(skipped),
+            "fact_adjudication": dict(skipped),
+            "wiki_backfill": dict(skipped),
             "compact_events": dict(skipped),
+            "safety_sweep": dict(skipped),
+            "cleanup": dict(skipped),
+            "rollup": dict(skipped),
+            "index_rebuild": dict(skipped),
+            "news_impact_refresh": dict(skipped),
+            "index_news_sync": dict(skipped),
             "pipeline_paused": True,
             "pause_reason": pause.get("pause_reason") or "",
-            "had_errors": any(_part_had_errors(part) for part in (migration, staging)),
+            "had_errors": any(
+                _part_had_errors(part)
+                for part in (migration, staging, staging_ttl)
+            ),
         }
+        _persist_maintenance_manifest(ticker=ticker, result=paused_result)
+        return paused_result
 
     if not run_maintenance:
         compact_events = _safe_stage(
@@ -842,6 +992,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "mode": mode,
             "migration": migration,
             "staging": staging,
+            "staging_ttl_purge": staging_ttl,
             "repair": {"skipped": True, "reason": "drain_only"},
             "backfill": {"skipped": True, "reason": "drain_only"},
             "compact_events": compact_events,
@@ -850,7 +1001,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             "news_impact_refresh": news_impact,
             "had_errors": any(
                 _part_had_errors(part)
-                for part in (migration, staging, compact_events, news_impact)
+                for part in (migration, staging, staging_ttl, compact_events, news_impact)
             ),
         }
         if isinstance(compact_events, dict):
@@ -866,8 +1017,23 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
                 logger.debug("worker last wiki compaction summary write failed: %s", exc)
         return drain_result
 
+    from trade_integrations.dataflows.index_research.news_cleanup import cleanup_hub_news
+    from trade_integrations.dataflows.index_research.news_maintainer_facts import run_fact_adjudication_backfill
+    from trade_integrations.dataflows.index_research.news_maintainer_safety_sweep import (
+        run_maintenance_safety_sweep,
+    )
+    from trade_integrations.dataflows.index_research.news_rollup import rollup_parent_topic_events
+
     repair = _safe_stage("repair", repair_leaked_distilled_summaries, ticker=ticker)
     backfill = _safe_stage("backfill", backfill_distilled_event_metadata, ticker=ticker)
+    legacy_finalize = _safe_stage("legacy_finalize", _finalize_legacy_ssot_if_ready, ticker=ticker)
+    fact_adjudication = _safe_stage(
+        "fact_adjudication",
+        run_fact_adjudication_backfill,
+        ticker=ticker,
+        lookback_days=min(lookback, 90),
+        limit=50,
+    )
     wiki_backfill: dict[str, Any] = {"skipped": True, "reason": "HUB_NEWS_WIKI_BACKFILL disabled"}
     try:
         from trade_integrations.dataflows.hub_wiki.compile import compile_all_events_to_wiki, wiki_backfill_enabled
@@ -882,15 +1048,21 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
                 rescan=True,
             )
     except Exception as exc:
-        logger.debug("wiki backfill skipped: %s", exc)
+        logger.warning("wiki backfill failed: %s", exc)
+        wiki_backfill = {"status": "error", "error": str(exc)[:200]}
     compact_events = _safe_stage(
         "compact_events",
         compact_distilled_events,
         ticker=ticker,
         lookback_days=lookback,
     )
-    from trade_integrations.dataflows.index_research.news_cleanup import cleanup_hub_news
-    from trade_integrations.dataflows.index_research.news_rollup import rollup_parent_topic_events
+    safety_sweep = _safe_stage(
+        "safety_sweep",
+        run_maintenance_safety_sweep,
+        ticker=ticker,
+        lookback_days=7,
+        max_events=200,
+    )
 
     cleanup = _safe_stage("cleanup", cleanup_hub_news, ticker=ticker)
     rollup = _safe_stage(
@@ -899,20 +1071,60 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
         ticker=ticker,
         lookback_days=7,
     )
-    stages = (migration, staging, repair, backfill, compact_events, cleanup, rollup)
-    news_impact = _refresh_news_impact_cache(ticker=ticker) if run_drain else {"skipped": True}
+    merge_stats = {
+        "rows_removed": int((compact_events or {}).get("rows_removed") or 0)
+        + int((safety_sweep or {}).get("rows_removed") or 0),
+        "groups_merged": int((compact_events or {}).get("groups_merged") or 0)
+        + int((safety_sweep or {}).get("groups_merged") or 0),
+    }
+    index_rebuild = _safe_stage(
+        "index_rebuild",
+        _maybe_rebuild_event_index,
+        ticker=ticker,
+        merge_stats=merge_stats,
+    )
+    news_impact = _refresh_news_impact_cache(ticker=ticker)
+    index_news_sync = _safe_stage(
+        "index_news_sync",
+        _sync_index_news_after_maintenance,
+        ticker=ticker,
+        impact_refresh=news_impact,
+    )
+    stages = (
+        migration,
+        legacy_finalize,
+        staging,
+        staging_ttl,
+        repair,
+        backfill,
+        fact_adjudication,
+        wiki_backfill,
+        compact_events,
+        safety_sweep,
+        cleanup,
+        rollup,
+        index_rebuild,
+        news_impact,
+        index_news_sync,
+    )
     result = {
         "mode": mode,
         "migration": migration,
+        "legacy_finalize": legacy_finalize,
         "staging": staging,
+        "staging_ttl_purge": staging_ttl,
         "repair": repair,
         "backfill": backfill,
+        "fact_adjudication": fact_adjudication,
         "wiki_backfill": wiki_backfill,
         "compact_events": compact_events,
+        "safety_sweep": safety_sweep,
         "cleanup": cleanup,
         "rollup": rollup,
+        "index_rebuild": index_rebuild,
         "news_impact_refresh": news_impact,
-        "had_errors": any(_part_had_errors(part) for part in (*stages, news_impact)),
+        "index_news_sync": index_news_sync,
+        "had_errors": any(_part_had_errors(part) for part in stages),
     }
     if isinstance(compact_events, dict):
         wiki_block = {
@@ -925,6 +1137,7 @@ def run_hub_news_entity_job(config: dict[str, Any] | None = None) -> dict[str, A
             _patch_worker_last({"ticker": ticker, **wiki_block, "compact_events": compact_events})
         except Exception as exc:
             logger.debug("worker last wiki compaction summary write failed: %s", exc)
+    _persist_maintenance_manifest(ticker=ticker, result=result)
     return result
 
 
@@ -1213,14 +1426,20 @@ def _merge_staging_summaries(parts: list[dict[str, Any]]) -> dict[str, Any]:
         "errors": 0,
         "tickers": [],
     }
+    stage_failures: list[dict[str, Any]] = []
     for part in parts:
         if not isinstance(part, dict):
             continue
+        if _part_had_errors(part):
+            stage_failures.append(part)
         for key in ("processed", "created", "updated", "skipped", "errors"):
             merged[key] = int(merged.get(key) or 0) + int(part.get(key) or 0)
         sym = part.get("ticker")
         if sym:
             merged["tickers"].append(sym)
+    if stage_failures:
+        merged["status"] = "error"
+        merged["stage_failures"] = stage_failures
     return merged
 
 
@@ -1230,7 +1449,7 @@ def repair_leaked_distilled_summaries(*, ticker: str = "NIFTY") -> dict[str, Any
 
     require_minimax_for_distillation()
     sym = ticker.strip().upper()
-    records = list_verified_records(ticker=sym, limit=5000, include_rejected=True)
+    records = _list_maintainer_event_records(ticker=sym, limit=5000, include_rejected=True)
     repaired = 0
     errors = 0
 
@@ -1300,15 +1519,11 @@ def backfill_distilled_event_metadata(*, ticker: str = "NIFTY") -> dict[str, Any
 
     from trade_integrations.dataflows.index_research.news_distillation import _consensus_from_refs
     from trade_integrations.dataflows.index_research.news_impact_engine import ingest_headline_rows
-    from trade_integrations.hub_storage.verified_news_store import (
-        count_verified_records,
-        patch_verified_event_meta,
-    )
 
     require_minimax_for_distillation()
     sym = ticker.strip().upper()
-    records = list_verified_records(ticker=sym, limit=5000, include_rejected=True)
-    row_guard = count_verified_records(ticker=sym)
+    records = _list_maintainer_event_records(ticker=sym, limit=5000, include_rejected=True)
+    row_guard = count_events(ticker=sym)
     meta_patches: list[tuple[str, dict[str, Any]]] = []
     redistill_targets: list[dict[str, Any]] = []
     redistilled = 0
@@ -1354,7 +1569,7 @@ def backfill_distilled_event_metadata(*, ticker: str = "NIFTY") -> dict[str, Any
 
     metadata_only = 0
     if meta_patches:
-        metadata_only = patch_verified_event_meta(meta_patches, min_rows=row_guard)
+        metadata_only = patch_event_meta(meta_patches, min_rows=row_guard)
 
     for rec in redistill_targets:
         story_id = str(rec.get("canonical_story_id") or "")
@@ -1372,14 +1587,14 @@ def backfill_distilled_event_metadata(*, ticker: str = "NIFTY") -> dict[str, Any
             if is_distillation_leak(str(row.get("summary") or "")):
                 raise RuntimeError("distillation still leaked thinking text")
             publish_day = publish_day_from_value(str(rec.get("published_at") or ""))
-            before = count_verified_records(ticker=sym)
+            before = count_events(ticker=sym)
             ingest_headline_rows(
                 [row],
                 ticker=sym,
                 collection_day=publish_day or None,
                 force_reverify=True,
             )
-            after = count_verified_records(ticker=sym)
+            after = count_events(ticker=sym)
             if after < before:
                 raise RuntimeError(f"row count dropped {before} -> {after} during redistill")
             _log_merge(

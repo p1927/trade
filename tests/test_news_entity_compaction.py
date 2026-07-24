@@ -575,3 +575,261 @@ def test_score_wiki_match_rejects_cross_day(hub_tmp):
     record = {"title": "FII selling drags Nifty lower", "published_at": f"{day_a}T10:00:00+00:00", "tags": {}}
     resolved = {"title": "FII selling drags Nifty lower", "publish_day": day_b}
     assert score_wiki_match(record, {"score": 0.95}, resolved) == 0.0
+
+
+def test_part_had_errors_flags_sync_and_stage_failures():
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    assert worker._part_had_errors({"status": "error"}) is True
+    assert worker._part_had_errors({"synced": False, "status": "error"}) is True
+    assert worker._part_had_errors({"synced": False, "skipped": True}) is False
+    assert worker._part_had_errors({"errors": 2}) is True
+    assert worker._part_had_errors({"skipped": True}) is False
+
+
+def test_run_hub_news_entity_job_paused_persists_maintenance_manifest(hub_tmp, monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(
+        worker,
+        "process_staging_batch",
+        lambda **_: {"processed": 0, "pipeline_paused": True},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.pipeline_pause_status",
+        lambda **_: {
+            "pipeline_paused": True,
+            "pause_reason": "MINIMAX_API_KEY is not configured.",
+            "pending": {"queued": 3},
+        },
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_migrations.ensure_hub_news_migrations",
+        lambda **_: {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_resolver.purge_stale_pending_refs",
+        lambda **_: {"purged": 0},
+    )
+
+    def _should_not_run(*_a, **_k):
+        raise AssertionError("maintenance stages must not run when pipeline is paused")
+
+    monkeypatch.setattr(worker, "repair_leaked_distilled_summaries", _should_not_run)
+    monkeypatch.setattr(worker, "backfill_distilled_event_metadata", _should_not_run)
+    monkeypatch.setattr(worker, "compact_distilled_events", _should_not_run)
+
+    result = worker.run_hub_news_entity_job({"ticker": "NIFTY", "mode": "maintenance"})
+    assert result.get("pipeline_paused") is True
+    assert result.get("fact_adjudication", {}).get("skipped") is True
+    assert result.get("index_news_sync", {}).get("skipped") is True
+    assert result.get("had_errors") is False
+
+    manifest = worker.load_worker_last_summary()
+    assert manifest is not None
+    last = manifest.get("last_maintenance") or {}
+    assert last.get("pipeline_paused") is True
+    assert last.get("had_errors") is False
+    stage_names = {s.get("stage") for s in last.get("stages") or []}
+    assert "index_news_sync" in stage_names
+    assert "wiki_backfill" in stage_names
+
+
+def test_run_hub_news_entity_job_had_errors_when_index_sync_fails(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(
+        worker,
+        "process_staging_batch",
+        lambda **_: {"processed": 0, "created": 0, "updated": 0},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.pipeline_pause_status",
+        lambda **_: {"pipeline_paused": False, "pause_reason": "", "pending": {"queued": 0}},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_migrations.ensure_hub_news_migrations",
+        lambda **_: {"status": "ok"},
+    )
+    monkeypatch.setattr(worker, "_tickers_with_pending_staging", lambda: [])
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_resolver.purge_stale_pending_refs",
+        lambda **_: {"purged": 0},
+    )
+    monkeypatch.setattr(worker, "repair_leaked_distilled_summaries", lambda **_: {"repaired": 0})
+    monkeypatch.setattr(worker, "backfill_distilled_event_metadata", lambda **_: {"backfilled": 0})
+    monkeypatch.setattr(
+        worker,
+        "_finalize_legacy_ssot_if_ready",
+        lambda **_: {"skipped": True, "reason": "already_finalized"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_maintainer_facts.run_fact_adjudication_backfill",
+        lambda **_: {"events_scanned": 0, "errors": 0},
+    )
+    monkeypatch.setattr(worker, "compact_distilled_events", lambda **_: {"groups_merged": 0, "rows_removed": 0})
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_maintainer_safety_sweep.run_maintenance_safety_sweep",
+        lambda **_: {"groups_merged": 0, "rows_removed": 0},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_cleanup.cleanup_hub_news",
+        lambda **_: {"removed": 0},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_rollup.rollup_parent_topic_events",
+        lambda **_: {"rolled_up": 0},
+    )
+    monkeypatch.setattr(
+        worker,
+        "_refresh_news_impact_cache",
+        lambda **_: {"status": "ok", "ticker": "NIFTY"},
+    )
+    monkeypatch.setattr(
+        worker,
+        "_sync_index_news_after_maintenance",
+        lambda **_: {"synced": False, "status": "error", "reason": "no_index_doc"},
+    )
+
+    result = worker.run_hub_news_entity_job({"ticker": "NIFTY", "mode": "maintenance"})
+    assert result.get("index_news_sync", {}).get("synced") is False
+    assert result.get("had_errors") is True
+    manifest = worker.load_worker_last_summary()
+    assert (manifest or {}).get("last_maintenance", {}).get("had_errors") is True
+
+
+def test_part_had_errors_flags_wiki_backfill_list_errors():
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    assert worker._part_had_errors({"ok": False, "errors": ["evt:a: boom"]}) is True
+    assert worker._part_had_errors({"ok": False, "skipped": True}) is False
+
+
+def test_run_hub_news_entity_job_drain_had_errors_when_staging_ttl_fails(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(
+        worker,
+        "process_staging_batch",
+        lambda **_: {"processed": 1, "created": 0, "updated": 1},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.pipeline_pause_status",
+        lambda **_: {"pipeline_paused": False, "pause_reason": "", "pending": {"queued": 0}},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_migrations.ensure_hub_news_migrations",
+        lambda **_: {"status": "ok"},
+    )
+    monkeypatch.setattr(worker, "_tickers_with_pending_staging", lambda: [])
+    monkeypatch.setattr(worker, "compact_distilled_events", lambda **_: {"groups_merged": 0})
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_resolver.purge_stale_pending_refs",
+        lambda **_: {"status": "error", "error": "ttl failed"},
+    )
+
+    result = worker.run_hub_news_entity_job({"ticker": "NIFTY", "mode": "drain"})
+    assert result.get("staging_ttl_purge", {}).get("status") == "error"
+    assert result.get("had_errors") is True
+
+
+def test_run_hub_news_entity_job_had_errors_when_wiki_backfill_partial_fail(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    monkeypatch.setattr(
+        worker,
+        "process_staging_batch",
+        lambda **_: {"processed": 0, "created": 0, "updated": 0},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_staging_store.pipeline_pause_status",
+        lambda **_: {"pipeline_paused": False, "pause_reason": "", "pending": {"queued": 0}},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.hub_storage.news_migrations.ensure_hub_news_migrations",
+        lambda **_: {"status": "ok"},
+    )
+    monkeypatch.setattr(worker, "_tickers_with_pending_staging", lambda: [])
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_resolver.purge_stale_pending_refs",
+        lambda **_: {"purged": 0},
+    )
+    monkeypatch.setattr(worker, "repair_leaked_distilled_summaries", lambda **_: {"repaired": 0})
+    monkeypatch.setattr(worker, "backfill_distilled_event_metadata", lambda **_: {"backfilled": 0})
+    monkeypatch.setattr(
+        worker,
+        "_finalize_legacy_ssot_if_ready",
+        lambda **_: {"skipped": True, "reason": "already_finalized"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_maintainer_facts.run_fact_adjudication_backfill",
+        lambda **_: {"events_scanned": 0, "errors": 0},
+    )
+    monkeypatch.setattr(worker, "compact_distilled_events", lambda **_: {"groups_merged": 0, "rows_removed": 0})
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_maintainer_safety_sweep.run_maintenance_safety_sweep",
+        lambda **_: {"groups_merged": 0, "rows_removed": 0},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_cleanup.cleanup_hub_news",
+        lambda **_: {"removed": 0},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.index_research.news_rollup.rollup_parent_topic_events",
+        lambda **_: {"rolled_up": 0},
+    )
+    monkeypatch.setattr(
+        worker,
+        "_refresh_news_impact_cache",
+        lambda **_: {"status": "ok", "ticker": "NIFTY"},
+    )
+    monkeypatch.setattr(
+        worker,
+        "_sync_index_news_after_maintenance",
+        lambda **_: {"synced": True, "ticker": "NIFTY"},
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.compile.wiki_backfill_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "trade_integrations.dataflows.hub_wiki.compile.compile_all_events_to_wiki",
+        lambda **_: {"ok": False, "errors": ["evt:x: compile failed"], "compiled": 0},
+    )
+
+    result = worker.run_hub_news_entity_job({"ticker": "NIFTY", "mode": "maintenance"})
+    assert result.get("wiki_backfill", {}).get("ok") is False
+    assert result.get("had_errors") is True
+
+
+def test_sync_index_news_reuses_impact_refresh_without_second_build(monkeypatch):
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    calls: list[str] = []
+
+    def _refresh(**_):
+        calls.append("refresh")
+        return {"status": "ok", "ticker": "NIFTY"}
+
+    monkeypatch.setattr(worker, "_refresh_news_impact_cache", _refresh)
+    monkeypatch.setattr(
+        "trade_integrations.context.hub.load_index_research_json",
+        lambda _sym: None,
+    )
+
+    impact = {"status": "ok", "ticker": "NIFTY", "from": "test"}
+    worker._sync_index_news_after_maintenance(ticker="NIFTY", impact_refresh=impact)
+    assert calls == []
+
+
+def test_merge_staging_summaries_propagates_stage_errors():
+    from trade_integrations.dataflows.index_research import news_entity_worker as worker
+
+    merged = worker._merge_staging_summaries(
+        [
+            {"status": "error", "stage": "staging", "error": "boom"},
+            {"processed": 5, "created": 0, "updated": 5, "errors": 0, "ticker": "BANKNIFTY"},
+        ]
+    )
+    assert merged.get("status") == "error"
+    assert worker._part_had_errors(merged) is True
