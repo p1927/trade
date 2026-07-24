@@ -28,6 +28,8 @@ stack_dev_prepare_inner() {
   stack_wait_port_free "$(stack_vibe_api_port)" 15 || true
   stack_wait_port_free "$(stack_openalgo_port)" 15 || true
   stack_set_stack_mode "dev"
+  stack_set_tier_owner "dev"
+  stack_set_dev_session_pid "$$"
 }
 
 stack_load_env

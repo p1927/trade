@@ -334,18 +334,19 @@ def test_stack_start_nautilus_watch_delegates_to_python_cli():
         stack_reconcile_nautilus_watch_pid() { return 0; }
         cat > .test-bin/python3 << 'SHIM'
 #!/bin/bash
-if [[ " $* " == *" nautilus_watch_cli stack-start "* ]]; then
-  echo "[stack] starting Nautilus watch node ..."
-  echo "[stack] Nautilus watch running (pid 4242)"
-  exit 0
-fi
+case " $* " in
+  *nautilus_watch_cli*)
+    echo "[stack] starting Nautilus watch node ..."
+    exit 0
+    ;;
+esac
 exec /usr/bin/env python3 "$@"
 SHIM
         chmod +x .test-bin/python3
         stack_pick_python() { echo "$PWD/.test-bin/python3"; }
         export -f stack_reconcile_nautilus_watch_pid stack_pick_python
-        stack_start_nautilus_watch aa_flagtest 2>&1 | tee log/nautilus-cli-delegate.log
-        grep -q 'starting Nautilus watch node' log/nautilus-cli-delegate.log
+        stack_start_nautilus_watch aa_flagtest
+        grep -q 'starting Nautilus watch node' log/nautilus-watch.log
         """
     )
     assert proc.returncode == 0

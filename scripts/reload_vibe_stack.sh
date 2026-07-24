@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Reload app-tier services after code or env changes (keeps hub Docker running).
+# Prefer: trade reload app | trade reload env | trade reload nautilus
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${TRADE_STACK_RELOAD_LEGACY:-0}" != "1" ]]; then
+  echo "[stack] reload_vibe_stack.sh is internal — use: trade reload <app|env|nautilus|hub|all>" >&2
+fi
 # shellcheck disable=SC1091
 source "$ROOT/scripts/stack_lib.sh"
 

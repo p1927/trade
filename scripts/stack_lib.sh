@@ -35,14 +35,84 @@ stack_mode_file() {
   echo "$(stack_log_dir)/stack.mode"
 }
 
+stack_dev_session_pid_file() {
+  echo "$(stack_log_dir)/stack.dev.pid"
+}
+
+stack_tier_owner_file() {
+  echo "$(stack_log_dir)/stack.tier_owner"
+}
+
+stack_instance_json_file() {
+  echo "$(stack_log_dir)/stack.instance.json"
+}
+
+stack_heal_state_file() {
+  echo "$(stack_log_dir)/stack.heal.state"
+}
+
 stack_stack_mode() {
   local file
   file="$(stack_mode_file)"
   [[ -f "$file" ]] && tr -d '[:space:]' <"$file" || true
 }
 
+stack_tier_owner() {
+  local f owner
+  f="$(stack_tier_owner_file)"
+  [[ -f "$f" ]] || { echo "off"; return 0; }
+  owner="$(tr -d '[:space:]' <"$f" 2>/dev/null || true)"
+  [[ -n "$owner" ]] && echo "$owner" || echo "off"
+}
+
+stack_set_tier_owner() {
+  local owner="$1"
+  mkdir -p "$(stack_log_dir)"
+  printf '%s\n' "$owner" >"$(stack_tier_owner_file)"
+}
+
+stack_set_dev_session_pid() {
+  local pid="$1"
+  mkdir -p "$(stack_log_dir)"
+  stack_write_pidfile "$(stack_dev_session_pid_file)" "$pid"
+}
+
 stack_dev_mode_flagged() {
-  [[ "$(stack_stack_mode)" == "dev" ]]
+  local mode
+  mode="$(stack_stack_mode)"
+  [[ "$mode" == "dev" || "$mode" == "booting" ]]
+}
+
+stack_dev_state_raw() {
+  local mode session_pid
+  mode="$(stack_stack_mode)"
+  case "$mode" in
+    dev|booting)
+      if stack_dev_tier_alive; then
+        session_pid="$(stack_read_pid "$(stack_dev_session_pid_file)")"
+        if [[ -n "$session_pid" ]] && ! stack_pid_alive "$session_pid"; then
+          echo "stale"
+        elif [[ "$mode" == "booting" ]]; then
+          stack_set_stack_mode "dev"
+          echo "active"
+        else
+          echo "active"
+        fi
+      elif [[ "$mode" == "booting" ]]; then
+        echo "booting"
+      else
+        echo "stale"
+      fi
+      ;;
+    *)
+      echo "off"
+      ;;
+  esac
+}
+
+stack_dev_state() {
+  stack_reconcile_stale_dev_mode
+  stack_dev_state_raw
 }
 
 # True when dev tier is actually responding (OpenAlgo + Vibe API minimum).
@@ -65,7 +135,16 @@ stack_vibe_api_http_ok() {
 
 # Clear orphaned dev flag when the dev tier is down (terminal closed, Ctrl+C, etc.).
 stack_reconcile_stale_dev_mode() {
-  if stack_dev_tier_alive || ! stack_dev_mode_flagged; then
+  if ! stack_dev_mode_flagged; then
+    return 0
+  fi
+  local state session_pid
+  state="$(stack_dev_state_raw)"
+  if [[ "$state" == "active" || "$state" == "booting" ]]; then
+    return 0
+  fi
+  session_pid="$(stack_read_pid "$(stack_dev_session_pid_file)")"
+  if [[ -n "$session_pid" ]] && stack_pid_alive "$session_pid"; then
     return 0
   fi
   local api_port openalgo_port ui_port
@@ -76,15 +155,16 @@ stack_reconcile_stale_dev_mode() {
   if [[ -n "$(stack_port_listener_pid "$openalgo_port")" ]] \
     || [[ -n "$(stack_port_listener_pid "$api_port")" ]] \
     || [[ -n "$(stack_port_listener_pid "$ui_port")" ]]; then
+    echo "[stack] stale dev mode with orphan listeners — run: trade down --app" >&2
     return 0
   fi
   echo "[stack] clearing stale dev mode (dev tier not running — run: ./trade dev)" >&2
   stack_clear_stack_mode
+  rm -f "$(stack_dev_session_pid_file)" "$(stack_tier_owner_file)"
 }
 
 stack_dev_mode_active() {
-  stack_reconcile_stale_dev_mode
-  stack_dev_mode_flagged && stack_dev_tier_alive
+  [[ "$(stack_dev_state)" == "active" ]]
 }
 
 stack_set_stack_mode() {
@@ -98,9 +178,20 @@ stack_clear_stack_mode() {
 }
 
 stack_refuse_if_dev_mode() {
-  stack_reconcile_stale_dev_mode
-  if stack_dev_mode_flagged && stack_dev_tier_alive; then
+  local state
+  state="$(stack_dev_state)"
+  if [[ "$state" == "active" ]]; then
     echo "[stack] dev mode active — keep this terminal open, or stop with Ctrl+C then: ./trade dev" >&2
+    exit 1
+  fi
+}
+
+stack_refuse_if_dev_tier_owner() {
+  local owner state
+  owner="$(stack_tier_owner)"
+  state="$(stack_dev_state)"
+  if [[ "$owner" == "dev" && ( "$state" == "active" || "$state" == "booting" ) ]]; then
+    echo "[stack] dev tier owns app ports — stop dev first or use: trade heal --hub-only" >&2
     exit 1
   fi
 }
@@ -210,19 +301,145 @@ stack_vibe_api_listener_alive() {
   [[ -n "$listener" ]] && stack_pid_alive "$listener"
 }
 
+stack_vibe_api_ready() {
+  local port="${1:-$(stack_vibe_api_port)}"
+  curl -sf -o /dev/null -m 3 "http://127.0.0.1:${port}/health" 2>/dev/null
+}
+
+stack_probe_url() {
+  local service="$1" port="${2:-}"
+  stack_load_env
+  case "$service" in
+    vibe-api)
+      port="${port:-$(stack_vibe_api_port)}"
+      echo "http://127.0.0.1:${port}/health"
+      ;;
+    vibe-ui)
+      port="${port:-$(stack_vibe_ui_port)}"
+      echo "http://127.0.0.1:${port}/"
+      ;;
+    openalgo)
+      echo "${OPENALGO_HOST:-http://127.0.0.1:$(stack_openalgo_port)}/"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+stack_probe() {
+  local service="$1" port="${2:-}" url
+  case "$service" in
+    vibe-api) stack_vibe_api_ready "$port" ;;
+    vibe-ui|openalgo)
+      url="$(stack_probe_url "$service" "$port")" || return 1
+      stack_http_ok "$url"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+stack_probe_liveness() {
+  local service="$1" port="${2:-}"
+  stack_load_env
+  case "$service" in
+    vibe-api) stack_vibe_api_listener_alive "${port:-$(stack_vibe_api_port)}" ;;
+    vibe-ui)
+      port="${port:-$(stack_vibe_ui_port)}"
+      [[ -n "$(stack_port_listener_pid "$port")" ]]
+      ;;
+    openalgo)
+      port="${port:-$(stack_openalgo_port)}"
+      [[ -n "$(stack_port_listener_pid "$port")" ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+stack_probe_path() {
+  local service="$1"
+  case "$service" in
+    vibe-api) echo "/health" ;;
+    openalgo|vibe-ui) echo "/" ;;
+    *) return 1 ;;
+  esac
+}
+
+stack_heal_max_attempts() {
+  echo "${STACK_HEAL_MAX_ATTEMPTS:-2}"
+}
+
+stack_wait_max_attempts() {
+  echo "${STACK_WAIT_MAX_ATTEMPTS:-15}"
+}
+
+stack_heal_fail_loud() {
+  local reason="$1"
+  local log_dir attempts
+  log_dir="$(stack_log_dir)"
+  attempts="$(stack_heal_max_attempts)"
+  echo "" >&2
+  echo "══════════════════════════════════════════════════════════" >&2
+  echo "  STACK HEAL FAILED — manual fix required" >&2
+  echo "══════════════════════════════════════════════════════════" >&2
+  echo "$reason" >&2
+  echo "" >&2
+  echo "  Attempted ${attempts} heal pass(es). No further automatic retries." >&2
+  echo "  Logs: ${log_dir}/" >&2
+  echo "  Next: trade doctor" >&2
+  echo "  Next: trade status --json" >&2
+  echo "══════════════════════════════════════════════════════════" >&2
+}
+
+stack_record_heal_result() {
+  local rc="${1:-1}" reason="${2:-}" attempts_used="${3:-0}"
+  local py file
+  file="$(stack_heal_state_file)"
+  py="$(stack_pick_python)"
+  STACK_HEAL_RC="$rc" STACK_HEAL_REASON="$reason" STACK_HEAL_ATTEMPTS="$attempts_used" \
+    STACK_HEAL_STATE_FILE="$file" \
+    "$py" - <<'PY'
+import json, os
+from datetime import datetime, timezone
+from pathlib import Path
+
+path = Path(os.environ["STACK_HEAL_STATE_FILE"])
+attempts_raw = os.environ.get("STACK_HEAL_ATTEMPTS", "0")
+try:
+    attempts_used = int(attempts_raw)
+except ValueError:
+    attempts_used = 0
+payload = {
+    "last_attempt_at": datetime.now(timezone.utc).isoformat(),
+    "last_result": "ok" if int(os.environ.get("STACK_HEAL_RC", "1")) == 0 else "failed",
+    "attempts_used": attempts_used,
+    "fail_reason": os.environ.get("STACK_HEAL_REASON", ""),
+}
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+  stack_write_instance_manifest
+}
+
+stack_tier_already_healthy() {
+  stack_load_env
+  stack_probe openalgo && stack_probe vibe-api && stack_probe vibe-ui
+}
+
 stack_http_ok() {
   curl -sf -o /dev/null -m 3 "$1" 2>/dev/null
 }
 
 stack_wait_for_url() {
-  local label="$1" url="$2" attempts="${3:-45}"
+  local label="$1" url="$2" attempts="${3:-$(stack_wait_max_attempts)}"
+  local i
   for ((i = 1; i <= attempts; i++)); do
     if stack_http_ok "$url"; then
       return 0
     fi
     sleep 1
   done
-  echo "[stack] timed out waiting for $label at $url" >&2
+  echo "[stack] timed out waiting for $label at $url (${attempts} attempts)" >&2
   return 1
 }
 
@@ -452,20 +669,6 @@ stack_nautilus_watch_required() {
   [[ -n "$(stack_primary_nautilus_agent_id)" ]]
 }
 
-stack_sync_nautilus_registry_quiet() {
-  local py root log_dir
-  root="$(stack_root)"
-  log_dir="$(stack_log_dir)"
-  py="$(stack_pick_python)"
-  if ! PYTHONPATH="$root/integrations" "$py" -c "
-from trade_integrations.watch_registry.store import sync_nautilus_registry_from_watches
-sync_nautilus_registry_from_watches(restart_if_changed=False)
-" 2>>"$log_dir/nautilus-watch.log"; then
-    echo "[stack] WARN: Nautilus registry sync failed — launch may use stale agent list" >&2
-    return 1
-  fi
-}
-
 stack_purge_nautilus_watch_processes() {
   local py root log_dir
   root="$(stack_root)"
@@ -631,21 +834,129 @@ stack_stop_claimed() {
 }
 
 stack_write_instance_manifest() {
-  local file log_dir pid
+  local py log_dir legacy_file
   log_dir="$(stack_log_dir)"
-  file="$log_dir/stack.instance"
-  {
-    echo "updated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "root=$(stack_root)"
-    echo "openalgo_pid=$(stack_claim_pid openalgo)"
-    echo "vibe_api_pid=$(stack_claim_pid vibe-api)"
-    echo "vibe_ui_pid=$(stack_claim_pid vibe-ui)"
-    pid="$(stack_claim_pid nautilus-watch)"
-    if [[ -z "$pid" ]]; then
-      pid="$(stack_read_pid "$log_dir/nautilus-watch.pid")"
+  legacy_file="$log_dir/stack.instance"
+  py="$(stack_pick_python)"
+  STACK_INSTANCE_JSON="$(stack_instance_json_file)" \
+    STACK_INSTANCE_LEGACY="$legacy_file" \
+    STACK_HEAL_STATE="$(stack_heal_state_file)" \
+    STACK_MODE="$(stack_stack_mode)" \
+    STACK_TIER_OWNER="$(stack_tier_owner)" \
+    STACK_DEV_SESSION_PID="$(stack_read_pid "$(stack_dev_session_pid_file)")" \
+    STACK_OPENALGO_PID="$(stack_claim_pid openalgo)" \
+    STACK_VIBE_API_PID="$(stack_claim_pid vibe-api)" \
+    STACK_VIBE_UI_PID="$(stack_claim_pid vibe-ui)" \
+    STACK_NAUTILUS_PID="$(stack_claim_pid nautilus-watch)" \
+    STACK_LOG_DIR="$log_dir" \
+    STACK_ROOT="$(stack_root)" \
+    "$py" - <<'PY'
+import json, os
+from datetime import datetime, timezone
+from pathlib import Path
+
+def read_json(path: str) -> dict:
+    p = Path(path)
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def pid_or_none(raw: str) -> str | None:
+    raw = (raw or "").strip()
+    return raw or None
+
+heal_state = read_json(os.environ.get("STACK_HEAL_STATE", ""))
+nautilus_pid = os.environ.get("STACK_NAUTILUS_PID", "").strip()
+if not nautilus_pid:
+    np = Path(os.environ["STACK_LOG_DIR"]) / "nautilus-watch.pid"
+    if np.is_file():
+        nautilus_pid = np.read_text(encoding="utf-8").strip()
+
+mode = (os.environ.get("STACK_MODE") or "").strip() or "off"
+manifest = {
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+    "root": os.environ.get("STACK_ROOT", ""),
+    "mode": mode,
+    "tier_owner": (os.environ.get("STACK_TIER_OWNER") or "off").strip() or "off",
+    "owner": {
+        "openalgo_pid": pid_or_none(os.environ.get("STACK_OPENALGO_PID", "")),
+        "vibe_api_pid": pid_or_none(os.environ.get("STACK_VIBE_API_PID", "")),
+        "vibe_ui_pid": pid_or_none(os.environ.get("STACK_VIBE_UI_PID", "")),
+        "nautilus_watch_pid": pid_or_none(nautilus_pid),
+        "session_pid": pid_or_none(os.environ.get("STACK_DEV_SESSION_PID", "")),
+    },
+    "probes": {
+        "vibe_api": "/health",
+        "openalgo": "/",
+        "vibe_ui": "/",
+    },
+    "heal": {
+        "last_attempt_at": heal_state.get("last_attempt_at"),
+        "last_result": heal_state.get("last_result"),
+        "attempts_used": heal_state.get("attempts_used"),
+        "fail_reason": heal_state.get("fail_reason"),
+    },
+}
+json_path = Path(os.environ["STACK_INSTANCE_JSON"])
+json_path.parent.mkdir(parents=True, exist_ok=True)
+json_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+legacy = Path(os.environ["STACK_INSTANCE_LEGACY"])
+legacy.write_text(
+    "\n".join(
+        [
+            f"updated_at={manifest['updated_at']}",
+            f"root={manifest['root']}",
+            f"mode={manifest['mode']}",
+            f"tier_owner={manifest['tier_owner']}",
+            f"openalgo_pid={manifest['owner']['openalgo_pid'] or ''}",
+            f"vibe_api_pid={manifest['owner']['vibe_api_pid'] or ''}",
+            f"vibe_ui_pid={manifest['owner']['vibe_ui_pid'] or ''}",
+            f"nautilus_watch_pid={manifest['owner']['nautilus_watch_pid'] or ''}",
+            f"session_pid={manifest['owner']['session_pid'] or ''}",
+        ]
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+stack_stop_app_tier() {
+  local log_dir api_port ui_port openalgo_port
+  log_dir="$(stack_log_dir)"
+  api_port="$(stack_vibe_api_port)"
+  ui_port="$(stack_vibe_ui_port)"
+  openalgo_port="$(stack_openalgo_port)"
+  stack_stop_claimed "Vibe UI" "vibe-ui" "$log_dir/vibe-ui.pid" "$ui_port"
+  stack_stop_claimed "Vibe API" "vibe-api" "$log_dir/vibe-api.pid" "$api_port"
+  stack_stop_claimed "OpenAlgo" "openalgo" "$log_dir/openalgo.pid" "$openalgo_port"
+  stack_kill_openalgo_ws_proxy
+}
+
+stack_kill_dev_session() {
+  local session_pid
+  session_pid="$(stack_read_pid "$(stack_dev_session_pid_file)")"
+  if [[ -n "$session_pid" ]] && stack_pid_alive "$session_pid"; then
+    echo "[stack] stopping dev session (pid $session_pid) ..."
+    kill "$session_pid" 2>/dev/null || true
+    local waited=0
+    while (( waited < 20 )); do
+      stack_pid_alive "$session_pid" || break
+      sleep 0.5
+      waited=$((waited + 1))
+    done
+    if stack_pid_alive "$session_pid"; then
+      kill -9 "$session_pid" 2>/dev/null || true
     fi
-    echo "nautilus_watch_pid=$pid"
-  } >"$file"
+  fi
+  stack_stop_dev_nautilus_heal
+  stack_stop_app_tier
+  stack_clear_stack_mode
+  rm -f "$(stack_dev_session_pid_file)" "$(stack_tier_owner_file)"
 }
 
 stack_sync_service_claim() {
@@ -679,85 +990,25 @@ print(bool(st.get('alive')), st.get('pid') or '')
   fi
 }
 
-stack_sync_nautilus_registry_pid() {
-  local pid="$1"
-  local py root
-  [[ -n "$pid" ]] || return 0
-  root="$(stack_root)"
-  py="$(stack_pick_python)"
-  PYTHONPATH="$root/integrations" "$py" - "$pid" <<'PY' 2>/dev/null || true
-import sys
-from trade_integrations.autonomous_agents.nautilus_watch import load_registry, save_registry
-
-reg = load_registry()
-reg["node_pid"] = int(sys.argv[1])
-save_registry(reg)
-PY
-}
-
-stack_adopt_running_nautilus_watch() {
-  local log_dir pidfile existing
-  log_dir="$(stack_log_dir)"
-  pidfile="$log_dir/nautilus-watch.pid"
-  existing="$(stack_read_pid "$pidfile")"
-  if stack_nautilus_pid_valid "$existing"; then
-    stack_sync_nautilus_registry_pid "$existing"
-    stack_write_claim "nautilus-watch" "$existing" "" "nautilus watch --registry"
-    return 0
-  fi
-  local orphan
-  orphan="$(pgrep -f "nautilus_openalgo_bridge.runtime.run_watch_node" 2>/dev/null | head -1 || true)"
-  if [[ -n "$orphan" ]] && stack_nautilus_pid_valid "$orphan"; then
-    stack_write_pidfile "$pidfile" "$orphan"
-    stack_sync_nautilus_registry_pid "$orphan"
-    stack_write_claim "nautilus-watch" "$orphan" "" "nautilus watch --registry"
-    echo "[stack] adopted running Nautilus watch (pid $orphan)"
-    return 0
-  fi
-  return 1
-}
-
 stack_sync_nautilus_claim() {
-  stack_reconcile_nautilus_watch_pid
-  local log_dir pidfile reg_file py reg_pid
+  local py root log_dir
+  root="$(stack_root)"
   log_dir="$(stack_log_dir)"
-  pidfile="$log_dir/nautilus-watch.pid"
-  reg_file="$log_dir/nautilus-watch.agents.json"
   py="$(stack_pick_python)"
-  reg_pid="$("$py" - "$reg_file" <<'PY' 2>/dev/null || true
-import json, sys
-from pathlib import Path
-p = Path(sys.argv[1])
-if not p.is_file():
-    raise SystemExit(0)
-try:
-    data = json.loads(p.read_text(encoding="utf-8"))
-except Exception:
-    raise SystemExit(0)
-pid = data.get("node_pid")
-if isinstance(pid, int) and pid > 0:
-    print(pid)
-PY
-)"
-  if [[ -n "$reg_pid" ]] && stack_nautilus_pid_valid "$reg_pid"; then
-    stack_write_pidfile "$pidfile" "$reg_pid"
-    stack_write_claim "nautilus-watch" "$reg_pid" "" "nautilus watch"
-    return 0
-  fi
-  stack_sync_service_claim "nautilus-watch" "$pidfile" "" "nautilus watch"
+  PYTHONPATH="$root/integrations" "$py" -m trade_integrations.autonomous_agents.nautilus_watch_cli stack-reconcile-claim \
+    >>"$log_dir/nautilus-watch.log" 2>&1
 }
 
 stack_clear_instance_manifest() {
-  rm -f "$(stack_log_dir)/stack.instance"
+  rm -f "$(stack_log_dir)/stack.instance" "$(stack_instance_json_file)"
 }
 
 stack_service_up() {
   local port="$1" service="${2:-}"
-  if [[ "$service" == "vibe-api" ]]; then
-    stack_vibe_api_http_ok "$port"
-    return
-  fi
-  stack_http_ok "http://127.0.0.1:${port}/"
+  case "$service" in
+    vibe-api|vibe-ui|openalgo) stack_probe "$service" "$port" ;;
+    *) stack_http_ok "http://127.0.0.1:${port}/" ;;
+  esac
 }
 
 stack_wait_for_service_port() {
@@ -1190,7 +1441,7 @@ stack_kill_openalgo_ws_proxy() {
 }
 
 stack_heal_daemon_enabled() {
-  local v="${STACK_HEAL_DAEMON:-1}"
+  local v="${STACK_HEAL_DAEMON:-0}"
   v="$(_stack_lc "$v")"
   [[ "$v" != "0" && "$v" != "false" && "$v" != "no" && "$v" != "off" ]]
 }
@@ -1214,34 +1465,62 @@ stack_start_heal_daemon() {
   if stack_dev_mode_flagged; then
     return 0
   fi
-  local root log_dir pidfile logfile pid interval
+  local root log_dir pidfile logfile pid
   root="$(stack_root)"
   log_dir="$(stack_log_dir)"
   pidfile="$log_dir/stack-heal.pid"
   logfile="$log_dir/stack-heal.log"
-  interval="${STACK_HEAL_INTERVAL_SEC:-60}"
   pid="$(stack_read_pid "$pidfile")"
   if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
     return 0
   fi
-  echo "[stack] starting stack heal daemon (every ${interval}s) ..."
+  echo "[stack] running one-shot stack heal check (STACK_HEAL_DAEMON=1) ..."
   : >>"$logfile"
   nohup bash -c "
-    while true; do
-      sleep $interval
-      if [[ -f '$root/log/stack.mode' ]] && [[ \"\$(tr -d '[:space:]' <'$root/log/stack.mode')\" == 'dev' ]]; then
-        continue
-      fi
-      '$root/trade' heal >>'$logfile' 2>&1
-      heal_rc=$?
-      if (( heal_rc != 0 )); then
-        echo \"[\$(date -Iseconds)] heal failed (exit \$heal_rc)\" >>'$logfile'
-      fi
-    done
+    trade-stack-heal-daemon
+    '$root/trade' heal >>'$logfile' 2>&1
+    heal_rc=\$?
+    if (( heal_rc != 0 )); then
+      echo \"[\$(date -Iseconds)] one-shot heal failed (exit \$heal_rc)\" >>'$logfile'
+    fi
+    rm -f '$pidfile'
+    exit \$heal_rc
   " >>"$logfile" 2>&1 < /dev/null &
   pid=$!
   disown "$pid" 2>/dev/null || true
   stack_write_pidfile "$pidfile" "$pid"
+}
+
+stack_ensure_dev_nautilus_once() {
+  if ! stack_dev_mode_flagged; then
+    return 0
+  fi
+  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
+    return 0
+  fi
+  local log_dir pidfile pid args
+  log_dir="$(stack_log_dir)"
+  pidfile="$log_dir/nautilus-watch.pid"
+  pid="$(stack_read_pid "$pidfile")"
+  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
+    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    if [[ "$args" == *run_watch_node* ]]; then
+      return 0
+    fi
+  fi
+  echo "[stack] dev boot: Nautilus watch not running — one ensure pass (no background loop)" >&2
+  local root
+  root="$(stack_root)"
+  "$root/trade" heal --hub-only >/dev/null 2>&1 || true
+  "$root/trade" reload nautilus >/dev/null 2>&1 || {
+    echo "[stack] WARN: Nautilus reload failed — run: trade reload nautilus" >&2
+    return 1
+  }
+  return 0
+}
+
+stack_start_dev_nautilus_heal() {
+  stack_ensure_dev_nautilus_once
 }
 
 stack_data_worker_enabled() {
@@ -1262,53 +1541,9 @@ stack_stop_data_worker() {
   rm -f "$pidfile"
 }
 
-stack_start_dev_nautilus_heal() {
-  if ! stack_dev_mode_flagged; then
-    return 0
-  fi
-  if [[ "${NAUTILUS_WATCH_ENABLE:-1}" == "0" || "${NAUTILUS_WATCH_ENABLE:-}" == "false" ]]; then
-    return 0
-  fi
-  local root log_dir pidfile logfile pid interval
-  root="$(stack_root)"
-  log_dir="$(stack_log_dir)"
-  pidfile="$log_dir/stack-nautilus-heal.pid"
-  logfile="$log_dir/stack-nautilus-heal.log"
-  interval="${STACK_NAUTILUS_HEAL_INTERVAL_SEC:-120}"
-  pid="$(stack_read_pid "$pidfile")"
-  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
-    return 0
-  fi
-  echo "[stack] starting dev Nautilus heal (every ${interval}s while dev mode) ..."
-  : >>"$logfile"
-  nohup bash -c "
-    while [[ -f '$root/log/stack.mode' ]] && [[ \"\$(tr -d '[:space:]' <'$root/log/stack.mode')\" == 'dev' ]]; do
-      sleep $interval
-      watch_pid=\$(tr -d '[:space:]' <'$log_dir/nautilus-watch.pid' 2>/dev/null || true)
-      if [[ -n \"\$watch_pid\" ]] && ps -p \"\$watch_pid\" >/dev/null 2>&1; then
-        args=\$(ps -p \"\$watch_pid\" -o args= 2>/dev/null || true)
-        if [[ \"\$args\" == *run_watch_node* ]]; then
-          continue
-        fi
-      fi
-      '$root/trade' heal --hub-only >>'$logfile' 2>&1 || true
-      '$root/trade' reload nautilus >>'$logfile' 2>&1 || true
-    done
-  " >>"$logfile" 2>&1 < /dev/null &
-  pid=$!
-  disown "$pid" 2>/dev/null || true
-  stack_write_pidfile "$pidfile" "$pid"
-}
-
 stack_stop_dev_nautilus_heal() {
-  local log_dir pidfile pid
-  log_dir="$(stack_log_dir)"
-  pidfile="$log_dir/stack-nautilus-heal.pid"
-  pid="$(stack_read_pid "$pidfile")"
-  if [[ -n "$pid" ]] && stack_pid_alive "$pid"; then
-    kill "$pid" 2>/dev/null || true
-  fi
-  rm -f "$pidfile"
+  stack_kill_orphan_trade_pgrep "stack-nautilus-heal" "legacy dev Nautilus heal loop"
+  rm -f "$(stack_log_dir)/stack-nautilus-heal.pid"
 }
 
 stack_start_data_worker() {
@@ -1367,6 +1602,7 @@ stack_stop_vibe_stack() {
   stack_kill_orphan_trade_processes
   stack_reconcile_orphan_watchdogs
   stack_clear_stack_mode
+  rm -f "$(stack_dev_session_pid_file)" "$(stack_tier_owner_file)"
   stack_clear_instance_manifest
 
   # shellcheck disable=SC1091
@@ -1424,8 +1660,9 @@ stack_kill_orphan_trade_processes() {
   stack_kill_orphan_trade_pgrep "openalgo/.venv/bin/python app.py" "OpenAlgo"
   stack_kill_orphan_trade_pgrep "vite --port ${ui_port}" "Vibe UI"
   stack_kill_orphan_trade_pgrep "uvicorn.*:${api_port}" "Vibe API"
-  stack_kill_orphan_trade_pgrep "stack-nautilus-heal" "dev Nautilus heal loop"
-  stack_kill_orphan_trade_pgrep "stack-heal.pid" "stack heal daemon"
+  stack_kill_orphan_trade_pgrep "trade-stack-heal-daemon" "stack heal check"
+  stack_kill_orphan_trade_pgrep "while true.*trade.* heal" "legacy stack heal loop"
+  stack_kill_orphan_trade_pgrep "stack-nautilus-heal" "legacy dev Nautilus heal loop"
 }
 
 stack_cleanup_after_stop() {
@@ -1602,20 +1839,18 @@ stack_status_vibe_stack() {
   for svc in "OpenAlgo:openalgo:$openalgo_port:$log_dir/openalgo.pid" \
              "Vibe API:vibe-api:$api_port:$log_dir/vibe-api.pid" \
              "Vibe UI:vibe-ui:$ui_port:$log_dir/vibe-ui.pid"; do
-    local name service port pidfile pid http_code alive="dead" claimed=""
+    local name service port pidfile pid alive="dead" claimed="" ready=0 live=0
     name="${svc%%:*}"
     service="${svc#*:}"; service="${service%%:*}"
     port="${svc#*:}"; port="${port#*:}"; port="${port%%:*}"
     pidfile="${svc##*:}"
     pid="$(stack_read_pid "$pidfile")"
     claimed="$(stack_claim_pid "$service")"
-    local probe_url="http://127.0.0.1:${port}/"
-    if [[ "$service" == "vibe-api" ]]; then
-      probe_url="http://127.0.0.1:${port}/health"
-    fi
-    http_code="$(curl -sf -o /dev/null -w "%{http_code}" -m 5 "$probe_url" 2>/dev/null || true)"
-    if [[ -z "$http_code" ]]; then
-      http_code="000"
+    if stack_probe "$service" "$port"; then
+      ready=1
+      live=1
+    elif stack_probe_liveness "$service" "$port"; then
+      live=1
     fi
     local listener
     listener="$(stack_port_listener_pid "$port")"
@@ -1626,17 +1861,17 @@ stack_status_vibe_stack() {
       alive="alive"
     fi
 
-    if [[ "$http_code" == "200" ]]; then
+    if (( ready )); then
       if [[ -n "$claimed" && -n "$pid" && "$claimed" != "$pid" ]]; then
-        echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid} claim=${claimed} ($alive)"
+        echo "  ✓ $name  :$port  ready  pid=${pid} claim=${claimed} ($alive)"
       else
-        echo "  ✓ $name  :$port  HTTP $http_code  pid=${pid:-${claimed:-?}} ($alive)"
+        echo "  ✓ $name  :$port  ready  pid=${pid:-${claimed:-?}} ($alive)"
       fi
-    elif [[ -n "$listener" ]] && stack_pid_alive "$listener"; then
-      echo "  ⚠ $name  :$port  HTTP $http_code  pid=${listener} (alive, not ready)"
+    elif (( live )); then
+      echo "  ⚠ $name  :$port  live (not ready)  pid=${pid:-${listener:-none}} ($alive)"
       ok=0
     else
-      echo "  ✗ $name  :$port  HTTP $http_code  pid=${pid:-none} ($alive)"
+      echo "  ✗ $name  :$port  down  pid=${pid:-none} ($alive)"
       ok=0
     fi
   done
@@ -1779,8 +2014,13 @@ stack_start_nautilus_watch() {
   [[ -n "$agent_id" ]] && cli_args+=(--agent-id "$agent_id")
 
   if ! PYTHONPATH="$root/integrations" "$py" -m trade_integrations.autonomous_agents.nautilus_watch_cli "${cli_args[@]}" >>"$logfile" 2>&1; then
+    rc=$?
     echo "[stack] Nautilus watch failed to start — see $logfile" >&2
     tail -8 "$logfile" 2>/dev/null >&2 || true
+    if (( rc == 2 )); then
+      echo "[stack] Nautilus purge incomplete — survivors remain; pid/claim preserved" >&2
+      return 1
+    fi
     rm -f "$log_dir/nautilus-watch.pid" "$log_dir/nautilus-watch.agent_id"
     stack_release_claim "nautilus-watch"
     return 1

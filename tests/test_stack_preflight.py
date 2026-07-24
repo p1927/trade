@@ -39,3 +39,53 @@ def test_stack_reconcile_stale_claims_vibe_api_uses_health():
     block = stack_lib.split("stack_reconcile_stale_claims")[1].split("stack_service_for_pid")[0]
     assert '"$service" == "vibe-api"' in block
     assert "stack_vibe_api_http_ok" in block
+
+
+def test_stack_heal_daemon_disabled_by_default():
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        unset STACK_HEAL_DAEMON
+        stack_heal_daemon_enabled && echo enabled || echo disabled
+        """,
+        ],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "disabled" in proc.stdout
+
+
+def test_stack_lib_has_no_infinite_heal_loops():
+    root = Path(__file__).resolve().parents[1]
+    stack_lib = (root / "scripts" / "stack_lib.sh").read_text()
+    assert "while true; do" not in stack_lib.lower()
+    assert "stack_heal_max_attempts" in stack_lib
+    assert "stack_heal_fail_loud" in stack_lib
+
+
+def test_stack_wait_max_attempts_default_is_bounded():
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+        source scripts/stack_lib.sh
+        STACK_ROOT="$PWD"
+        unset STACK_WAIT_MAX_ATTEMPTS
+        stack_wait_max_attempts
+        """,
+        ],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "15"

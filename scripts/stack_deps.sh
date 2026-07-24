@@ -36,6 +36,7 @@ stack_reconcile_all() {
   stack_recover_stale_scheduler_jobs
   stack_reconcile_stale_claims
   stack_reconcile_nautilus_watch_pid
+  stack_sync_nautilus_claim
   stack_reconcile_orphan_lock
 }
 
@@ -45,12 +46,16 @@ stack_reconcile_for_status() {
   stack_reconcile_orphan_watchdogs
   stack_reconcile_stale_claims
   stack_reconcile_nautilus_watch_pid
+  stack_sync_nautilus_claim
   stack_reconcile_orphan_lock
 }
 
 stack_reconcile_orphan_watchdogs() {
   local log_dir pid pidfile name
   log_dir="$(stack_log_dir)"
+  stack_kill_orphan_trade_pgrep "trade-stack-heal-daemon" "stack heal check"
+  stack_kill_orphan_trade_pgrep "while true.*trade.* heal" "legacy stack heal loop"
+  stack_kill_orphan_trade_pgrep "stack-nautilus-heal" "legacy dev Nautilus heal loop"
   for name in stack-heal stack-nautilus-heal; do
     pidfile="$log_dir/${name}.pid"
     [[ -f "$pidfile" ]] || continue
@@ -253,7 +258,6 @@ stack_ensure_dependencies() {
   if [[ "$tier" == "all" ]]; then
     stack_ensure_nautilus_watch || ok=1
     stack_sync_nautilus_claim
-    stack_ensure_heal_daemon_if_dead
     stack_ensure_data_worker_if_enabled
     stack_warn_stale_exposure
   fi
@@ -271,7 +275,7 @@ stack_bootstrap_session() {
   if [[ "$bootstrap" == "clean" ]]; then
     stack_reconcile_stale_claims
     stack_reconcile_nautilus_watch_pid
-    rm -f "$(stack_log_dir)/stack.instance"
+    rm -f "$(stack_log_dir)/stack.instance" "$(stack_instance_json_file)"
   fi
 
   py="$(stack_pick_python)"
@@ -326,6 +330,11 @@ stack_maybe_heal_before_command() {
   if ! stack_command_needs_heal "$cmd"; then
     return 0
   fi
+  case "$cmd" in
+    up|heal|restart)
+      return 0
+      ;;
+  esac
   if stack_dev_mode_active && [[ "$cmd" != "dev" ]]; then
     return 0
   fi
@@ -399,18 +408,30 @@ stack_clear_stale_exposure_state() {
 }
 
 stack_status_json() {
-  local py
+  local py manifest_file
   py="$(stack_pick_python)"
-  STACK_ROOT="$(stack_root)" OPENALGO_HOST="${OPENALGO_HOST:-}" \
+  manifest_file="$(stack_instance_json_file)"
+  if [[ ! -f "$manifest_file" ]]; then
+    stack_write_instance_manifest
+  fi
+  STACK_ROOT="$(stack_root)" \
+    OPENALGO_HOST="${OPENALGO_HOST:-}" \
+    OPENALGO_PORT="$(stack_openalgo_port)" \
     VIBE_BACKEND_PORT="$(stack_vibe_api_port)" \
     VIBE_FRONTEND_PORT="$(stack_vibe_ui_port)" \
     SEARXNG_BASE_URL="$(stack_searxng_url)" \
     NAUTILUS_REDIS_URL="$(stack_redis_url)" \
+    STACK_INSTANCE_JSON="$manifest_file" \
+    STACK_HEAL_STATE="$(stack_heal_state_file)" \
+    STACK_MODE="$(stack_stack_mode)" \
+    STACK_TIER_OWNER="$(stack_tier_owner)" \
+    STACK_DEV_STATE="$(stack_dev_state_raw)" \
     "$py" - <<'PY'
 import json
 import os
 import subprocess
 import urllib.request
+from pathlib import Path
 
 def curl_ok(url: str) -> bool:
     try:
@@ -419,8 +440,19 @@ def curl_ok(url: str) -> bool:
     except Exception:
         return False
 
+def port_listener(port: str) -> bool:
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return bool((out.stdout or "").strip())
+    except Exception:
+        return False
+
 def searxng_ok(url: str) -> bool:
-    # SearXNG botdetection logs ERROR when X-Real-IP / X-Forwarded-For is missing.
     req = urllib.request.Request(url, headers={"X-Real-IP": "127.0.0.1"})
     try:
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -441,17 +473,57 @@ def redis_ok() -> bool:
     except Exception:
         return False
 
+def read_json(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
 api_port = os.environ.get("VIBE_BACKEND_PORT", "8899")
 ui_port = os.environ.get("VIBE_FRONTEND_PORT", "5899")
-openalgo = os.environ.get("OPENALGO_HOST", "http://127.0.0.1:5001").rstrip("/")
+openalgo_port = os.environ.get("OPENALGO_PORT", "5001")
+openalgo = os.environ.get("OPENALGO_HOST", f"http://127.0.0.1:{openalgo_port}").rstrip("/")
 searxng = os.environ.get("SEARXNG_BASE_URL", "http://localhost:5556").rstrip("/")
 
+manifest = read_json(Path(os.environ.get("STACK_INSTANCE_JSON", "")))
+heal = read_json(Path(os.environ.get("STACK_HEAL_STATE", "")))
+if not heal and manifest.get("heal"):
+    heal = manifest["heal"]
+
+mode = (os.environ.get("STACK_MODE") or "").strip() or "off"
 payload = {
-    "searxng": {"ok": searxng_ok(f"{searxng}/healthz") or searxng_ok(f"{searxng}/")},
-    "redis": {"ok": redis_ok()},
-    "openalgo": {"ok": curl_ok(f"{openalgo}/")},
-    "vibe_api": {"ok": curl_ok(f"http://127.0.0.1:{api_port}/health")},
-    "vibe_ui": {"ok": curl_ok(f"http://127.0.0.1:{ui_port}/")},
+    "mode": mode,
+    "dev_state": os.environ.get("STACK_DEV_STATE", "off"),
+    "tier_owner": (os.environ.get("STACK_TIER_OWNER") or "off").strip() or "off",
+    "owner": manifest.get("owner") or {},
+    "probes": manifest.get("probes")
+    or {"vibe_api": "/health", "openalgo": "/", "vibe_ui": "/"},
+    "heal": heal,
+    "services": {
+        "openalgo": {
+            "ready": curl_ok(f"{openalgo}/"),
+            "live": port_listener(openalgo_port),
+            "probe": "/",
+        },
+        "vibe_api": {
+            "ready": curl_ok(f"http://127.0.0.1:{api_port}/health"),
+            "live": port_listener(api_port),
+            "probe": "/health",
+        },
+        "vibe_ui": {
+            "ready": curl_ok(f"http://127.0.0.1:{ui_port}/"),
+            "live": port_listener(ui_port),
+            "probe": "/",
+        },
+        "searxng": {
+            "ready": searxng_ok(f"{searxng}/healthz") or searxng_ok(f"{searxng}/"),
+            "live": None,
+            "probe": "/healthz",
+        },
+        "redis": {"ready": redis_ok(), "live": None, "probe": "PING"},
+    },
 }
 print(json.dumps(payload, indent=2))
 PY

@@ -17,7 +17,7 @@ Stack (one lifecycle — use these):
   heal                  Heal missing services only (no preflight noise)
   down [--all|--hub]          Stop OpenAlgo + Vibe + watchers; remove stale pidfiles/claims ( --all: + docker compose down + tunnels )
   heal [--hub-only]           Heal missing services (hub tier only with --hub-only)
-  restart [--force]     Heal missing services ( --force: full stop + start )
+  restart [--force] [--kill-dev]     Heal missing services ( --force: full stop + start; --kill-dev: stop dev first )
   status                Vibe + hub Docker health (read-only — does not start services)
   doctor                Preflight checks before start (no start)
   dev                   Dev mode: auto-reload API/UI + OpenAlgo debug (exclusive Vibe tier).
@@ -75,6 +75,7 @@ Examples:
   trade doctor && trade up          # verify deps, then start
   trade restart                     # heal — start only what's down
   trade restart --force             # full stop + preflight + start
+  trade restart --force --kill-dev  # stop dev session, then full daemon restart
   trade down                        # stop background stack
   trade dev                         # dev mode with auto-reload (blocks trade up; Nautilus watch stays up)
   trade reload app                  # reload daemon after code edit
